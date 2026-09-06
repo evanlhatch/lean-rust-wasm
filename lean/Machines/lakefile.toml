@@ -1,0 +1,40 @@
+name = "Machines"
+defaultTargets = ["Machines", "MachinesTests"]
+
+# LSpec's @[test_driver]-registered runner for `lake test`.
+testDriver = "MachinesTests"
+
+# Guarded state machines: executable + proof relation (the two projections),
+# convergence, refinement, composition, traces, rewind. mathlib per
+# notes/lean/lean-v3.md D1. No flatland vocabulary.
+
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4"
+rev = "v4.33.0"
+
+# The shared test harness (core + LSpec only; see notes/lean/lean-v3.md D14).
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
+[[lean_lib]]
+name = "Machines"
+roots = ["Machines"]
+# doctrine lints on for library code; weak so Tests can override
+weakLeanArgs = ["-Dweak.linter.flexible=true"]
+
+[[lean_exe]]
+name = "MachinesTests"
+root = "Tests.Main"
+
+# D12: gonzalgo — the axiom-provenance/dependency dump behind `just lean-trust`.
+[[require]]
+name = "gonzalgo"
+git = "https://github.com/vince-gonzalez/gonzalgo"
+rev = "7e67f77292685c0e295027b530349e3c664a2758"
+
+# The conformance battery (Machines.Testing) uses the shared harness.
+[[require]]
+name = "TestKit"
+path = "../TestKit"

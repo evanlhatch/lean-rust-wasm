@@ -1,0 +1,23 @@
+name = "CodegenCore"
+defaultTargets = ["CodegenCore", "CodegenCoreTests"]
+
+# LSpec's @[test_driver]-registered runner for `lake test`.
+testDriver = "CodegenCoreTests"
+
+# The registry/emitter core (the buf machinery): generic env-extension
+# registries + the three-layer emitter discipline. NO domain types here —
+# everything naming PType/schema/WIT lives in the packages above this one.
+# Core-only (no mathlib) per the D1 doctrine — it is importable by every
+# downstream package's internals.
+
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
+[[lean_lib]]
+name = "CodegenCore"
+roots = ["CodegenCore"]
+
+[[lean_exe]]
+name = "CodegenCoreTests"
+root = "Tests.Main"

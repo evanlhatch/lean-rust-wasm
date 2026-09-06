@@ -1,0 +1,11 @@
+# yek config — repo → LLM context packer (`yek` in the devenv shell).
+# yek also respects .gitignore; these are extras.
+
+ignore_patterns:
+    - "target/**"
+    - "target-fix/**"
+    - ".devenv/**"
+    - ".direnv/**"
+    - "result*"
+    - "notes/**"
+    - "*.lock"

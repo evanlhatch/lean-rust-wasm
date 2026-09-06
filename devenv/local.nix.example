@@ -1,0 +1,24 @@
+# Local, machine/project-specific overrides — NOT committed in a template
+# but this file documents the pattern. Create devenv/local.nix with your
+# overrides; it is gitignored.
+#
+# Opt-in toolchains are devenv PROFILES (no options to set):
+#   devenv --profile js shell          # node + bun
+#   devenv --profile python shell
+#   devenv --profile wasm shell        # wasm toolchain + guest-link env
+#   devenv --profile docs shell        # astro starlight (extends js)
+#   devenv --profile cloudflare shell  # wrangler/miniserve (extends js)
+#   devenv --profile wasm --profile cloudflare shell   # stack any of them
+#
+# Automatic per-machine/per-user activation also works via profiles:
+# {
+#   profiles.hostname."dev-box".module = {
+#     templateConfig.processes.enable = true;   # legacy option modules still work
+#   };
+# }
+#
+# Example (legacy option modules, still honored):
+# {
+#   templateConfig.ncro.enable = true;
+#   templateConfig.processes.enable = true;
+# }

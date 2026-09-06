@@ -1,0 +1,174 @@
+[package]
+name = "myproj"
+version = "0.1.0"
+authors = ["evan"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+members = ["crates/forge"]
+resolver = "2"
+
+[dependencies]
+# Errors/observability: fast-observe IS the error tool. No thiserror,
+# no anyhow, no eyre — define faults with fast-observe, flow with `?`.
+fast-observe = "0.1"
+log = { version = "0.4", features = ["kv"] }
+
+# Async: runtime-agnostic concurrency building blocks
+asyncband = "0.7"
+
+# Data structures
+ahash = "0.8" # HashMap/HashSet — deterministic iteration (std banned in clippy.toml)
+arc-swap = "1.7"
+ecow = "0.3" # clone-on-write vec/string/bytes — prefer over smallvec
+itertools = "0.14"
+parking_lot = "0.12"
+
+# Derive / ergonomics
+bon = "3" # builder patterns
+derive_more = { version = "1.0", features = ["display"] }
+strum = { version = "0.26", features = ["derive"] }
+
+# Paths + IO with real error messages
+camino = "1.2"
+fs-err = "3.3"
+
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+bolero = "0.13" # property/fuzz tests
+insta = "1" # snapshot tests
+
+[lints.rust]
+# Fail on lints we don't know about (nightly gains them regularly).
+unknown_lints = "deny"
+unsafe_code = "deny"
+unused_imports = "deny"
+unused_variables = "warn"
+dead_code = "warn"
+non_ascii_idents = "deny"
+unconditional_recursion = "deny"
+redundant_semicolons = "deny"
+unused_must_use = "deny"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+variant_size_differences = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Deny anti-patterns
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unwrap_in_result = "deny"
+enum_glob_use = "deny"
+
+# Doc / types
+missing_docs_in_private_items = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+wildcard_enum_match_arm = "warn"
+use_self = "warn"
+unnecessary_literal_unwrap = "warn"
+trait_duplication_in_bounds = "warn"
+string_slice = "warn"
+fallible_impl_from = "deny"
+large_enum_variant = "deny"
+must_use_candidate = "warn"
+
+# Type-safety: no silent narrowing
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "warn"
+as_conversions = "warn"
+
+# Complexity
+cognitive_complexity = "deny"
+too_many_arguments = "warn"
+too_many_lines = "warn"
+
+# Style
+module_name_repetitions = "warn"
+redundant_closure = "warn"
+unnecessary_wraps = "warn"
+semicolon_if_nothing_returned = "warn"
+
+# ── Fast-fail over silent fallback ──────────────────────────────────
+# .unwrap_or(f()) should be .unwrap_or_else(|| f()) for non-const fns.
+or_fun_call = "warn"
+# .clone() on refs / unnecessary clones.
+redundant_clone = "warn"
+# No silent type narrowing: prefer From/TryFrom over `as`.
+cast_lossless = "warn"
+# filter_map(|x| x.ok()) → flatten().
+manual_flatten = "warn"
+filter_map_identity = "warn"
+filter_map_next = "warn"
+# let x = expr; x → expr.
+let_and_return = "warn"
+# fn f(x: Type) where &Type would suffice.
+needless_pass_by_value = "warn"
+# Wildcard arms where variants could be listed exhaustively.
+match_same_arms = "warn"
+
+# ── Swallow hygiene ─────────────────────────────────────────────────
+# `let _ = result` hides dropped Results — genuine swallows become
+# explicit (e.g. fast-observe's .report("why")). `let _ =` on Option
+# does NOT trip this lint.
+let_underscore_must_use = "warn"
+# `let _ = mutex.lock()` unlocks instantly — always a bug.
+let_underscore_lock = "deny"
+# No new #[allow] without reason = "...".
+allow_attributes_without_reason = "warn"
+redundant_pub_crate = "warn"
+# std::process::exit skips destructors (flush, shutdown hooks).
+exit = "deny"
+
+# ── Profiles: bound target/ bloat without losing backtraces ────────
+[profile.dev]
+opt-level = 1
+# incremental caching accrued 63G in target/debug/incremental — off.
+# Session-level hot loop: CARGO_INCREMENTAL=1 (devenv autoprune bounds it).
+incremental = false
+# line-tables-only, not full debug: full debuginfo on big dep trees
+# inflates target/debug past 100G. Still yields file/line backtraces.
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+strip = "none"
+
+# Dependencies get NO debug info — they dominate target/ size.
+# Own crates keep line-tables-only via the default above.
+[profile.dev.package."*"]
+debug = false
+split-debuginfo = "off"
+
+[profile.release]
+opt-level = 3
+debug = false
+split-debuginfo = "packed"
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+
+# Bench profile: full optimization for auto-vectorization, but no fat
+# LTO — the mold/wild linker plugins can't claim LLVM-IR from
+# fat-LTO .rlibs.
+[profile.bench]
+inherits = "release"
+lto = "off"
+codegen-units = 16
+debug = false
+strip = "symbols"
+
+[patch.crates-io]
+# getrandom 0.3.4 (transitive via ahash etc.) hard-compile_errors on
+# wasm32-wasip3 ("only previews 1 and 2 are supported"). Vendored copy with
+# a wasi_p3 backend added (wasmtron pattern; see
+# patches/getrandom-0.3.4/src/backends/wasi_p3.rs). Only reachable on the
+# p3 target; every other target's code path is untouched upstream code.
+getrandom = { path = "patches/getrandom-0.3.4" }

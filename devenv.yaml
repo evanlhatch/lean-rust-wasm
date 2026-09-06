@@ -1,0 +1,21 @@
+inputs:
+    nixpkgs:
+        url: github:cachix/devenv-nixpkgs/rolling
+    git-hooks:
+        url: github:cachix/git-hooks.nix
+        inputs:
+            nixpkgs:
+                follows: nixpkgs
+    rust-overlay:
+        url: github:oxalica/rust-overlay
+        inputs:
+            nixpkgs:
+                follows: nixpkgs
+
+# SecretSpec: secrets declared in secretspec.toml (see that file for
+# providers). Load at RUNTIME via `secretspec run -- <cmd>` — never export
+# into the shell env. dotenv = repo-root .env (gitignored).
+secretspec:
+    enable: true
+    provider: dotenv
+    profile: default

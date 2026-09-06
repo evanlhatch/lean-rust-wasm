@@ -1,0 +1,33 @@
+name = "Faults"
+defaultTargets = ["Faults", "FaultsTests"]
+
+# LSpec's @[test_driver]-registered runner for `lake test`.
+testDriver = "FaultsTests"
+
+# The failure-mode registry + the fast-observe emitter: the ONE code
+# allocator across the stack (TOOLKIT §11.1, completed — flatland
+# designed it, never emitted it). Payloads typed by schema-lang.
+
+[[require]]
+name = "CodegenCore"
+path = "../codegen-core"
+
+[[require]]
+name = "SchemaLang"
+path = "../schema-lang"
+
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
+[[lean_lib]]
+name = "Faults"
+roots = ["Faults"]
+
+[[lean_exe]]
+name = "FaultsTests"
+root = "Tests.Main"
+
+[[lean_exe]]
+name = "faults-gen"
+root = "GenMain"

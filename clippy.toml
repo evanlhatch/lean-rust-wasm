@@ -1,0 +1,22 @@
+# Workspace-wide Clippy thresholds + banned APIs.
+
+# Thresholds (shadow-empire values).
+cognitive-complexity-threshold = 15
+too-many-arguments-threshold = 7
+too-many-lines-threshold = 200
+
+# Deterministic iteration: std HashMap/HashSet are banned — use ahash.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use ahash::HashMap for deterministic iteration" },
+    { path = "std::collections::HashSet", reason = "use ahash::HashSet" },
+]
+
+# fast-observe is the error tool: no direct unwrap/expect. Flow with `?`
+# or fast-observe's or_raise()/ensure!. (Lints already deny unwrap_used/
+# expect_used; this catches method calls on values too.)
+disallowed-methods = [
+    { path = "std::result::Result::unwrap", reason = "use ? or .or_raise() with fast-observe" },
+    { path = "std::result::Result::expect", reason = "use ? or .or_raise() with fast-observe" },
+    { path = "std::option::Option::unwrap", reason = "use ? or .or_raise() with fast-observe" },
+    { path = "std::option::Option::expect", reason = "use ? or .or_raise() with fast-observe" },
+]

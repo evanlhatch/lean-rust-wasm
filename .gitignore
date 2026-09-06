@@ -1,0 +1,36 @@
+# Build artifacts
+/target/
+target-fix/
+
+# Nix / devenv
+.devenv*/
+.direnv/
+result*
+/.pre-commit-config.yaml
+devenv.local.nix
+
+# Local env + secrets
+.env
+.secrets/
+
+# Editor / OS
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+
+# Node (if tooling needs it)
+node_modules/
+
+# Scratch
+/scratch/
+
+# Vendored crates (patches/) — drop cargo registry metadata
+.cargo-ok
+.cargo_vcs_info.json
+patches/*/target/
+.lake/
+lake-manifest.json
+target/
+target-fix/

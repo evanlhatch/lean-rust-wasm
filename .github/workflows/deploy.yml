@@ -1,0 +1,33 @@
+# Deploy dist/ to Cloudflare Pages on main push. Skeleton until the
+# web/pack pipeline exists — build steps commented, gate placeholder.
+# One-time setup:
+#   1. `npx wrangler pages project create <project>` (or use the dash).
+#   2. Repo secrets: CLOUDFLARE_API_TOKEN (Pages:Edit), CLOUDFLARE_ACCOUNT_ID.
+name: deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+      - name: Build devenv shell
+        run: devenv test
+      # TODO: build + pack steps once the browser/component target lands:
+      #   just gen && just wasm-build && <pack dist/>
+      # Gate: component boots byte-identical vs native (web-check analog).
+      - name: Deploy to Cloudflare Pages
+        shell: devenv shell bash -- -e {0}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: just deploy

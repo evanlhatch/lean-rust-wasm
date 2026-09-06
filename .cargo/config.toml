@@ -1,0 +1,10 @@
+# Per-target cargo config.
+# aarch64-linux: use lld via the cc driver (gcc supports -fuse-ld=lld).
+# ld.bfd 2.46 doesn't understand nightly Rust's object files on aarch64.
+
+[target.aarch64-unknown-linux-gnu]
+linker = "cc"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[alias]
+nt = "nextest run"

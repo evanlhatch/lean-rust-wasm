@@ -1,0 +1,12 @@
+# nextest config.
+#
+# Perf gates that assert on wall time must run alone — parallel-suite
+# CPU contention inflates them (observed in real projects: 5s solo →
+# 38s alongside the full suite). Reserve all test threads for such
+# tests with a `threads-required = "num-test-threads"` override.
+
+[profile.default]
+# Example (uncomment and adapt per test name):
+# [[profile.default.overrides]]
+# filter = "test(stays_fast)"
+# threads-required = "num-test-threads"

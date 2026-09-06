@@ -1,0 +1,68 @@
+/-
+# CodegenCore Tests
+
+Mangler goldens (the most common codegen bug class), header contract,
+registry semantics (pure), printer spot-checks, determinism.
+
+Run: `lake build CodegenCoreTests && .lake/build/bin/CodegenCoreTests`
+-/
+import CodegenCore
+import TestKit
+
+open CodegenCore
+open CodegenCore.Emit
+open TestKit
+
+def mangleChecks : CheckResult := do
+  _ ← assertEq "camel" (camel "max_health.current") "maxHealthCurrent"
+  _ ← assertEq "pascal" (pascal "max_health") "MaxHealth"
+  _ ← assertEq "snake" (snake "MaxHealth current") "max_health_current"
+  _ ← assertEq "kebab" (kebab "maxHealth current") "max-health-current"
+  _ ← assertEq "rust-kw" (rustIdent "type") "r#type"
+  _ ← assertEq "rust-ok" (rustIdent "spawn_count") "spawnCount"
+  .ok ()
+
+def headerCheck : CheckResult :=
+  let h := header "codegen-core" "spec.md"
+  if h.contains "DO NOT EDIT" && h.contains "spec.md" && h.contains "byte-tie"
+  then .ok () else .error s!"header missing parts: {h}"
+
+/-- The registry semantics, purely: append on add, concatenate on import. -/
+def registryChecks : CheckResult := do
+  let spec := registrySpec (α := Nat)
+  let added := [1, 2, 3].foldl spec.addEntryFn ([] : List Nat)
+  _ ← assertEq "addEntryFn appends" added [1, 2, 3]
+  _ ← assertEq "addImportedFn concatenates in order"
+    (spec.addImportedFn #[#[1], #[2, 3], #[]]) [1, 2, 3]
+  -- code allocation: position-derived, prefix + running start
+  let codes := allocateCodes "E" 100 ["a", "b"]
+  _ ← assertEq "codes" (codes.map (·.2)) ["E100", "E101"]
+  _ ← assertEq "code count" (codes.length) 2
+  .ok ()
+
+/-- Printer spot-checks on a demo module (the flatland Emit.Rust shape). -/
+def emitChecks : CheckResult := do
+  let items : List CodegenCore.Emit.Rust.Item :=
+    [ .use_ "crate::x"
+    , .struct "User" ["Clone", "Debug"]
+        [{ name := "id", ty := "u64" }, { name := "name", ty := "String" }]
+    , .newtype "ValidEmail" "String" ["Clone", "Debug"]
+    , .fn "pub fn run() -> u32" "1"
+    ]
+  let out := CodegenCore.Emit.Rust.renderModule items
+  -- determinism: same input, same bytes
+  _ ← assertEq "deterministic" out (CodegenCore.Emit.Rust.renderModule items)
+  _ ← assertEq "use" (out.contains "use crate::x;") true
+  _ ← assertEq "derive line" (out.contains "#[derive(Clone, Debug)]") true
+  _ ← assertEq "struct fields" (out.contains "pub id : u64,") true
+  _ ← assertEq "newtype" (out.contains "pub struct ValidEmail(pub String);") true
+  _ ← assertEq "no raw" (out.contains "raw") false
+  .ok ()
+
+def main : IO UInt32 :=
+  mainOfChecks "CodegenCore"
+    [ ("mangle", mangleChecks)
+    , ("header", headerCheck)
+    , ("registry", registryChecks)
+    , ("emit", emitChecks)
+    ]

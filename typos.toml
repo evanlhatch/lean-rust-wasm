@@ -1,0 +1,6 @@
+# typos config — `just typos` / CI. Add project words here as needed.
+[default.extend-words]
+
+[files]
+# Vendored/patched crates are upstream text — don't spell-check.
+extend-exclude = ["target", "target-fix", "patches/**"]

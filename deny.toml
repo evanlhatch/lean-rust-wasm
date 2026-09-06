@@ -1,0 +1,41 @@
+# cargo-deny config — run: cargo deny check (pre-commit hook + just deny).
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[bans]
+# Error handling — fast-observe only, never thiserror/anyhow/eyre.
+# v2 syntax: { crate = "name", reason/wrappers/... }.
+deny = [
+    { crate = "thiserror", reason = "fast-observe is the error tool" },
+    # anyhow: bolero's fuzz harness needs it (dev) — 1.x allowed via the
+    # crate spec; ban any newer major.
+    { crate = "anyhow@>=2", reason = "fast-observe is the error tool; bolero (dev) pins anyhow 1" },
+    { crate = "eyre", reason = "fast-observe is the error tool" },
+]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+# No `deny` list — licenses not in `allow` are reported (PR #611 removed
+# licenses.deny; allow-list-only semantics).
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "allow"
