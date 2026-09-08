@@ -16,7 +16,7 @@ impl dbsp::Change for UserChange {
     true
   }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OrderItemChange {
   Insert(OrderItem),
   Update(OrderItem),
@@ -31,7 +31,7 @@ impl dbsp::Change for OrderItemChange {
     true
   }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OrderChange {
   Insert(Order),
   Update(Order),

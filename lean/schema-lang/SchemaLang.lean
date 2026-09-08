@@ -18,5 +18,4 @@ import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
-import SchemaLang.Spec.Demo
 import SchemaLang.Pipeline

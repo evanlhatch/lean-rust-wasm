@@ -8,15 +8,27 @@ pub struct User {
   pub email : String,
   pub tags : Vec<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OrderItem {
   pub id : u64,
   pub qty : u32,
   pub price : f64,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Order {
   pub id : u64,
   pub items : Vec<OrderItem>,
   pub total : f64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Role {
+  Admin,
+  Editor,
+  Viewer,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrderError {
+  EmptyCart,
+  InvalidItem(u64),
+  InsufficientFunds(f64),
 }

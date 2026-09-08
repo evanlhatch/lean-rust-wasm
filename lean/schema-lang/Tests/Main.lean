@@ -11,6 +11,53 @@ import TestKit
 
 open SchemaLang TestKit
 
+/-! ## Item-algebra fixtures (test data, not spec)
+
+The items below reproduce the old `SchemaLang.Spec.Demo` hand-list verbatim.
+They exercise the Item ALGEBRA (resolution, diff, delta shapes) without
+depending on the reflection registry — which the golden checks load live
+from `Demo` via `importModules`. The names are deliberately lowercase
+(`user`, `role`, …) as the hand-list wrote them; the reflection emits
+Pascal names and the emitters kebab at emission, so nothing drifts. -/
+
+/-- Record fixture: `user`. -/
+def demoUser : Item :=
+  .record "user"
+    [ { name := "id", ty := .u64 }
+    , { name := "name", ty := .string }
+    , { name := "email", ty := .string }
+    , { name := "tags", ty := .list .string } ]
+
+/-- Variant fixture: `role`. -/
+def demoRole : Item :=
+  .variant "role" [("admin", none), ("editor", none), ("viewer", none)]
+
+/-- Variant fixture: `order-error`. -/
+def demoOrderError : Item :=
+  .variant "order-error"
+    [ ("empty-cart", none)
+    , ("invalid-item", some .u64)
+    , ("insufficient-funds", some .f64) ]
+
+/-- Func fixture: `get-user`. -/
+def demoGetUser : Item :=
+  .func { name := "get-user"
+        , params := [("id", .u64)]
+        , ret := .option (.ty "user") }
+
+/-- Func fixture: `watch-orders`. -/
+def demoWatchOrders : Item :=
+  .func { name := "watch-orders"
+        , params := [("into", .ty "order-error")]
+        , ret := .future (.list (.ty "user")) }
+
+/-- Resource fixture: `db`. -/
+def demoDb : Item := .resource "db"
+
+/-- The full demo universe fixture (the old Spec.demo). -/
+def demoItems : List Item :=
+  [ demoUser, demoRole, demoOrderError, demoGetUser, demoWatchOrders, demoDb ]
+
 /-! ## The linen patterns, exercised -/
 
 /-- Schema-indexed field resolution (abbrev list — the reducibility rule). -/
@@ -39,9 +86,9 @@ def codecChecks : CheckResult := do
 
 def resolutionChecks : CheckResult := do
   -- demo universe: all refs resolve, names unique (Bool projection)
-  _ ← assertEq "demo wellFormed" (universeWellFormed Spec.demo) true
+  _ ← assertEq "demo wellFormed" (universeWellFormed demoItems) true
   -- the DIAGNOSTIC authority: empty diags = well formed
-  _ ← assertEq "demo check clean" (universeCheck Spec.demo) []
+  _ ← assertEq "demo check clean" (universeCheck demoItems) []
   -- a ref to a missing type: rejected WITH did-you-mean + valid space
   let broken : List Item :=
     [ .record "a" [{ name := "x", ty := .ty "usr" }], .record "user" [] ]
@@ -210,36 +257,36 @@ def bridgeSchemaChecks : CheckResult := do
 
 def deltaChecks : CheckResult := do
   -- the change-shape functions, per record
-  _ ← assertEq "changeTypeName" (Item.changeTypeName Spec.user) "UserChange"
-  _ ← assert (Item.changeTy Spec.user == some (.ty "user")) "changeTy is the record ref"
-  _ ← assert (Item.changeTy Spec.getUser == none) "func has no change ty"
+  _ ← assertEq "changeTypeName" (Item.changeTypeName demoUser) "UserChange"
+  _ ← assert (Item.changeTy demoUser == some (.ty "user")) "changeTy is the record ref"
+  _ ← assert (Item.changeTy demoGetUser == none) "func has no change ty"
   _ ← assert (Item.changeTy (.record "empty" []) == none) "key-less record has no change ty"
   -- WIT change variant: name, insert/update payloads, remove carries the key type
-  let wit := String.intercalate "\n" (Item.changeWitDecl Spec.user)
+  let wit := String.intercalate "\n" (Item.changeWitDecl demoUser)
   _ ← assert (wit.contains "variant user-change {") "variant name kebab+mangled"
   _ ← assert (wit.contains "insert(user)") "wit insert"
   _ ← assert (wit.contains "update(user)") "wit update"
   _ ← assert (wit.contains "remove(u64)") "wit remove carries key ty"
-  _ ← assert (Item.changeWitDecl Spec.role == []) "variant item: no change decl"
+  _ ← assert (Item.changeWitDecl demoRole == []) "variant item: no change decl"
   -- Rust: enum + ChangeSpec impl
-  let out := CodegenCore.Emit.Rust.renderModule (Spec.demo.flatMap Item.changeRustItems)
+  let out := CodegenCore.Emit.Rust.renderModule (demoItems.flatMap Item.changeRustItems)
   _ ← assertEq "deterministic" out
-    (CodegenCore.Emit.Rust.renderModule (Spec.demo.flatMap Item.changeRustItems))
+    (CodegenCore.Emit.Rust.renderModule (demoItems.flatMap Item.changeRustItems))
   _ ← assert (out.contains "pub enum UserChange {") "change enum"
   _ ← assert (out.contains "#[derive(Clone, Debug, PartialEq, Eq)]") "derives"
   _ ← assert (out.contains "Insert(User),") "insert payload"
   _ ← assert (out.contains "Remove(u64),") "remove payload"
   _ ← assert (out.contains "impl dbsp::Change for UserChange") "ChangeSpec impl"
   -- the emitters: declared paths, determinism
-  let files := deltaEmitter.run Spec.demo
-  _ ← assertEq "delta path" (files.head?.map (·.path)) (some "src/delta_generated.rs")
+  let files := deltaEmitter.run demoItems
+  _ ← assertEq "delta path" (files.head?.map (·.path)) (some "../../src/delta_generated.rs")
   _ ← assertEq "delta deterministic" (files.map (·.contents))
-    ((deltaEmitter.run Spec.demo).map (·.contents))
-  let wfiles := deltaWitEmitter.run Spec.demo
-  _ ← assertEq "deltaWit path" (wfiles.head?.map (·.path)) (some "wit/delta.wit")
+    ((deltaEmitter.run demoItems).map (·.contents))
+  let wfiles := deltaWitEmitter.run demoItems
+  _ ← assertEq "deltaWit path" (wfiles.head?.map (·.path)) (some "../../wit/delta.wit")
   let wout := wfiles.head?.map (·.contents) |>.getD ""
   _ ← assertEq "deltaWit deterministic" wout
-    ((deltaWitEmitter.run Spec.demo).head?.map (·.contents) |>.getD "")
+    ((deltaWitEmitter.run demoItems).head?.map (·.contents) |>.getD "")
   _ ← assert (wout.contains "insert(user)") "deltaWit insert pin"
   _ ← assert (wout.contains "remove(u64)") "deltaWit remove pin"
   .ok ()

@@ -98,7 +98,7 @@ end SchemaLang.Emit.Rust
 def rustEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "rust"
   style := .doubleSlash
-  specSource := "SchemaLang/Spec/Demo.lean"
+  specSource := "Demo.lean"
   outputs := ["../../src/schema_generated.rs"]
   run items := [
     { path := "../../src/schema_generated.rs"

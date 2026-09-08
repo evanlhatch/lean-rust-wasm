@@ -20,3 +20,15 @@ pub struct Order {
   pub items : Vec<OrderItem>,
   pub total : f64,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Role {
+  Admin,
+  Editor,
+  Viewer,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrderError {
+  EmptyCart,
+  InvalidItem(u64),
+  InsufficientFunds(f64),
+}

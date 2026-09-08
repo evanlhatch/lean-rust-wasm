@@ -84,7 +84,12 @@ def Item.changeWitDecl : Item → List String
 /-- The change ENUM + its `dbsp::Change` impl (the `Dbsp.Change` class
     shape: `patch` + `valid`). `insert`/`update` replace the row;
     `remove` keeps the last-seen value (the deletion is the key join's
-    signal). Empty list for non-records / key-less records. -/
+    signal). Empty list for non-records / key-less records.
+
+    Derives follow the Rust emitter's Eq discipline: a change enum whose
+    payload record is float-free gets `Eq` (the same `hasFloat` check
+    `schemaItems` uses). The full record is the payload, so the check is
+    over the record's own fields. -/
 def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
   | .record n fields =>
       match fields.head? with
@@ -93,7 +98,10 @@ def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
           let change := Item.changeTypeName (.record n fields)
           let full := SchemaLang.Emit.Rust.tyRust (.ty n)
           let keyTy := SchemaLang.Emit.Rust.tyRust key.ty
-          [ .enum change SchemaLang.Emit.Rust.baseDerives
+          let eqOk := !(fields.any (fun f => SchemaLang.Emit.Rust.hasFloat f.ty))
+          let derives := if eqOk then SchemaLang.Emit.Rust.baseDerives ++ ["Eq"]
+                         else SchemaLang.Emit.Rust.baseDerives
+          [ .enum change derives
               [ s!"Insert({full})"
               , s!"Update({full})"
               , s!"Remove({keyTy})"
@@ -119,7 +127,7 @@ open SchemaLang (Item)
 def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "delta"
   style := .doubleSlash
-  specSource := "SchemaLang/Spec/Demo.lean"
+  specSource := "Demo.lean"
   outputs := ["../../src/delta_generated.rs"]
   run items :=
     [{ path := "../../src/delta_generated.rs"
@@ -127,13 +135,14 @@ def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
          CodegenCore.Emit.Rust.renderModule (items.flatMap Item.changeRustItems) }]
 
 /-- The WIT delta emitter: all change variants, one file (see the module
-    header for why this is separate from `witEmitter`). -/
+    header for why this is separate from `witEmitter`). Repo-root-relative
+    path like the other emitters — the forge byte-tie covers it. -/
 def deltaWitEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "delta-wit"
   style := .doubleSlash
-  specSource := "SchemaLang/Spec/Demo.lean"
-  outputs := ["wit/delta.wit"]
+  specSource := "Demo.lean"
+  outputs := ["../../wit/delta.wit"]
   run items :=
-    [{ path := "wit/delta.wit"
+    [{ path := "../../wit/delta.wit"
        contents :=
          String.join ((items.flatMap Item.changeWitDecl).map (· ++ "\n")) }]

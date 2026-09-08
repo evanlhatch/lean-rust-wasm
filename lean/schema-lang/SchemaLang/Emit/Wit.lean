@@ -103,13 +103,15 @@ def worldOf (packageName worldName : String) (items : List Item) : String :=
 
 end SchemaLang.Emit.Wit
 
-/-- The WIT emitter plugin. -/
+/-- The WIT emitter plugin. Repo-root-relative path (the `../../` prefix)
+    matches the Rust/vortex emitters — the forge byte-tie checks the SAME
+    file the emitter writes. -/
 def witEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "wit"
   style := .doubleSlash
-  specSource := "SchemaLang/Spec/Demo.lean"
-  outputs := ["wit/gateway.wit"]
+  specSource := "Demo.lean"
+  outputs := ["../../wit/gateway.wit"]
   run items := [
-    { path := "wit/gateway.wit"
+    { path := "../../wit/gateway.wit"
       contents := SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway" items }
   ]

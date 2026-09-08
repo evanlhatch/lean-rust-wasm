@@ -178,7 +178,7 @@ def recordItems (rec : String × StructFields) : List CodegenCore.Emit.Rust.Item
 def vortexEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "vortex"
   style := .doubleSlash
-  specSource := "SchemaLang/Spec/Demo.lean"
+  specSource := "Demo.lean"
   outputs := ["../../src/vortex_generated.rs"]
   run items :=
     [ { path := "../../src/vortex_generated.rs"

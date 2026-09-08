@@ -96,6 +96,7 @@ inductive SchemaDiag where
   | notAStructure (name : String)
   | noCtor (name : String)
   | binderMismatch (name : String)
+  | multiPayload (name : String)
 deriving Repr, BEq, Inhabited
 
 namespace SchemaDiag
@@ -115,6 +116,8 @@ def render : SchemaDiag → String
   | .noCtor n => s!"`{n}`: no constructor found"
   | .binderMismatch n =>
       s!"`{n}`: field/binder count mismatch — flat structures without typeclass fields only (v1)"
+  | .multiPayload n =>
+      s!"`{n}`: variant cases carry at most one payload type (v1 — WIT case shape)"
 
 end SchemaDiag
 
@@ -193,8 +196,8 @@ def Item.check (known : List String) : Item → List SchemaDiag
       fields.flatMap fun f =>
         (if f.ty.banAsync then [] else [.asyncField n f.name])
           ++ f.ty.check known
-  | .variant n cases =>
-      cases.flatMap fun (cn, payload) =>
+  | .variant _ cases =>
+      cases.flatMap fun (_, payload) =>
         match payload with
         | some t => t.check known
         | none => []
