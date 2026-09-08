@@ -18,6 +18,7 @@ import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
+import SchemaLang.Vortex.Emit
 
 namespace SchemaLang.Emit
 
@@ -25,6 +26,7 @@ namespace SchemaLang.Emit
 def emitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
   [ witEmitter
   , rustEmitter
+  , SchemaLang.Vortex.Emit.vortexEmitter
   ]
 
 /-- Audit: no two emitters claim the same output path. -/

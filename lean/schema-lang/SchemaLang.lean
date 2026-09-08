@@ -12,6 +12,8 @@ import SchemaLang.Codec
 import SchemaLang.Field
 import SchemaLang.Row
 import SchemaLang.Lin
+import SchemaLang.Bridge
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
+import SchemaLang.Vortex.Emit
 import SchemaLang.Spec.Demo

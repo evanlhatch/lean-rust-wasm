@@ -133,6 +133,80 @@ def rustChecks : CheckResult := do
   _ ← assertEq "no funcs" (out.contains "get_user") false
   .ok ()
 
+/-! ## Bridge: Ty → SType -/
+
+open LeanSubstrait.Typed in
+def bridgeChecks : CheckResult := do
+  -- scalars round-trip 1:1 (signed, floats, bool, string)
+  _ ← assert (Ty.toSType? .bool == some .bool) "bool"
+  _ ← assert (Ty.toSType? .i8 == some .i8) "i8"
+  _ ← assert (Ty.toSType? .i32 == some .i32) "i32"
+  _ ← assert (Ty.toSType? .i64 == some .i64) "i64"
+  _ ← assert (Ty.toSType? .f32 == some .fp32) "f32"
+  _ ← assert (Ty.toSType? .f64 == some .fp64) "f64"
+  _ ← assert (Ty.toSType? .string == some .string) "string"
+  -- unsigned narrowing: u-lossy by design
+  _ ← assert (Ty.toSType? .u8 == some .i8) "u8 narrows"
+  _ ← assert (Ty.toSType? .u64 == some .i64) "u64 narrows"
+  -- nesting
+  _ ← assert (Ty.toSType? (.list .string) == some (.list .string)) "list"
+  _ ← assert (Ty.toSType? (.ty "user") == some (.userDefined "" "user" [])) "ty ref"
+  -- not queryable
+  _ ← assert (Ty.toSType? (.future .u64) == none) "future none"
+  _ ← assert (Ty.toSType? (.stream .string) == none) "stream none"
+  _ ← assert (Ty.toSType? (.result .u64 .string) == none) "result none"
+  _ ← assert (Ty.toSType? .bytes == none) "bytes none"
+  -- option does not lower outside a column context
+  _ ← assert (Ty.toSType? (.option .string) == none) "option none"
+  -- the congruence proof instantiates; equal types lower equally
+  let _pf := Ty.toSType?_congr (show Ty.i32 = Ty.i32 from rfl)
+  _ ← assert (Ty.toSType? .i32 == Ty.toSType? .i32) "congr"
+  .ok ()
+
+open LeanSubstrait.Typed in
+def bridgeSchemaChecks : CheckResult := do
+  -- required field: nullable=false, u64 narrows
+  _ ← assert (SchemaCol.ofField ⟨"id", .u64⟩ == some ("id", .i64, false)) "required field"
+  -- option field: unwrapped into nullable=true
+  _ ← assert (SchemaCol.ofField ⟨"email", .option .string⟩
+    == some ("email", .string, true)) "option field"
+  -- nested options stay flat-nullable
+  _ ← assert (SchemaCol.ofField ⟨"x", .option (.option .u32)⟩
+    == some ("x", .i32, true)) "nested option"
+  -- non-queryable field type
+  _ ← assert (SchemaCol.ofField ⟨"job", .future .u64⟩ == none) "future field none"
+  -- ofItems: records only, option fields become nullable columns
+  let items : List Item :=
+    [ .record "user" [⟨"id", .u64⟩, ⟨"email", .option .string⟩]
+    , .variant "role" [("admin", none)]
+    , .resource "db" ]
+  let expect : List (String × Schema) :=
+    [("user", [("id", .i64, false), ("email", .string, true)])]
+  _ ← assert (Schema.ofItems items == expect) "ofItems"
+  .ok ()
+
+/-! ## Vortex emitter -/
+
+def vortexChecks : CheckResult := do
+  let files := SchemaLang.Vortex.Emit.vortexEmitter.run Spec.demo
+  _ ← assertEq "one file" files.length 1
+  -- output path is declared, exactly
+  _ ← assertEq "path" (files.head?.map (·.path) |>.getD "") "src/vortex_generated.rs"
+  let out := files.head?.map (·.contents) |>.getD ""
+  -- determinism: same input, same bytes
+  _ ← assertEq "deterministic" out
+    ((SchemaLang.Vortex.Emit.vortexEmitter.run Spec.demo).head?.map (·.contents) |>.getD "")
+  -- dtype pins
+  _ ← assertEq "primitive pin" (out.contains "DType::Primitive(PType::U64") true
+  _ ← assertEq "nullability pin" (out.contains "Nullability::NonNullable") true
+  _ ← assertEq "impl pin" (out.contains "impl IntoVortex for User") true
+  -- list<string> field lowers to Arc-wrapped Utf8
+  _ ← assertEq "list pin"
+    (out.contains "DType::List(std::sync::Arc::new(DType::Utf8(Nullability::NonNullable))") true
+  -- const naming: snake + upper + _DTYPE
+  _ ← assertEq "const pin" (out.contains "pub const USER_DTYPE") true
+  .ok ()
+
 def main : IO UInt32 :=
   mainOfChecks "SchemaLang"
     [ ("resolution", resolutionChecks)
@@ -142,4 +216,7 @@ def main : IO UInt32 :=
     , ("diff", diffChecks)
     , ("wit", witChecks)
     , ("rust", rustChecks)
+    , ("bridge", bridgeChecks)
+    , ("bridgeSchema", bridgeSchemaChecks)
+    , ("vortex", vortexChecks)
     ]

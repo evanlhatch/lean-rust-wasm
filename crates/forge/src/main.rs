@@ -26,7 +26,7 @@ struct Job {
 const JOBS: &[Job] = &[Job {
     package: "schema-lang",
     exe: "schema-gen",
-    outputs: &["wit/gateway.wit", "src/schema_generated.rs"],
+    outputs: &["wit/gateway.wit", "src/schema_generated.rs", "src/vortex_generated.rs"],
   },
   Job {
     package: "faults",

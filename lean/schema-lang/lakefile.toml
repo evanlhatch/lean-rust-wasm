@@ -16,6 +16,10 @@ path = "../codegen-core"
 name = "TestKit"
 path = "../TestKit"
 
+[[require]]
+name = "LeanSubstrait"
+path = "../LeanSubstrait"
+
 [[lean_lib]]
 name = "SchemaLang"
 roots = ["SchemaLang"]
@@ -33,3 +37,7 @@ root = "Tests.Main"
 [[lean_exe]]
 name = "schema-gen"
 root = "GenMain"
+# `enableInitializersExecution` (extension replay for importModules) runs
+# imported initializers through the interpreter — needs the core native
+# impls (IO.getRandomBytes) linked in.
+supportInterpreter = true
