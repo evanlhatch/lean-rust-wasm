@@ -1,0 +1,12 @@
+=== Extensions
+URNs:
+  @  1: extension:io.substrait:functions_comparison
+  @  2: extension:io.substrait:functions_arithmetic
+Functions:
+  #  1 @  1: gt
+  #  2 @  2: add
+
+=== Plan
+Project[$0, $1, add($0, $1):i32?]
+  Filter[gt($0, 0:i32):boolean? => $0, $1]
+    Read[units => health:i32?, regen:i32?]

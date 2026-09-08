@@ -1,5 +1,6 @@
 /- SchemaLang — the schema language: types, items, resolution, diff,
-   emission, codecs, schema-indexed fields, reification, linearity. -/
+   emission, codecs, schema-indexed fields, reification, linearity,
+   Vortex lowering. -/
 import SchemaLang.DidYouMean
 import SchemaLang.Ty
 import SchemaLang.Item
@@ -11,5 +12,6 @@ import SchemaLang.Codec
 import SchemaLang.Field
 import SchemaLang.Row
 import SchemaLang.Lin
-
+import SchemaLang.Vortex.DType
+import SchemaLang.Vortex.Lower
 import SchemaLang.Spec.Demo
