@@ -17,7 +17,7 @@ def mySpec : PropSpec "my property" propSuite
 Both are reported; a vacuous property is louder than a failing one.
 
 The property suites are `LSpec.TestSeq`s built with `checkPlausibleIO`
-(seeded, shrinking) — see LeanSubstrait/Tests for the reference instance.
+(seeded, shrinking) — see Substrait/Tests for the reference instance.
 -/
 
 import LSpec

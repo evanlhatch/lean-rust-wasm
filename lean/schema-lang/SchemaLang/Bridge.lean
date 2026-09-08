@@ -1,8 +1,8 @@
 /-
-# SchemaLang.Bridge — Ty → LeanSubstrait SType lowering
+# SchemaLang.Bridge — Ty → Substrait SType lowering
 
 The bridge from the schema-lang component-boundary universe to the
-LeanSubstrait typed query universe. This is where the "what maps to a
+Substrait typed query universe. This is where the "what maps to a
 queryable column" decision lives — the query-side sibling of
 `Vortex.Lower`.
 
@@ -23,19 +23,19 @@ Lowering decisions (target-neutral → Substrait):
 - `.result`, `.future`, `.stream`, `.bytes` → `none` (not queryable:
   async/error channels live in function signatures, not column types)
 
-Nullability composition rule (flatland `LeanSubstrait.Typed.Schema`
+Nullability composition rule (flatland `Substrait.Typed.Schema`
 convention): both universes are nullability-FREE — schema-lang nests
-nullability as `option<T>` constructors, LeanSubstrait carries it as
+nullability as `option<T>` constructors, Substrait carries it as
 the third component of a `SchemaCol`. `ofField` is the junction: it
 peels option constructors and emits the nullable flag.
 -/
 
 import SchemaLang.Item
-import LeanSubstrait.Typed.Expr
+import Substrait.Typed.Expr
 
 namespace SchemaLang
 
-open LeanSubstrait.Typed (SType SchemaCol Schema)
+open Substrait.Typed (SType SchemaCol Schema)
 
 /-! ## Type lowering -/
 

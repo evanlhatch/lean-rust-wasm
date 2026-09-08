@@ -1,11 +1,13 @@
 //! forge — the codegen pipeline orchestrator.
 //!
 //! Owns: invoking Lean emitters (`lake build` + `lake exe` per package),
-//! byte-tie checking (`gen --check`), and later: component linking, OCI
-//! layout. Logic lives here; just/devenv stay thin shims.
+//! byte-tie checking (`gen --check`), the OCI layout store, and later:
+//! component linking, splice orchestration.
 //!
 //! Never contains: emitters (Lean owns those — they read the elaborated
 //! environment), devenv logic (shell stays thin).
+
+mod oci;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,22 +25,18 @@ struct Job {
     outputs: &'static [&'static str],
 }
 
-const JOBS: &[Job] = &[Job {
-    package: "schema-lang",
-    exe: "schema-gen",
-    outputs: &[
-        "wit/gateway.wit",
-        "src/schema_generated.rs",
-        "src/vortex_generated.rs",
-        "src/delta_generated.rs",
-        "wit/delta.wit",
-    ],
-  },
-  Job {
-    package: "faults",
-    exe: "faults-gen",
-    outputs: &["src/faults_generated.rs"],
-}];
+const JOBS: &[Job] = &[
+    Job {
+        package: "schema-lang",
+        exe: "schema-gen",
+        outputs: &["wit/gateway.wit", "src/schema_generated.rs", "src/vortex_generated.rs"],
+    },
+    Job {
+        package: "faults",
+        exe: "faults-gen",
+        outputs: &["src/faults_generated.rs"],
+    },
+];
 
 fn lean_tc() -> PathBuf {
     if let Ok(tc) = std::env::var("LEAN_TC") {
@@ -95,9 +93,15 @@ fn read_if_exists(p: &Path) -> Option<Vec<u8>> {
 }
 
 fn main() {
-    let check = std::env::args().any(|a| a == "--check");
+    let args: Vec<String> = std::env::args().collect();
+    let check = args.iter().any(|a| a == "--check");
+    let store_artifacts = args.iter().any(|a| a == "--store");
     let tc = lean_tc();
     let root = repo_root();
+
+    // Initialize the OCI store (lazy — only used with --store).
+    let oci_root = root.join("target/oci");
+    let store = oci::OciStore::open(&oci_root).expect("oci store init");
 
     if !check {
         let mut failed = false;
@@ -106,6 +110,23 @@ fn main() {
             if let Err(e) = run_job(&tc, &root, job) {
                 eprintln!("forge: FAIL {e}");
                 failed = true;
+            }
+        }
+        if store_artifacts {
+            for job in JOBS {
+                for out in job.outputs {
+                    let path = root.join(out);
+                    if let Some(data) = read_if_exists(&path) {
+                        match store.put(out, &data) {
+                            Ok(digest) => println!("forge: oci {out} → {digest}"),
+                            Err(e) => eprintln!("forge: oci store {out}: {e}"),
+                        }
+                    }
+                }
+            }
+            match store.write_index() {
+                Ok(()) => println!("forge: oci index written"),
+                Err(e) => eprintln!("forge: oci index: {e}"),
             }
         }
         std::process::exit(if failed { 1 } else { 0 });

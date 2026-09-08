@@ -7,3 +7,4 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 # Pipeline orchestrator: lake emitters -> byte-tie -> component link -> OCI.
 # Deps land with each phase (serde, sha2, oci-wasm, wasm-encoder...).
+serde_json = "1"

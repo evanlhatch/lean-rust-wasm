@@ -15,7 +15,7 @@ Lowering decisions (target-neutral → Vortex):
   in func signatures they map to WASI 0.3 future/stream, not Vortex
 - `.ty n` / `.ext n` → extension dtype lookup from the registry
 
-Nullability composition rule (flatland `LeanSubstrait.Typed.Schema`
+Nullability composition rule (flatland `Substrait.Typed.Schema`
 convention): the schema universe is nullability-FREE (option handles
 it); the lowering ADDS nullability based on context. A top-level
 `.option t` becomes nullable; everything inside it stays as lowered.

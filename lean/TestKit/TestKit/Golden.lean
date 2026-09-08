@@ -1,7 +1,7 @@
 /-
 # TestKit.Golden — the golden-file driver, generalized
 
-LeanSubstrait's golden driver (emit text, byte-compare against a committed
+Substrait's golden driver (emit text, byte-compare against a committed
 file, `--update` regenerates) was hand-rolled inside its Tests/Main.lean.
 The pattern recurs — Codegen artifacts, future DSL surfaces — so it lives
 here once.

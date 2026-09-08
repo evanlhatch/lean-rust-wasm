@@ -17,8 +17,8 @@ name = "TestKit"
 path = "../TestKit"
 
 [[require]]
-name = "LeanSubstrait"
-path = "../LeanSubstrait"
+name = "Substrait"
+path = "../substrait"
 
 [[lean_lib]]
 name = "SchemaLang"

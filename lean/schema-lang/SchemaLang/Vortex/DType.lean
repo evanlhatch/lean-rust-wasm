@@ -1,7 +1,7 @@
 /-
 # SchemaLang.Vortex — the Vortex dtype model, wire-faithful
 
-Lifted from flatland's `LeanSubstrait.Vortex.DType` (which ports the
+Lifted from flatland's `Substrait.Vortex.DType` (which ports the
 fork's `vortex-array/src/dtype/`). This is the proof-carrying
 intermediate between the target-neutral `Ty` universe and the Rust
 `vortex::dtype::DType` construction code.

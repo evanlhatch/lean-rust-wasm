@@ -156,7 +156,7 @@ unsafe def goldenChecks (update : Bool) : IO (List (String × CheckResult)) := d
 
 /-! ## Bridge: Ty → SType -/
 
-open LeanSubstrait.Typed in
+open Substrait.Typed in
 def bridgeChecks : CheckResult := do
   -- scalars round-trip 1:1 (signed, floats, bool, string)
   _ ← assert (Ty.toSType? .bool == some .bool) "bool"
@@ -184,7 +184,7 @@ def bridgeChecks : CheckResult := do
   _ ← assert (Ty.toSType? .i32 == Ty.toSType? .i32) "congr"
   .ok ()
 
-open LeanSubstrait.Typed in
+open Substrait.Typed in
 def bridgeSchemaChecks : CheckResult := do
   -- required field: nullable=false, u64 narrows
   _ ← assert (SchemaCol.ofField ⟨"id", .u64⟩ == some ("id", .i64, false)) "required field"
