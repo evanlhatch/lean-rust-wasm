@@ -244,6 +244,31 @@ def deltaChecks : CheckResult := do
   _ ← assert (wout.contains "remove(u64)") "deltaWit remove pin"
   .ok ()
 
+/-! ## Vortex ExtVTable emitter (ext dtypes, spec-as-data) -/
+
+def extDTypeChecks : CheckResult := do
+  -- the registry: wellFormed over every entry
+  _ ← assertEq "ext wellFormed" (SchemaLang.Vortex.Emit.extDTypes.all (·.wellFormed)) true
+  let out := CodegenCore.Emit.Rust.renderModule
+    (SchemaLang.Vortex.Emit.extDTypeModule SchemaLang.Vortex.Emit.extDTypes)
+  -- the ExtVTable impl is present, with the correct id
+  _ ← assert (out.contains "impl ExtVTable for PositionExt") "vtable impl present"
+  _ ← assert (out.contains "ExtId::new(\"flatland.position\")") "id correct"
+  _ ← assert (out.contains "type Metadata = PositionMetadata;") "metadata assoc type"
+  _ ← assert (out.contains "impl ExtVTable for TensorExt") "tensor impl present"
+  _ ← assert (out.contains "ExtId::new(\"vortex.fixedshape.tensor\")") "tensor id correct"
+  -- external (fork-owned) entries are registered but NOT emitted
+  _ ← assert (!out.contains "GeoExt") "external skipped"
+  -- determinism
+  _ ← assertEq "ext deterministic" out
+    (CodegenCore.Emit.Rust.renderModule
+      (SchemaLang.Vortex.Emit.extDTypeModule SchemaLang.Vortex.Emit.extDTypes))
+  -- the emitter: declared path + zero-input (ignores schema items)
+  let files := SchemaLang.Vortex.Emit.extVortexEmitter.run []
+  _ ← assertEq "ext path" (files.head?.map (·.path))
+    (some "../../src/ext_dtypes_generated.rs")
+  .ok ()
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
@@ -257,4 +282,5 @@ unsafe def main (args : List String) : IO UInt32 := do
      [ ("bridge", bridgeChecks)
      , ("bridgeSchema", bridgeSchemaChecks)
      , ("delta", deltaChecks)
+     , ("extDType", extDTypeChecks)
      ])

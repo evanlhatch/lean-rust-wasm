@@ -20,6 +20,7 @@ import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
 import SchemaLang.Vortex.Emit
+import SchemaLang.Vortex.ExtDType
 
 namespace SchemaLang.Emit
 
@@ -28,6 +29,7 @@ def emitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
   [ witEmitter
   , rustEmitter
   , SchemaLang.Vortex.Emit.vortexEmitter
+  , SchemaLang.Vortex.Emit.extVortexEmitter
   , deltaEmitter
   , deltaWitEmitter
   ]

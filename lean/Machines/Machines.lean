@@ -4,6 +4,7 @@ import Machines.Core
 import Machines.Convergent
 import Machines.Live
 import Machines.Refine
+import Machines.LinearMachine
 import Machines.Rewind
 import Machines.Compose
 import Machines.Trace

@@ -432,6 +432,113 @@ def semChecks : CheckResult := do
 
 end SyncTest
 
+-- ── 6. LinearMachine: machines over change groups (Machines.LinearMachine) ──
+
+namespace LinearTest
+
+open Machines
+
+/-- Raw-form Int lemmas: `Int.add_assoc` etc. are stated over `+`, whose
+    elaborated head (`HAdd.hAdd`) does not syntactically match the raw
+    `Int.add` applications that `patch`/`step?` reduce to. -/
+theorem iadd_assoc (a b c : Int) : Int.add (Int.add a b) c = Int.add a (Int.add b c) := by
+  show a + b + c = a + (b + c)
+  rw [Int.add_assoc]
+
+theorem iadd_comm (a b : Int) : Int.add a b = Int.add b a := by
+  show a + b = b + a
+  rw [Int.add_comm]
+
+theorem imul_add (a b c : Int) : Int.mul (Int.add a b) c = Int.add (Int.mul a c) (Int.mul b c) := by
+  show (a + b) * c = a * c + b * c
+  rw [Int.add_mul]
+
+/-- Lean-core `Int` carries a change group — the mathlib-free bridge instance. -/
+instance intChangeGroup : ChangeGroup Int where
+  add := Int.add
+  zero := 0
+  neg := Int.neg
+  add_assoc := Int.add_assoc
+  add_comm := Int.add_comm
+  zero_add := Int.zero_add
+  neg_add_cancel := Int.add_left_neg
+
+-- A translation-equivariant counter on `Int`: bump adds 1. The linearity
+-- law holds with the IDENTITY delta transform: `(s + δ) + 1 = (s + 1) + δ`
+-- — a constant offset persists through the dynamics.
+machine! deltaCounter where
+  State: Int
+  Inv: fun _ => True
+  event: bump guard: (fun _ => true) action: (fun s _ => s + 1)
+
+instance : LinearMachine deltaCounter where
+  eventDelta := fun _ δ => δ
+  linear := by
+    intro s δ l
+    cases l
+    have hg : ∀ x : Int, (deltaCounter.event deltaCounter.Label.bump).guard x = true :=
+      fun _ => rfl
+    rw [Machine.step?_eq, dif_pos (hg _), Machine.step?_eq, dif_pos (hg _), patchOpt]
+    congr 1
+    show Int.add (Int.add s δ) 1 = Int.add (Int.add s 1) δ
+    rw [iadd_assoc, iadd_comm δ 1, ← iadd_assoc]
+
+-- A machine whose delta transform is NOT the identity: doubling scales
+-- the delta (`eventDelta _ δ = δ * 2`), since `(s + δ) * 2 = s * 2 + δ * 2`.
+machine! doubler where
+  State: Int
+  Inv: fun _ => True
+  event: double guard: (fun _ => true) action: (fun s _ => s * 2)
+
+instance : LinearMachine doubler where
+  eventDelta := fun _ δ => δ * 2
+  linear := by
+    intro s δ l
+    cases l
+    have hg : ∀ x : Int, (doubler.event doubler.Label.double).guard x = true :=
+      fun _ => rfl
+    rw [Machine.step?_eq, dif_pos (hg _), Machine.step?_eq, dif_pos (hg _), patchOpt]
+    congr 1
+    show Int.mul (Int.add s δ) 2 = Int.add (Int.mul s 2) (Int.mul δ 2)
+    rw [imul_add]
+
+/-- THE THEOREM at the doubler: the batch run of the patched machine equals
+    the batch run of the base machine corrected by the pure delta chain. -/
+theorem doublerIncremental (s₀ δ : Int) (trace : List doubler.Label) :
+    doubler.runState (patch s₀ δ) trace =
+      (doubler.runState s₀ trace).map (fun fin => patch fin (doubler.deltaChain δ trace)) :=
+  incremental_run_equiv doubler s₀ δ trace
+
+/-- Executable checks: batch vs incremental on both machines. -/
+def linearSmoke : CheckResult := do
+  -- counter, batch: 0 → 1 → 2 → 3
+  match deltaCounter.runState 0 [.bump, .bump, .bump] with
+  | none => .error "counter batch run rejected"
+  | some fin => if fin != 3 then .error s!"counter batch final {fin} ≠ 3"
+  -- counter, incremental: the identity delta transform passes δ through
+  let Δc := deltaCounter.deltaChain 1 [.bump, .bump, .bump]
+  if Δc != 1 then .error s!"counter delta chain {Δc} ≠ 1"
+  match deltaCounter.runState (patch 0 1) [.bump, .bump, .bump] with
+  | none => .error "counter incremental run rejected"
+  | some fin => if fin != 4 then .error s!"counter incremental final {fin} ≠ 4"
+  -- the delta-only step consumes no state: the transform is the identity
+  if deltaCounter.incrementalStep 7 deltaCounter.Label.bump != 7 then
+    .error "counter incrementalStep wrong"
+  -- doubler: batch 3 → 6 → 12; the incremental run from (3, δ=1) — state 4 —
+  -- gives 16, and batch-final + chain = 12 + 4 = 16: they agree
+  match doubler.runState 3 [.double, .double] with
+  | none => .error "doubler batch run rejected"
+  | some base =>
+    let Δ := doubler.deltaChain 1 [.double, .double]
+    if Δ != 4 then .error s!"doubler delta chain {Δ} ≠ 4"
+    match doubler.runState (patch 3 1) [.double, .double] with
+    | none => .error "doubler incremental run rejected"
+    | some fin =>
+      if fin != 16 then .error s!"doubler incremental final {fin} ≠ 16"
+      if base + Δ != fin then .error s!"doubler chain {base}+{Δ} ≠ {fin}"
+
+end LinearTest
+
 -- ── driver (TestKit) ────────────────────────────────────────────────────
 
 def main : IO UInt32 :=
@@ -449,6 +556,7 @@ def main : IO UInt32 :=
     ("sync-mpsc", SyncTest.mpscChecks),
     ("sync-oneshot", SyncTest.oneshotChecks),
     ("sync-barrier", SyncTest.barrierChecks),
-    ("sync-semaphore", SyncTest.semChecks)
+    ("sync-semaphore", SyncTest.semChecks),
+    ("linear-machine", LinearTest.linearSmoke)
   ]
 
