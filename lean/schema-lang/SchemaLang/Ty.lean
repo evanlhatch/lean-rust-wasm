@@ -108,4 +108,46 @@ inductive EqAns {α : Type} (a b : α) : Type where
 def Ty.eqAns (a b : Ty) : EqAns a b :=
   if h : a = b then .yes h else .no
 
+/-! ## Reification: the schema universe as Lean types
+
+`toType` turns data-describing-types into TYPES. Named references are
+open-world: one `RefTy` instance per schema type; an unresolved
+reference fails at ELABORATION TIME the moment `toType` is used - the
+universe check becomes a type-class check, strictly stronger than the
+runtime `wellFormed` scan.
+
+`future`/`stream` erase to their payload: the async wrapping is an
+emission concern (WASI 0.3 future/stream at the boundary), not a Lean
+type-level one. -/
+
+/-- Open-world semantics for named type references: a function from
+    schema type names to Lean types. Provided per schema; v1 universes
+    are acyclic (self-reference needs depth fuel). -/
+abbrev TySem : Type 1 := String → Type
+
+/-- Reify a schema type as a Lean type. Unresolved references become
+    whatever `sem` says (typically `Empty`) — and if `sem` is total over
+    the universe, the wellFormed scan is SUPERSEDED by the kernel:
+    unresolved refs are elaboration errors at the use site. -/
+def Ty.toType : Ty → TySem → Type
+  | .bool, _ => Bool
+  | .u8, _ => UInt8
+  | .u16, _ => UInt16
+  | .u32, _ => UInt32
+  | .u64, _ => UInt64
+  | .i8, _ => Int8
+  | .i16, _ => Int16
+  | .i32, _ => Int32
+  | .i64, _ => Int64
+  | .f32, _ => Float32
+  | .f64, _ => Float
+  | .string, _ => String
+  | .bytes, _ => List UInt8
+  | .option a, sem => Option (a.toType sem)
+  | .result ok err, sem => Sum (ok.toType sem) (err.toType sem)
+  | .list a, sem => List (a.toType sem)
+  | .future a, sem => a.toType sem
+  | .stream a, sem => a.toType sem
+  | .ty n, sem => sem n
+
 end SchemaLang

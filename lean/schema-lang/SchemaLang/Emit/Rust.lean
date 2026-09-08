@@ -72,3 +72,14 @@ def schemaItems (derives : List String) (items : List Item) :
     | _ => none
 
 end SchemaLang.Emit.Rust
+
+/-- The Rust emitter plugin: rich domain types. -/
+def rustEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+  name := "rust"
+  style := .doubleSlash
+  specSource := "SchemaLang/Spec/Demo.lean"
+  outputs := ["src/schema_generated.rs"]
+  run items := [
+    { path := "src/schema_generated.rs"
+      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems SchemaLang.Emit.Rust.defaultDerives items) }
+  ]

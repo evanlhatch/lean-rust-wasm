@@ -102,3 +102,14 @@ def worldOf (packageName worldName : String) (items : List Item) : String :=
     ++ "-exports;\n}\n"
 
 end SchemaLang.Emit.Wit
+
+/-- The WIT emitter plugin. -/
+def witEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+  name := "wit"
+  style := .doubleSlash
+  specSource := "SchemaLang/Spec/Demo.lean"
+  outputs := ["wit/gateway.wit"]
+  run items := [
+    { path := "wit/gateway.wit"
+      contents := SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway" items }
+  ]

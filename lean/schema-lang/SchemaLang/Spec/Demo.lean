@@ -14,6 +14,7 @@ staging; attribute-first moves in with the authoring surface).
 -/
 
 import SchemaLang.Item
+import SchemaLang.Row
 
 namespace SchemaLang.Spec
 
@@ -55,3 +56,23 @@ def demo : List Item :=
   [ user, role, orderError, getUser, watchOrders, db ]
 
 end SchemaLang.Spec
+
+namespace SchemaLang.Spec
+
+/- The demo record's fields, as an abbrev (the reducibility rule). -/
+abbrev demoUserFields : List Field :=
+  [ ⟨"id", .u64⟩
+  , ⟨"name", .string⟩
+  , ⟨"email", .string⟩ ]
+
+/- The named-type semantics for the demo universe: one line per
+    referenceable type. Acyclic v1 (self-reference needs depth fuel).
+    `demoUserFields` has no `.ty` refs, so the Row's inner `sem` is
+    never invoked — the terminal semantics stands in for the fixpoint. -/
+def demoSem : TySem := fun n =>
+  match n with
+  | "user" => Row (fun _ => Empty) demoUserFields
+  | _ => Empty
+
+end SchemaLang.Spec
+

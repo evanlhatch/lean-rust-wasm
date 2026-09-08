@@ -10,8 +10,7 @@ import Faults
 def faultsOut : System.FilePath := "../../src/faults_generated.rs"
 
 def main : IO Unit := do
-  let hdr := (CodegenCore.Emit.header "faults" "Faults/Spec/Demo.lean")
-    |>.replace "--" "//"
+  let hdr := CodegenCore.Emit.header .doubleSlash "faults" "Faults/Spec/Demo.lean"
   let body := Faults.Emit.Rust.faultModule "OrderError"
     (Faults.allocate Faults.Spec.apiFaults)
   IO.FS.writeFile faultsOut (hdr ++ CodegenCore.Emit.Rust.renderModule body)
