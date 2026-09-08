@@ -1,16 +1,15 @@
 /-
 # Machines.LinearMachine — machines over change groups (the DBSP bridge)
 
-Bridges Machines (guarded state machines, mathlib-free) to the Dbsp
-change-structure spec shape (`Dbsp.ChangeSpec`'s `Change`/`Difference`/
-`ChangeInversion` — re-declared here, mathlib-free, so the bridge layer
-stays pure). Contents:
+Bridges Machines (guarded state machines) to the Dbsp change-structure
+spec shape (`Dbsp.ChangeSpec`'s `Change`/`Difference`/`ChangeInversion` —
+re-declared here, because Machines does not depend on dbsp; see the TODO
+at the classes). Contents:
 
-1. `ChangeGroup` — the MINIMAL commutative group class replacing mathlib's
-   `AddCommGroup`: `add`/`zero`/`neg` + the four laws. From it we derive
-   the `Dbsp.ChangeSpec`-shaped change structure over the machine state
-   (patch = `+`, diff = `new - old`, invert = `-`, noc = `0`), all laws
-   proved.
+1. The change-structure classes over mathlib's `AddCommGroup`: from it we
+   derive the `Dbsp.ChangeSpec`-shaped change structure over the machine
+   state (patch = `+`, diff = `new - old`, invert = `-`, noc = `0`), all
+   laws proved by `abel`.
 2. `LinearMachine m` — the linearity predicate: a machine RESPECTS its
    change group when stepping a patched state equals patching the stepped
    state by the event's delta transform:
@@ -26,68 +25,22 @@ stays pure). Contents:
 
 Deliberately out of scope (per the bridge brief): the full DBSP
 incrementality calculus (three-term stream joins, D/I over `Stream`).
-The point is the INTERFACE: `Machine` + `ChangeGroup` + the linearity law.
+The point is the INTERFACE: `Machine` + `AddCommGroup` + the linearity law.
 -/
 
 import Machines.Core
+import Mathlib.Algebra.Group.Defs
+import Mathlib.Algebra.Group.Int.Defs
+import Mathlib.Tactic.Abel
 
 namespace Machines
 
-/-! ## ChangeGroup — the minimal group class (mathlib-free) -/
-
-/-- A commutative group, with the laws as class fields. This is the
-    mathlib-free stand-in for `AddCommGroup`: Machines does not depend on
-    mathlib, and neither does the bridge. -/
-class ChangeGroup (α : Type) where
-  add : α → α → α
-  zero : α
-  neg : α → α
-  add_assoc : ∀ a b c : α, add (add a b) c = add a (add b c)
-  add_comm : ∀ a b : α, add a b = add b a
-  zero_add : ∀ a : α, add zero a = a
-  neg_add_cancel : ∀ a : α, add (neg a) a = zero
-
-instance ChangeGroup.toAdd (α : Type) [ChangeGroup α] : Add α := ⟨ChangeGroup.add⟩
-instance ChangeGroup.toZero (α : Type) [ChangeGroup α] : Zero α := ⟨ChangeGroup.zero⟩
-instance ChangeGroup.toNeg (α : Type) [ChangeGroup α] : Neg α := ⟨ChangeGroup.neg⟩
-
-section
-variable {α : Type} [ChangeGroup α]
-
-theorem add_assoc (a b c : α) : a + b + c = a + (b + c) :=
-  ChangeGroup.add_assoc a b c
-
-theorem add_comm (a b : α) : a + b = b + a :=
-  ChangeGroup.add_comm a b
-
-theorem zero_add (a : α) : 0 + a = a :=
-  ChangeGroup.zero_add a
-
-theorem neg_add_cancel (a : α) : -a + a = 0 :=
-  ChangeGroup.neg_add_cancel a
-
-/-- The right-sided laws, derived from the class fields by commutativity. -/
-theorem add_zero (a : α) : a + 0 = a := by
-  rw [add_comm, zero_add]
-
-theorem add_neg_cancel (a : α) : a + -a = 0 := by
-  rw [add_comm, neg_add_cancel]
-
-/-! ## Patching: the change structure over the machine state -/
-
-/-- Patch a state by a delta: addition in the change group. The
-    `Change.patch` of the Dbsp spec shape. -/
-def patch (s δ : α) : α := ChangeGroup.add s δ
-
-theorem patch_zero (s : α) : patch s 0 = s := add_zero s
-
-end
-
-/-! ## The Dbsp.ChangeSpec shape, re-declared (mathlib-free)
+/-! ## The Dbsp.ChangeSpec shape, re-declared (no dbsp dependency)
 
 Same field names and laws as `Dbsp.ChangeSpec`, so the spec-level reading
-carried there transfers verbatim; we only drop the `AddCommGroup`
-dependency in favor of `ChangeGroup`. -/
+carried there transfers verbatim. Machines does not depend on dbsp, so the
+classes are duplicated here; TODO: once the dependency direction allows
+it, import these from `Dbsp.ChangeSpec` and delete the copies. -/
 
 /-- A change structure: changes patch values, with a validity predicate. -/
 class Change (α Δα : Type) where
@@ -116,41 +69,50 @@ class LawfulNoChange (α Δα : Type) [Noc Δα] [Change α Δα] where
   valid_noc : ∀ t : α, Change.valid t (Noc.noc (Δα := Δα))
   correct_noc : ∀ t : α, Change.patch t (Noc.noc (Δα := Δα)) = t
 
-/-- Every `ChangeGroup` is a change structure over itself — the canonical
-    group change structure of `Dbsp.ChangeSpec`, mathlib-free. -/
-instance Change.groupSelf (α : Type) [ChangeGroup α] : Change α α where
-  patch := Machines.patch
+/-! ## The canonical group change structure -/
+
+/-- Every `AddCommGroup` is a change structure over itself — the canonical
+    group change structure of `Dbsp.ChangeSpec`. -/
+instance Change.groupSelf (α : Type) [AddCommGroup α] : Change α α where
+  patch := (· + ·)
   valid := fun _ _ => True
 
-instance Difference.groupSelf (α : Type) [ChangeGroup α] : Difference α α where
-  diff new old := patch new (ChangeGroup.neg old)
+instance Difference.groupSelf (α : Type) [AddCommGroup α] : Difference α α where
+  diff new old := new - old
   diff_valid := fun _ _ => trivial
   diff_correct := fun old new => by
-    show old + (new + -old) = new
-    rw [← add_assoc, add_comm old new, add_assoc, add_neg_cancel, add_zero]
+    show old + (new - old) = new
+    abel
 
-instance ChangeInversion.groupSelf (α : Type) [ChangeGroup α] : ChangeInversion α α where
-  invert := ChangeGroup.neg
+instance ChangeInversion.groupSelf (α : Type) [AddCommGroup α] : ChangeInversion α α where
+  invert := Neg.neg
   valid_invert := fun _ _ _ => trivial
   correct_invert := fun t Δt _ => by
-    show (t + Δt) + -Δt = t
-    rw [add_assoc, add_neg_cancel, add_zero]
+    show t + Δt + -Δt = t
+    abel
 
-instance Noc.groupSelf (α : Type) [ChangeGroup α] : Noc α where
-  noc := ChangeGroup.zero
+instance Noc.groupSelf (α : Type) [AddCommGroup α] : Noc α where
+  noc := 0
 
-instance LawfulNoChange.groupSelf (α : Type) [ChangeGroup α] : LawfulNoChange α α where
+instance LawfulNoChange.groupSelf (α : Type) [AddCommGroup α] : LawfulNoChange α α where
   valid_noc := fun _ => trivial
   correct_noc := fun t => by
-    show patch t (ChangeGroup.zero) = t
-    exact add_zero t
+    show t + 0 = t
+    rw [add_zero]
 
 section
-variable {α : Type} [ChangeGroup α]
+variable {α : Type} [AddCommGroup α]
+
+/-- Patch a state by a delta: addition in the group. The `Change.patch`
+    of the Dbsp spec shape. -/
+def patch (s δ : α) : α := s + δ
+
+theorem patch_zero (s : α) : patch s 0 = s := add_zero s
 
 /-- Rollback of a group delta restores the value (the Dbsp revert law). -/
-theorem group_rollback (t Δt : α) : patch (patch t Δt) (-Δt) = t :=
-  ChangeInversion.correct_invert t Δt (by trivial)
+theorem group_rollback (t Δt : α) : patch (patch t Δt) (-Δt) = t := by
+  show t + Δt + -Δt = t
+  abel
 
 end
 
@@ -158,7 +120,7 @@ end
 
 /-- Pointwise patching of an optional state: `none` (a disabled step)
     stays `none` — the delta of a disabled event is unobservable. -/
-def patchOpt [ChangeGroup α] (δ : α) : Option α → Option α
+def patchOpt [AddCommGroup α] (δ : α) : Option α → Option α
   | none => none
   | some s => some (patch s δ)
 
@@ -166,7 +128,7 @@ def patchOpt [ChangeGroup α] (δ : α) : Option α → Option α
     group: applying a delta then stepping = stepping then applying the
     event's delta transform. Translation-equivariance of the dynamics —
     the machine-level content of DBSP's linearity. -/
-class LinearMachine (m : Machine) [ChangeGroup m.State] where
+class LinearMachine (m : Machine) [AddCommGroup m.State] where
   /-- The delta transform induced by event `l`: the running delta after
       the event, as a function of the running delta before it. -/
   eventDelta : m.Label → m.State → m.State
@@ -187,7 +149,7 @@ theorem step?_eq_true (m : Machine) (s : m.State) (l : m.Label)
 
 /-- The linearity law forces the guard to be stable under patching: a
     delta can neither enable nor disable an event. -/
-theorem LinearMachine.guard_patch_stable (m : Machine) [ChangeGroup m.State]
+theorem LinearMachine.guard_patch_stable (m : Machine) [AddCommGroup m.State]
     [LinearMachine m] (s δ : m.State) (l : m.Label) :
     (m.event l).guard s = (m.event l).guard (patch s δ) := by
   have h := LinearMachine.linear (m := m) (s := s) (δ := δ) (l := l)
@@ -215,22 +177,22 @@ namespace Machine
 
 /-- The delta-only version of `step?`: the running delta after event `l`
     is the event's delta transform. Consumes no full state. -/
-def incrementalStep (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+def incrementalStep (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (Δs : m.State) (l : m.Label) : m.State :=
   LinearMachine.eventDelta l Δs
 
 /-- The delta chain: fold `incrementalStep` over the trace, starting from
     δ. The result is a delta RELATIVE to the batch run's final state —
     translation-equivariant dynamics preserve the offset. -/
-def deltaChain (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+def deltaChain (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (δ : m.State) : List m.Label → m.State
   | [] => δ
   | l :: rest => m.deltaChain (m.incrementalStep δ l) rest
 
-@[simp] theorem deltaChain_nil (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+@[simp] theorem deltaChain_nil (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (δ : m.State) : m.deltaChain δ [] = δ := rfl
 
-@[simp] theorem deltaChain_cons (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+@[simp] theorem deltaChain_cons (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (δ : m.State) (l : m.Label) (rest : List m.Label) :
     m.deltaChain δ (l :: rest) = m.deltaChain (m.incrementalStep δ l) rest := rfl
 
@@ -262,7 +224,7 @@ end Machine
     the trace lands exactly where stepping the base state lands, corrected
     by the pure delta chain — which was computed from the labels alone,
     inspecting no full state. -/
-theorem runState_patch_deltaChain (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+theorem runState_patch_deltaChain (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (δ : m.State) :
     ∀ (s : m.State) (trace : List m.Label),
       m.runState (patch s δ) trace =
@@ -290,7 +252,7 @@ theorem runState_patch_deltaChain (m : Machine) [ChangeGroup m.State] [LinearMac
     patched machine ends at the batch final state patched by the delta
     chain. With a zero initial delta the final states are EQUAL
     (`runState_zero_chain`). -/
-theorem incremental_run_equiv (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+theorem incremental_run_equiv (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (s₀ δ₀ : m.State) (trace : List m.Label) :
     m.runState (patch s₀ δ₀) trace =
       (m.runState s₀ trace).map (fun fin => patch fin (m.deltaChain δ₀ trace)) :=
@@ -298,7 +260,7 @@ theorem incremental_run_equiv (m : Machine) [ChangeGroup m.State] [LinearMachine
 
 /-- Corollary: with a zero initial delta the batch run is unchanged — the
     incremental evaluator reconstructs the batch trajectory exactly. -/
-theorem runState_zero_chain (m : Machine) [ChangeGroup m.State] [LinearMachine m]
+theorem runState_zero_chain (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (s₀ : m.State) (trace : List m.Label) :
     m.runState (patch s₀ 0) trace = m.runState s₀ trace := by
   rw [patch_zero]

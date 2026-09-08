@@ -453,15 +453,7 @@ theorem imul_add (a b c : Int) : Int.mul (Int.add a b) c = Int.add (Int.mul a c)
   show (a + b) * c = a * c + b * c
   rw [Int.add_mul]
 
-/-- Lean-core `Int` carries a change group — the mathlib-free bridge instance. -/
-instance intChangeGroup : ChangeGroup Int where
-  add := Int.add
-  zero := 0
-  neg := Int.neg
-  add_assoc := Int.add_assoc
-  add_comm := Int.add_comm
-  zero_add := Int.zero_add
-  neg_add_cancel := Int.add_left_neg
+-- Int carries mathlib's `AddCommGroup` — the bridge group instance.
 
 -- A translation-equivariant counter on `Int`: bump adds 1. The linearity
 -- law holds with the IDENTITY delta transform: `(s + δ) + 1 = (s + 1) + δ`

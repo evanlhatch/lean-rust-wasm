@@ -124,11 +124,6 @@ def capMinusFill (m : Machine) (fill : m.State → Nat) (cap : Nat)
     have hb := hbnd s l h
     omega
 
-/-- A stream of states, each a legal step from the previous (the
-    divergence witness for a `Machine`, not a certificate). -/
-def Machine.InfiniteRun (m : Machine) (steps : Nat → m.State) : Prop :=
-  ∀ n, ∃ l, m.tr (steps n) l (steps (n + 1))
-
 /-- The run-length certificate: each successful step spends exactly one
     unit of the variant, so a run that reaches `fin` in `ls.length` steps
     has `ls.length + variant fin ≤ variant s` — the invariant form of the

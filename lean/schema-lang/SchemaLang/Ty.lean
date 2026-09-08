@@ -28,6 +28,8 @@ refinement predicates (the schema-indexed package owns `{x // P x}`;
 v1 payloads are plain types).
 -/
 
+import Substrait.Typed.Schema
+
 namespace SchemaLang
 
 /-! ## The universe -/
@@ -90,22 +92,18 @@ end
 
 /-! ## Proof-carrying directed equality
 
-`EqAns a b` is `.yes h` (with the equational proof — composable evidence
-for reindexing/compat) or `.no` (deliberately proof-free: the check is
-directed, failure needs no justification).
+`EqAns` lives in `Substrait.Typed` (the original — same `.yes h` /
+`.no` shape, proof-carrying directed equality). SchemaLang consumes the
+substrait type; no local re-declaration.
 
-NOT hand-rolled: `Ty` derives `DecidableEq` (first-order inductive — the
-flatland `SType`/`SParam` mutual-block trap doesn't apply here), so the
-decision is one `dite` and the proof rides the branch. The wrapper exists
-only because `Option` cannot carry a `Prop`. -/
-
-inductive EqAns {α : Type} (a b : α) : Type where
-  | yes (h : a = b)
-  | no
+`Ty` derives `DecidableEq` (first-order inductive — the flatland
+`SType`/`SParam` mutual-block trap doesn't apply here), so the decision
+is one `dite` and the proof rides the branch. The wrapper exists only
+because `Option` cannot carry a `Prop`. -/
 
 /-- The directed decision: kernel-derived decidability, proof in the
-    `.yes` branch. -/
-def Ty.eqAns (a b : Ty) : EqAns a b :=
+    `.yes` branch. Returns substrait's `EqAns`. -/
+def Ty.eqAns (a b : Ty) : Substrait.Typed.EqAns a b :=
   if h : a = b then .yes h else .no
 
 /-! ## Reification: the schema universe as Lean types
