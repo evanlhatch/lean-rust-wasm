@@ -1,0 +1,12 @@
+[package]
+name = "guest-demo"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# No deps — the guest is minimal. fast-observe + generated types come later
+# once the component ABI is proven.

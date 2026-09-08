@@ -269,6 +269,47 @@ def extDTypeChecks : CheckResult := do
     (some "../../src/ext_dtypes_generated.rs")
   .ok ()
 
+/-! ## Pipeline machine (Machines conformance battery) -/
+
+/-- The positive battery: all three checks must pass over the full
+    6-state space. -/
+def pipelineConformanceChecks : CheckResult := do
+  let rs := pipelineConformance
+  for (name, r) in rs do
+    match r with
+    | .ok () => pure ()
+    | .error msg => throw s!"pipeline conformance {name}: {msg}"
+  -- named pins: the battery ran all three checks
+  _ ← assert (rs.any (·.1 == "deadlock-freedom")) "deadlock-freedom ran"
+  _ ← assert (rs.any (·.1 == "guard-coverage")) "guard-coverage ran"
+  _ ← assert (rs.any (·.1 == "invariant-non-vacuous")) "invariant-non-vacuous ran"
+  .ok ()
+
+/-- The negative control: `pipelineDead` (a never-enabled event) must FAIL
+    guard coverage — the battery is not vacuous. -/
+def pipelineGuardControl : CheckResult :=
+  match Machines.Testing.guardCoverage pipelineDead pipelineDead.labels [0, 1, 2] with
+  | .error _ => .ok ()
+  | .ok () => .error "dead event not caught — the battery is vacuous"
+
+/-- The happy path executes end-to-end and out-of-order firing is
+    rejected; acyclicity is `rank_advances_tr` (compile-time, above). -/
+def pipelineRunChecks : CheckResult := do
+  match pipeline.run .idle [.reflect, .check, .emit, .tie] with
+  | none => throw "happy path rejected"
+  | some (_, fin) =>
+      if fin == .tied then pure ()
+      else throw s!"happy path ended in {repr fin}"
+  match pipeline.run .idle [.check] with
+  | none => pure ()
+  | some _ => throw "out-of-order check accepted"
+  match pipeline.run (.failed "check" ["dup"]) [.reset] with
+  | none => throw "reset from failed rejected"
+  | some (_, fin) =>
+      if fin == .idle then pure ()
+      else throw s!"reset ended in {repr fin}"
+  .ok ()
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
@@ -283,4 +324,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("bridgeSchema", bridgeSchemaChecks)
      , ("delta", deltaChecks)
      , ("extDType", extDTypeChecks)
+     , ("pipelineConformance", pipelineConformanceChecks)
+     , ("pipelineGuardControl", pipelineGuardControl)
+     , ("pipelineRun", pipelineRunChecks)
      ])

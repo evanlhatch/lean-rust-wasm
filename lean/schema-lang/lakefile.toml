@@ -9,6 +9,10 @@ testDriver = "SchemaLangTests"
 # codegen-core (registries); knows nothing about WIT/Rust/OpenAPI.
 
 [[require]]
+name = "Machines"
+path = "../Machines"
+
+[[require]]
 name = "CodegenCore"
 path = "../codegen-core"
 

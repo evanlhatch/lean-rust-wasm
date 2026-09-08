@@ -80,6 +80,18 @@ watch-check:
 fuzz name:
 	cargo bolero run {{name}}
 
+# ── WASM guest component (wasip3, via wasm-component-ld + wasi-sdk sysroot) ──
+wasm-guest:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	RUSTFLAGS="$RUSTFLAGS_WASIP3" cargo build -p guest-demo \
+	  --target targets/wasm32-wasip3-local.json \
+	  -Z build-std=std,panic_abort \
+	  -Z json-target-spec
+	echo "component: target/wasm32-wasip3-local/debug/guest_demo.wasm"
+	wasm-tools validate target/wasm32-wasip3-local/debug/guest_demo.wasm
+	echo "wasm-tools validate: clean"
+
 # ── WASM compile checks (nightly + rust-src required) ────────────────
 # RUSTFLAGS_WASIP3/RUSTFLAGS_WASM32 strip host-only flags (target-cpu=native,
 # -Z*); these are the real gates for "does it build for wasm" without a link.
