@@ -20,5 +20,5 @@ fast_observe::error! {
       }
 }
 pub fn init_guest() {
-  fast_observe::register_statics(&[OrderError::ENTRIES]);
+  fast_observe::register_statics(OrderError::ENTRIES);
 }

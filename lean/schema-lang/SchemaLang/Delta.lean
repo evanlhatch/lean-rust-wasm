@@ -93,7 +93,7 @@ def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
           let change := Item.changeTypeName (.record n fields)
           let full := SchemaLang.Emit.Rust.tyRust (.ty n)
           let keyTy := SchemaLang.Emit.Rust.tyRust key.ty
-          [ .enum change SchemaLang.Emit.Rust.defaultDerives
+          [ .enum change SchemaLang.Emit.Rust.baseDerives
               [ s!"Insert({full})"
               , s!"Update({full})"
               , s!"Remove({keyTy})"
@@ -120,9 +120,9 @@ def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "delta"
   style := .doubleSlash
   specSource := "SchemaLang/Spec/Demo.lean"
-  outputs := ["src/delta_generated.rs"]
+  outputs := ["../../src/delta_generated.rs"]
   run items :=
-    [{ path := "src/delta_generated.rs"
+    [{ path := "../../src/delta_generated.rs"
        contents :=
          CodegenCore.Emit.Rust.renderModule (items.flatMap Item.changeRustItems) }]
 

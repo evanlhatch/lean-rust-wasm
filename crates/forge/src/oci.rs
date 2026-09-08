@@ -9,25 +9,46 @@
 //! ```text
 //! target/oci/
 //! ├── oci-layout                    {"imageLayoutVersion":"1.0.0"}
-//! ├── index.json                    tag → manifest digest
+//! ├── index.json                    label → manifest digest (annotations)
 //! └── blobs/
 //!     └── xxh3/
 //!         └── <hex digest>          content-addressed artifact
 //! ```
 
+use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+
+use xxhash_rust::xxh3::xxh3_128;
 
 /// xxh3-128 digest as a lowercase hex string (32 chars).
 pub type Digest = String;
 
+/// Annotation key holding the artifact label (repo-root-relative path).
+const LABEL_ANNOTATION: &str = "org.opencontainers.image.ref.name";
+
 pub struct OciStore {
     root: PathBuf,
+    /// label (artifact path) → digest, loaded from index.json at open
+    /// and updated by `put`.
+    tags: HashMap<String, Digest>,
+}
+
+/// Result of `OciStore::verify`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verify {
+    /// Store has no digest for this label — nothing to check.
+    NotStored,
+    /// File hash matches the stored digest.
+    Match,
+    /// Drift: the file's hash differs from the stored digest.
+    Mismatch { stored: Digest, actual: Digest },
 }
 
 impl OciStore {
     /// Open (or lazily create) an OCI layout at `root`.
-    pub fn open(root: &Path) -> std::io::Result<Self> {
+    pub fn open(root: &Path) -> io::Result<Self> {
         let blobs = root.join("blobs/xxh3");
         fs::create_dir_all(&blobs)?;
         let layout = root.join("oci-layout");
@@ -36,28 +57,53 @@ impl OciStore {
         }
         let index = root.join("index.json");
         if !index.exists() {
-            fs::write(&index, r#"{"manifests":[]}"#)?;
+            fs::write(&index, r#"{"schemaVersion":2,"manifests":[]}"#)?;
         }
-        Ok(Self { root: root.to_path_buf() })
+        let tags = Self::load_tags(&index);
+        Ok(Self { root: root.to_path_buf(), tags })
+    }
+
+    /// Read label → digest from an existing index.json. Missing or
+    /// malformed entries are skipped (the index is a cache; `--store`
+    /// rebuilds it).
+    fn load_tags(index: &Path) -> HashMap<String, Digest> {
+        let Ok(raw) = fs::read_to_string(index) else {
+            return HashMap::new();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return HashMap::new();
+        };
+        value["manifests"]
+            .as_array()
+            .map(|manifests| {
+                manifests
+                    .iter()
+                    .filter_map(|m| {
+                        let digest = m["digest"].as_str()?.strip_prefix("xxh3:")?.to_string();
+                        let label = m["annotations"][LABEL_ANNOTATION].as_str()?.to_string();
+                        Some((label, digest))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn blobs_dir(&self) -> PathBuf {
         self.root.join("blobs/xxh3")
     }
 
-    /// Content-address a blob: hash with xxh3-128, write if absent,
-    /// return the hex digest.
-    pub fn put(&self, _label: &str, data: &[u8]) -> std::io::Result<Digest> {
+    /// Content-address a blob: hash with xxh3-128, write (unconditionally,
+    /// so a corrupted cache blob self-heals on the next --store), record
+    /// `label → digest`, return the hex digest.
+    pub fn put(&mut self, label: &str, data: &[u8]) -> io::Result<Digest> {
         let digest = xxh3_hex(data);
-        let blob_path = self.blobs_dir().join(&digest);
-        if !blob_path.exists() {
-            fs::write(&blob_path, data)?;
-        }
+        fs::write(self.blobs_dir().join(&digest), data)?;
+        self.tags.insert(label.to_string(), digest.clone());
         Ok(digest)
     }
 
     /// Read a blob by digest.
-    pub fn get(&self, digest: &str) -> std::io::Result<Vec<u8>> {
+    pub fn get(&self, digest: &str) -> io::Result<Vec<u8>> {
         fs::read(self.blobs_dir().join(digest))
     }
 
@@ -66,16 +112,60 @@ impl OciStore {
         self.blobs_dir().join(digest).exists()
     }
 
-    /// Write the tag → digest mapping to index.json.
-    pub fn write_index(&self) -> std::io::Result<()> {
-        // v1: scan blobs dir, build the index. No tags yet — tags land
-        // when the component pipeline exists (tag = build target).
+    /// Byte-tie a label against the store: look up the stored digest,
+    /// read the current file, rehash, and compare. The file is the
+    /// authority; the store is the cache. Also re-reads the stored blob
+    /// and byte-compares with the file, so a corrupted cache blob is
+    /// caught even if the digest entry survived.
+    pub fn verify(&self, label: &str, path: &Path) -> io::Result<Verify> {
+        let Some(stored) = self.tags.get(label) else {
+            return Ok(Verify::NotStored);
+        };
+        let file = fs::read(path).map_err(|e| {
+            io::Error::new(e.kind(), format!("verify {label}: {}: {e}", path.display()))
+        })?;
+        let actual = xxh3_hex(&file);
+        if &actual != stored {
+            return Ok(Verify::Mismatch { stored: stored.clone(), actual });
+        }
+        // Digest matches; confirm the cached blob bytes too. A corrupted
+        // blob self-heals on the next `--store` (put overwrites).
+        if let Ok(blob) = self.get(stored) {
+            if blob != file {
+                return Ok(Verify::Mismatch { stored: stored.clone(), actual });
+            }
+        }
+        Ok(Verify::Match)
+    }
+
+    /// Write the label → digest mapping to index.json as OCI manifests
+    /// with label annotations.
+    pub fn write_index(&self) -> io::Result<()> {
         let blobs_dir = self.blobs_dir();
         let mut manifests = Vec::new();
+
+        // Tagged entries first (sorted for stable output).
+        let mut tagged: Vec<_> = self.tags.iter().collect();
+        tagged.sort();
+        for (label, digest) in tagged {
+            let size = fs::metadata(blobs_dir.join(digest))
+                .map(|m| m.len())
+                .unwrap_or(0);
+            manifests.push(serde_json::json!({
+                "mediaType": "application/vnd.guestlang.artifact",
+                "digest": format!("xxh3:{digest}"),
+                "size": size,
+                "annotations": { LABEL_ANNOTATION: label },
+            }));
+        }
+        // Any untagged blobs (e.g. from a previous run) stay inspectable.
+        let mut seen: Vec<_> = self.tags.values().cloned().collect();
+        seen.sort();
         if blobs_dir.exists() {
             let mut entries: Vec<_> = fs::read_dir(&blobs_dir)?
                 .filter_map(|e| e.ok())
                 .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|d| !seen.contains(d))
                 .collect();
             entries.sort();
             for digest in entries {
@@ -89,6 +179,7 @@ impl OciStore {
                 }));
             }
         }
+
         let index = serde_json::json!({
             "schemaVersion": 2,
             "manifests": manifests,
@@ -98,16 +189,24 @@ impl OciStore {
     }
 }
 
-/// xxh3-128 hex digest (32 chars). Uses a simple FNV fallback when the
-/// xxhash crate is not available — upgrade to xxh3 via `xxhash-rust`.
-fn xxh3_hex(data: &[u8]) -> Digest {
-    // FNV-1a 64-bit as a placeholder — swap for xxh3_128 when the
-    // xxhash-rust crate is added. The layout is identical; only the
-    // digest length changes (32 hex chars for 128-bit).
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+/// Store a list of (label, path) pairs: hash + write each artifact into
+/// the store, return the label → digest mapping.
+pub fn store_artifacts(
+    store: &mut OciStore,
+    artifacts: &[(&str, &Path)],
+) -> io::Result<HashMap<String, Digest>> {
+    let mut digests = HashMap::new();
+    for (label, path) in artifacts {
+        let data = fs::read(path).map_err(|e| {
+            io::Error::new(e.kind(), format!("store {label}: {}: {e}", path.display()))
+        })?;
+        let digest = store.put(label, &data)?;
+        digests.insert((*label).to_string(), digest);
     }
-    format!("{hash:032x}")
+    Ok(digests)
+}
+
+/// xxh3-128 hex digest (32 hex chars, 128 bits).
+fn xxh3_hex(data: &[u8]) -> Digest {
+    format!("{:032x}", xxh3_128(data))
 }

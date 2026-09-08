@@ -1,4 +1,5 @@
 //! lean-rust-wasm — guestlang framework crate.
+#![feature(error_generic_member_access)]
 //!
 //! The fast-observe base wiring lives in `src/main.rs` (same shape as
 //! fast-observe's `examples/demo.rs`); the library is intentionally thin

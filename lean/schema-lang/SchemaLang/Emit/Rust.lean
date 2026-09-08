@@ -25,8 +25,19 @@ namespace SchemaLang.Emit.Rust
 
 open CodegenCore.Emit (pascal rustIdent)
 
-/-- The derives stamped on every generated type. -/
-def defaultDerives : List String := ["Clone", "Debug", "PartialEq", "Eq"]
+/-- The base derives stamped on every generated type. Eq is added
+    conditionally — f32/f64 don't implement Eq. -/
+def baseDerives : List String := ["Clone", "Debug", "PartialEq"]
+
+/-- Check whether a Ty's Rust lowering contains a float type. -/
+def hasFloat : Ty → Bool
+  | .f32 | .f64 => true
+  | .option a => hasFloat a
+  | .result ok err => hasFloat ok || hasFloat err
+  | .list a => hasFloat a
+  | .future a => hasFloat a
+  | .stream a => hasFloat a
+  | _ => false
 
 /-- Lower a `Ty` to Rust type text. `future`/`stream` cannot reach this
     in field position (wellFormed bans them); if a func-signature
@@ -62,13 +73,23 @@ def variantItem (derives : List String) : Item → CodegenCore.Emit.Rust.Item
   | _ => .comment "variantItem: not a variant"
 
 /-- A full universe → the Rust module items (types only; funcs are the
-    WIT world's exports, not Rust-side types). -/
+    WIT world's exports, not Rust-side types). Eq is added per-record
+    only when no field contains a float. -/
 def schemaItems (derives : List String) (items : List Item) :
     List CodegenCore.Emit.Rust.Item :=
   items.filterMap fun it =>
     match it with
-    | .record _ _ => some (recordItem derives it)
-    | .variant _ _ => some (variantItem derives it)
+    | .record _ fields =>
+        let eqOk := !(fields.any (fun f => hasFloat f.ty))
+        let ds := if eqOk then derives ++ ["Eq"] else derives
+        some (recordItem ds it)
+    | .variant _ cases =>
+        let eqOk := !(cases.any fun (_, payload) =>
+          match payload with
+          | some t => hasFloat t
+          | none => false)
+        let ds := if eqOk then derives ++ ["Eq"] else derives
+        some (variantItem ds it)
     | _ => none
 
 end SchemaLang.Emit.Rust
@@ -78,8 +99,8 @@ def rustEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "rust"
   style := .doubleSlash
   specSource := "SchemaLang/Spec/Demo.lean"
-  outputs := ["src/schema_generated.rs"]
+  outputs := ["../../src/schema_generated.rs"]
   run items := [
-    { path := "src/schema_generated.rs"
-      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems SchemaLang.Emit.Rust.defaultDerives items) }
+    { path := "../../src/schema_generated.rs"
+      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems SchemaLang.Emit.Rust.baseDerives items) }
   ]

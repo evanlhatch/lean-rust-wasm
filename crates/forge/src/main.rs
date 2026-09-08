@@ -99,9 +99,10 @@ fn main() {
     let tc = lean_tc();
     let root = repo_root();
 
-    // Initialize the OCI store (lazy — only used with --store).
+    // Initialize the OCI store (lazy — only used with --store, and
+    // read-only for drift checks with --check).
     let oci_root = root.join("target/oci");
-    let store = oci::OciStore::open(&oci_root).expect("oci store init");
+    let mut store = oci::OciStore::open(&oci_root).expect("oci store init");
 
     if !check {
         let mut failed = false;
@@ -113,15 +114,55 @@ fn main() {
             }
         }
         if store_artifacts {
+            // Collect (label, path) pairs for every artifact.
+            let mut pairs: Vec<(&str, PathBuf)> = Vec::new();
             for job in JOBS {
                 for out in job.outputs {
                     let path = root.join(out);
-                    if let Some(data) = read_if_exists(&path) {
-                        match store.put(out, &data) {
-                            Ok(digest) => println!("forge: oci {out} → {digest}"),
-                            Err(e) => eprintln!("forge: oci store {out}: {e}"),
+                    if path.exists() {
+                        pairs.push((out, path));
+                    }
+                }
+            }
+            let pair_refs: Vec<(&str, &Path)> =
+                pairs.iter().map(|(l, p)| (*l, p.as_path())).collect();
+            match oci::store_artifacts(&mut store, &pair_refs) {
+                Ok(digests) => {
+                    for (label, digest) in &digests {
+                        println!("forge: oci {label} → {digest}");
+                    }
+                    // OCI-level byte-tie: re-read each blob from the
+                    // store and verify against the file. The file is
+                    // the authority; the store is the cache.
+                    let mut verify_failed = false;
+                    for (label, path) in &pairs {
+                        match store.verify(label, path) {
+                            Ok(oci::Verify::Match) => {
+                                println!("forge: oci verify {label}: ok");
+                            }
+                            Ok(oci::Verify::NotStored) => {
+                                eprintln!("forge: oci verify {label}: not stored");
+                                verify_failed = true;
+                            }
+                            Ok(oci::Verify::Mismatch { stored, actual }) => {
+                                eprintln!(
+                                    "forge: oci verify {label}: DRIFT stored {stored} != file {actual}"
+                                );
+                                verify_failed = true;
+                            }
+                            Err(e) => {
+                                eprintln!("forge: oci verify {label}: {e}");
+                                verify_failed = true;
+                            }
                         }
                     }
+                    if verify_failed {
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("forge: oci store: {e}");
+                    std::process::exit(1);
                 }
             }
             match store.write_index() {
@@ -146,6 +187,19 @@ fn main() {
             let new = read_if_exists(&root.join(out));
             if old != new {
                 drifted.push(*out);
+            }
+            // OCI-level byte-tie: if the store has a digest for this
+            // artifact and the current file's hash doesn't match,
+            // that's drift too (file drifted after the last --store).
+            match store.verify(out, &root.join(out)) {
+                Ok(oci::Verify::Mismatch { stored, actual }) => {
+                    eprintln!("forge: oci {out}: stored {stored} != file {actual}");
+                    if !drifted.contains(out) {
+                        drifted.push(out);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("forge: oci verify {out}: {e}"),
             }
         }
     }

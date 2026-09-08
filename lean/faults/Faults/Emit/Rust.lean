@@ -58,7 +58,7 @@ def faultModule (enumName : String) (modes : List (FailureModeItem × String)) :
   , .comment "at guest startup; native builds resolve codes at link time."
   , .macroCall "fast_observe::error" [errorBlock enumName modes]
   , .fn "fn init_guest()"
-        s!"fast_observe::register_statics(&[{pascal enumName}::ENTRIES]);"
+        s!"fast_observe::register_statics({pascal enumName}::ENTRIES);"
   ]
 
 end Faults.Emit.Rust
