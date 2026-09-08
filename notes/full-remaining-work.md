@@ -125,107 +125,102 @@ artifacts. The full vision also compiles Lean LOGIC (function bodies)
 to WASM. This is the deepest layer and the one that makes guestlang a
 language, not just a schema tool.
 
-### LCNF → WASM backend
+### LCNF → WASM backend (verified from Lean 4.33 source)
 
-Lean's compiler pipeline (parser → elaborator → kernel → LCNF) is
-available as a library. The LCNF (Lean Compiler Normal Form) is the
-IR: first-order functions, explicit memory ops, no dependent types
-(they're erased). A backend that consumes LCNF and emits WASM
-instructions gives you Lean logic running in the guest.
+**Architecture:** a SEPARATE EXECUTABLE (like `leanir`, the existing
+C backend) — not a compiler pass. It imports the module's olean,
+re-runs the LCNF pipeline (the impure-phase LCNF is NOT persisted in
+oleans), reads the final `Decl`s from `impureExt`, and emits WAT.
 
-The backend is a Lean compiler plugin (like the C backend and LLVM
-backend — they're Lean programs consuming `Lean.Compiler.LCNF`).
-When Lean updates, the plugin fails at compile time — not runtime.
+**The LCNF Code constructors we handle:**
 
-What it must handle:
-- **Perceus RC**: Lean's reference-counting memory model. Each object
-  has a header (tag + refcount + fields). `inc`/`dec` are explicit.
-  In-place mutation when rc == 1.
-- **Bump allocator**: the guest's heap is a linear-memory bump
-  allocator. `memory.grow` when the bump pointer exceeds the limit.
-  Objects allocated contiguously, freed by RC reaching zero.
-- **String**: UTF-8 bytes in linear memory, (ptr, len) representation.
-  `String.concat` allocates + copies.
-- **Array**: flat array of same-typed values. (ptr, len) or (ptr, len,
-  capacity). `Array.push` may reallocate.
-- **Nat/Int**: fixed-width u64/i64 by default (no libgmp). Big-int as
-  a host capability (opt-in).
-- **Closures**: (funcref, env-ptr) pairs. The env is a flat allocation
-  of captured variables.
-- **IO monad**: maps to WASI 0.3 `future<T>`. Each `do` bind is a
-  suspension point. The host (wasmtime) schedules.
-- **Pattern matching**: compiles to `br_table` or nested `if` chains.
-  Lean's match compiler (the `match` equation compiler) does the
-  lowering before LCNF.
-- **Recursion**: `return_call` (tail-call proposal) for tail-recursive
-  functions. Non-tail recursion → the WASM stack (bounded, stack
-  overflow = trap).
+| Constructor | WASM emission |
+|---|---|
+| `.let decl k` | compute + `local.set` |
+| `.return arg` | load + `return` |
+| `.fun λ k` | alloc closure (funcref + env) |
+| `.jp`/`.jmp` | WASM `block`/`loop` + `br` |
+| `.cases c` | `br_table` or nested `if` (load tag from offset 4) |
+| `.inc`/`.dec`/`.del` | `call $rc_inc`/`$rc_dec` (Perceus — already inserted) |
+| `.reset`/`.reuse` | v1: skip (leak) |
+| `.oset`/`.uset`/`.sset` | `i32.store` |
+| `.unreach` | `unreachable` |
 
-The pipeline:
-```
-Lean source → lean4lean kernel → LCNF (proofs erased)
-  → our backend plugin (consumes LCNF.Decl)
-  → emits WASM MVP instructions (via wasm-encoder, or via C → clang)
-  → core WASM module
-  → wit-component (adds the WIT interface)
-  → component WASM
+**LetValue:** `.lit`→const, `.fvar`→local.get, `.proj`→`i32.load
+offset=8+i*w`, `.ctor`→alloc+tag+fields, `.fap`→`call`, `.pap`→closure
+alloc, `.box`/`.unbox`, `.isShared`→rc>1 check.
+
+**CtorInfo** (name, cidx, size, usize, ssize) = the object layout —
+generates field offsets for proj and sizes for alloc.
+
+**The re-run recipe (what `leanir` does, what we clone):**
+
+```lean
+-- 1. Import the module's olean
+let env ← Lean.importModules #[`Demo] {}
+-- 2. Re-run the LCNF pipeline (produces impure-phase Decl with RC)
+Lean.Compiler.LCNF.main declNames {}  -- in CoreM
+-- 3. Read final impure decls
+let decls := Lean.Compiler.LCNF.getLocalImpureDecls env
+-- 4. Emit WAT for each Decl
 ```
 
-Two backend strategies (choose per deployment):
-- **Direct WASM emission**: the Lean plugin emits WASM instructions
-  directly (via the `wasm-encoder` crate from Rust, or by emitting
-  WAT text). Smaller output, no C toolchain needed.
-- **C emission**: the Lean plugin emits C code (like the existing C
-  backend), then `clang --target=wasm32-wasip3` compiles it. Gets
-  LLVM optimization for free, but needs clang in the build.
+**Pure checkStruct pattern (no monad generalization):** the check
+logic runs in a Sum, not Except/do — the CoreM do-block monad
+generalization trap is avoided entirely.
 
-Start with C emission (it's the existing Lean backend's model — port
-it), then add direct WASM emission later.
+### The toolchain: wasm-tools (not wabt)
+
+| Step | Tool | Gives |
+|---|---|---|
+| Validate + DWARF | `wasm-tools validate -g` | Spec check + DWARF from WAT |
+| WAT → binary | `wasm-tools parse` | Name section + DWARF embedded |
+| Component wrap | `wasm-tools component new` | Core → component (WIT embedded) |
+| Component embed | `wasm-tools component embed` | WIT types → custom section |
+| Debug | `wasm-tools addr2line` | Binary offset → file:line (via DWARF) |
+| Profile | `wasmtime --profile=guest` | Sampling → Firefox Profiler JSON |
+| Explore | `wasmtime explore` | WAT → Cranelift IR → native asm (HTML) |
+| Traps | `WasmBacktrace` | Stack trace with names (from name section) |
+
+**Skip wabt** — no DWARF, no stack-switching, less active. Use
+`wasm-tools parse` for WAT → binary.
+
+**The name section is CRITICAL** — emit function/local names in WAT;
+wasmtime's profiler/backtrace use them. Without: `func[0]`, `func[1]`
+— useless for debugging.
 
 ### Perceus RC + allocator
 
-The guest's memory management. The allocator is a bump allocator in
-linear memory:
+The RC instructions (`.inc`/`.dec`) are ALREADY IN THE LCNF — inserted
+by Lean's `LCNF.rc` pass. We translate to `call $rc_inc`/`$rc_dec`.
+`.reset`/`.reuse` → v1: skip (leak).
 
-```wasm
-(global $heap-ptr (mut i32) (i32.const 0))
-(func $alloc (param $size i32) (result i32)
-  ;; align to 8
-  ;; bump the pointer
-  ;; memory.grow if over limit
-)
-```
-
-RC: each object has a header: `{rc : u32, tag : u8, ...}`. `inc` = 
-increment the rc field. `dec` = decrement; if 0, free (return to
-bump if it's the top allocation, else mark for sweep — v1: leak).
-
-In-place mutation: when rc == 1, the object is exclusively owned —
-mutate in place (no copy). This is Lean's `borrowed`/`owned` distinction.
+Bump allocator (~100 lines WAT, hand-written, linked with generated
+code). Object layout: `{rc: u32, tag: u8, pad, field_0, field_1, ...}`.
 
 ### guestlang-std
 
-The compiled-to-WASM standard library. Written in Lean, compiled by
-the backend to WASM. Replaces Lean's Init for the guest:
-
-- `String` — concat, length, substring, comparison
-- `Array` — push, get, set, length, map, filter, fold
-- `Nat`/`Int` — fixed-width arithmetic, comparison
-- `IO` — the WASI 0.3 bindings: stdout, stderr, files, clocks
-- `Option`/`Result` — already in the prelude
-- `Future`/`Stream` — the WASI 0.3 async primitives
-
-This is ~5-10KB of WASM (the primitives only — no proofs, no tactics).
+Compiled-to-WASM stdlib (String, Array, Nat/Int as u64/i64, IO → WASI
+0.3). ~5-10KB WASM.
 
 ### lean4lean as WASM component
 
-The compiler itself, compiled to a WASI component. This enables:
-- Sandboxed compilation (the compiler can't escape)
-- Browser-based IDE (compile Lean in a web worker)
-- Hermetic builds (the compiler is a fixed .wasm artifact)
+Compiler sandboxed: `compile: func(source) -> future<component>`.
+~8MB WASM, loaded on demand.
 
-The compiler is big (~8MB WASM) — it's loaded on demand, not shipped
-with every component.
+### The full pipeline (verified design)
+
+```
+Lean source → lean4lean kernel → LCNF.main (re-runs pipeline)
+  → impureExt.getState → our backend: emitDecl → WAT
+  → wasm-tools parse -g (binary + DWARF + name section)
+  → wasm-tools validate → component embed → component new
+  → component.wasm → steel-host (wasmtime, epoch/fuel, fast-observe)
+```
+
+Debugging chain: WAT (readable) → DWARF (addr2line) → name section
+(profiler/backtrace) → wasmtime --profile=guest (flamegraph) →
+wasmtime explore (WAT→IR→asm) → WasmBacktrace → fast-observe spans.
 
 ---
 

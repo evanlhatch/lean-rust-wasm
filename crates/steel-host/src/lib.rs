@@ -15,6 +15,7 @@
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
+pub mod bindings;
 pub mod engine;
 pub mod runtime;
 pub mod valves;
