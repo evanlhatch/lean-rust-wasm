@@ -55,7 +55,7 @@ mutants name:
 
 # Fast type-check only, no emission (buf lint analog).
 check-schema:
-	@echo "TODO: steelc check"
+	@echo "TODO: guestlangc check"
 
 # Schema-compat diff vs last released schema (buf breaking analog).
 breaking:
