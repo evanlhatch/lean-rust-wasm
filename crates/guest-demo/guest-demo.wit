@@ -1,0 +1,9 @@
+// GENERATED-adjacent: consumed by `just wasm-guest` (wasm-tools component
+// embed) to lift exports into the component world. Keep export names in
+// kebab-case; the guest matches them via #[export_name].
+package demo:guest;
+
+world greeter {
+    export add: func(a: u64, b: u64) -> u64;
+    export get-version: func() -> u32;
+}

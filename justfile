@@ -92,6 +92,26 @@ wasm-guest:
 	wasm-tools validate target/wasm32-wasip3-local/debug/guest_demo.wasm
 	echo "wasm-tools validate: clean"
 
+# ── Proper component with lifted exports (host-embedder input) ──────
+# The wasip3 linker wraps the core module (no raw core artifact on disk to
+# embed WIT into), so the pure-export core module is built with
+# wasm32-unknown-unknown (guest-demo uses no WASI), the world is embedded
+# with `component embed`, and `component new` lifts the exports.
+wasm-guest-component:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	RUSTFLAGS="$RUSTFLAGS_WASM32" cargo build -p guest-demo \
+	  --target wasm32-unknown-unknown \
+	  -Z build-std=std,panic_abort
+	core=target/wasm32-unknown-unknown/debug/guest_demo.wasm
+	embedded=target/wasm32-unknown-unknown/debug/guest_demo.embedded.wasm
+	out=target/wasm32-unknown-unknown/debug/guest_demo.component.wasm
+	wasm-tools component embed crates/guest-demo/guest-demo.wit "$core" -o "$embedded"
+	wasm-tools component new "$embedded" -o "$out"
+	wasm-tools validate "$out"
+	echo "component: $out"
+	wasm-tools component wit "$out"
+
 # ── WASM compile checks (nightly + rust-src required) ────────────────
 # RUSTFLAGS_WASIP3/RUSTFLAGS_WASM32 strip host-only flags (target-cpu=native,
 # -Z*); these are the real gates for "does it build for wasm" without a link.

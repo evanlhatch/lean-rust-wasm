@@ -1,0 +1,30 @@
+[package]
+name = "steel-host"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# wasi 0.3 (streams/futures) needs wasmtime 47+ — wasmtime-wasi 28 only
+# implements wasi 0.2 and cannot satisfy the wasip3 guest's imports.
+# Features mirror wasmtime's defaults minus the fat we don't use; p3
+# needs component-model-async + component-model-bytes.
+wasmtime = { version = "47", default-features = false, features = [
+  "async",
+  "component-model",
+  "component-model-async",
+  "cranelift",
+  "pooling-allocator",
+  "runtime",
+  "std",
+  # wasip3 guest target builds with +atomics (shared memory) — needed to
+  # compile the std binary.
+  "threads",
+] }
+wasmtime-wasi = { version = "47", default-features = false, features = ["p3"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+fast-observe = "0.1"
+
+[dev-dependencies]
+wasmtime = { version = "47", default-features = false, features = ["wat"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
