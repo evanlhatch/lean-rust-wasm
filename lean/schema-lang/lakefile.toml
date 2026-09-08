@@ -5,7 +5,7 @@ defaultTargets = ["SchemaLang", "SchemaLangTests"]
 testDriver = "SchemaLangTests"
 
 # The schema language: target-neutral type universe, item model,
-# resolution well-formedness, proof-carrying compat diff. Consumes
+# resolution well-formedness, compat diff, emitters. Consumes
 # codegen-core (registries); knows nothing about WIT/Rust/OpenAPI.
 
 [[require]]
@@ -19,6 +19,12 @@ path = "../TestKit"
 [[lean_lib]]
 name = "SchemaLang"
 roots = ["SchemaLang"]
+
+# The demo authoring surface: native Lean structures + @[schema].
+# Separate root so `lake exe schema-gen` can importModules #[`Demo].
+[[lean_lib]]
+name = "Demo"
+roots = ["Demo"]
 
 [[lean_exe]]
 name = "SchemaLangTests"

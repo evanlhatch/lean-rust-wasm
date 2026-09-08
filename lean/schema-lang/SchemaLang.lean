@@ -1,5 +1,6 @@
 /- SchemaLang — the schema language: types, items, resolution, diff,
    emission, codecs, schema-indexed fields, reification, linearity. -/
+import SchemaLang.DidYouMean
 import SchemaLang.Ty
 import SchemaLang.Item
 import SchemaLang.Diff
@@ -10,4 +11,5 @@ import SchemaLang.Codec
 import SchemaLang.Field
 import SchemaLang.Row
 import SchemaLang.Lin
+
 import SchemaLang.Spec.Demo

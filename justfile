@@ -140,9 +140,8 @@ doc-build:
 wit-check:
 	wasm-tools component wit wit/gateway.wit > /dev/null
 
-# Full gate: byte-tie + WIT roundtrip + lean axiom gates (extend as the
-# pipeline grows: splice-smoke, oci digests, mirror-check).
-gates: gen-check wit-check
+# Full gate: builds lean first (no stale oleans), then all drift checks.
+gates: lean-build gen-check wit-check lean-axioms
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed

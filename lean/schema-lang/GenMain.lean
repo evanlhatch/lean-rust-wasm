@@ -1,23 +1,31 @@
 /-
 # SchemaLang.GenMain — the artifact writer (the buf driver)
 
-Iterates the emitter registry: for each emitter, run the fold over the
-universe, prepend the styled header, write each declared file. The
-one-writer discipline: every path is claimed by exactly one emitter
-(audited in Tests), and this driver is the only code that writes.
+Imports the demo module (running `@[schema]` reflection), reads the
+registry from the elaborated environment, and runs every emitter over
+the reified universe. The one-writer discipline: every path is claimed
+by exactly one emitter (audited in Tests), and this driver is the only
+code that writes.
 -/
-import CodegenCore
+import Lean
 import SchemaLang.Emit.Registry
-import SchemaLang.Spec.Demo
+import Demo
+
+open Lean SchemaLang.Meta
 
 open SchemaLang.Emit (emitters)
 open CodegenCore.Emit (header)
 
 def main : IO Unit := do
+  -- Import the demo module: this replays its `@[schema]` registrations
+  -- from the environment (persistent extensions).
+  let env ← Lean.importModules #[`Demo] (opts := {})
+  let items := (registeredItems env).map (·.2)
+
   for e in emitters do
-    for f in e.run SchemaLang.Spec.demo do
+    for f in e.run items do
       let p := CodegenCore.Emit.GeneratedFile.path f
       let dir := String.intercalate "/" (((p : String).splitOn "/").dropLast)
       IO.FS.createDirAll dir
-      IO.FS.writeFile p (header e.style "schema-lang" e.specSource ++ CodegenCore.Emit.GeneratedFile.contents f)
+      IO.FS.writeFile p (CodegenCore.Emit.header e.style "schema-lang" "Demo.lean" ++ CodegenCore.Emit.GeneratedFile.contents f)
       IO.println s!"wrote {p}"

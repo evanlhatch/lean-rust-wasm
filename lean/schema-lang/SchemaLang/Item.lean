@@ -16,6 +16,7 @@ flatland's staging discipline); attribute-first registration over
 `mkRegistryExt` moves in when the authoring surface lands.
 -/
 
+import SchemaLang.DidYouMean
 import SchemaLang.Ty
 
 namespace SchemaLang
@@ -76,7 +77,58 @@ def Ty.tyRefs : Ty → List String
   | .ty n => [n]
   | _ => []
 
-/-! ## Well-formedness — resolution over the universe -/
+/-! ## Well-formedness — resolution over the universe, with designed errors
+
+The universe check returns STRUCTURED diagnostics (TOOLKIT §11.1: errors
+enumerate the valid space, did-you-mean everywhere, never a bare Bool).
+`universeWellFormed` stays as the Bool projection for gates; `universeCheck`
+is the diagnostic authority.
+
+The closed-world superpower: `unknownRef` carries the closest matches AND
+the full valid space — for an LLM, an error that lists the valid moves is
+a self-correcting prompt. -/
+
+/-- One well-formedness finding. -/
+inductive SchemaDiag where
+  | unknownRef (got : String) (candidates valid : List String)
+  | dupName (name : String)
+  | asyncField (item field : String)
+  | notAStructure (name : String)
+  | noCtor (name : String)
+  | binderMismatch (name : String)
+deriving Repr, BEq, Inhabited
+
+namespace SchemaDiag
+
+def render : SchemaDiag → String
+  | .unknownRef got cands valid =>
+      let hint := match cands with
+        | [] => ""
+        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
+      s!"unknown type `{got}` — valid types: "
+        ++ String.intercalate ", " valid ++ hint
+  | .dupName n => s!"duplicate name `{n}` — names must be unique"
+  | .asyncField item field =>
+      s!"field `{field}` on `{item}`: future/stream cannot appear in field "
+        ++ "position (WIT grammar) — move it to a function signature"
+  | .notAStructure n => s!"`{n}` is not a structure — v1 reflects structures only"
+  | .noCtor n => s!"`{n}`: no constructor found"
+  | .binderMismatch n =>
+      s!"`{n}`: field/binder count mismatch — flat structures without typeclass fields only (v1)"
+
+end SchemaDiag
+
+/-- Collect resolution diagnostics for one type against `known`.
+    (Async-in-field-position is diagnosed at the FIELD level, where the
+    item/field names are known — see `Item.check`.) -/
+def Ty.check (known : List String) : Ty → List SchemaDiag
+  | .option a => a.check known
+  | .result ok err => ok.check known ++ err.check known
+  | .list a => a.check known
+  | .future a => a.check known
+  | .stream a => a.check known
+  | .ty n => if known.contains n then [] else [.unknownRef n (didYouMean n known) known]
+  | _ => []
 
 /-- Async types are banned in FIELD position (WIT grammar: records can't
     contain future/stream — they live in func signatures where `async`
@@ -89,8 +141,6 @@ def Ty.banAsync : Ty → Bool
   | _ => true
 
 mutual
-/-- A type is well formed over `known` when every `.ty` reference
-    resolves. -/
 def Ty.wellFormed (known : List String) : Ty → Bool
   | .option a => a.wellFormed known
   | .result ok err => ok.wellFormed known && err.wellFormed known
@@ -134,6 +184,34 @@ def universeWellFormed (items : List Item) : Bool :=
   let known := Item.typeNames items
   items.all (Item.wellFormed known) && namesUnique items
 
+/-! ## The diagnostic authority (supersedes the Bool) -/
+
+/-- Collect ALL diagnostics for one item (async-in-field + unresolved
+    refs), tagged with the item's name. -/
+def Item.check (known : List String) : Item → List SchemaDiag
+  | .record n fields =>
+      fields.flatMap fun f =>
+        (if f.ty.banAsync then [] else [.asyncField n f.name])
+          ++ f.ty.check known
+  | .variant n cases =>
+      cases.flatMap fun (cn, payload) =>
+        match payload with
+        | some t => t.check known
+        | none => []
+  | .func s =>
+      s.params.flatMap fun (_, t) => t.check known
+        ++ s.ret.check known
+  | .resource _ => []
+
+/-- The universe check: ALL diagnostics. Empty list = well formed. -/
+def universeCheck (items : List Item) : List SchemaDiag :=
+  let known := Item.typeNames items
+  let ns := items.map Item.name
+  let dupNames := ns.filter (fun n => ns.countP (· == n) > 1)
+  let dedupNames := SchemaLang.dedupStr dupNames
+  let dupDiags := dedupNames.map SchemaDiag.dupName
+  items.flatMap (Item.check known) ++ dupDiags
+
 /-- The `.ty` references of an item — used by the compat diff and by
     dependency-ordered emission. -/
 def Item.tyRefs : Item → List String
@@ -141,5 +219,11 @@ def Item.tyRefs : Item → List String
   | .variant _ cases => cases.filterMap (·.2) |>.flatMap Ty.tyRefs
   | .func s => s.params.map (·.2) ++ [s.ret] |>.flatMap Ty.tyRefs
   | .resource _ => []
+
+instance : ToString SchemaDiag where
+  toString := SchemaDiag.render
+
+instance : ToString (List SchemaDiag) where
+  toString ds := String.intercalate ";; " (ds.map toString)
 
 end SchemaLang

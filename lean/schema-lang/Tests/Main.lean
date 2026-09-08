@@ -36,12 +36,21 @@ def codecChecks : CheckResult := do
   .ok ()
 
 def resolutionChecks : CheckResult := do
-  -- demo universe: all refs resolve, names unique
+  -- demo universe: all refs resolve, names unique (Bool projection)
   _ ← assertEq "demo wellFormed" (universeWellFormed Spec.demo) true
-  -- a ref to a missing type is rejected
+  -- the DIAGNOSTIC authority: empty diags = well formed
+  _ ← assertEq "demo check clean" (universeCheck Spec.demo) []
+  -- a ref to a missing type: rejected WITH did-you-mean + valid space
   let broken : List Item :=
     [ .record "a" [{ name := "x", ty := .ty "usr" }], .record "user" [] ]
   _ ← assertEq "unknown ref rejected" (universeWellFormed broken) false
+  let diags := universeCheck broken
+  match diags with
+  | [SchemaDiag.unknownRef got cands valid] => do
+    _ ← assertEq "got" got "usr"
+    _ ← assertEq "didYouMean finds user" (cands.contains "user") true
+    _ ← assertEq "valid space enumerated" (valid.contains "user") true
+  | ds => throw s!"unexpected diagnostics: {ds}"
   -- duplicate names rejected
   let dup : List Item :=
     [ .record "user" [], .variant "user" [] ]
