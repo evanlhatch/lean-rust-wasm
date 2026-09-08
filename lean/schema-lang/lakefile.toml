@@ -33,6 +33,9 @@ roots = ["Demo"]
 [[lean_exe]]
 name = "SchemaLangTests"
 root = "Tests.Main"
+# Golden checks replay Demo's `@[schema]` registrations via
+# importModules + enableInitializersExecution (unsafe init path).
+supportInterpreter = true
 
 [[lean_exe]]
 name = "schema-gen"

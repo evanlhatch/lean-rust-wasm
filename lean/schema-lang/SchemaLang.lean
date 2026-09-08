@@ -7,6 +7,7 @@ import SchemaLang.Item
 import SchemaLang.Diff
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
+import SchemaLang.Delta
 import SchemaLang.Emit.Registry
 import SchemaLang.Codec
 import SchemaLang.Field

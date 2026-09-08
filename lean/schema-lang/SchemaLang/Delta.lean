@@ -1,0 +1,139 @@
+/-
+# SchemaLang.Delta — delta-shaped contracts (the event-sourcing shape)
+
+For each `@[schema]` RECORD, derive the change variant: the event-sourcing
+shape that connects schema-lang to `Dbsp.ChangeSpec` (the change-structure
+classes — patch/valid/diff/invert — D18). A table's row type gets a
+companion change type:
+
+    record user { id: u64, ... }
+      ⇒ variant user-change { insert(user), update(user), remove(u64) }
+        enum UserChange { Insert(User), Update(User), Remove(u64) }
+        impl dbsp::Change for UserChange { ... }
+
+Lowering decisions:
+- `insert` / `update` carry the FULL record (v1 is full replacement —
+  the Dbsp.ChangeSpec patch law `patch old Δ = new` with a self-contained
+  delta; column-wise/positioned patches land with the faults package).
+- `remove` carries the KEY field's type (the FIRST field — same key
+  convention the oracle and codecs use). A record with no fields has no
+  key, so it gets NO change type (`changeTy = none`).
+- Only RECORDS get change types: variants/funcs/resources have no row
+  identity in the store.
+
+Non-goals (deliberate): diff generation (`Difference.diff` bodies), the
+`ChangeInversion`/`Noc` instances — the emitted Rust is the CONTRACT
+shape; the lawful instances are the engine's job.
+
+Why a separate `deltaWitEmitter` (not folding the variants into
+`witEmitter`): `wit/gateway.wit` is a byte-tied golden whose exact
+content existing tests pin (`witChecks`); the change variants are
+consumed by DBSP-side tooling, not the gateway world. A distinct
+`wit/delta.wit` keeps the gateway world stable and gives the delta
+artifact its own one-writer claim.
+-/
+
+import CodegenCore
+import SchemaLang.Item
+import SchemaLang.Emit.Wit
+import SchemaLang.Emit.Rust
+
+namespace SchemaLang
+
+open CodegenCore.Emit (pascal kebab)
+
+/-! ## The change shape, target-neutral -/
+
+/-- The change type's name: record `user` → `UserChange` (Pascal + suffix,
+    the Rust/WIT-facing name). Non-records have no change type. -/
+def Item.changeTypeName : Item → String
+  | .record n _ => pascal n ++ "Change"
+  | _ => ""
+
+/-- The change variant's PAYLOAD type for a record: the record itself
+    (`.ty n` — the caller wraps it in its target's variant/enum). `none`
+    for non-records AND for field-less records (no key field). -/
+def Item.changeTy : Item → Option Ty
+  | .record n fields =>
+      match fields with
+      | [] => none
+      | _ :: _ => some (.ty n)
+  | _ => none
+
+/-! ## WIT lowering -/
+
+/-- The change variant as WIT text lines. The variant name and the record
+    reference are kebab-mangled; `remove` carries the KEY field's WIT
+    type. Empty list for non-records / key-less records. -/
+def Item.changeWitDecl : Item → List String
+  | .record n fields =>
+      match fields.head? with
+      | none => []
+      | some key =>
+          let ref := kebab n
+          ["variant " ++ kebab n ++ "-change {"
+          , "    insert(" ++ ref ++ "),"
+          , "    update(" ++ ref ++ "),"
+          , "    remove(" ++ SchemaLang.Emit.Wit.tyWit key.ty ++ "),"
+          , "}"
+          ]
+  | _ => []
+
+/-! ## Rust lowering -/
+
+/-- The change ENUM + its `dbsp::Change` impl (the `Dbsp.Change` class
+    shape: `patch` + `valid`). `insert`/`update` replace the row;
+    `remove` keeps the last-seen value (the deletion is the key join's
+    signal). Empty list for non-records / key-less records. -/
+def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
+  | .record n fields =>
+      match fields.head? with
+      | none => []
+      | some key =>
+          let change := Item.changeTypeName (.record n fields)
+          let full := SchemaLang.Emit.Rust.tyRust (.ty n)
+          let keyTy := SchemaLang.Emit.Rust.tyRust key.ty
+          [ .enum change SchemaLang.Emit.Rust.defaultDerives
+              [ s!"Insert({full})"
+              , s!"Update({full})"
+              , s!"Remove({keyTy})"
+              ]
+          , .comment
+              s!"ChangeSpec: the Dbsp.Change shape (patch + valid) for {change}."
+          , .implTrait "dbsp::Change" change []
+              [ ("patch(&self, base: &" ++ full ++ ") -> " ++ full
+                , "match self { Self::Insert(u) | Self::Update(u) => "
+                  ++ "u.clone(), Self::Remove(_) => base.clone() }")
+              , ("valid(&self) -> bool", "true")
+              ]
+          ]
+  | _ => []
+
+end SchemaLang
+
+/-! ## The emitters -/
+
+open SchemaLang (Item)
+
+/-- The Rust delta emitter: all change enums + ChangeSpec impls, one file. -/
+def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+  name := "delta"
+  style := .doubleSlash
+  specSource := "SchemaLang/Spec/Demo.lean"
+  outputs := ["src/delta_generated.rs"]
+  run items :=
+    [{ path := "src/delta_generated.rs"
+       contents :=
+         CodegenCore.Emit.Rust.renderModule (items.flatMap Item.changeRustItems) }]
+
+/-- The WIT delta emitter: all change variants, one file (see the module
+    header for why this is separate from `witEmitter`). -/
+def deltaWitEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+  name := "delta-wit"
+  style := .doubleSlash
+  specSource := "SchemaLang/Spec/Demo.lean"
+  outputs := ["wit/delta.wit"]
+  run items :=
+    [{ path := "wit/delta.wit"
+       contents :=
+         String.join ((items.flatMap Item.changeWitDecl).map (· ++ "\n")) }]

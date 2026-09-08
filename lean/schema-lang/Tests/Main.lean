@@ -4,7 +4,9 @@
 Resolution wellFormed (accept/reject), EqAns direction, compat diff,
 WIT golden emission.
 -/
+import Lean
 import SchemaLang
+import Demo
 import TestKit
 
 open SchemaLang TestKit
@@ -96,42 +98,61 @@ def diffChecks : CheckResult := do
     [ .record "user" [{ name := "id", ty := .string }]
     , .variant "role" [("admin", none)] ]
   _ ← assertEq "reshape breaking" (backwardCompatible v1 v4) false
-  _ ← assertEq "reshape reported" ((diff v1 v4).any (· == .changed "user")) true
+  _ ← assertEq "reshape reported" ((diff v1 v4).any
+      (· == .changed "user" [.fieldTypeChanged "id" .u64 .string])) true
+  -- field-level evidence: WHICH field moved (EqAns-based compat)
+  let u1 : List Item := [ .record "user" [{ name := "id", ty := .u64 }] ]
+  let u2 : List Item :=
+    [ .record "user" [{ name := "name", ty := .string }
+                    , { name := "id", ty := .u64 }] ]
+  _ ← assertEq "field added" (diff u1 u2)
+      [.changed "user" [.fieldAdded "name"]]
+  _ ← assertEq "field removed" (diff u2 u1)
+      [.changed "user" [.fieldRemoved "name"]]
+  let u3 : List Item := [ .record "user" [{ name := "id", ty := .u32 }] ]
+  _ ← assertEq "field retyped" (diff u1 u3)
+      [.changed "user" [.fieldTypeChanged "id" .u64 .u32]]
+  -- mixed: retype + addition, old-order evidence then additions
+  let u4 : List Item :=
+    [ .record "user" [{ name := "id", ty := .u64 }
+                    , { name := "email", ty := .string }] ]
+  _ ← assertEq "field mix" (diff u3 u4)
+      [.changed "user" [.fieldTypeChanged "id" .u32 .u64, .fieldAdded "email"]]
   .ok ()
 
-def witChecks : CheckResult := do
-  let out := Emit.Wit.worldOf "demo:gateway" "gateway" Spec.demo
-  -- determinism: same input, same bytes
-  _ ← assertEq "deterministic" out (Emit.Wit.worldOf "demo:gateway" "gateway" Spec.demo)
-  -- structure pins
-  _ ← assertEq "package" (out.contains "package demo:gateway;") true
-  _ ← assertEq "world" (out.contains "world gateway {") true
-  _ ← assertEq "types iface" (out.contains "interface gateway-types {") true
-  _ ← assertEq "use clause" (out.contains "use gateway-types.{user, order-error};") true
-  _ ← assertEq "record" (out.contains "record user {") true
-  _ ← assertEq "kebab field" (out.contains "  id: u64,") true
-  _ ← assertEq "list field" (out.contains "  tags: list<string>,") true
-  _ ← assertEq "variant payload" (out.contains "  invalid-item(u64),") true
-  _ ← assertEq "resource" (out.contains "resource db;") true
-  _ ← assertEq "exports iface" (out.contains "interface gateway-exports {") true
-  _ ← assertEq "func sig" (out.contains "get-user: func(id: u64) -> option<user>;") true
-  _ ← assertEq "future/stream" (out.contains "future<list<user>>") true
-  -- kebab mangle: an import header line never appears
-  _ ← assertEq "no import kw" (out.contains "\nimport ") false
-  .ok ()
+/-! ## Golden byte-tie: registry emitters vs committed goldens -/
 
-def rustChecks : CheckResult := do
-  let items := Emit.Rust.schemaItems Emit.Rust.defaultDerives Spec.demo
-  let out := CodegenCore.Emit.Rust.renderModule items
-  -- determinism: same input, same bytes
-  _ ← assertEq "deterministic" out (CodegenCore.Emit.Rust.renderModule items)
-  _ ← assertEq "struct" (out.contains "pub struct User {") true
-  _ ← assertEq "derive" (out.contains "#[derive(Clone, Debug, PartialEq, Eq)]") true
-  _ ← assertEq "vec field" (out.contains "Vec<String>") true
-  _ ← assertEq "enum" (out.contains "pub enum OrderError {") true
-  _ ← assertEq "payload variant" (out.contains "InvalidItem(u64),") true
-  _ ← assertEq "no funcs" (out.contains "get_user") false
-  .ok ()
+open Lean SchemaLang.Meta in
+/-- The reflected Demo registry, loaded at runtime (GenMain's pattern).
+    `importModules` resolves oleans at RUNTIME — initialize the search
+    path, then add the package build dir (a direct binary run lacks
+    LEAN_PATH; the tests run from the package root). -/
+unsafe def loadDemoItems : IO (List SchemaLang.Item) := do
+  Lean.initSearchPath (← Lean.findSysroot)
+  Lean.searchPathRef.modify fun sp =>
+    sp ++ [(".lake/build/lib" : System.FilePath), (".lake/build/lib/lean" : System.FilePath)]
+  Lean.enableInitializersExecution
+  let env ← Lean.importModules #[`Demo] (opts := {}) (loadExts := true)
+  pure ((registeredItems env).map (·.2))
+
+/-- Run every registry emitter over the CURRENT reflected Demo registry
+    and byte-compare each output (header prepended, matching `schema-gen`'s
+    write) against the committed golden under `goldens/<emitter>/`.
+    `update = true` regenerates (the deliberate-change path). -/
+unsafe def goldenChecks (update : Bool) : IO (List (String × CheckResult)) := do
+  let items ← loadDemoItems
+  let mut results : List (String × CheckResult) := []
+  for e in SchemaLang.Emit.emitters do
+    for f in e.run items do
+      let file := ((f.path : String).splitOn "/").getLast!
+      let golden : System.FilePath := s!"goldens/{e.name}/{file}"
+      let dir := String.intercalate "/" ((golden.toString.splitOn "/").dropLast)
+      IO.FS.createDirAll dir
+      let out := CodegenCore.Emit.header e.style "schema-lang" "Demo.lean"
+        ++ CodegenCore.Emit.GeneratedFile.contents f
+      let r ← TestKit.Golden.checkAgainstGolden e.name out golden update
+      results := results ++ [(s!"{e.name}/{file}", r)]
+  return results
 
 /-! ## Bridge: Ty → SType -/
 
@@ -185,38 +206,55 @@ def bridgeSchemaChecks : CheckResult := do
   _ ← assert (Schema.ofItems items == expect) "ofItems"
   .ok ()
 
-/-! ## Vortex emitter -/
+/-! ## Delta emitter (the event-sourcing shape) -/
 
-def vortexChecks : CheckResult := do
-  let files := SchemaLang.Vortex.Emit.vortexEmitter.run Spec.demo
-  _ ← assertEq "one file" files.length 1
-  -- output path is declared, exactly
-  _ ← assertEq "path" (files.head?.map (·.path) |>.getD "") "src/vortex_generated.rs"
-  let out := files.head?.map (·.contents) |>.getD ""
-  -- determinism: same input, same bytes
+def deltaChecks : CheckResult := do
+  -- the change-shape functions, per record
+  _ ← assertEq "changeTypeName" (Item.changeTypeName Spec.user) "UserChange"
+  _ ← assert (Item.changeTy Spec.user == some (.ty "user")) "changeTy is the record ref"
+  _ ← assert (Item.changeTy Spec.getUser == none) "func has no change ty"
+  _ ← assert (Item.changeTy (.record "empty" []) == none) "key-less record has no change ty"
+  -- WIT change variant: name, insert/update payloads, remove carries the key type
+  let wit := String.intercalate "\n" (Item.changeWitDecl Spec.user)
+  _ ← assert (wit.contains "variant user-change {") "variant name kebab+mangled"
+  _ ← assert (wit.contains "insert(user)") "wit insert"
+  _ ← assert (wit.contains "update(user)") "wit update"
+  _ ← assert (wit.contains "remove(u64)") "wit remove carries key ty"
+  _ ← assert (Item.changeWitDecl Spec.role == []) "variant item: no change decl"
+  -- Rust: enum + ChangeSpec impl
+  let out := CodegenCore.Emit.Rust.renderModule (Spec.demo.flatMap Item.changeRustItems)
   _ ← assertEq "deterministic" out
-    ((SchemaLang.Vortex.Emit.vortexEmitter.run Spec.demo).head?.map (·.contents) |>.getD "")
-  -- dtype pins
-  _ ← assertEq "primitive pin" (out.contains "DType::Primitive(PType::U64") true
-  _ ← assertEq "nullability pin" (out.contains "Nullability::NonNullable") true
-  _ ← assertEq "impl pin" (out.contains "impl IntoVortex for User") true
-  -- list<string> field lowers to Arc-wrapped Utf8
-  _ ← assertEq "list pin"
-    (out.contains "DType::List(std::sync::Arc::new(DType::Utf8(Nullability::NonNullable))") true
-  -- const naming: snake + upper + _DTYPE
-  _ ← assertEq "const pin" (out.contains "pub const USER_DTYPE") true
+    (CodegenCore.Emit.Rust.renderModule (Spec.demo.flatMap Item.changeRustItems))
+  _ ← assert (out.contains "pub enum UserChange {") "change enum"
+  _ ← assert (out.contains "#[derive(Clone, Debug, PartialEq, Eq)]") "derives"
+  _ ← assert (out.contains "Insert(User),") "insert payload"
+  _ ← assert (out.contains "Remove(u64),") "remove payload"
+  _ ← assert (out.contains "impl dbsp::Change for UserChange") "ChangeSpec impl"
+  -- the emitters: declared paths, determinism
+  let files := deltaEmitter.run Spec.demo
+  _ ← assertEq "delta path" (files.head?.map (·.path)) (some "src/delta_generated.rs")
+  _ ← assertEq "delta deterministic" (files.map (·.contents))
+    ((deltaEmitter.run Spec.demo).map (·.contents))
+  let wfiles := deltaWitEmitter.run Spec.demo
+  _ ← assertEq "deltaWit path" (wfiles.head?.map (·.path)) (some "wit/delta.wit")
+  let wout := wfiles.head?.map (·.contents) |>.getD ""
+  _ ← assertEq "deltaWit deterministic" wout
+    ((deltaWitEmitter.run Spec.demo).head?.map (·.contents) |>.getD "")
+  _ ← assert (wout.contains "insert(user)") "deltaWit insert pin"
+  _ ← assert (wout.contains "remove(u64)") "deltaWit remove pin"
   .ok ()
 
-def main : IO UInt32 :=
+unsafe def main (args : List String) : IO UInt32 := do
+  let update := args.contains "--update"
+  let goldens ← goldenChecks update
   mainOfChecks "SchemaLang"
-    [ ("resolution", resolutionChecks)
-    , ("fieldRes", fieldResolutionChecks)
-    , ("codec", codecChecks)
-    , ("eqAns", eqAnsChecks)
-    , ("diff", diffChecks)
-    , ("wit", witChecks)
-    , ("rust", rustChecks)
-    , ("bridge", bridgeChecks)
-    , ("bridgeSchema", bridgeSchemaChecks)
-    , ("vortex", vortexChecks)
-    ]
+    ([ ("resolution", resolutionChecks)
+     , ("fieldRes", fieldResolutionChecks)
+     , ("codec", codecChecks)
+     , ("eqAns", eqAnsChecks)
+     , ("diff", diffChecks)
+     ] ++ goldens ++
+     [ ("bridge", bridgeChecks)
+     , ("bridgeSchema", bridgeSchemaChecks)
+     , ("delta", deltaChecks)
+     ])
