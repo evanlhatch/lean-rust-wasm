@@ -3,7 +3,7 @@
 // regenerate via `just gen`; drift fails CI (byte-tie)
 package demo:gateway;
 
-world gateway {
+interface gateway-types {
 record user {
   id: u64,
   name: string,
@@ -21,8 +21,14 @@ variant order-error {
   insufficient-funds(f64),
 }
 resource db;
-  export interface gateway-exports {
-  get-user: func(id: u64) -> option<user>;
-  watch-orders: func(into: order-error) -> future<list<user>>;
-  }
+}
+
+interface gateway-exports {
+  use gateway-types.{user, order-error};
+    get-user: func(id: u64) -> option<user>;
+    watch-orders: func(into: order-error) -> future<list<user>>;
+}
+
+world gateway {
+  export gateway-exports;
 }

@@ -53,11 +53,6 @@ mutants name:
 # `gen`/`check`/`breaking` run identically in CI and in watchers. The
 # watcher never changes what runs, only when.
 
-# Emit wit/ + src/generated/ + wasm from the type-definition layer.
-# Placeholder impl — swap for steelc/lake when wired.
-gen:
-	@echo "TODO: steelc emit"
-
 # Fast type-check only, no emission (buf lint analog).
 check-schema:
 	@echo "TODO: steelc check"
@@ -97,7 +92,7 @@ check-wasm:
 # ── Lean workspace (packages in dependency order) ────────────────────
 # elan shims broken — invoke toolchain bin directly.
 lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" / "bin"
-lean_pkgs := "TestKit Machines"
+lean_pkgs := "TestKit Machines codegen-core schema-lang faults"
 
 lean-build:
 	#!/usr/bin/env bash
@@ -158,7 +153,8 @@ lean-axioms:
 	for p in {{lean_pkgs}}; do
 	  out=$(cd lean/$p && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env lean Tests/Axioms.lean 2>&1)
 	  if echo "$out" | grep -q "sorryAx"; then echo "FAIL: sorryAx in $p"; exit 1; fi
-	  bad=$(echo "$out" | grep -oE "\[(.*)\]" | tr ',' '\n' | sed 's/^ *//;s/ *$//' \
+	  bad=$(echo "$out" | grep -v "does not depend" | sed "s/.*depends on axioms: //" | tr -d "[]" | tr "," "\n" \
+	    | sed "s/^ *//;s/ *$//" \
 	    | grep -vE "^(propext|Classical.choice|Quot.sound|.*native_decide..*|)$" || true)
 	  if [ -n "$bad" ]; then echo "FAIL: $p unexpected axioms:"; echo "$bad"; exit 1; fi
 	  echo "$p: axioms clean"

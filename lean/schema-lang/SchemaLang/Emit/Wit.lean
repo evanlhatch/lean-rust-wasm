@@ -64,21 +64,41 @@ def funcDecl : FuncSig → String :=
     "  " ++ kebab s.name ++ ": func(" ++ String.intercalate ", " params
       ++ ") -> " ++ tyWit s.ret ++ ";"
 
-/-- The world: type items at top level + funcs in an exports interface
-    (handler-symmetry shape; composable). -/
+/-- The world, in the wasmtron small-interfaces shape:
+
+    interface <world>-types { records, variants, resources }
+    interface <world>-exports { use <world>-types.{...}; funcs }
+    world <world> { export <world>-exports; }
+
+Types live in their own interface; the exports interface `use`s exactly
+the type names its signatures reference (deduped, kebab-mangled).
+-/
 def worldOf (packageName worldName : String) (items : List Item) : String :=
-  let types := items.filter fun it =>
+  let typeItems := items.filter fun it =>
     match it with | .record _ _ | .variant _ _ | .resource _ => true | _ => false
   let funcs := items.filterMap fun it =>
     match it with | .func s => some s | _ => none
-  let typeLines := types.flatMap typeDecl
-  let iface :=
-    if funcs.isEmpty then []
-    else ("  export interface " ++ kebab worldName ++ "-exports {")
-      :: (funcs.map (funcDecl · ++ ""))
-      ++ ["  }"]
-  let body := (typeLines.map (· ++ "\n")) ++ (iface.map (· ++ "\n"))
-  "package " ++ packageName ++ ";\n\nworld " ++ kebab worldName ++ " {\n"
-    ++ String.join body ++ "}\n"
+  let typeLines := typeItems.flatMap typeDecl
+  -- types referenced by func signatures (deduped, registration order)
+  let refs :=
+    (funcs.flatMap fun s => s.params.map (·.2) ++ [s.ret])
+      |>.flatMap Ty.tyRefs
+      |>.foldl (fun acc r => if acc.contains r then acc else acc ++ [r]) []
+  let useLine :=
+    if refs.isEmpty then ""
+    else "  use " ++ kebab worldName ++ "-types.{"
+      ++ String.intercalate ", " (refs.map kebab) ++ "};\n"
+  let exportsIface :=
+    "interface " ++ kebab worldName ++ "-exports {\n"
+      ++ useLine
+      ++ String.join (funcs.map (fun s => "  " ++ funcDecl s ++ "\n"))
+      ++ "}\n"
+  "package " ++ packageName ++ ";\n\n"
+    ++ "interface " ++ kebab worldName ++ "-types {\n"
+    ++ String.join (typeLines.map (· ++ "\n"))
+    ++ "}\n\n"
+    ++ exportsIface ++ "\n"
+    ++ "world " ++ kebab worldName ++ " {\n  export " ++ kebab worldName
+    ++ "-exports;\n}\n"
 
 end SchemaLang.Emit.Wit

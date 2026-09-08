@@ -97,12 +97,14 @@ def witChecks : CheckResult := do
   -- structure pins
   _ ← assertEq "package" (out.contains "package demo:gateway;") true
   _ ← assertEq "world" (out.contains "world gateway {") true
+  _ ← assertEq "types iface" (out.contains "interface gateway-types {") true
+  _ ← assertEq "use clause" (out.contains "use gateway-types.{user, order-error};") true
   _ ← assertEq "record" (out.contains "record user {") true
   _ ← assertEq "kebab field" (out.contains "  id: u64,") true
   _ ← assertEq "list field" (out.contains "  tags: list<string>,") true
   _ ← assertEq "variant payload" (out.contains "  invalid-item(u64),") true
   _ ← assertEq "resource" (out.contains "resource db;") true
-  _ ← assertEq "exports iface" (out.contains "export interface gateway-exports {") true
+  _ ← assertEq "exports iface" (out.contains "interface gateway-exports {") true
   _ ← assertEq "func sig" (out.contains "get-user: func(id: u64) -> option<user>;") true
   _ ← assertEq "future/stream" (out.contains "future<list<user>>") true
   -- kebab mangle: an import header line never appears

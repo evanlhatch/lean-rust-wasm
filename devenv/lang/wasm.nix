@@ -24,11 +24,9 @@ let
     hash = "sha256-hb3N+itPqOH98Z1eDT/tAe/W6BgdSibhat7z/6+KjeY=";
   };
   wasiSdkSysroot = pkgs.runCommand "wasi-sdk-sysroot-34.0-rc.2" { } ''
-    mkdir -p $out
-    cp -r ${wasiSdkTarball} sysroot.tar.gz
-    mkdir extract
-    tar -xzf sysroot.tar.gz -C extract
-    cp -r extract/wasi-sdk-34.0-rc.2/share $out/share
+    mkdir -p $out extract
+    tar -xzf ${wasiSdkTarball} -C extract
+    cp -r extract/wasi-sdk-34.0-rc.2-arm64-linux/share $out/share
   '';
 
   # wasm-component-ld execs `wasm-ld` via PATH — force lld 23 ahead of
