@@ -69,6 +69,16 @@ def ctorNameOf (declName ctor : Name) : String :=
 def registeredNames (env : Environment) : List String :=
   (schemaItemExt.getState env).map (fun (_, item) => item.name)
 
+/-- The registered name of a func parameter: the binder name with a
+    leading `_` stripped. Authors underscore a stub body's dead binder
+    (`def getUser (_id : UInt64) := …`) but the SPEC's param name is the
+    written word (`id`) — the underscore is a Lean-body convention, not
+    wire content. -/
+def paramNameOf (name : Name) : String :=
+  match String.dropPrefix? name.toString "_" with
+  | some rest => (rest : String.Slice).toString
+  | none => name.toString
+
 /-- Partial reifier: a Lean type expression → schema `Ty`, when the type
     is in the boundary fragment. `env` resolves references to previously
     reflected declarations. -/
@@ -252,7 +262,7 @@ def funcSignature (env : Environment) (declName : Name) :
     | .forallE name d b bi =>
         if bi.isExplicit then
           match tyOfExpr? env d with
-          | some ty => go (acc ++ [(name.stripPrefix "_".toList |>.getD name.toString, ty)]) b
+          | some ty => go (acc ++ [(paramNameOf name, ty)]) b
           | none => throw s!"param `{name}` has non-boundary type: {d}"
         else go acc b
     | _ =>
