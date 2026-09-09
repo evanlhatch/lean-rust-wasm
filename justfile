@@ -245,4 +245,11 @@ wasm-compile:
 	[ -x "$WT" ] || WT=wasm-tools
 	"$WT" parse -g lean/wasm-backend/target/demo.wat -o lean/wasm-backend/target/demo.wasm
 	"$WT" validate lean/wasm-backend/target/demo.wasm
-	echo "wasm-compile: lean/wasm-backend/target/demo.wasm VALID"
+	# Differential smoke: the wasm results must equal Lean's own evaluation
+	# (double 21 = 42 = adder 40 2; isBig 250 = 1; isBig 42 = 0).
+	devenv shell --profile wasm -- bash -c 'cd lean/wasm-backend; \
+	  [ "$(wasmtime run --invoke double target/demo.wasm 21)" = "42" ] \
+	  && [ "$(wasmtime run --invoke adder target/demo.wasm 40 2)" = "42" ] \
+	  && [ "$(wasmtime run --invoke isBig target/demo.wasm 250)" = "1" ] \
+	  && [ "$(wasmtime run --invoke isBig target/demo.wasm 42)" = "0" ]'
+	echo "wasm-compile: lean/wasm-backend/target/demo.wasm VALID + differential smoke green"

@@ -28,7 +28,11 @@ def emitModuleWasm : CoreM String := do
   decls := decls.reverse
   let exports := targetDecls.toList.map fun n =>
     s!"  (export \"{n.toString}\" (func ${n.toString}))"
-  pure (WasmBackend.emitModule decls exports)
+  let res : Except String (String × WasmBackend.S) :=
+    StateT.run (WasmBackend.emitModule decls exports) {}
+  match res with
+  | .ok (wat, _) => pure wat
+  | .error e => throwError e
 
 unsafe def main : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot)

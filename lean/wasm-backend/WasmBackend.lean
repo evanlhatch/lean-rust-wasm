@@ -8,7 +8,12 @@ Consumes the final impure-phase LCNF (the `leanir` re-run pattern —
 see GenMain) and emits WebAssembly Text Format. The toolchain:
 
     WAT → `wasm-tools parse -g` (binary + DWARF + name section)
-        → `wasm-tools validate` → `wasm-tools component new`
+        → `wasm-tools validate` → wasmtime --invoke smoke
+
+ROBUSTNESS CONTRACT: unsupported LCNF constructs are COMPILE ERRORS
+(`throw`), never silent comments — a missing backend case fails
+`wasm-gen` with the decl name and construct, so it can never reach a
+guest as wrong code. Coverage grows by adding cases, not by hoping.
 
 The guest runtime is OURS: the object layout is guestlang's, not Lean's
 C runtime's:
@@ -20,8 +25,8 @@ is `8 + off` (one 8-byte slot per scalar field, matching the dump:
 `rect` fields at sproj[0,0] / sproj[0,8]).
 
 v1 scope (the scalar core): let/return/cases/const-primitives/lits/
-sproj, `inc`/`dec`/`del` erased (leak — bump allocator comes with
-guestlang-std). `._boxed` wrappers are skipped: the erased-Type calling
+sproj; `inc`/`dec`/`del` erased (leak — the pooled allocator lands with
+guestlang-std); `._boxed` wrappers are skipped: the erased-Type calling
 convention is replaced at the boundary by the canonical ABI.
 -/
 
@@ -60,9 +65,16 @@ structure S where
   n : Nat := 0
   deriving Inhabited
 
-abbrev M := StateM S
+/-- Emission errors: unsupported constructs ABORT the compile (the
+robustness contract) — the message names the decl and the construct. -/
+abbrev M := StateT S (Except String)
+
+instance : Inhabited (M String) := ⟨fun s => .ok (default, s)⟩
 
 def emit (line : String) : M Unit := modify fun s => { s with out := s.out.push line }
+
+/-- Unsupported construct → compile error (naming it is the fix path). -/
+def unsupported (what : String) : M Unit := throw s!"WasmBackend: unsupported construct: {what}"
 
 /-- Fresh local bound to an fvar. -/
 def bindLocal (fvarId : FVarId) (ty : String) : M String := do
@@ -81,7 +93,7 @@ def load (fvarId : FVarId) : M String := do
   let s ← get
   match s.fvars[fvarId]? with
   | some n => pure s!"local.get ${n}"
-  | none => pure s!";; UNBOUND fvar {fvarId.name}"
+  | none => throw s!"WasmBackend: unbound fvar {fvarId.name}"
 
 /-! ## Primitive operations -/
 
@@ -111,15 +123,15 @@ partial def emitCode (code : Code .impure) : M Unit := do
   | .let decl k => emitLet decl; emitCode k
   | .return fvarId => emitReturn fvarId
   | .cases c => emitCases c
-  | .inc _ _ _ _ k => emitCode k  -- Perceus inc: leak (v1)
+  | .inc _ _ _ _ k => emitCode k  -- Perceus inc: leak (v1; pooled allocator next)
   | .dec _ _ _ _ _ k => emitCode k  -- Perceus dec: leak (v1)
   | .del _ k => emitCode k
-  | .fun _ _ h => absurd h (by simp)  -- pure-only ctor: unreachable
   | .jp _ k => emitCode k  -- v1: join points inlined-away by elim (not observed)
-  | .jmp .. => emit ";; JMP: unsupported in v1"
+  | .jmp .. => unsupported "Code.jmp"
   | .unreach _ => emit "unreachable"
   | .oset .. | .uset .. | .sset .. | .setTag .. =>
-    emit ";; mutation: unsupported in v1"
+    unsupported "in-place mutation (oset/uset/sset/setTag)"
+  | .fun _ _ h => absurd h (by simp)  -- pure-only ctor: unreachable
 
 /-- One let binding. -/
 partial def emitLet (decl : LetDecl .impure) : M Unit := do
@@ -133,8 +145,10 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       let l ← bindLocal decl.fvarId "i32"
       emit s!"i32.const {v}"
       emit s!"local.set ${l}"
-  | .lit (.nat _) => emit ";; NAT literal: GMP — unsupported in the guest"
-  | .lit _ => emit ";; literal: unsupported kind"
+  | .lit (.nat _) => unsupported "Nat literal (GMP — banned in the guest)"
+  | .lit (.usize _) => unsupported "USize literal (word-size portability: later)"
+  | .lit (.str _) => unsupported "String literal (UTF-8 objects: guestlang-std)"
+  | .lit (.uint16 _) => unsupported "UInt16 literal"
   | .erased => pure ()  -- types/proofs: no runtime value
   | .fvar fvarId args =>
       if args.isEmpty then
@@ -142,33 +156,7 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emit (← load fvarId)
         emit s!"local.set ${l}"
       else
-        emit ";; fvar application: unsupported in v1"
-  | .const fn _ args _ =>
-      match binop? fn, args.isEmpty with
-      | some op, false =>
-          let l ← bindLocal decl.fvarId (ty.getD "i64")
-          for a in args do emitArg a
-          emit op
-          emit s!"local.set ${l}"
-      | _, _ => emit s!";; const {fn}: unsupported in v1"
-  | .sproj _ offset var _ =>
-      -- object field: 8-byte scalar slots, header is 8 bytes
-      let tyS := ty.getD "i64"
-      let l ← bindLocal decl.fvarId tyS
-      emit (← load var)
-      let loadOp := if tyS == "i64" then "i64.load" else "i32.load"
-      emit s!"{loadOp} offset={8 + offset}"
-      emit s!"local.set ${l}"
-  | .ctor _ _ _ => emit ";; ctor alloc: needs the bump allocator (guestlang-std)"
-  | .box _ var _ =>
-      -- scalar → object: v1 passes the scalar raw (boundary layer decides)
-      let l ← bindLocal decl.fvarId "i32"
-      emit (← load var)
-      emit s!"local.set ${l} ;; BOX: v1 passes the scalar raw"
-  | .unbox var _ =>
-      let l ← bindLocal decl.fvarId (ty.getD "i64")
-      emit (← load var)
-      emit s!"local.set ${l} ;; UNBOX: raw pass-through in v1"
+        unsupported "fvar application (join-point call)"
   | .fap fn args =>
       -- impure-phase applications: primitives (binop table) AND calls
       match binop? fn with
@@ -178,16 +166,41 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
           emit op
           emit s!"local.set ${l}"
       | none =>
-          -- real call: push args, call, capture
           let l ← bindLocal decl.fvarId (ty.getD "i64")
           for a in args do emitArg a
           emit s!"call ${fn.toString}"
           emit s!"local.set ${l}"
+  | .sproj _ offset var _ =>
+      -- object field: 8-byte scalar slots, header is 8 bytes
+      let tyS := ty.getD "i64"
+      let l ← bindLocal decl.fvarId tyS
+      emit (← load var)
+      let loadOp := if tyS == "i64" then "i64.load" else "i32.load"
+      emit s!"{loadOp} offset={8 + offset}"
+      emit s!"local.set ${l}"
+  | .ctor _ _ _ =>
+      unsupported "ctor allocation (needs the pooled allocator — next up)"
+  | .box _ var _ =>
+      -- scalar → object: v1 passes the scalar raw (boundary layer decides)
+      let l ← bindLocal decl.fvarId "i32"
+      emit (← load var)
+      emit s!"local.set ${l} ;; BOX: v1 passes the scalar raw"
+  | .unbox var _ =>
+      let l ← bindLocal decl.fvarId (ty.getD "i64")
+      emit (← load var)
+      emit s!"local.set ${l} ;; UNBOX: raw pass-through in v1"
   | .proj .. | .oproj .. | .uproj .. =>
-      emit ";; proj family: unsupported in v1"
-  | .pap .. | .reset .. | .reuse .. | .isShared .. =>
-      emit ";; Perceus/closure op: unsupported in v1"
+      unsupported "proj/oproj/uproj"
+  | .pap .. =>
+      unsupported "pap (closures — funcref+env pairs: next up)"
+  | .reset .. | .reuse .. =>
+      unsupported "Perceus reset/reuse (in-place update: later)"
+  | .isShared .. =>
+      unsupported "isShared"
+  | .const fn .. =>
+      unsupported s!"const {fn} (pure-phase application)"
 
+/-- `return` — the function's result is the loaded local. -/
 partial def emitReturn (fvarId : FVarId) : M Unit := do
   emit (← load fvarId)
   emit "return"
@@ -260,13 +273,14 @@ def emitDecl (d : Decl .impure) : M String := do
   let locals := s.locals.toList.map fun (n, t) => s!"  (local ${n} {t})"
   let body := String.intercalate "\n  " (locals ++ s.out.toList)
   let full := s!"{header}\n  {body}\n)"
-  -- reset output for the next decl (fresh scope)
-  modify fun s => { s with out := #[] }
   pure full
 
 /-- Emit the whole module for the final impure decls. -/
-def emitModule (decls : List (Decl .impure)) (exports : List String) : String :=
-  let funcs := decls.map fun d => (emitDecl d {}).1
-  String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs) ++ exports ++ [")"])
+def emitModule (decls : List (Decl .impure)) (exports : List String) : M String := do
+  let mut funcs : List String := []
+  for d in decls do
+    let (f, _) ← emitDecl d |>.run {}
+    funcs := funcs ++ [f]
+  pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs) ++ exports ++ [")"])
 
 end WasmBackend
