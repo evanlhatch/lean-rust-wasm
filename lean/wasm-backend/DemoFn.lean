@@ -61,5 +61,21 @@ def sumList (xs : List UInt64) (acc : UInt64) : UInt64 :=
   | [] => acc
   | x :: rest => sumList rest (acc + x)
 
+
+/-- MULTI-ARITY closures: pap with 1 captured arg, TWO fresh args —
+    a second trampoline signature (sig_2box). -/
+@[guest]
+def curried (a : UInt64) : UInt64 → UInt64 → UInt64 :=
+  fun x y => a + x + y
+
+@[guest]
+def apply2All (fs : List (UInt64 → UInt64 → UInt64)) (x y : UInt64) : UInt64 :=
+  match fs with
+  | [] => x + y
+  | f :: rest => apply2All rest (f x y) y
+
+@[guest]
+def useCurried (a : UInt64) : UInt64 := apply2All [curried a] 3 4
+
 @[guest]
 def total (a b c : UInt64) : UInt64 := sumList [a, b, c] 0

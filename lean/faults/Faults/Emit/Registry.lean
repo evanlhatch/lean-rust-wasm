@@ -49,12 +49,52 @@ def hostEmitter : Emitter FaultsSpec where
 /-- The emitters (order = write order). -/
 def emitters : List (Emitter FaultsSpec) := [guestEmitter, hostEmitter]
 
-/-- Pair each emitter with the spec it consumes (faults has two spec
-    sources, so the driver runs each with its own registry). -/
-def jobs : List (Emitter FaultsSpec × FaultsSpec) :=
-  [(guestEmitter, Spec.apiFaults), (hostEmitter, Spec.hostFaults)]
-
 /-- Audit: no two emitters claim the same output path. -/
 def pathsUnique : Bool := (emitters.flatMap (·.outputs)).Nodup
+
+/-! ## The forge-driver manifest row
+
+Same pattern as `SchemaLang.Emit`: the job row is a LITERAL copy of the
+registry's outputs under the driver exe (the copy breaks the
+cycle rows → registry → manifest emitter → rows), and
+`jobsCoverEmitters` makes the copy's drift a TEST FAILURE. forge unions
+the per-package manifest files and byte-ties every listed output.
+-/
+
+def forgeJobs : List (String × List String) :=
+  [("faults-gen",
+    [ "../../src/faults_generated.rs"
+    , "../../src/host_faults_generated.rs"
+    ])]
+
+def jobsCoverEmitters : Bool :=
+  (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2)
+
+/-- The manifest rows for this package (forge unions rows across
+    packages; brackets + header come from the writer). Paths are
+    REPO-ROOT-relative (forge joins from the root). -/
+def forgeJobsLines : List String :=
+  let rootRel := fun (p : String) =>
+    match p.dropPrefix? "../../" with | some rest => rest.toString | none => p
+  forgeJobs.map fun (exe, outputs) =>
+    SchemaLang.Emit.jobJson "faults" exe (outputs.map rootRel)
+
+def forgeJobsEmitter : Emitter FaultsSpec where
+  name := "forge-jobs"
+  style := .hash
+  specSource := "Faults.Emit.Registry (forgeJobs)"
+  outputs := ["../../crates/forge/src/faults_jobs_generated.json"]
+  run _ :=
+    [{ path := "../../crates/forge/src/faults_jobs_generated.json"
+       contents := "[\n" ++ String.intercalate ",\n" forgeJobsLines ++ "\n]\n" }]
+
+/-- Pair each emitter with the spec it consumes (faults has two spec
+    sources, so the driver runs each with its own registry). The
+    forge-jobs emitter consumes no fault registry — it emits the driver
+    manifest — so it pairs with the empty list. -/
+def jobs : List (Emitter FaultsSpec × FaultsSpec) :=
+  [(guestEmitter, Spec.apiFaults), (hostEmitter, Spec.hostFaults)
+   , (forgeJobsEmitter, [])]
+
 
 end Faults.Emit

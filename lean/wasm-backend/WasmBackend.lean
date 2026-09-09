@@ -210,13 +210,14 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emit (← load fvarId); emit s!"local.set ${l}"
       else
         -- CLOSURE APPLICATION: f is an object; call its trampoline:
-        -- push closure-ptr, fresh args, fnIdx; call_indirect.
+        -- push closure-ptr, fresh args (boxed), fnIdx; call_indirect.
+        -- The sig is picked by the FRESH-arg count (sig_1box, sig_2box…).
         let l ← bindLocal decl.fvarId "i32"  -- result: boxed obj
         emit (← load fvarId)  -- closure ptr (also the trampoline's 1st arg)
         for a in args do emitArg a
         emit (← load fvarId)
         emit "i32.load offset=8"  -- fnIdx
-        emit "call_indirect (type $sig_1box)"
+        emit s!"call_indirect (type $sig_{args.size}box)"
         emit s!"local.set ${l}"
   | .fap fn args =>
       match binop? fn with
@@ -377,6 +378,14 @@ def emitDecl (d : Decl .impure) : M String := do
   let body := String.intercalate "\n  " (locals ++ s.out.toList)
   pure s!"{header}\n  {body}\n)"
 
+/-- Dedup trampolines (the same (fn, nPartial) pap may appear at several
+    sites; the table gets ONE func per distinct trampoline). -/
+def dedupTramps : List (Name × Nat) → List (Name × Nat)
+  | [] => []
+  | (f, n) :: rest =>
+      let rest := dedupTramps rest
+      if rest.any (fun p => p.1 == f && p.2 == n) then rest else (f, n) :: rest
+
 /-- Canonical-ABI adapter: flat component args → the impl's calling
 convention. Borrowed-scalar params (objects in the impl) get BOXED;
 raw scalars pass through; an object RESULT gets unboxed to the flat
@@ -424,8 +433,7 @@ def emitAdapter (d : Decl .impure) : M String := do
     String.intercalate "\n  " body ++ "\n)"
 
 /-- Emit the module: runtime + funcs + trampolines + table + adapters +
-exports. The state THREADS across decls (tramps accumulate; l-counter
-keeps locals globally unique). -/
+exports. The state THREADS across decls (tramps accumulate). -/
 def emitModule (decls : List (Decl .impure))
     (exportTargets : List (String × Name)) : M String := do
   let mut st : S := {}
@@ -434,38 +442,62 @@ def emitModule (decls : List (Decl .impure))
     let (f, s2) ← emitDecl d |>.run st
     st := { s2 with out := #[], locals := #[] }
     funcs := funcs ++ [f]
-  -- trampolines: (closure i32, boxed fresh arg i32) → boxed result i32.
-  -- Unbox the fresh arg, apply captured args (raw @16…), box the result.
+  -- Trampoline signatures: name → (param wasm tys, result wasm ty).
+  let sigs : Std.HashMap Name (Array String × String) :=
+    decls.foldl (fun m d =>
+      let rt := match d.value with | .code c => resultTyOf c | .extern .. => none
+      m.insert d.name (d.params.map (fun p => paramWasmTy p), rt.getD "i32")) {}
+  -- Trampolines: (closure i32, boxed fresh args…) → boxed result.
+  -- The FRESH count = the target's arity − nA; every arg (captured or
+  -- fresh) is a boxed object; the target's param types decide unbox-vs-
+  -- forward; a raw i64 result gets boxed.
   let mut trampFuncs : List String := []
   let mut elem : List String := []
-  for (fn, nA) in st.tramps.toList do
+  for (fn, nA) in dedupTramps st.tramps.toList do
     let name := s!"pap_{fn.toString}_{nA}"
+    let (paramTys, resTy) := sigs[fn]?.getD (#[], "i32")
+    let nFresh := paramTys.size - nA
     let boxed := fn.toString.endsWith "_boxed" || fn.toString.endsWith "_closed"
     let mut body : List String := []
     let mut off := 16
     if boxed then
-      -- boxed target: forward args as-is (objects in, object out)
+      -- boxed target: forward every arg as-is (objects in, object out)
       for _ in [0:nA] do
         body := body ++ [s!"local.get $c", s!"i32.load offset={off}"]
         off := off + 8
-      body := body ++ ["local.get $x0", s!"call ${fn.toString}"]
+      for i in [0:nFresh] do
+        body := body ++ [s!"local.get $x{i}"]
+      body := body ++ [s!"call ${fn.toString}"]
     else
       -- raw scalar target: unbox captured + fresh args, call, box result
-      for _ in [0:nA] do
+      for i in [0:nA] do
         body := body ++ [s!"local.get $c", s!"i32.load offset={off}", "i64.load offset=8"]
         off := off + 8
-      body := body ++ ["local.get $x0", "i64.load offset=8", s!"call ${fn.toString}", "local.set $r",
-        "i32.const 16", "call $alloc", "local.tee $p", "local.get $r", "i64.store offset=8", "local.get $p"]
+      for i in [0:nFresh] do
+        body := body ++ [s!"local.get $x{i}", "i64.load offset=8"]
+      body := body ++ [s!"call ${fn.toString}", "local.set $r", "i32.const 16",
+        "call $alloc", "local.tee $p", "local.get $r", "i64.store offset=8", "local.get $p"]
+    let paramDecls := String.intercalate " "
+      (["(param $c i32)"] ++ (List.range nFresh).map fun i => s!"(param $x{i} i32)")
     let f :=
-      if boxed then
-        s!"(func ${name} (param $c i32) (param $x0 i32) (result i32)\n  " ++
+      if resTy == "i64" then
+        s!"(func ${name} {paramDecls} (result i32)\n" ++
+          String.intercalate "\n  " ["  (local $r i64)", "  (local $p i32)"] ++ "\n  " ++
           String.intercalate "\n  " body ++ "\n)"
       else
-        s!"(func ${name} (param $c i32) (param $x0 i32) (result i32)\n" ++
-          String.intercalate "\n  " ["  (local $r i64)", "  (local $p i32)"] ++ "\n  " ++
+        s!"(func ${name} {paramDecls} (result i32)\n  " ++
           String.intercalate "\n  " body ++ "\n)"
     trampFuncs := trampFuncs ++ [f]
     elem := elem ++ [s!"${name}"]
+  -- the call_indirect TYPE per distinct fresh count (all params i32:
+  -- the closure ptr + boxed fresh args — the result is always a box)
+  let mut freshCounts : List Nat := []
+  for (fn, nA) in dedupTramps st.tramps.toList do
+    let nF := (sigs[fn]?.getD (#[], "i32")).1.size - nA
+    if !freshCounts.contains nF then freshCounts := freshCounts ++ [nF]
+  let sigTypes := freshCounts.map fun nF =>
+    let ps := String.intercalate " " ((List.range (nF + 1)).map fun _ => "(param i32)")
+    s!"  (type $sig_{nF}box (func {ps} (result i32)))"
   -- canonical-ABI adapters for the export targets
   let mut abiFuncs : List String := []
   for (kebab, n) in exportTargets do
@@ -475,11 +507,11 @@ def emitModule (decls : List (Decl .impure))
         abiFuncs := abiFuncs ++ [a]
   let exports := exportTargets.map fun (kebab, n) =>
     s!"  (export \"{kebab}\" (func ${n.toString}_abi))"
-  let nT := st.tramps.size
-  let table := if nT > 0 then
-    ["  (type $sig_1box (func (param i32 i32) (result i32)))",
-     s!"  (table {nT} funcref)",
-     s!"  (elem (i32.const 0) {String.intercalate " " elem})"]
+  let sp := " "
+  let table := if !sigTypes.isEmpty then
+    sigTypes ++
+    [s!"  (table {st.tramps.size} funcref)",
+     s!"  (elem (i32.const 0) {String.intercalate sp elem})"]
   else []
   pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs ++ abiFuncs ++ trampFuncs ++ table) ++ exports ++ [")"])
 

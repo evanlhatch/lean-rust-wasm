@@ -24,6 +24,7 @@ import SchemaLang.Item
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
+import SchemaLang.Emit.WitFixture
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
 
@@ -47,11 +48,6 @@ were registered here but never byte-tied there):
    (`jobsCoverEmitters`), not a silent gap.
 -/
 
-/-- Escape a JSON string (paths + names only — quotes and backslashes
-    are the whole story). -/
-def jsonStr (s : String) : String :=
-  "\"" ++ (s.replace "\\" "\\\\").replace "\"" "\\\"" ++ "\""
-
 /-- Package-relative output → repo-root-relative (emitters run with CWD
     = the lean package dir and declare `../..`-paths; forge joins from
     the repo root). -/
@@ -61,8 +57,8 @@ def rootRel (p : String) : String :=
 /-- One job row → the JSON object text (paths REPO-ROOT-relative — forge
     joins from the root). -/
 def jobJson (package exe : String) (outputs : List String) : String :=
-  "  { \"package\": " ++ jsonStr package ++ ", \"exe\": " ++ jsonStr exe
-    ++ ", \"outputs\": [" ++ String.intercalate ", " ((outputs.map rootRel).map jsonStr) ++ "] }"
+  "  { \"package\": " ++ CodegenCore.Emit.jsonStr package ++ ", \"exe\": " ++ CodegenCore.Emit.jsonStr exe
+    ++ ", \"outputs\": [" ++ String.intercalate ", " ((outputs.map rootRel).map CodegenCore.Emit.jsonStr) ++ "] }"
 
 /-- The pipeline stage machine as Rust: the `PipelineStage` enum + the
     `step` fn, mirroring `Pipeline.pipelineTrans` (+ the structural
@@ -89,11 +85,11 @@ def pipelineRust : String :=
     , .raw "pub fn step(s: PipelineStage, e: PipelineEvent) -> Option<PipelineStage> {"
     , .raw "    use PipelineStage::*;"
     , .raw "    match (s, e) {"
-    , .raw "        (Idle, Reflect) => Some(Reflecting),"
-    , .raw "        (Reflecting, Check) => Some(Checked),"
-    , .raw "        (Checked, Emit) => Some(Emitted),"
-    , .raw "        (Emitted, Tie) => Some(Tied),"
-    , .raw "        (_, Reset) => Some(Idle),"
+    , .raw "        (Idle, PipelineEvent::Reflect) => Some(Reflecting),"
+    , .raw "        (Reflecting, PipelineEvent::Check) => Some(Checked),"
+    , .raw "        (Checked, PipelineEvent::Emit) => Some(Emitted),"
+    , .raw "        (Emitted, PipelineEvent::Tie) => Some(Tied),"
+    , .raw "        (_, PipelineEvent::Reset) => Some(Idle),"
     , .raw "        _ => None,"
     , .raw "    }"
     , .raw "}"
@@ -101,12 +97,16 @@ def pipelineRust : String :=
     , .raw "/// The happy chain: Idle -> Reflecting -> Checked -> Emitted -> Tied"
     , .raw "/// (Lean: `happy_path`, proved by rfl). Illegal = driver bug."
     , .raw "pub fn happy_path_assertions() {"
+    , .raw "    use PipelineStage::*;"
     , .raw "    assert_eq!(step(Idle, PipelineEvent::Reflect), Some(Reflecting));"
     , .raw "    assert_eq!(step(Reflecting, PipelineEvent::Check), Some(Checked));"
     , .raw "    assert_eq!(step(Checked, PipelineEvent::Emit), Some(Emitted));"
     , .raw "    assert_eq!(step(Emitted, PipelineEvent::Tie), Some(Tied));"
     , .raw "    assert_eq!(step(Idle, PipelineEvent::Check), None);"
-    , .raw "    assert_eq!(step(Failed { stage: \"tie\" }, PipelineEvent::Reset), Some(Idle));"
+    , .raw "    assert_eq!("
+    , .raw "        step(Failed { stage: \"tie\" }, PipelineEvent::Reset),"
+    , .raw "        Some(Idle)"
+    , .raw "    );"
     , .raw "}"
     ]
 
@@ -135,6 +135,11 @@ def forgeJobs : List (String × List String) :=
     , "../../src/dbsp_change_generated.rs"
     , "../../src/pipeline_generated.rs"
     , "../../crates/forge/src/jobs_generated.json"
+    , "../../crates/steel-host/tests/fixtures/wit_fixture_scalars.wit"
+    , "../../crates/steel-host/tests/fixtures/wit_fixture_nested.wit"
+    , "../../crates/steel-host/tests/fixtures/wit_fixture_variants.wit"
+    , "../../crates/steel-host/tests/fixtures/wit_fixture_async.wit"
+    , "../../crates/steel-host/tests/fixtures/wit_manifest.json"
     ])]
 
 /-- The manifest CONTENT for this package's rows (no header — the driver
@@ -163,6 +168,8 @@ def emitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
   , changeSpecEmitter
   , pipelineEmitter
   , forgeJobsEmitter
+  , WitFixture.fixtureEmitter
+  , WitFixture.manifestEmitter
   ]
 
 /-- Audit: no two emitters claim the same output path. -/

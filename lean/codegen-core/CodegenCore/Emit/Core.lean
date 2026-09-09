@@ -112,6 +112,13 @@ def snake (s : String) : String := String.intercalate "_" (words s)
 /-- `foo_bar` → `foo-bar` (WIT identifiers are kebab-case). -/
 def kebab (s : String) : String := String.intercalate "-" (words s)
 
+/-- Escape a JSON string (paths + names only — quotes and backslashes
+    are the whole story). Shared by every manifest emitter (schema-lang's
+    Registry + WitFixture both consume it; it lives here so neither can
+    import-cycle the other). -/
+def jsonStr (s : String) : String :=
+  "\"" ++ (s.replace "\\" "\\\\").replace "\"" "\\\"" ++ "\""
+
 /-- Rust keywords get a raw-identifier escape; the only mangling surprise
     that is allowed to exist. -/
 def rustIdent (s : String) : String :=

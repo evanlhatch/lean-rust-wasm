@@ -32,11 +32,11 @@ pub enum PipelineEvent {
 pub fn step(s: PipelineStage, e: PipelineEvent) -> Option<PipelineStage> {
     use PipelineStage::*;
     match (s, e) {
-        (Idle, Reflect) => Some(Reflecting),
-        (Reflecting, Check) => Some(Checked),
-        (Checked, Emit) => Some(Emitted),
-        (Emitted, Tie) => Some(Tied),
-        (_, Reset) => Some(Idle),
+        (Idle, PipelineEvent::Reflect) => Some(Reflecting),
+        (Reflecting, PipelineEvent::Check) => Some(Checked),
+        (Checked, PipelineEvent::Emit) => Some(Emitted),
+        (Emitted, PipelineEvent::Tie) => Some(Tied),
+        (_, PipelineEvent::Reset) => Some(Idle),
         _ => None,
     }
 }
@@ -44,10 +44,14 @@ pub fn step(s: PipelineStage, e: PipelineEvent) -> Option<PipelineStage> {
 /// The happy chain: Idle -> Reflecting -> Checked -> Emitted -> Tied
 /// (Lean: `happy_path`, proved by rfl). Illegal = driver bug.
 pub fn happy_path_assertions() {
+    use PipelineStage::*;
     assert_eq!(step(Idle, PipelineEvent::Reflect), Some(Reflecting));
     assert_eq!(step(Reflecting, PipelineEvent::Check), Some(Checked));
     assert_eq!(step(Checked, PipelineEvent::Emit), Some(Emitted));
     assert_eq!(step(Emitted, PipelineEvent::Tie), Some(Tied));
     assert_eq!(step(Idle, PipelineEvent::Check), None);
-    assert_eq!(step(Failed { stage: "tie" }, PipelineEvent::Reset), Some(Idle));
+    assert_eq!(
+        step(Failed { stage: "tie" }, PipelineEvent::Reset),
+        Some(Idle)
+    );
 }

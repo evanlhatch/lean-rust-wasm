@@ -19,7 +19,7 @@ component wrap, and the differential smoke.
 open Lean
 
 /-- The functions to compile — DemoFn (the compiler-line demo stage). -/
-def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `sumList, `total]
+def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total]
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm : CoreM String := do

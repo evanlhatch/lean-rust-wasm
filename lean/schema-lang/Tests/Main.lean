@@ -365,6 +365,15 @@ def emitterAuditChecks : CheckResult := do
   -- the forge-driver audit: every registered emitter's output is in the
   -- job manifest forge consumes — no artifact silently outside byte-tie
   _ ← assertEq "jobs cover emitters" SchemaLang.Emit.jobsCoverEmitters true
+  -- the GENERATED ChangeSpec trait: emitted from `Dbsp.ChangeSpec`'s
+  -- class fields (`patch`/`valid`) — the method names ARE the class
+  -- field names, pinned here so the emitter and the Lean class cannot
+  -- drift apart (the Rust side re-exports the generated trait)
+  let traitText := (changeSpecEmitter.run []).head?.map (·.contents)
+    |>.getD ""
+  _ ← assert (traitText.contains "pub trait Change<Row>") "generated Change trait"
+  _ ← assert (traitText.contains "fn patch(&self, base: &Row) -> Row;") "trait patch = ChangeSpec field"
+  _ ← assert (traitText.contains "fn valid(&self, base: &Row) -> bool;") "trait valid = ChangeSpec field"
   .ok ()
 
 unsafe def main (args : List String) : IO UInt32 := do
