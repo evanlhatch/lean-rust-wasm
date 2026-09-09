@@ -20,101 +20,80 @@ from the current state.
 
 ## Stage closure (the A-G stages — notes/execution-guide.md)
 
-These are the immediate pipeline-closure stages. Each is independently
-demoable. The execution guide has the details; this is the summary.
+STATUS: A-G ALL DONE (committed: Stage A ppkylynr, Stage B przmkomy,
+Stage C yvyzqplm, Stages E+F xywqzlop, Stage G = the `just demo`
+recipe + this doc). Stage D is subsumed: the guest's export signatures
+come from the SSOT wit/gateway.wit via wit-bindgen `generate!` — the
+exports ARE the schema's func items by construction.
 
-### A. Unify the spec surface
+Each is independently demoable. `just demo` = gen + component build +
+typed-call tests in one command.
 
-Right now there are two sources of truth: `Demo.lean` (native
-structures with `@[schema]`) and `Spec/Demo.lean` (hand-written `List
-Item` data). They must become one.
+### A. Unify the spec surface — DONE
 
-The reflection (`Meta/Reflect.lean`) currently handles structures only.
-It needs to also reflect:
-- **Inductives** (variants): read constructor args as payload types,
-  register as `Item.variant`
-- **Functions**: a `@[schema_fn]` attribute on defs — read the type,
-  extract params/ret, register as `Item.func`
+Single SSOT: `Demo.lean` with `@[schema]`/`@[schema_fn]`/
+`@[schema_resource]`; records/variants/funcs/resources all reflected;
+`Spec/Demo.lean` deleted; WIT emitters write `../../wit/*` so forge
+byte-ties them.
 
-Once this works, `Spec/Demo.lean` is deleted — the hand-written data
-is replaced by the reflection. The test fixtures (broken/dup/fwd
-universes used in resolution tests) move into the test file itself.
+### B. Typed host bindings from WIT — DONE
 
-Done when: `lake build` green, tests green, `schema-gen` emits the
-same artifacts (byte-tie against existing goldens).
+`bindings.rs`: `bindgen!({ path: "../../wit/gateway.wit", world:
+"gateway" })` (NO `async` option — wasmtime 47 removed it). Test:
+`get_user(42)` returns structured `User` through `GatewayPre::new(
+instance_pre).instantiate_async(store)` + `iface.call_get_user`.
+Watch-orders uses the wasi 0.3 async ABI (`async func` in WIT — see
+the emitter fix below). WASI p3 + bindgen check needs the nix cc
+wrapper: `export CC=.../profiles/wasm/profile/bin/cc`.
 
-### B. Typed host bindings from WIT
+### C. Generated host faults — DONE
 
-The steel-host currently calls guest functions through untyped
-`wasmtime::Val` marshalling. The generated WIT defines the interface —
-use `wasmtime::component::bindgen!` (or wit-bindgen) to generate
-typed host-side bindings.
+`Faults/Spec/Host.lean` registers hostFaults; `faults-gen` emits
+`src/host_faults_generated.rs` (codes E110-E113 via `allocateHost`);
+steel-host's hand-written `error!` block deleted — `valves.rs` now
+re-exports the generated enum. Done-criteria test:
+`lookup_error("E110")` (host) and `("E100")` (guest) resolve from ONE
+fast-observe registry.
 
-This turns `call("get-user", &[Val::U64(42)])` into
-`gateway.get_user(42)` — the args and return are structured types
-connected to `schema_generated.rs`. The "Lean defines the ABI" proof:
-the host's API is generated from the Lean-defined world.
+### D. Guest exports from schema funcs — DONE (subsumed)
 
-Done when: steel-host test calls `add(1,2)` through typed bindings
-(not raw `Val`), and `get-user` returns a structured `User`.
+`guest-demo` implements world gateway via `wit-bindgen::generate!` —
+export signatures generated from the SSOT; `get-user` + `watch-orders`
++ `resource db` all match the schema's func/resource items.
 
-### C. Generated host faults
+### E. Certified delta impls — DONE
 
-The steel-host hardcodes error codes E110-E113 in its valves module.
-The guest's faults (E100-E103) come from the Lean registry. They should
-share ONE allocator.
+The delta emitter appends `#[cfg(test)] mod tests`: one patch-
+roundtrip test per keyed record, emitted from the Lean Item grammar.
+The trait is OURS: `src/dbsp.rs` `trait Change<Row>` (patch +
+valid-with-base, mirroring `Dbsp.ChangeSpec`) — NOT the Feldera
+crate. `cargo test -p lean-rust-wasm`: 3/3.
 
-Extend the faults emitter to generate a second module — `HostFault` —
-from the same `FailureModeItem` registry. Add host-specific faults
-(engine error, missing export, fuel exhausted, timeout) to the
-registry. Replace the hardcoded codes.
+### F. Rust round-trip gate — DONE
 
-Done when: `lookup_error("E110")` resolves from both host and guest.
-The E-code means the same thing across the boundary.
+`crates/steel-host/tests/wit_roundtrip.rs`: wit-parser 0.258 parses
+the GENERATED `wit/gateway.wit`; 4 structural tests (record fields,
+variant cases+payloads, func sigs incl. `watch-orders`
+AsyncFreestanding, world exports). Lean-emitter ↔ Rust-reader drift
+now fails CI.
 
-### D. Guest exports from schema funcs
+### G. The end-to-end demo — DONE
 
-The guest-demo's exports are hand-written `#[no_mangle]` functions.
-The schema's `func` items should generate the export stubs.
-
-Extend reflection to handle `@[schema_fn]` on defs. The emitter
-generates a guest-side module of export signatures. The guest-demo
-imports the stub and implements the handlers.
-
-Done when: the guest's exports match the schema's func items.
-
-### E. Certified delta impls
-
-The `delta_generated.rs` emits `UserChange` with a `dbsp::Change` impl —
-but the impl body is a leaf string with no proof. The `ChangeSpec`
-theorems (patch/invert/diff_correct) should have EXECUTABLE Rust tests.
-
-The delta emitter generates `#[cfg(test)]` tests per record:
-```rust
-#[test]
-fn change_roundtrip() {
-    let user = User { ... };
-    let delta = UserChange::Update(user.clone());
-    assert_eq!(delta.patch(&user), user);  // diff_correct, executed
-}
-```
-
-Done when: `cargo test` proves the change laws on concrete values.
-
-### F. Rust round-trip gate
-
-The Lean side has `Decode.lean` proving `parse ∘ emit = id` for the
-Substrait text format. The Rust side should have the equivalent for
-WIT: use `wit-parser` to parse `gateway.wit` back and assert the
-schema matches. This catches any drift between what Lean emits and
-what the Rust side reads.
-
-### G. The end-to-end demo
-
-One command: `just demo`. Edits the schema, regenerates, builds the
-component, loads it in steel-host, calls through typed bindings,
-verifies the result. The "edit Lean, get a working component" loop,
+`just demo`: gen → gateway component build → typed-call + delta +
+round-trip tests. The "edit Lean, get a working component" loop,
 closed.
+
+### Wasip3-async emitter fix (Load-bearing discovery)
+
+`Async.Future` returns emit as `async func(...) -> a` — NOT
+`func(...) -> future<a>`. The component validator rejects the latter:
+"the `async` canonical option requires an async function type" — the
+async-ness must live in the FUNCTION TYPE (wit-parser 0.258: `async`
+prefix on Func, `FunctionKind::AsyncFreestanding`). wit-bindgen then
+binds it as a plain Rust `async fn` returning the payload. Tooling
+pin: wasm-tools CLI 1.258 (cargo-installed to
+~/.local/guestlang-tools) — wit-bindgen 0.61's wit-component 0.258
+async-lift encoding predates nixpkgs' 1.256 CLI.
 
 ---
 

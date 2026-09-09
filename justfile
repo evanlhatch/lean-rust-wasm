@@ -187,6 +187,19 @@ doc-dev:
 doc-build:
 	cd docs-site && bun run build
 
+# ── End-to-end demo (Stage G): edit Lean → working component ─────────
+# Regenerates from the SSOT (Demo.lean + fault registries), rebuilds the
+# gateway component from the generated WIT, and proves the loop: typed
+# host bindings call the guest, structured User comes back; delta laws
+# execute; WIT round-trips through the canonical parser.
+demo:
+	just gen
+	just wasm-guest-gateway
+	devenv shell --profile wasm -- bash -c \
+	  'export CC=$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc; \
+	   cargo test -p steel-host && cargo test -p lean-rust-wasm'
+	@echo "demo: edit Lean → component → typed calls — loop closed"
+
 # ── Gates: every lean↔rust drift check in one shot ───────────────────
 # wit-check: the canonical parser (wasm-tools) must accept our emitted
 # WIT — it, not our printer, is the correctness authority. Prefers the
