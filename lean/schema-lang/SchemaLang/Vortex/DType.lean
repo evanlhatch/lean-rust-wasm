@@ -53,8 +53,9 @@ theorem PType.ofDiscriminant_toDiscriminant (p : PType) :
   cases p <;> rfl
 
 /-- The ENGINE's type name (lowercase — the `batch_expr` catalog's
-    naming universe). SSOT: the Rust table is generated from this;
-    the names never drift. -/
+    naming universe). v1: no emitter consumes this yet (the Rust table is
+    hand-written in vortex-array); the injectivity theorem below is
+    stated so the future emitter inherits the no-collision obligation. -/
 def PType.engineName : PType → String
   | .u8 => "u8" | .u16 => "u16" | .u32 => "u32" | .u64 => "u64"
   | .i8 => "i8" | .i16 => "i16" | .i32 => "i32" | .i64 => "i64"

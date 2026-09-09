@@ -11,8 +11,6 @@ import SchemaLang.Delta
 import SchemaLang.Emit.Registry
 import SchemaLang.Codec
 import SchemaLang.Field
-import SchemaLang.Row
-import SchemaLang.Lin
 import SchemaLang.Bridge
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower

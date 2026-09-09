@@ -410,23 +410,23 @@ def oneshotChecks : CheckResult := do
 
 /-- The barrier contract: all parties arrive before proceed. -/
 def barrierChecks : CheckResult := do
-  match (barrier 2).run ⟨0, 2, false⟩ [.arrive, .arrive, .proceed] with
+  match barrier.run ⟨0, 2, false⟩ [.arrive, .arrive, .proceed] with
   | none => .error "valid barrier run rejected"
   | some (_, fin) =>
     if fin.released then pure () else .error "barrier not released after full arrival"
-  match (barrier 2).run ⟨0, 2, false⟩ [.proceed] with
+  match barrier.run ⟨0, 2, false⟩ [.proceed] with
   | none => pure ()
   | some _ => .error "proceed before release accepted"
 
 /-- The semaphore contract: acquire/release bounding. -/
 def semChecks : CheckResult := do
-  match (semaphore 2).run ⟨2, 2⟩ [.acquire, .acquire, .release, .acquire] with
+  match semaphore.run ⟨2, 2⟩ [.acquire, .acquire, .release, .acquire] with
   | none => .error "valid semaphore run rejected"
   | some _ => pure ()
-  match (semaphore 1).run ⟨1, 1⟩ [.acquire, .acquire] with
+  match semaphore.run ⟨1, 1⟩ [.acquire, .acquire] with
   | none => pure ()
   | some _ => .error "acquire at zero permits accepted"
-  match (semaphore 1).run ⟨1, 1⟩ [.release] with
+  match semaphore.run ⟨1, 1⟩ [.release] with
   | none => pure ()
   | some _ => .error "release past capacity accepted"
 

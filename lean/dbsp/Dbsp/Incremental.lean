@@ -26,6 +26,10 @@ engine's rewrite licenses:
 Deferred from the source: the nested-stream machinery (`strict2`,
 `causal_nested`, `cycle2_incremental`, sprod product forms) — the
 two-input nested cycle story lands with the multi-input cascade work.
+
+UPDATE: this is no longer deferred — `Dbsp.NestedCycle` ports it
+(`fix2_eq`, `fix2_unique`, `cycle2_incremental`, `strict2`,
+`causal_nested`). This header predates that module.
 -/
 
 import Dbsp.Linear

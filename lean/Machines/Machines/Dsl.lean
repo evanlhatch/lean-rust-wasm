@@ -132,6 +132,13 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
     `($(mkIdentFrom ev (name.getId ++ `Label ++ evName.getId)))
   elabCommand (← `(command|
     def $labelsId:ident : List ($labelId:ident) := [$labelTerms,*]))
+  -- the completeness proof: every constructor is in `labels`. The
+  -- conformance battery consumes this as a PROOF PARAMETER (not a
+  -- convention) — the enumeration's totality is now checked, not assumed.
+  let completeId := mkIdentFrom stx (name.getId ++ `labels_complete)
+  elabCommand (← `(command|
+    theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
+      intro l; cases l <;> simp [$labelsId]))
 
 /-- The registration form the attribute accepts: the type must be the
     literal `CommandElab` synonym, so the impl is a separate def. -/

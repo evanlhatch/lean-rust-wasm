@@ -1,25 +1,24 @@
 /-
 # Faults.GenMain — the artifact writer (one-writer-per-artifact)
 
-Regenerates the committed fast-observe error module from the failure
-registry. Byte-tie CI: `forge gen --check` re-runs this in memory and
-diffs — never edit the artifact, regenerate.
+The buf driver: iterates `Faults.Emit.jobs`, runs each emitter's pure
+`run` over its spec, prepends the GENERATED header (from the emitter's
+`style` + `specSource` — the `CodegenCore.Emit.Core` contract: emitters
+never prepend headers, the driver does), and writes. Byte-tie CI:
+`forge gen --check` re-runs this in memory and diffs — never edit the
+artifact, regenerate.
 -/
-import Faults
+import Faults.Emit.Registry
 
-def faultsOut : System.FilePath := "../../src/faults_generated.rs"
+open Faults.Emit (jobs)
+open CodegenCore.Emit (header)
 
-def hostFaultsOut : System.FilePath := "../../src/host_faults_generated.rs"
-
-def main : IO Unit := do
-  let hdr := CodegenCore.Emit.header .doubleSlash "faults" "Faults/Spec/Demo.lean"
-  let body := Faults.Emit.Rust.faultModule "OrderError"
-    (Faults.allocate Faults.Spec.apiFaults)
-  IO.FS.writeFile faultsOut (hdr ++ CodegenCore.Emit.Rust.renderModule body)
-  IO.println s!"wrote {faultsOut}"
-
-  let hostHdr := CodegenCore.Emit.header .doubleSlash "faults" "Faults/Spec/Host.lean"
-  let hostBody := Faults.Emit.Rust.faultModule "HostFault"
-    (Faults.allocateHost Faults.Spec.hostFaults) (guest? := false)
-  IO.FS.writeFile hostFaultsOut (hostHdr ++ CodegenCore.Emit.Rust.renderModule hostBody)
-  IO.println s!"wrote {hostFaultsOut}"
+unsafe def main : IO Unit := do
+  for h in jobs do
+    let (e, spec) := h
+    for f in e.run spec do
+      let p := (CodegenCore.Emit.GeneratedFile.path f : String)
+      let dir := String.intercalate "/" (p.splitOn "/").dropLast
+      IO.FS.createDirAll dir
+      IO.FS.writeFile p (header e.style "faults" e.specSource ++ CodegenCore.Emit.GeneratedFile.contents f)
+      IO.println s!"wrote {p}"

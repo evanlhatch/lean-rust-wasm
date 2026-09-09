@@ -91,7 +91,7 @@ def pipelineStates : List PipelineState :=
     invariant non-vacuity over the full state space. Labels are GENERATED
     by `machine!` (`pipeline.labels`). -/
 def pipelineConformance : List (String × TestKit.CheckResult) :=
-  Machines.Testing.conformance pipeline pipeline.labels pipelineStates
+  Machines.Testing.conformance pipeline pipeline.labels pipelineStates pipeline.labels_complete
 
 -- NEGATIVE CONTROL: a machine with an unsatisfiable guard (a dead event)
 -- must FAIL guard coverage — proves the battery is not vacuous.

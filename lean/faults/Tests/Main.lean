@@ -7,6 +7,7 @@ kernel-checked obligation), retry policy, emit determinism + pins.
 Run: `lake build FaultsTests && .lake/build/bin/FaultsTests`
 -/
 import Faults
+import Faults.Emit.Registry
 import TestKit
 
 open Faults TestKit
@@ -49,9 +50,15 @@ def emitChecks : CheckResult := do
   -- payload fields via schema Ty lowering
   _ ← assertEq "payload field" (out.contains "NotFound { id: u64 },") true
   -- wasm init hook (linkme unavailable on wasm)
-  _ ← assertEq "init_guest" (out.contains "register_statics(&[OrderError::ENTRIES])") true
+  _ ← assertEq "init_guest" (out.contains "register_statics(OrderError::ENTRIES)") true
   -- no raw escape hatches
   _ ← assertEq "no pub pub" (out.contains "pub pub") false
+  .ok ()
+
+/-- The one-writer audit: no two faults emitters claim the same output
+    path (mirrors `SchemaLang.Emit.pathsUnique`). -/
+def emitterAuditChecks : CheckResult := do
+  _ ← assertEq "emitter paths unique" Faults.Emit.pathsUnique true
   .ok ()
 
 def main : IO UInt32 :=
@@ -59,4 +66,5 @@ def main : IO UInt32 :=
     [ ("registry", registryChecks)
     , ("policy", policyChecks)
     , ("emit", emitChecks)
+    , ("emitterAudit", emitterAuditChecks)
     ]

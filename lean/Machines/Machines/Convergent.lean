@@ -53,10 +53,18 @@ structure ConvergentMachine extends Machine where
   variant : State → V
   decreases : ∀ s l s', toMachine.tr s l s' → rel (variant s') (variant s)
 
-/-- An infinite execution: a state at every time, each a legal step from the
-    previous. -/
-def ConvergentMachine.InfiniteRun (m : ConvergentMachine) (steps : Nat → m.State) : Prop :=
-  ∀ n, ∃ l, m.toMachine.tr (steps n) l (steps (n + 1))
+/-- A stream of states, each a legal step from the previous (the
+    divergence witness for a `Machine`, not a certificate). Defined here,
+    before `ConvergentMachine.InfiniteRun`, so the certificate's
+    `InfiniteRun` can delegate to it without a forward reference. -/
+def Machine.InfiniteRun (m : Machine) (steps : Nat → m.State) : Prop :=
+  ∀ n, ∃ l, m.tr (steps n) l (steps (n + 1))
+
+/-- An infinite execution: a state at every time, each a legal step from
+    the previous. Delegates to `Machine.InfiniteRun` on the underlying
+    machine (one definition, not two). -/
+abbrev ConvergentMachine.InfiniteRun (m : ConvergentMachine) (steps : Nat → m.State) : Prop :=
+  m.toMachine.InfiniteRun steps
 
 /-- Convergent machines terminate: no infinite run exists. In engine terms:
     a certified iterative stage's cascade reaches fixpoint in finitely many
@@ -69,11 +77,6 @@ theorem ConvergentMachine.terminates (m : ConvergentMachine) (steps : Nat → m.
   exact m.decreases _ l _ hl
 
 /-! ## The Nat-valued certificate over a `Machine` (engine shape, spec §5.1) -/
-
-/-- A stream of states, each a legal step from the previous (the
-    divergence witness for a `Machine`, not a certificate). -/
-def Machine.InfiniteRun (m : Machine) (steps : Nat → m.State) : Prop :=
-  ∀ n, ∃ l, m.tr (steps n) l (steps (n + 1))
 
 /-- A convergence certificate for an EXISTING machine: a Nat-valued variant
     that every ENABLED event strictly decreases. The guard proof `h` is

@@ -236,8 +236,9 @@ def barrierSpec : BarrierEvent → EventSpec BarrierState BarrierInv
     , action := fun s _ => s
     , safety := by intro s h hinv; exact hinv }
 
-/-- The barrier machine. -/
-@[reducible] def barrier (parties : Nat) : Machine where
+/-- The barrier machine. (The `parties` count lives in `BarrierState`;
+    the machine itself takes no parameter.) -/
+@[reducible] def barrier : Machine where
   State := BarrierState
   Label := BarrierEvent
   Inv := BarrierInv
@@ -245,7 +246,7 @@ def barrierSpec : BarrierEvent → EventSpec BarrierState BarrierInv
 
 /-- Arrive at full count is rejected (no over-arrival). -/
 theorem barrier_arrive_full_rejected (s : BarrierState) (h : s.arrived = s.parties) :
-    (barrier s.parties).step? s .arrive = none := by
+    barrier.step? s .arrive = none := by
   simp [Machine.step?, barrier, barrierSpec, h]
 
 -- ═══ Semaphore ═══
@@ -285,8 +286,9 @@ def semSpec : SemEvent → EventSpec SemState SemInv
         simp only at hinv ⊢
         omega }
 
-/-- The semaphore machine. -/
-@[reducible] def semaphore (cap : Nat) : Machine where
+/-- The semaphore machine. (The `cap` lives in `SemState`; the machine
+    itself takes no parameter.) -/
+@[reducible] def semaphore : Machine where
   State := SemState
   Label := SemEvent
   Inv := SemInv
@@ -294,12 +296,12 @@ def semSpec : SemEvent → EventSpec SemState SemInv
 
 /-- Acquire at zero permits is rejected. -/
 theorem sem_acquire_empty_rejected (s : SemState) (h : s.permits = 0) :
-    (semaphore s.cap).step? s .acquire = none := by
+    semaphore.step? s .acquire = none := by
   simp [Machine.step?, semaphore, semSpec, h]
 
 /-- Release at full capacity is rejected (permit conservation). -/
 theorem sem_release_full_rejected (s : SemState) (h : s.permits = s.cap) :
-    (semaphore s.cap).step? s .release = none := by
+    semaphore.step? s .release = none := by
   simp [Machine.step?, semaphore, semSpec, h]
 
 -- ═══ the liveness reading: blocking is bounded waiting ═══
@@ -325,8 +327,8 @@ theorem mpsc_blocked_send_unblocks (α : Type) (s : MpscState α) (v : α)
     release — bounded waiting. -/
 theorem sem_blocked_acquire_unblocks (s : SemState)
     (hzero : s.permits = 0) (hroom : 0 < s.cap) :
-    ∃ s', (semaphore s.cap).step? s .release = some s' ∧
-          (semaphore s.cap).enabled s' .acquire = true := by
+    ∃ s', semaphore.step? s .release = some s' ∧
+          semaphore.enabled s' .acquire = true := by
   refine ⟨{ s with permits := s.permits + 1 }, ?_, ?_⟩
   · simp [Machine.step?, semaphore, semSpec, hzero]
     omega

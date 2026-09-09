@@ -36,7 +36,7 @@ resource db;
 interface gateway-exports {
   use gateway-types.{user, order-error};
     get-user: func(id: u64) -> option<user>;
-    watch-orders: func(into: order-error) -> future<list<user>>;
+    watch-orders: async func(into: order-error) -> list<user>;
 }
 
 world gateway {

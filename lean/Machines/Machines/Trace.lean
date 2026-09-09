@@ -13,11 +13,12 @@ predicates that sit ON TOP of traces, without touching Core:
   every successful run can be extended by one more event (`step?` at the
   run's final state is a `some`). In engine terms: a live cascade always
   has somewhere left to go.
-- `Machine.deadlockFree_comp_inl` / `Machine.deadlockFree_comp_inr` /
-  `Machine.deadlockFree_comp` — deadlock-freedom survives parallel
-  composition (`Machines.Compose`): the product invariant forces both
-  sides' invariants, so either side's witness lifts to an `inl`/`inr`
-  witness in the composite.
+- `Machine.deadlockFree_comp_inl` / `Machine.deadlockFree_comp_inr` —
+  deadlock-freedom survives parallel composition (`Machines.Compose`):
+  the product invariant forces both sides' invariants, so either side's
+  witness lifts to an `inl`/`inr` witness in the composite. (A joint
+  `deadlockFree_comp` is not provided; the two projections are the
+  useful form.)
 
 Trace-type moves (rewind, merge, replay-equality) are their own modules;
 this one only owns the deadlock predicates.

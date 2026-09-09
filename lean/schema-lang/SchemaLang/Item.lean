@@ -143,50 +143,6 @@ def Ty.banAsync : Ty → Bool
   | .future _ | .stream _ => false
   | _ => true
 
-mutual
-def Ty.wellFormed (known : List String) : Ty → Bool
-  | .option a => a.wellFormed known
-  | .result ok err => ok.wellFormed known && err.wellFormed known
-  | .list a => a.wellFormed known
-  | .future a => a.wellFormed known
-  | .stream a => a.wellFormed known
-  | .ty n => known.contains n
-  | _ => true
-
-def Ty.fieldsWellFormed (known : List String) : List Field → Bool
-  | [] => true
-  | f :: rest =>
-      f.ty.banAsync && f.ty.wellFormed known && Ty.fieldsWellFormed known rest
-
-def Ty.variantsWellFormed (known : List String) : List VariantCase → Bool
-  | [] => true
-  | (_, some t) :: rest => t.wellFormed known && Ty.variantsWellFormed known rest
-  | (_, none) :: rest => Ty.variantsWellFormed known rest
-
-def Ty.paramsWellFormed (known : List String) : List (String × Ty) → Bool
-  | [] => true
-  | (_, t) :: rest => t.wellFormed known && Ty.paramsWellFormed known rest
-end
-
-/-- An item is well formed when its types resolve against `known`.
-    (Called with the FULL universe's type names — a record may reference
-    a variant declared after it.) -/
-def Item.wellFormed (known : List String) : Item → Bool
-  | .record _ fields => Ty.fieldsWellFormed known fields
-  | .variant _ cases => Ty.variantsWellFormed known cases
-  | .func s => Ty.paramsWellFormed known s.params && s.ret.wellFormed known
-  | .resource _ => true
-
-/-- Names are unique (no two items share an identifying name). -/
-def namesUnique (items : List Item) : Bool :=
-  let ns := items.map Item.name
-  ns.Nodup
-
-/-- The whole universe: every item well formed against it, names unique. -/
-def universeWellFormed (items : List Item) : Bool :=
-  let known := Item.typeNames items
-  items.all (Item.wellFormed known) && namesUnique items
-
 /-! ## The diagnostic authority (supersedes the Bool) -/
 
 /-- Collect ALL diagnostics for one item (async-in-field + unresolved
@@ -214,6 +170,16 @@ def universeCheck (items : List Item) : List SchemaDiag :=
   let dedupNames := SchemaLang.dedupStr dupNames
   let dupDiags := dedupNames.map SchemaDiag.dupName
   items.flatMap (Item.check known) ++ dupDiags
+
+/-! ## The Bool projection (derived from the diagnostic authority) -/
+
+/-- The whole universe is well formed iff the diagnostic authority emits
+    NO findings — DERIVED from `universeCheck`, not a parallel fold. One
+    authority, two readings; they cannot drift. (The `namesUnique` /
+    `Item.wellFormed` / `Ty.wellFormed` folds that used to sit here were
+    deleted — the diagnostic fold is the single source.) -/
+def universeWellFormed (items : List Item) : Bool :=
+  (universeCheck items).isEmpty
 
 /-- The `.ty` references of an item — used by the compat diff and by
     dependency-ordered emission. -/

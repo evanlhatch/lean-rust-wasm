@@ -12,10 +12,13 @@ runtime the guest does not have:
 - `String.*` — UTF-8 objects land with guestlang-std
 - `IO.*` / `Task.*` / `Thunk.*` — host capabilities, not guest code
 
-Failure is an elaboration error AT THE DECL — `lake build` fails before
-any emitter runs. No proofs, no LCNF: a one-pass Expr scan. The
-backend's `unsupported` throw then only ever fires for constructs the
-scan can't see (LCNF-only shapes like `jmp`) — belt and suspenders.
+The PREDICATE is pure (`checkExpr : Expr → List String`) — unit-testable
+(Tests/Main.lean: positive + negative controls). The attribute handler
+renders the violations into the elaboration error AT THE DECL — `lake
+build` fails before any emitter runs. No proofs, no LCNF: a one-pass
+Expr scan. The backend's `unsupported` throw then only ever fires for
+constructs the scan can't see (LCNF-only shapes like `jmp`) — belt and
+suspenders.
 
 Coverage note: the scan is SYNTACTIC (constants in the elaborated
 term). It over-approximates: `if n == 0` on Nat bans even when the
@@ -36,30 +39,38 @@ def banned? (n : Name) : Option String :=
   else if root == `Thunk then some "Thunk (laziness) needs heap + scheduler — not guest code"
   else none
 
-/-- Scan one Expr for banned constants (Expr trees are finite — no
-termination concern; def self-reference is a leaf const). -/
-partial def scan (e : Expr) : CoreM Unit := do
+/-- PURE predicate: every banned constant root in the Expr, in scan
+order, deduped. The testable core of the `@[guest]` gate. -/
+partial def checkExpr (e : Expr) (acc : List String := []) : List String :=
   match e with
   | .const n _ =>
-      match banned? n with
-      | some why =>
-          throwError "WasmBackend: `@[guest]` uses `{n}` — {why}"
-      | none => pure ()
-  | .app f a => scan f; scan a
-  | .lam _ t b _ => scan t; scan b
-  | .letE _ t v b _ => scan t; scan v; scan b
-  | .forallE _ t b _ => scan t; scan b
-  | .mdata _ e => scan e
-  | .proj _ _ e => scan e
-  | _ => pure ()
+      let hit := (banned? n).map fun _ => n.getRoot.toString
+      match hit with
+      | some h => if acc.contains h then acc else acc ++ [h]
+      | none => acc
+  | .app f a => checkExpr f (checkExpr a acc)
+  | .lam _ t b _ => checkExpr t (checkExpr b acc)
+  | .letE _ t v b _ => checkExpr t (checkExpr v (checkExpr b acc))
+  | .forallE _ t b _ => checkExpr t (checkExpr b acc)
+  | .mdata _ e => checkExpr e acc
+  | .proj _ _ e => checkExpr e acc
+  | _ => acc
+
+/-- Rendered reason for each violation (for the elab error). -/
+def reasons (violations : List String) : String :=
+  String.intercalate "\n" (violations.map fun v =>
+    match banned? v.toName with
+    | some why => s!"- `{v}` — {why}"
+    | none => s!"- `{v}`")
 
 /-- The `@[guest]` attribute: check a def's type + value at elab time. -/
 def checkGuest (decl : Name) : CoreM Unit := do
   let env ← getEnv
   match env.find? decl with
   | some (.defnInfo di) =>
-      scan di.type
-      scan di.value
+      let violations := checkExpr di.type (checkExpr di.value [])
+      if !violations.isEmpty then
+        throwError s!"`@[guest]` function `{decl}` is not guest-compilable:\n{reasons violations}"
   | some _ =>
       throwError "`@[guest]` applies to defs only: `{decl.toString}`"
   | none => pure ()

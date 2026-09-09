@@ -206,4 +206,16 @@ def Rel.name : Rel → String
   | .extensionSingle _  => "ExtensionSingle"
   | .extensionMulti _   => "ExtensionMulti"
 
+/-- The output width of a join, given the left/right input widths.
+    Semi/anti/single project one side; mark adds the mark column; the
+    rest concatenate. SHARED by the emitter (`Emit.Text.relWidth`) and
+    the decoder (`Decode.relWidthD`) — one width rule, not two. -/
+def JoinType.width (jt : JoinType) (l r : Nat) : Nat :=
+  match jt with
+  | .leftSemi | .leftAnti | .leftSingle => l
+  | .rightSemi | .rightAnti | .rightSingle => r
+  | .leftMark => l + 1
+  | .rightMark => r + 1
+  | _ => l + r
+
 end Substrait.Proto

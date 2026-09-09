@@ -29,7 +29,6 @@ are not invertible and rejected.
 Substrait stays core-only: nothing here imports the engine model.
 -/
 import Substrait.Emit.Text
-import Substrait.Decode.ListExtra
 import Substrait.Substrait.Grammar
 
 namespace Substrait.Decode.Text
@@ -2046,11 +2045,9 @@ theorem parseType_typeText (t : Proto.PType) (b : String) (rest : List Char)
       hnil hcons trivial (fun _ _ _ _ => trivial) t
   exact hgen b rest hrest hemit
 
-/-- The nullability marker. -/
-def nullabilityOf : Proto.PType → Proto.Nullability
-  | .bool n | .i8 n | .i16 n | .i32 n | .i64 n | .fp32 n | .fp64 n
-  | .string n | .binary n | .decimal _ _ n | .list _ n | .map _ _ n
-  | .struct _ n | .userDefined _ _ n => n
+/-- The nullability marker. Delegates to `Proto.PType.nullability` (one
+    accessor, not two — the parallel fold was dead duplication). -/
+abbrev nullabilityOf (t : Proto.PType) : Proto.Nullability := t.nullability
 
 -- ── literals + expressions ──────────────────────────────────────────────────
 
@@ -3033,17 +3030,10 @@ def relWidthD : Nat → Proto.Rel → Nat
   | _, .aggregate r => r.groupingExpressions.length + r.measures.length
   | fuel + 1, .sort r => relWidthD fuel r.input
   | fuel + 1, .fetch r => relWidthD fuel r.input
-  | fuel + 1, .join r => joinWidthD r.joinType (relWidthD fuel r.left) (relWidthD fuel r.right)
+  | fuel + 1, .join r => r.joinType.width (relWidthD fuel r.left) (relWidthD fuel r.right)
   | fuel + 1, .cross r => relWidthD fuel r.left + relWidthD fuel r.right
   | fuel + 1, .set r => (r.inputs.head?).map (relWidthD fuel) |>.getD 0
   | _, .write _ | _, .extensionLeaf _ | _, .extensionSingle _ | _, .extensionMulti _ => 0
-where
-  joinWidthD : Proto.JoinType → Nat → Nat → Nat
-    | .leftSemi | .leftAnti | .leftSingle => fun l _ => l
-    | .rightSemi | .rightAnti | .rightSingle => fun _ r => r
-    | .leftMark => fun l _ => l + 1
-    | .rightMark => fun _ r => r + 1
-    | _ => fun l r => l + r
 
 /-- The leading whitespace count of a line. -/
 def indentOf (l : String) : Nat := (l.toList.takeWhile (· == ' ')).length
@@ -3350,7 +3340,7 @@ def parseHeader (ctx : FnCtx) (cs : List Char) : Option HeaderShape :=
               | some r4 =>
                 let items := splitTopLevel r4 0 []
                 some (.two fun l r =>
-                    let w := relWidthD.joinWidthD jt (relWidthD (cs.length + 1) l)
+                    let w := jt.width (relWidthD (cs.length + 1) l)
                       (relWidthD (cs.length + 1) r)
                     let cm := commonOfMapping (outputMappingOf w items)
                     some (.join { joinType := jt, left := l, right := r, condition := cond, postJoinFilter := none, common := cm }))

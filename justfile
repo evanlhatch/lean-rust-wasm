@@ -145,7 +145,7 @@ check-wasm:
 # ── Lean workspace (packages in dependency order) ────────────────────
 # elan shims broken — invoke toolchain bin directly.
 lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" / "bin"
-lean_pkgs := "TestKit Machines codegen-core substrait schema-lang faults dbsp"
+lean_pkgs := "TestKit Machines codegen-core substrait schema-lang faults dbsp wasm-backend"
 
 lean-build:
 	#!/usr/bin/env bash

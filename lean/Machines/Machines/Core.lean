@@ -14,8 +14,9 @@ labels and cannot drift.
 
 Deliberately absent (per lean-v3 D2): nondeterminism (own module, later),
 WP/Hoare machinery (deterministic actions collapse it to a one-liner),
-SMT. Convergence lives in `Machines.Convergent` (planned); liveness in
-`Machines.Live` (lentil's leads_to/wf1, vendored, planned).
+SMT. Convergence lives in `Machines.Convergent`; liveness (lentil-style
+leads_to/wf1) is deferred — `Machines.Live` was removed as a dead
+vocabulary seed with no consumers (recoverable via the op log).
 -/
 
 namespace Machines

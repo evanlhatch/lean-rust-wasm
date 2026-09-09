@@ -135,11 +135,35 @@ partial def emitReturn (fvarId : FVarId) : M Unit := do
   emit "return"
 
 partial def emitCases (c : Cases .impure) : M Unit := do
-  emit (← load c.discr)
-  emit "i32.load8_u offset=4"
-  let tag ← bindFresh "i32"
-  emit s!"local.set ${tag}"
-  goAlts tag c.alts.toList
+  -- SCALAR scrutinees (Bool/UInt8 — the impl param is a raw flat
+  -- value): branch on the VALUE itself. OBJECT scrutinees: tag =
+  -- i32.load8_u offset=4, stashed in a temp local.
+  let scalar := c.typeName == `Bool || c.typeName == `UInt8
+    || c.typeName == `UInt32 || c.typeName == `UInt64
+  if scalar then
+    goAltsRaw (← load c.discr) c.alts.toList
+  else do
+    emit (← load c.discr)
+    emit "i32.load8_u offset=4"
+    let tag ← bindFresh "i32"
+    emit s!"local.set ${tag}"
+    goAlts tag c.alts.toList
+
+partial def goAltsRaw (value : String) : List (Alt .impure) → M Unit
+  | [] => emit "unreachable ;; no matching scalar case"
+  | alt :: rest => do
+      match alt with
+      | .ctorAlt info code =>
+          emit value
+          emit s!"i32.const {info.cidx}"
+          emit "i32.eq"
+          emit "if (result i64)"
+          emitCode code
+          emit "else"
+          goAltsRaw value rest
+          emit "end"
+      | .default code => emitCode code
+      | .alt _ _ _ h => absurd h (by simp)
 
 partial def goAlts (tag : String) : List (Alt .impure) → M Unit
   | [] => emit "unreachable ;; no matching ctor tag"
@@ -342,10 +366,57 @@ def emitDecl (d : Decl .impure) : M String := do
   let body := String.intercalate "\n  " (locals ++ s.out.toList)
   pure s!"{header}\n  {body}\n)"
 
-/-- Emit the module: runtime + funcs + trampolines + table + exports.
-The state THREADS across decls (tramps accumulate; l-counter keeps
-locals globally unique). -/
-def emitModule (decls : List (Decl .impure)) (exports : List String) : M String := do
+/-- Canonical-ABI adapter: flat component args → the impl's calling
+convention. Borrowed-scalar params (objects in the impl) get BOXED;
+raw scalars pass through; an object RESULT gets unboxed to the flat
+i64. Exported under the WIT name; the impl stays internal (internal
+callers keep calling it directly). -/
+def emitAdapter (d : Decl .impure) : M String := do
+  let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
+  let resultTy := resultTyOf code
+  let mut flats : List String := []
+  let mut body : List String := []
+  let mut boxLocals : Array String := #[]
+  let mut pIdx := 0
+  for p in d.params do
+    let flat := paramWasmTy p
+    if p.borrow then
+      -- box the flat arg (scalar op: i32 for Bool/u8/u32, else i64).
+      -- The TAG byte = the flat value for i32 params (bools are CASES'd
+      -- — the impl reads the tag); i64 params get tag 0.
+      let op := if flat == "i64" then "i64.store" else "i32.store"
+      let pName := s!"b{pIdx}"
+      body := body ++ [s!"i32.const 16", "call $alloc", s!"local.set ${pName}",
+        s!"local.get ${pName}", s!"local.get ${p.binderName.toString}", s!"{op} offset=8",
+        s!"local.get ${pName}"]
+      if flat == "i32" then
+        body := body ++ [s!"local.get ${p.binderName.toString}", "i32.store8 offset=4"]
+      else
+        body := body ++ ["i32.const 0", "i32.store8 offset=4"]
+      body := body ++ [s!"local.get ${pName}"]
+      boxLocals := boxLocals.push pName
+    else
+      body := body ++ [s!"local.get ${p.binderName.toString}"]
+    flats := flats ++ [flat]
+    pIdx := pIdx + 1
+  body := body ++ (match resultTy with
+    | some _ => [s!"call ${d.name.toString}"]
+    | none => [s!"call ${d.name.toString}", "i64.load offset=8"])
+  let sigParams := String.intercalate " "
+    (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
+  let resDecl := match resultTy with
+    | some t => s!" (result {t})"
+    | none => " (result i64)"
+  let locals := boxLocals.toList.map fun n => s!"  (local ${n} i32)"
+  pure <| s!"(func ${d.name.toString}_abi {sigParams}{resDecl}\n" ++
+    String.intercalate "\n  " locals ++ "\n  " ++
+    String.intercalate "\n  " body ++ "\n)"
+
+/-- Emit the module: runtime + funcs + trampolines + table + adapters +
+exports. The state THREADS across decls (tramps accumulate; l-counter
+keeps locals globally unique). -/
+def emitModule (decls : List (Decl .impure))
+    (exportTargets : List (String × Name)) : M String := do
   let mut st : S := {}
   let mut funcs : List String := []
   for d in decls do
@@ -384,12 +455,21 @@ def emitModule (decls : List (Decl .impure)) (exports : List String) : M String 
           String.intercalate "\n  " body ++ "\n)"
     trampFuncs := trampFuncs ++ [f]
     elem := elem ++ [s!"${name}"]
+  -- canonical-ABI adapters for the export targets
+  let mut abiFuncs : List String := []
+  for (kebab, n) in exportTargets do
+    for d in decls do
+      if d.name.toString == n.toString then
+        let (a, _) ← emitAdapter d |>.run st
+        abiFuncs := abiFuncs ++ [a]
+  let exports := exportTargets.map fun (kebab, n) =>
+    s!"  (export \"{kebab}\" (func ${n.toString}_abi))"
   let nT := st.tramps.size
   let table := if nT > 0 then
     ["  (type $sig_1box (func (param i32 i32) (result i32)))",
      s!"  (table {nT} funcref)",
      s!"  (elem (i32.const 0) {String.intercalate " " elem})"]
   else []
-  pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs ++ trampFuncs ++ table) ++ exports ++ [")"])
+  pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs ++ abiFuncs ++ trampFuncs ++ table) ++ exports ++ [")"])
 
 end WasmBackend

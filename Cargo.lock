@@ -1973,6 +1973,7 @@ version = "0.1.0"
 dependencies = [
  "fast-observe",
  "lean-rust-wasm",
+ "serde_json",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",

@@ -40,9 +40,10 @@ structure FailureModeItem where
 deriving Repr, BEq, Inhabited
 
 /-- Payload type references resolve against `known` (the schema
-    universe's type names; scalars need no universe). -/
+    universe's type names; scalars need no universe). Uses the diagnostic
+    authority (`Ty.check`) — one resolver, shared with SchemaLang. -/
 def FailureModeItem.wellFormed (known : List String) (m : FailureModeItem) : Bool :=
-  m.payload.all (fun (_, t) => t.wellFormed known)
+  m.payload.all (fun (_, t) => (t.check known).isEmpty)
 
 /-- Failure-mode names are unique. -/
 def namesUnique (items : List FailureModeItem) : Bool :=

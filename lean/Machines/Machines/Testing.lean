@@ -35,16 +35,22 @@ namespace Machines.Testing
 open Machines
 
 /-- Deadlock-freedom over an enumerated state space: every invariant-
-    satisfying state has at least one enabled event. -/
+    satisfying state has at least one enabled event. The completeness
+    proof (`∀ l, l ∈ labels`) is a phantom parameter — unused in the
+    body, but REQUIRED so the caller PROVES the label enumeration is
+    total (a partial enumeration would let a never-swept event wedge
+    the machine undetected). -/
 def deadlockSweep (m : Machine) (labels : List m.Label) (states : List m.State)
-    [DecidablePred m.Inv] : TestKit.CheckResult :=
+    [DecidablePred m.Inv] (_ : ∀ l, l ∈ labels) : TestKit.CheckResult :=
   let wedged := states.filter (fun s => decide (m.Inv s) && !labels.any (m.enabled s))
   if wedged.isEmpty then .ok ()
   else .error s!"deadlock: {wedged.length} invariant-satisfying state(s) have no enabled event"
 
-/-- Guard coverage: every event fires from at least one enumerated state. -/
-def guardCoverage (m : Machine) (labels : List m.Label) (states : List m.State) :
-    TestKit.CheckResult :=
+/-- Guard coverage: every event fires from at least one enumerated state.
+    The completeness proof is REQUIRED — without it, a missing label would
+    skip a dead event entirely (the check would pass vacuously). -/
+def guardCoverage (m : Machine) (labels : List m.Label) (states : List m.State)
+    (_ : ∀ l, l ∈ labels) : TestKit.CheckResult :=
   let dead := labels.filter (fun l => !states.any (m.enabled · l))
   if dead.isEmpty then .ok ()
   else .error s!"dead events: {dead.length} event(s) never enabled over the enumerated states"
@@ -57,11 +63,13 @@ def invariantNonVacuous (m : Machine) (states : List m.State) [DecidablePred m.I
   if states.any (fun s => !decide (m.Inv s)) then .ok ()
   else .error "invariant holds on every enumerated state — is it vacuous?"
 
-/-- The battery, as named checks for the TestKit driver. -/
+/-- The battery, as named checks for the TestKit driver. The completeness
+    proof (`hcomplete`) is threaded into both sweeps — the caller must
+    discharge it (the `machine!` macro generates `<name>.labels_complete`). -/
 def conformance (m : Machine) (labels : List m.Label) (states : List m.State)
-    [DecidablePred m.Inv] : List (String × TestKit.CheckResult) :=
-  [ ("deadlock-freedom", deadlockSweep m labels states)
-  , ("guard-coverage", guardCoverage m labels states)
+    [DecidablePred m.Inv] (hcomplete : ∀ l, l ∈ labels) : List (String × TestKit.CheckResult) :=
+  [ ("deadlock-freedom", deadlockSweep m labels states hcomplete)
+  , ("guard-coverage", guardCoverage m labels states hcomplete)
   , ("invariant-non-vacuous", invariantNonVacuous m states) ]
 
 end Machines.Testing

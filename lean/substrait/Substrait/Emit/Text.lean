@@ -320,13 +320,7 @@ def outputClause (implicit : Bool) (cols : List Col) (emit : Option Proto.EmitKi
     | some (.emit m)  => pure ("+> " ++ direct ++ " |> " ++ sep ", " (m.map fieldRef))
 
 /-- The output width of a join for a join type. -/
-def joinWidth (jt : Proto.JoinType) (l rw : Nat) : Nat :=
-  match jt with
-  | .leftSemi | .leftAnti | .leftSingle => l
-  | .rightSemi | .rightAnti | .rightSingle => rw
-  | .leftMark => l + 1
-  | .rightMark => rw + 1
-  | _ => l + rw
+def joinWidth (jt : Proto.JoinType) (l rw : Nat) : Nat := jt.width l rw
 
 /-- The empty group argument display: `_`. -/
 def emptyGroup : String := "_"

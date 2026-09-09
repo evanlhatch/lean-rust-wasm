@@ -33,9 +33,11 @@ structure Machine.Refines (c a : Machine) where
   R : c.State → a.State → Prop
   /-- Label interpretation: which abstract event a concrete event means. -/
   ρ : c.Label → a.Label
-  /-- Initial states relate: concrete invariant states have an abstract
-      counterpart... stated as: related states exist for every concrete
-      invariant state the caller starts from (the caller supplies `as`). -/
+  /-- The simulation step: for every concrete transition `c.tr cs l cs'`
+      from a related pair `R cs as`, an abstract transition on the
+      interpreted label `ρ l` reaches a related pair `R cs' as'`.
+      (Initial-state relatedness is the caller's precondition — supplied
+      as `as` at the use site; `Refines` has no init field by design.) -/
   step : ∀ cs as l cs', R cs as → c.tr cs l cs' →
     ∃ as', a.tr as (ρ l) as' ∧ R cs' as'
 

@@ -189,13 +189,6 @@ where
         if emitted.length == n then some emitted else none
       else go d fuel (emitted ++ avail)
 
-/-- What a topological order MEANS (the correctness property; the proof
-    and the executable check live with it in Tests). -/
-def IsTopoOrder (l : List (Fin n)) : Prop :=
-  l.Nodup ∧ (∀ v : Fin n, v ∈ l) ∧
-  ∀ (v : Fin n), ∀ d' ∈ d.deps v, ∀ (i j : Nat),
-    l[i]? = some d' → l[j]? = some v → i < j
-
 end Dag
 
 /-! ## BoundedFix — fuel-bounded iteration with a convergence witness

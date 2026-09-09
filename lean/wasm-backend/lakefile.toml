@@ -23,3 +23,7 @@ name = "wasm-gen"
 root = "GenMain"
 # importModules + LCNF re-run: replay Demo's initializers + compile in-process.
 supportInterpreter = true
+
+[[lean_exe]]
+name = "WasmBackendTests"
+root = "Tests.Main"

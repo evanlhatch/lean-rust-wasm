@@ -276,7 +276,7 @@ def deltaChecks : CheckResult := do
   _ ← assert (out.contains "#[derive(Clone, Debug, PartialEq, Eq)]") "derives"
   _ ← assert (out.contains "Insert(User),") "insert payload"
   _ ← assert (out.contains "Remove(u64),") "remove payload"
-  _ ← assert (out.contains "impl dbsp::Change for UserChange") "ChangeSpec impl"
+  _ ← assert (out.contains "impl dbsp::Change<User> for UserChange") "ChangeSpec impl"
   -- the emitters: declared paths, determinism
   let files := deltaEmitter.run demoItems
   _ ← assertEq "delta path" (files.head?.map (·.path)) (some "../../src/delta_generated.rs")
@@ -357,6 +357,13 @@ def pipelineRunChecks : CheckResult := do
       else throw s!"reset ended in {repr fin}"
   .ok ()
 
+/-- The one-writer audit: no two emitters claim the same output path.
+    The advertised discipline (`Emit.Registry.pathsUnique`) is ASSERTED
+    here, not just stated in a header. -/
+def emitterAuditChecks : CheckResult := do
+  _ ← assertEq "emitter paths unique" SchemaLang.Emit.pathsUnique true
+  .ok ()
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
@@ -374,4 +381,5 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("pipelineConformance", pipelineConformanceChecks)
      , ("pipelineGuardControl", pipelineGuardControl)
      , ("pipelineRun", pipelineRunChecks)
+     , ("emitterAudit", emitterAuditChecks)
      ])
