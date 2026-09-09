@@ -12,11 +12,11 @@ particular engine's semantics.  Flatland-specific extension YAML and payloads
 are data consumed through the extension declarations — they never appear in
 this package.
 
-The wire story: `Typed` → `Proto` → text or binary.  The text is
-byte-identical to the canonical substrait-explain output.  The binary wire
-lives in `Substrait.ProtoGen` (generated protobuf codec + hand-written
-bridge), deliberately kept out of this umbrella so the default surface stays
-dependency-light — import it explicitly when wire I/O is needed.
+The wire story: `Typed` → `Proto` → text.  The text is byte-identical to
+the canonical substrait-explain output.  This umbrella is text-only: the
+binary protobuf codec (`Substrait.ProtoGen`, generated codec + hand-written
+bridge, on the Lean-zh/protobuf dep) is EXCLUDED from this package — the
+documented add-back seam (git rev + moreLeanArgs) lives in `lakefile.toml`.
 
 [Substrait]: https://substrait.io/
 

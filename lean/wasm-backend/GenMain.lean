@@ -18,8 +18,16 @@ component wrap, and the differential smoke.
 
 open Lean
 
-/-- The functions to compile — DemoFn (the compiler-line demo stage). -/
-def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total, `strLenDemo, `greet]
+/-- The SCHEMA-FN wire names: the impl fn → the WIRE name the world
+    exports (the schema fn's name — `GuestImpl.getUserImpl` implements
+    the schema's `get-user`). Everything else wires as its own simple
+    name kebabbed. -/
+def wireNames : List (Name × String) :=
+  [ (`GuestImpl.getUserImpl, "get-user")
+  , (`GuestImpl.greet, "greet")
+  , (`GuestImpl.strLenDemo, "str-len-demo") ]
+
+def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total, `GuestImpl.getUserImpl, `GuestImpl.greet, `GuestImpl.strLenDemo]
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm : CoreM String := do
@@ -47,8 +55,11 @@ def emitModuleWasm : CoreM String := do
   for d in decls2 do
     let fmt ← Lean.Compiler.LCNF.ppDecl' d .impure
     IO.eprintln s!"--- {d.name}\n{fmt}"
-  let exportTargets := targetDecls.toList.map fun n =>
-    (CodegenCore.Emit.kebab n.getString!, n)
+  let wireNameOf (n : Name) : String :=
+    match wireNames.find? (fun (m, _) => m == n) with
+    | some (_, w) => w
+    | none => CodegenCore.Emit.kebab n.getString!
+  let exportTargets := targetDecls.toList.map fun n => (wireNameOf n, n)
   -- which targets return a STRING (the canonical ABI's post-return
   -- (ptr,len) convention): from the ORIGINAL def type — the LCNF type is
   -- erased to `obj` for every object result, Shape and String alike
@@ -97,14 +108,15 @@ def worldExports : List (String × List String × String) :=
   , ("total", ["a: u64", "b: u64", "c: u64"], "u64")
   , ("pick", ["b: bool", "a: u64", "x: u64"], "u64")
   , ("str-len-demo", ["n: u64"], "u64")
-  , ("greet", ["n: u64"], "string") ]
+  , ("greet", ["n: u64"], "string")
+  , ("get-user", ["id: u64"], "option<user>") ]
 
 /-- The oracle's fn names — mirrors `oracleSrc`'s `rows`/`resultOf`
     (kebab, as the JSON spells them). The drift surface 3.4 pins: an
     oracle row for a fn the world does not export is a differential row
     with no component export to run it against. -/
 def oracleFns : List String :=
-  ["double", "is-big", "adder", "double-area", "run-paps", "total", "pick", "str-len-demo", "greet"]
+  ["double", "is-big", "adder", "double-area", "run-paps", "total", "pick", "str-len-demo", "greet", "get-user"]
 
 -- 3.4: every oracle fn IS a world export (the component contract covers
 -- everything the differential manifest exercises).
@@ -113,11 +125,34 @@ def oracleFns : List String :=
 /-- The world document (doubleSlash comments; the driver prepends the
     header). -/
 def worldWit : String :=
-  "package guestlang:demo;\n\nworld demo {\n"
+  "package guestlang:demo;\n\n"
+    ++ "interface demo-types {\n"
+    ++ "  record user {\n    id: u64,\n    name: string,\n    email: string,\n    tags: list<string>,\n  }\n"
+    ++ "}\n\nworld demo {\n"
+    ++ "  use demo-types.{user};\n"
     ++ String.intercalate "\n"
       (worldExports.map fun (name, params, ret) =>
         s!"    export {name}: func({String.intercalate ", " params}) -> {ret};")
     ++ "\n}\n"
+
+/-! ## The COMPILED world — the gateway's compilable subset
+
+`get-user` is the first SCHEMA function the backend compiles: option +
+record + strings + list<string> through the canonical ABI. The world
+`use`s the gateway's types (one type authority — the record is the
+SSOT's user, not a structural copy). `watch-orders` (async) + `db`
+(resource) join when the async ABI + resources land — the compiled
+world is the HONEST surface of what's compiled, and the compiled
+component embeds IT.
+-/
+
+/-- The compiled world's WIT (types `use`d from the gateway package). -/
+def compiledWorldWit : String :=
+  "package guestlang:compiled;\n\n"
+    ++ "use demo:gateway/gateway-types.{user};\n\n"
+    ++ "world compiled {\n"
+    ++ "    export get-user: func(id: u64) -> option<user>;\n"
+    ++ "}\n"
 
 /-- The DIFFERENTIAL ORACLE program: calls the real Lean functions over
 generated inputs and prints the manifest as JSON. The Lean semantics is
@@ -128,6 +163,7 @@ the row skeleton stays hand-spelled: `Json.mkObj` sorts keys and
 def oracleSrc : String := "
 import Lean
 import DemoFn
+import GuestlangStd
 
 def u64s : List UInt64 :=
   ((List.range 20).map (fun i => (i * 7 + 3) % 100)).map (fun n => n.toUInt64)
@@ -143,6 +179,7 @@ def rows : List (String × List String) :=
   ++ (u64s.map fun a => (\"pick\", [if a % 2 == 0 then \"1\" else \"0\", toString a, toString (a + 1)]))
   ++ (u64s.map fun a => (\"str-len-demo\", [toString a]))
   ++ (u64s.map fun a => (\"greet\", [toString a]))
+  ++ (u64s.map fun a => (\"get-user\", [toString a]))
 
 def resultOf (fn : String) (args : List String) : String :=
   match fn, args with
@@ -153,8 +190,13 @@ def resultOf (fn : String) (args : List String) : String :=
   | \"run-paps\", [a] => toString (runPaps a.toNat!.toUInt64)
   | \"total\", [a, b, c] => toString (total a.toNat!.toUInt64 b.toNat!.toUInt64 c.toNat!.toUInt64)
   | \"pick\", [b, a, x] => toString (pick (b == \"1\") a.toNat!.toUInt64 x.toNat!.toUInt64)
-  | \"str-len-demo\", [a] => toString (strLenDemo a.toNat!.toUInt64)
-  | \"greet\", [a] => greet a.toNat!.toUInt64
+  | \"str-len-demo\", [a] => toString (GuestImpl.strLenDemo a.toNat!.toUInt64)
+  | \"greet\", [a] => GuestImpl.greet a.toNat!.toUInt64
+  | \"get-user\", [a] => match GuestImpl.getUserImpl a.toNat!.toUInt64 with
+    | none => \"none\"
+    | some u =>
+      let tagS := String.intercalate \",\" (u.tags.map (fun t => t))
+      s!\"some(\\{ id={u.id}, name={u.name}, email={u.email}, tags=({tagS}) })\"
   | _, _ => \"?\"
 
 def jsonRow (fn : String) (args : List String) (expected : String) : String :=
@@ -180,9 +222,11 @@ def main : IO Unit := do
 unsafe def main : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot)
   Lean.enableInitializersExecution
-  -- 2.1: DemoFn only — the vestigial `Demo import (schema-lang's demo
-  -- surface) dragged mathlib into this exe's transitive closure.
-  let env ← Lean.importModules #[`DemoFn] (opts := {}) (loadExts := true)
+  -- 2.1 was 'DemoFn only' (mathlib cost) — OBSOLETE: the guest IMPLS
+  -- (lean/std, schema-typed functions) are now the point of this exe;
+  -- they need the schema types (Demo — via GuestlangStd's import) and
+  -- the std ops. The mathlib-in-closure cost is the product now.
+  let env ← Lean.importModules #[`DemoFn, `GuestlangStd] (opts := {}) (loadExts := true)
   let ctx : Core.Context := { fileName := "<wasm-gen>", fileMap := default }
   let state : Core.State := { env := env }
   let (wat, _) ← emitModuleWasm.toIO ctx state
@@ -194,4 +238,6 @@ unsafe def main : IO Unit := do
     ++ "// regenerate via `just wasm-compile`; the world is the component\n"
     ++ "// contract — hand-edits are overwritten\n"
   IO.FS.writeFile "demo-world.wit" (witHdr ++ worldWit)
+  let compiledHdr := CodegenCore.Emit.header .doubleSlash "wasm-backend" "Demo.lean (the compilable subset)"
+  IO.FS.writeFile "compiled-world.wit" (compiledHdr ++ compiledWorldWit)
   IO.println "wrote target/demo.wat + target/oracle.lean + demo-world.wit"

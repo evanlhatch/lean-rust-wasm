@@ -4,7 +4,7 @@ defaultTargets = ["Substrait", "SubstraitTests"]
 # LSpec's @[test_driver]-registered runner for `lake test`.
 testDriver = "SubstraitTests"
 
-# The typed query language + Vortex dtype model + text emitter.
+# The typed query language + canonical text emitter (text-only surface).
 # The binary protobuf codec (ProtoGen/) and its Lean-zh/protobuf dep are
 # EXCLUDED — add them back when binary Substrait interchange is needed
 # (git = https://github.com/Lean-zh/protobuf.git, rev = 8c707f2cb4ab8eae280127651162d28e58164c1e).

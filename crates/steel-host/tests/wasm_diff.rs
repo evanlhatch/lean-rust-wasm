@@ -58,6 +58,48 @@ fn code_section(w: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
+/// The canonical serialization of a component Val — MUST match the
+/// Lean oracle's `resultOf` rendering byte-for-byte (the diff compares
+/// strings). Formats: u64 → decimal; bool → 1/0; string → itself;
+/// option → none / some(inner); record → { k=v, ... }; list → (v,v,...).
+fn ser_val(v: &Val) -> String {
+    match v {
+        Val::Bool(b) => {
+            if *b {
+                "1".into()
+            } else {
+                "0".into()
+            }
+        }
+        Val::U8(n) => n.to_string(),
+        Val::U16(n) => n.to_string(),
+        Val::U32(n) => n.to_string(),
+        Val::U64(n) => n.to_string(),
+        Val::S8(n) => n.to_string(),
+        Val::S16(n) => n.to_string(),
+        Val::S32(n) => n.to_string(),
+        Val::S64(n) => n.to_string(),
+        Val::Float32(f) => f.to_string(),
+        Val::Float64(f) => f.to_string(),
+        Val::Char(c) => c.to_string(),
+        Val::String(s) => s.clone(),
+        Val::Option(None) => "none".into(),
+        Val::Option(Some(inner)) => format!("some({})", ser_val(inner)),
+        Val::Record(fields) => {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{k}={}", ser_val(v)))
+                .collect();
+            format!("{{ {} }}", inner.join(", "))
+        }
+        Val::List(items) => {
+            let inner: Vec<String> = items.iter().map(ser_val).collect();
+            format!("({})", inner.join(","))
+        }
+        other => format!("{other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn lean_semantics_govern_the_shipped_wasm() -> Result<(), Box<dyn std::error::Error>> {
     let rows = manifest();
@@ -97,24 +139,7 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
         let expected = row["expected"].as_str().expect("expected");
         match rt.call(f, &args).await {
             Ok(results) => {
-                let gotStr = match &results[0] {
-                    Val::U64(v) => v.to_string(),
-                    Val::String(s) => s.clone(),
-                    Val::Bool(b) => {
-                        if *b {
-                            "1".into()
-                        } else {
-                            "0".into()
-                        }
-                    }
-                    other => {
-                        failures.push(format!(
-                            "{f} {:?}: unexpected result {other:?}",
-                            row["args"]
-                        ));
-                        continue;
-                    }
-                };
+                let gotStr = ser_val(&results[0]);
                 if gotStr != expected {
                     failures.push(format!(
                         "{f} {:?}: expected {expected}, got {gotStr}",

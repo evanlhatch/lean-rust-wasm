@@ -183,6 +183,113 @@ def diffChecks : CheckResult := do
       [.changed "user" [.fieldTypeChanged "id" .u32 .u64, .fieldAdded "email"]]
   .ok ()
 
+/-! ## Codec combinators (5.5.1 + 5.5.7): append-form composition
+
+A composite wire structure exercising EVERY combinator — bool tag,
+length-prefixed list of option nats, closed enum, length-prefixed
+bytes — plus the theorem that the per-field append lemmas compose into
+the whole-structure round trip by `simp` alone. -/
+
+/-- Tiny closed enum for the enum-combinator pin. -/
+inductive Direction | north | south deriving Repr, BEq, DecidableEq
+
+def Direction.tag : Direction → Nat
+  | .north => 0 | .south => 1
+
+def Direction.ofTag? : Nat → Option Direction
+  | 0 => some .north | 1 => some .south | _ => none
+
+@[simp] theorem Direction.ofTag_tag? (d : Direction) :
+    Direction.ofTag? d.tag = some d := by cases d <;> rfl
+
+/-- The composite structure: one field per combinator. -/
+structure Composite where
+  flag : Bool
+  nums : List (Option Nat)
+  dir : Direction
+  payload : List UInt8
+deriving Repr, BEq, DecidableEq
+
+-- test-local rendering (assertEq wants ToString; core gives Prod only Repr)
+instance : ToString Direction := ⟨fun d => match d with | .north => "north" | .south => "south"⟩
+instance : ToString Composite := ⟨fun c => toString (repr c)⟩
+instance : ToString Codec.Envelope := ⟨fun e => toString (repr e)⟩
+instance [ToString α] [ToString β] : ToString (α × β) := ⟨fun (a, b) => s!"({a}, {b})"⟩
+
+/-- The composite wire: positional concatenation of self-delimiting
+    fields, one per combinator. -/
+def encComposite (c : Composite) : List UInt8 :=
+  Codec.encodeBool c.flag
+    ++ Codec.encList (Codec.encOpt Codec.encVarNat) c.nums
+    ++ Codec.encEnum c.dir.tag
+    ++ Codec.encBytes c.payload
+
+def decComposite? (bs : List UInt8) : Option (Composite × List UInt8) :=
+  match Codec.decBool? bs with
+  | none => none
+  | some (flag, r1) =>
+      match Codec.decList? (Codec.decOpt? Codec.decNat?) r1 with
+      | none => none
+      | some (nums, r2) =>
+          match Codec.decEnum? Direction.ofTag? r2 with
+          | none => none
+          | some (dir, r3) =>
+              match Codec.decBytes? r3 with
+              | none => none
+              | some (payload, r4) => some (⟨flag, nums, dir, payload⟩, r4)
+
+/-- The payoff (5.5.1): per-field append lemmas compose into the
+    whole-structure round trip by `simp` ALONE — no manual rewriting. -/
+theorem composite_decode_encode (c : Composite) (rest : List UInt8) :
+    decComposite? (encComposite c ++ rest) = some (c, rest) := by
+  obtain ⟨flag, nums, dir, payload⟩ := c
+  simp [encComposite, decComposite?, List.append_assoc,
+    Codec.decList_encList_append, Codec.decOpt_encOpt_append,
+    Codec.decEnum_encEnum_append, Direction.ofTag_tag?]
+
+def codecCombinatorChecks : CheckResult := do
+  let c : Composite := ⟨true, [some 1, none, some 300], .south, [9, 8, 7]⟩
+  let wire := encComposite c
+  -- whole-structure round trip over every combinator
+  _ ← assertEq "composite roundtrip" (decComposite? wire) (some (c, []))
+  -- self-delimiting: trailing junk survives the decode untouched
+  _ ← assertEq "composite append form" (decComposite? (wire ++ [42, 43]))
+    (some (c, [42, 43]))
+  -- truncation rejection: empty input fails the FIRST field's tag check
+  _ ← assertEq "truncated to empty" (decComposite? []) none
+  -- truncation inside the length-prefixed tail fails the byte count check
+  _ ← assertEq "truncated payload" (decComposite? (wire.take (wire.length - 1))) none
+  -- the varint base: multi-byte digit round trip
+  _ ← assertEq "varnat 300" (Codec.decVarNat (Codec.encVarNat 300)) (300, [])
+  _ ← assertEq "varnat 300 append"
+    (Codec.decVarNat (Codec.encVarNat 300 ++ [1, 2])) (300, [1, 2])
+  -- enum rejection: out-of-range tag is `none`, not garbage
+  _ ← assertEq "enum bad tag" (Codec.decEnum? Direction.ofTag? [7]) none
+  -- pair combinator round trip
+  _ ← assertEq "prod roundtrip"
+    (Codec.decProd? Codec.decNat? Codec.decU8?
+      (Codec.encProd Codec.encVarNat Codec.encodeU8 (5, (7 : UInt8)) ++ [0]))
+    (some ((5, (7 : UInt8)), [0]))
+  -- bytes combinator rejects a lying length prefix
+  _ ← assertEq "bytes overrun" (Codec.decBytes? [3, 1, 2]) none
+  .ok ()
+
+/-- The versioned envelope (5.5.7): round trip, wrong-version rejection
+    (theorem `Codec.decEnvelope_wrong_version`, executed here), and
+    truncation rejection. -/
+def envelopeChecks : CheckResult := do
+  let wire := Codec.encEnvelope 1 42 [1, 2, 3]
+  _ ← assertEq "envelope roundtrip" (Codec.decEnvelope? 1 wire)
+    (some ⟨1, 42, [1, 2, 3]⟩)
+  -- wrong version rejects BEFORE the payload is touched
+  _ ← assertEq "envelope wrong version" (Codec.decEnvelope? 2 wire) none
+  -- truncated payload rejects (the length prefix overruns)
+  _ ← assertEq "envelope truncated"
+    (Codec.decEnvelope? 1 (wire.take (wire.length - 1))) none
+  -- trailing garbage after the payload rejects
+  _ ← assertEq "envelope trailing junk" (Codec.decEnvelope? 1 (wire ++ [0])) none
+  .ok ()
+
 /-! ## Golden byte-tie: registry emitters vs committed goldens -/
 
 open Lean in
@@ -529,6 +636,8 @@ unsafe def main (args : List String) : IO UInt32 := do
     ([ ("resolution", resolutionChecks)
      , ("fieldRes", fieldResolutionChecks)
      , ("codec", codecChecks)
+     , ("codecCombinators", codecCombinatorChecks)
+     , ("envelope", envelopeChecks)
      , ("eqAns", eqAnsChecks)
      , ("diff", diffChecks)
      ] ++ goldens ++

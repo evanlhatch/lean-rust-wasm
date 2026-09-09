@@ -15,5 +15,6 @@ import Dbsp.ChangeSpec
 import Dbsp.Circuit
 import Dbsp.Staging
 import Dbsp.Tactics
+import Dbsp.Effects
 import Dbsp.Certs
 import Dbsp.Subsystems

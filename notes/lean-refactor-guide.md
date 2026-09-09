@@ -115,6 +115,19 @@ the diff agent: these files are near-identical modulo renames). Apply:
 | 5.4 | Move substrait's `PType` plausible instances out of the test file into a library `Testing` module for downstream reuse. |
 | 5.5 | GateKit on TestKit.Golden: one `byteTie name path regenerate` + uniform `--update`/`--check` CLI for all gate exes (the 13-artifact byte-tie family keeps growing). |
 
+## Status ledger (2026-09-09 audit-wave execution)
+
+LANDED + gate-verified (`just gates` clean): Phases 0, 1, 2 (all three
+package agents), 4.5–4.15, 4.1a–f (Decode.lean 3906→3664, −242), 4.2,
+4.3, 5.1, 5.2, 5.4 (GateKit byteTie), 5.5.1, 5.5.7 (Codec.lean
+combinators + Envelope, payoff `composite_decode_encode` closed by simp
+alone). Decode.lean dead pair `splitTopLevel_join_rbracket`/
+`sep_toList_joinCSep` was transformed (not deleted) — deletion candidate.
+
+REMAINING: 3.1–3.7 (gates/decisions), 4.4 (`declare_binop`), 4.1's
+parseExpr_lit_bool twin-merge (skipped by the sweep), 5.3 (plausible
+instances), 5.5, 5.5.2–5.5.4 (ports), 6.x (linters).
+
 ## Phase 6 — enforcement (linters), wired into `just gates`
 
 | # | Rule | Mechanism |
@@ -128,6 +141,22 @@ the diff agent: these files are near-identical modulo renames). Apply:
 | 6.7 | Core linters ON for library targets (`missingDocs`, `unusedSimpArgs`, `unreachableTactic`, `dupNamespace`, `deprecated`); Tests exempt via `weakLeanArgs` | lakefile `leanArgs` |
 | 6.8 | `just lean-lint` in `just gates`; existing violations grandfathered via `@[builtin_nolint]` — ratchet, not flag day | justfile |
 | 6.9 | Package-inventory check: every lean/ dir with a lakefile appears in `lean_pkgs` | justfile one-liner |
+
+## Phase 5.5 — ports from the flatland lineage (2026-09-09 port study)
+
+The flatland repo grew three packages this tree lacks. Full study in the
+session transcript; ranked port list:
+
+| # | Pattern | Destination | Verdict |
+|---|---|---|---|
+| 5.5.1 | **Binary codec combinators + `++ rest` round-trip lemmas** — self-delimiting fields, partial decode, lemmas in `dec (enc a ++ rest) = some (a, rest)` form so per-field lemmas compose into whole-structure round-trips by `simp` alone. Evidence: flatland `Flatland/RecipeWire.lean:58,84,127` (decOpt/decProd/decList), `Lifecycle.lean:333` (varint base), payoff `recipe_decode_encode` at :523 | extend `schema-lang/SchemaLang/Codec.lean` (currently Bool+UInt8 only) with `encVarNat/decVarNat` + generic `encOpt/encProd/encList/encEnum` and their append-form lemmas | **PORT — highest value.** Fills the template's biggest hole: no proved binary wire story (text+WIT only today). Zero game content in this layer |
+| 5.5.2 | **Proof-carrying emission** — the emitter takes the discharged proof term of the law over the CONCRETE spec data, so the artifact is unemittable if the law fails on it. Evidence: flatland `Tests/SpawnGate.lean:45,93-95` ("the artifact is false if we proved it wrong") | codegen-core Emitter discipline convention: emitters for law-governed data take the proof term | **PORT** — strictly stronger than byte-tie alone (reproducible ≠ correct); cheap |
+| 5.5.3 | **Corruption-negative gate discipline** — differential gates ship ≥2 engineered corruptions that MUST fail, and the error must name context. Evidence: flatland `Tests/ReplayGate.lean:50-77`. lrw enforces this for plausible sweeps (PropSpec) but NOT for golden/differential gates — the wasm differential smoke has only positive invokes | TestKit: documented gate-exe recipe (standalone import set + positive golden + named negatives) + one demo | **PORT the discipline** |
+| 5.5.4 | **`DeltaSystem` influence algebra** — static write sets; `disjoint_commutes` contract; derived `applySeq_perm` (pairwise-disjoint batch = any permutation). Different claim from Replicas (group-commutes vs disjoint-write-commutes; works for non-commutative mutations). Evidence: flatland `Flatland/Effects.lean:40-56,140` | new module `dbsp/Dbsp/Effects.lean` — port the class + ONE demo instance (flatland only ever instantiated it once) | **PORT (medium)** |
+| 5.5.5 | Rust→Lean generated mirror (inventory + opaque placeholders + rev-pinned header) | future `mirror` direction in codegen-core | **DEFER** until a host hand-owns Rust types the Lean oracle must consume |
+| 5.5.6 | Encoding-erasure law structure (`read∘encode=id`, lossy exemplars explicitly excluded) | schema-lang Vortex layer | **DEFER** until Vortex lowering gains encodings |
+| 5.5.7 | Versioned-envelope convention (`version + schemaFingerprint + edition` as first wire fields) | codec/emitter header convention — cheap, adopt with 5.5.1 | **PORT (with 5.5.1)** |
+| — | flatland Codegen Registry, DidYouMean, ChangeSpec→trait, KernelSem differential | — | **SKIP** — lrw's versions are strictly newer/better factored |
 
 ## Line-count ledger (audit estimates)
 

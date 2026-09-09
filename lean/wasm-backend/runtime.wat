@@ -11,7 +11,10 @@
 ;; and never free (v1: the scalars-only demo never exceeds a class).
 ;; Perceus: rc_inc/rc_dec; dec→0 pushes the block back to its class.
 
-(global $heap (mut i32) (i32.const 64))
+;; 48..256 = the canonical-ABI RETURN AREAS (static scratch: the string
+;; pair @48, the option<user> tuple @56..96; single-threaded, so fixed
+;; slots don't clobber) — the heap starts ABOVE the reserve.
+(global $heap (mut i32) (i32.const 256))
 (global $heap-end (mut i32) (i32.const 65536))
 
 (func $alloc (param $size i32) (result i32)
@@ -47,12 +50,20 @@
       i32.store
       local.get $blk
     else
-      ;; empty class → bump
+      ;; empty class → bump (16-BYTE ALIGNED: the canonical ABI's list
+      ;; pointers must align to the element's alignment (4..8) — an
+      ;; unaligned bump (odd-size strings) fails the lift's check)
       global.get $heap
       local.set $old
       global.get $heap
       local.get $size
       i32.add
+      i32.const 15
+      i32.add
+      i32.const 15
+      i32.const -1
+      i32.xor
+      i32.and
       global.set $heap
       ;; grow past the page end
       global.get $heap

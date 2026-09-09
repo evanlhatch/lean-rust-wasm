@@ -9,6 +9,14 @@ import SchemaLang
 #print axioms SchemaLang.Vortex.PType.engineName_inj
 #print axioms SchemaLang.Codec.decode_encodeBool
 #print axioms SchemaLang.Codec.decode_encodeU8
+#print axioms SchemaLang.Codec.decVarNat_append
+#print axioms SchemaLang.Codec.decOpt_encOpt_append
+#print axioms SchemaLang.Codec.decProd_encProd_append
+#print axioms SchemaLang.Codec.decList_encList_append
+#print axioms SchemaLang.Codec.decEnum_encEnum_append
+#print axioms SchemaLang.Codec.decBytes_encBytes_append
+#print axioms SchemaLang.Codec.decEnvelope_encEnvelope
+#print axioms SchemaLang.Codec.decEnvelope_wrong_version
 #print axioms SchemaLang.Ty.toSType?_congr
 #print axioms SchemaLang.rank_advances
 #print axioms SchemaLang.rank_advances_tr

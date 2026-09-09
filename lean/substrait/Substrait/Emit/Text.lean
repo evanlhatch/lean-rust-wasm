@@ -67,8 +67,9 @@ def escape (s : String) : String :=
 def name (n : String) : String :=
   if isIdentifier n then n else "\"" ++ escape n ++ "\""
 
-/-- Join a list with a separator. -/
-def sep (d : String) (xs : List String) : String := String.intercalate d xs
+/-- Join a list with a separator.  `abbrev` (reducible): proofs rewrite through
+    to core `String.intercalate` lemmas directly. -/
+abbrev sep (d : String) (xs : List String) : String := String.intercalate d xs
 
 /-- `$n`. -/
 def fieldRef (ord : Nat) : String := "$" ++ toString ord

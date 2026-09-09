@@ -16,6 +16,13 @@ testDriver = "WasmBackendTests"
 name = "CodegenCore"
 path = "../codegen-core"
 
+# GenMain's LCNF re-run compiles the GUEST IMPLS (lean/std) — the std
+# package requires codegen-core + schema-lang only (no back-edge; the
+# backend's stdOp? maps the intrinsics BY NAME).
+[[require]]
+name = "GuestlangStd"
+path = "../std"
+
 [[lean_lib]]
 name = "WasmBackend"
 roots = ["WasmBackend"]

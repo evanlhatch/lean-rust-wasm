@@ -1,0 +1,23 @@
+name = "GuestlangStd"
+defaultTargets = ["GuestlangStd"]
+
+# The COMPILED stdlib + the guest implementations of the schema's
+# functions. Depends on schema-lang (the TYPES — Demo's records) and
+# codegen-core; the BACKEND (wasm-backend) depends on NEITHER the std
+# ops' bodies nor this package: the intrinsics map BY NAME (data) —
+# the layering stays acyclic (the backend re-runs this package's LCNF
+# at compile time, but imports it as oleans, not as a require).
+
+[[require]]
+name = "SchemaLang"
+path = "../schema-lang"
+
+
+
+[[require]]
+name = "CodegenCore"
+path = "../codegen-core"
+
+[[lean_lib]]
+name = "GuestlangStd"
+roots = ["GuestlangStd"]

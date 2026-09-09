@@ -176,12 +176,17 @@ partial def emitCode (code : Code .impure) : M Unit := do
   | .jp _ k => emitCode k
   | .jmp .. => unsupported "Code.jmp"
   | .unreach _ => emit "unreachable"
-  | .sset _f _i offset y ty k =>
-      -- field store: sset var[i, off] := y → mem[var + 8 + off] = y
-      -- (the RC pass splits ctor-alloc from field-init)
+  | .sset _f i offset y ty k =>
+      -- field store: sset var[slot, off] := y → mem[var + 8 + slot*8 + off]
+      -- (the RC pass splits ctor-alloc from field-init AND reorders the
+      -- fields REF-FIRST: the slot index = the field's position in the
+      -- REORDERED layout — the id of a {u64, string, string, list} record
+      -- is slot 3 (@8+3*8) AFTER the three ref slots. The old emission
+      -- discarded `i` — the id CLOBBERED the first ref's pointer: the
+      -- object case was never exercised before the schema records.)
       emit (← load _f)
       emit (← load y)
-      emit s!"{storeOp (wasmTyOf? ty)} offset={8 + offset}"
+      emit s!"{storeOp (wasmTyOf? ty)} offset={8 + i * 8 + offset}"
       emitCode k
   | .oset .. | .uset .. | .setTag .. =>
     unsupported "in-place mutation (oset/uset/setTag)"
@@ -437,12 +442,76 @@ def dedupTramps : List (Name × Nat) → List (Name × Nat)
       let rest := dedupTramps rest
       if rest.any (fun p => p.1 == f && p.2 == n) then rest else (f, n) :: rest
 
+/-! ## The adapter SHAPES (the canonical-ABI lowering table)
+
+The adapter generator needs each export's RESULT SHAPE (how to flatten
+the guest object into the canonical layout). v1: a HAND TABLE (the
+generalization — schema-driven adapters — lands with the schema-typed
+adapter work). The shapes' authority: the WIT world (byte-tied); a
+wrong shape = a differential failure (the host misreads).
+
+- `string`: [bytes-ptr, byte-len] — the static return area holds the
+  pair; bytes-ptr = obj + 16 (bytes INLINE).
+- `optionUser`: option<user> — the area holds the option's MEMORY
+  layout: discr u32 @0, the record @8 (aligned 8 by the u64):
+  id i64 @8, name (ptr,len) @16/20, email @24/28, tags (ptr,len)
+  @32/36 — 40 bytes. The record's refs (name/email/tags) sit at
+  @8/16/24, the id scalar at @32 (the LCNF's sset [3, 0]).
+  The LIST<string> field: a cons-chain walk (two passes: count, then
+  fill an 8n-byte array of (ptr,len) pairs) — nil = tag 0, cons = tag 1
+  (head @8, tail @16).
+- default: the scalar/object conventions (scalar → raw i64; object →
+  unbox).
+-/
+
+/-- The adapter result shape per export (kebab name). -/
+def adapterShape? : String → Option String
+  | "get-user" => some "optionUser"
+  | _ => none
+
+/-- The WAT for walking a guest `List String` cons chain into a
+    canonical (array-ptr, count) pair, written at `areaOff`/`areaOff+4`.
+    Two passes: COUNT the cons cells, `$alloc` 8n bytes, then FILL each
+    element's (ptr=obj+16, len=obj+8). `loadSeq` = the WAT lines loading
+    the LIST OBJECT (e.g. `local.get $u; i32.load offset=24` — the
+    record's tags ref), emitted where the walk needs the object. -/
+def listWalkWat (loadSeq : List String) (areaOff : Nat) : List String :=
+  let countLoop :=
+    loadSeq ++ [ "local.set $cur"
+    , "i32.const 0", "local.set $n"
+    , "block $done"
+    , "  loop $count"
+    , "    local.get $cur", "i32.load8_u offset=4", "i32.eqz", "br_if $done"  -- nil tag = 0
+    , "    local.get $n", "i32.const 1", "i32.add", "local.set $n"
+    , "    local.get $cur", "i32.load offset=16", "local.set $cur"  -- tail @16
+    , "    br $count"
+    , "  end"
+    , "end" ]
+  let fillLoop :=
+    loadSeq ++ [ "local.set $cur"
+    , "local.get $n", "i32.const 8", "i32.mul", "call $alloc", "local.set $arr"
+    , "local.get $arr", "local.set $w"
+    , "block $done2"
+    , "  loop $fill"
+    , "    local.get $cur", "i32.load8_u offset=4", "i32.eqz", "br_if $done2"
+    , "    ;; element: (ptr = head+16, len = head+8) — 8 bytes at $w"
+    , "    local.get $w", "local.get $cur", "i32.load offset=8", "i32.const 16", "i32.add", "i32.store"
+    , "    local.get $w", "local.get $cur", "i32.load offset=8", "i32.load offset=8", "i32.store offset=4"
+    , "    local.get $w", "i32.const 8", "i32.add", "local.set $w"
+    , "    local.get $cur", "i32.load offset=16", "local.set $cur"
+    , "    br $fill"
+    , "  end"
+    , "end" ]
+  countLoop ++ fillLoop ++
+    [ s!"i32.const {areaOff}", "local.get $arr", "i32.store"        -- ptr @areaOff
+    , s!"i32.const {areaOff + 4}", "local.get $n", "i32.store" ]    -- count @areaOff+4
+
 /-- Canonical-ABI adapter: flat component args → the impl's calling
 convention. Borrowed-scalar params (objects in the impl) get BOXED;
 raw scalars pass through; an object RESULT gets unboxed to the flat
 i64. Exported under the WIT name; the impl stays internal (internal
 callers keep calling it directly). -/
-def emitAdapter (d : Decl .impure) (stringResult? : Bool) : M String := do
+def emitAdapter (d : Decl .impure) (shape : String) : M String := do
   -- STRING result: the post-return convention — the core signature takes
   -- the return-area pointer as its LAST param; the adapter calls the impl
   -- (→ the string object), then writes (bytes-ptr, byte-len) into it.
@@ -451,7 +520,7 @@ def emitAdapter (d : Decl .impure) (stringResult? : Bool) : M String := do
   -- (The STRING-ness comes from the ORIGINAL def type — GenMain looks it
   -- up in the imported env — the LCNF type is erased to `obj` for every
   -- object result, Shape and String alike.)
-  if stringResult? then do
+  if shape == "string" then do
     -- the shim: pass the flat args through, call the impl, write the
     -- canonical-ABI string flattening (bytes-ptr, byte-len) into a STATIC
     -- return area, return the area pointer — the embedder's convention
@@ -471,6 +540,47 @@ def emitAdapter (d : Decl .impure) (stringResult? : Bool) : M String := do
       , "i32.const 48"]
     let body := String.intercalate "\n  " (pass ++ tail)
     pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $p i32)\n  {body}\n)"
+  else if shape == "optionUser" then do
+    -- option<user> lowering: the return area (56..96) holds the
+    -- option's MEMORY representation (packed, aligned — wasmtime's
+    -- lift reads the area as the type's memory layout): discr u32 @56,
+    -- the record @64 (aligned 8 by the u64): id @64, name (ptr,len)
+    -- @72/76, email @80/84, tags (ptr,len) @88/92. The guest User
+    -- object: refs @8/16/24 (name/email/tags), the id scalar @32
+    -- (sset [3, 0]).
+    -- The tags list<string>: the cons-chain walk (listWalkWat) fills an
+    -- 8n-byte array of (ptr,len) pairs. The option's ctor tags:
+    -- none = 0, some = 1 (Lean's ctor order); the payload rides @8.
+    let sigParams := String.intercalate " "
+      (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
+      ++ " (result i32)"
+    let pass := d.params.toList.map fun p => s!"local.get ${p.binderName.toString}"
+    let area := 56
+    let body := String.intercalate "\n  " (pass
+      ++ [s!"call ${d.name.toString}", "local.set $opt"
+        , ";; discr = the option's ctor tag (none=0 / some=1)"
+        , "local.get $opt", "i32.load8_u offset=4", "local.set $tag"
+        , s!"i32.const {area}", "local.get $tag", "i32.store"
+        , ";; the some branch: flatten the user record"
+        , "local.get $tag", "i32.const 1", "i32.eq"
+        , "if"
+        , "local.get $opt", "i32.load offset=8", "local.set $u"
+        , s!"i32.const {area + 8}", "local.get $u", "i64.load offset=32", "i64.store"
+        -- the STRING fields: the record's slot holds the STRING OBJECT's
+        -- POINTER (p); the flat pair = (p+16 [bytes inline], load(p+8)
+        -- [len]) — ONE more indirection than greet (whose result WAS the
+        -- string object)
+        , s!"local.get $u", "i32.load offset=8", "local.set $p"
+        , s!"i32.const {area + 16}", "local.get $p", "i32.const 16", "i32.add", "i32.store"
+        , s!"i32.const {area + 20}", "local.get $p", "i32.load offset=8", "i32.store"
+        , s!"local.get $u", "i32.load offset=16", "local.set $p"
+        , s!"i32.const {area + 24}", "local.get $p", "i32.const 16", "i32.add", "i32.store"
+        , s!"i32.const {area + 28}", "local.get $p", "i32.load offset=8", "i32.store"
+        ]
+      ++ listWalkWat ["local.get $u", "i32.load offset=24"] (area + 32)
+      ++ ["end"
+        , s!"i32.const {area}"])
+    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $opt i32)\n  (local $tag i32)\n  (local $u i32)\n  (local $p i32)\n  (local $cur i32)\n  (local $n i32)\n  (local $arr i32)\n  (local $w i32)\n  {body}\n)"
   else do
   let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
   let resultTy := resultTyOf code
@@ -584,7 +694,8 @@ def emitModule (decls : List (Decl .impure))
   for (kebab, n) in exportTargets do
     for d in decls do
       if d.name.toString == n.toString then
-        let (a, _) ← emitAdapter d (stringResult? n) |>.run st
+        let shape := if stringResult? n then "string" else adapterShape? kebab |>.getD "default"
+        let (a, _) ← emitAdapter d shape |>.run st
         abiFuncs := abiFuncs ++ [a]
   let exports := exportTargets.map fun (kebab, n) =>
     s!"  (export \"{kebab}\" (func ${n.toString}_abi))"

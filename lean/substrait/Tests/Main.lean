@@ -162,6 +162,175 @@ def spec : TestKit.PropSpec :=
   , control := controlSuite
   , controlName := "reject-all-lists" }
 
+/- ── The expression sweep (5.3) ───────────────────────────────────────────
+
+`decode ∘ emit = id` over GENERATED expressions.  The generator covers
+exactly the TOTAL fragment of the `Emit.Text.expr`/`parseExpr` pair — the
+domain is shrunk to the fragment, the property is not weakened:
+
+- literals: bool, i8/i16/i32/i64 ints, strings (escaper exercised), EMPTY
+  binary payloads, `null:t` — minus floats (`parseLiteral` has no float
+  syntax: `toString 1.5` scans back as `.i64 1` with `.5` unconsumed) and
+  minus non-empty binaries (`Emit.Text.literal` renders every binary as
+  `{{binary}}`, payload dropped), and `null` always `nullable := true`
+  (the parser sets it unconditionally).
+- field refs with `segment := none` (the text grammar has no segment rule).
+- calls over the fixed `fnNames` table with ≥ 1 argument (the grammar
+  cannot parse `f()`), any emittable output type.
+- `if_then` with ≥ 1 pair (the emitter's empty-pairs form `if_then(, _ -> …)`
+  has no parse rule).
+- casts with `returnNull`/`throwException` (the parser rejects the bare
+  `::type` form — `unspecified` is unemittable by design).
+- subqueries are unemittable; excluded. -/
+
+/-- The fixed function table: emitter `Ctx` and decoder `FnCtx` agree on
+    these anchors; colon-free unique names mean the emitter suppresses the
+    `#anchor` and the parse resolves by bare name. -/
+def fnNames : FnCtx := [("add", 1), ("gt", 2), ("sub", 3)]
+
+/-- The emitter-side view of `fnNames` (kind 0 = function). -/
+def exprEmitCtx : Substrait.Emit.Text.Ctx :=
+  { urns := [], extensions := fnNames.map fun (n, a) => (1, 0, a, n) }
+
+/-- Small literal-character alphabet: exercises the escaper (quote, backslash)
+    without blowing up sample size (`unescape_escape` covers the rest). -/
+def genLitChar : Gen Char :=
+  Gen.oneOfWithDefault (pure 'a')
+    [pure 'b', pure '9', pure '_', pure ' ', pure '\'', pure '\\']
+
+/-- Strings of exactly `k` alphabet characters. -/
+def genLitString : Nat → Gen String
+  | 0 => pure ""
+  | k + 1 => do pure (toString (← genLitChar) ++ (← genLitString k))
+
+/-- Small-magnitude signed int. -/
+def genInt : Gen Int := do
+  let v ← Gen.chooseNat
+  let s ← Gen.chooseNat
+  pure (if s % 2 == 0 then (v % 97 : Int) else -((v % 97 : Int)))
+
+/-- Random literal over the round-trippable fragment (see the boundary note
+    above: no floats, empty binary only, `null` forced nullable). -/
+def genLiteral (tfuel : Nat) : Gen Proto.Literal := do
+  let branch ← Gen.chooseNat
+  match branch % 5 with
+  | 0 => do
+    let v ← Gen.chooseNat; let n ← Gen.chooseNat
+    pure { literalType := .bool (v % 2 == 0), nullable := n % 2 == 0 }
+  | 1 => do
+    let v ← genInt; let n ← Gen.chooseNat; let k ← Gen.chooseNat
+    let lt : Proto.LiteralType := match k % 4 with
+      | 0 => .i8 v | 1 => .i16 v | 2 => .i32 v | _ => .i64 v
+    pure { literalType := lt, nullable := n % 2 == 0 }
+  | 2 => do
+    let len ← Gen.chooseNat; let n ← Gen.chooseNat
+    pure { literalType := .string (← genLitString (len % 5)), nullable := n % 2 == 0 }
+  | 3 => do
+    let n ← Gen.chooseNat
+    pure { literalType := .binary [], nullable := n % 2 == 0 }
+  | _ =>
+    pure { literalType := .null (← genType tfuel), nullable := true }
+
+/-- A leaf expression: a field ref or a literal. -/
+def genExprLeaf : Gen Proto.Expression := do
+  let branch ← Gen.chooseNat
+  if branch % 2 == 0 then do
+    let n ← Gen.chooseNat
+    pure (.field { ordinal := n % 8, segment := none })
+  else
+    pure (.literal (← genLiteral 1))
+
+/-- Sized random expression over the total round-trippable fragment. -/
+def genExpr : Nat → Gen Proto.Expression
+  | 0 => genExprLeaf
+  | fuel + 1 => do
+    let branch ← Gen.chooseNat
+    match branch % 7 with
+    | 0 => do
+      let f ← Gen.chooseNat
+      let (_, anchor) := fnNames[f % fnNames.length]?.getD ("add", 1)
+      let argc ← Gen.chooseNat
+      let rec goArgs : Nat → Gen (List Proto.Expression)
+        | 0 => pure []
+        | k + 1 => do pure ((← genExpr fuel) :: (← goArgs k))
+      pure (.scalarFunction anchor (← goArgs (argc % 3 + 1)) (← genType 2))
+    | 1 => do
+      let pc ← Gen.chooseNat
+      let rec goPairs : Nat → Gen (List (Proto.Expression × Proto.Expression))
+        | 0 => pure []
+        | k + 1 => do pure ((← genExpr fuel, ← genExpr fuel) :: (← goPairs k))
+      pure (.ifThen (← goPairs (pc % 2 + 1)) (← genExpr fuel))
+    | 2 => do
+      let fb ← Gen.chooseNat
+      pure (.cast (← genExpr fuel) (← genType 2)
+        (if fb % 2 == 0 then .returnNull else .throwException))
+    | _ => genExprLeaf
+
+/-- The plausible instance: fueled generation driven by the size parameter. -/
+instance : ArbitraryFueled Proto.Expression where
+  arbitraryFueled := genExpr
+
+instance : Arbitrary Proto.Expression where
+  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
+
+/-- Shrink toward subterms — a failing call/if_then/cast minimizes to the
+    smallest failing fragment. -/
+partial def shrinkExpr : Proto.Expression → List Proto.Expression
+  | .scalarFunction _ args _ => args ++ args.flatMap shrinkExpr
+  | .ifThen ifs els =>
+    let subs := els :: (ifs.map (·.1) ++ ifs.map (·.2))
+    subs ++ subs.flatMap shrinkExpr
+  | .cast i _ _ => i :: shrinkExpr i
+  | _ => []
+
+instance : Shrinkable Proto.Expression where
+  shrink := shrinkExpr
+
+/-- The expression round-trip property as a decidable check: emit with the
+    fixed context, parse at `length + 1` fuel, require full consumption and
+    value equality. -/
+def exprRoundtripOk (e : Proto.Expression) : Bool :=
+  match Substrait.Emit.Text.expr exprEmitCtx e with
+  | .error _ => false
+  | .ok txt =>
+    match parseExpr (txt.length + 1) fnNames txt.toList with
+    | some (e', []) => e' == e
+    | _ => false
+
+/-- The suite: 1000 instances, pinned seed (CI failures replay
+    byte-identically; the shrinker minimizes any counterexample). -/
+def exprSuite : TestSeq :=
+  checkPlausibleIO "decode∘emit = id (generated expressions)"
+    (∀ e : Proto.Expression, exprRoundtripOk e = true)
+    .done { numInst := 1000, randomSeed := some 20260909 }
+
+/-- The mandatory negative controls (TestKit.PropSpec discipline), one per
+    recursive form: each sabotaged suite is caught only if the generator
+    actually reaches that constructor — the coverage witness for calls,
+    if_then, and casts respectively. -/
+def exprControl (name : String) (sabotage : Proto.Expression → Bool) : TestSeq :=
+  checkPlausibleIO s!"sabotaged: {name} rejected (must be caught)"
+    (∀ e : Proto.Expression, sabotage e = true)
+    .done { numInst := 1000, randomSeed := some 20260909 }
+
+def exprSpecCalls : TestKit.PropSpec :=
+  { name := "expr decode∘emit round-trip"
+  , suite := exprSuite
+  , control := exprControl "calls" (fun e => match e with | .scalarFunction .. => false | _ => true)
+  , controlName := "reject-all-calls" }
+
+def exprSpecIfThen : TestKit.PropSpec :=
+  { name := "expr decode∘emit round-trip"
+  , suite := exprSuite
+  , control := exprControl "if_then" (fun e => match e with | .ifThen .. => false | _ => true)
+  , controlName := "reject-all-ifthen" }
+
+def exprSpecCast : TestKit.PropSpec :=
+  { name := "expr decode∘emit round-trip"
+  , suite := exprSuite
+  , control := exprControl "casts" (fun e => match e with | .cast .. => false | _ => true)
+  , controlName := "reject-all-casts" }
+
 end PropSweep
 
 /-- Run the check suite, collecting (name, result) pairs. Hard errors on
@@ -399,4 +568,5 @@ def main (args : List String) : IO UInt32 := do
         -- (TestKit.PropSpec: the property must pass AND the sabotaged sibling
         -- must be caught — a sweep whose generator never reaches the failing
         -- fragment is flagged as vacuous)
-        TestKit.runSpecs [PropSweep.spec]
+        TestKit.runSpecs [PropSweep.spec, PropSweep.exprSpecCalls,
+          PropSweep.exprSpecIfThen, PropSweep.exprSpecCast]

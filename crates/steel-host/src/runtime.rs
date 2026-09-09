@@ -153,6 +153,7 @@ impl ComponentRuntime {
     pub fn store_mut(&mut self) -> &mut Store<HostState> {
         &mut self.store
     }
+
 }
 
 /// wasmtime::Error → fault. String, not `wasmtime::Error`: that type
@@ -182,6 +183,21 @@ fn default_val(ty: Type) -> SteelResult<Val> {
         Type::Float64 => Val::Float64(0.0),
         Type::Char => Val::Char('\0'),
         Type::String => Val::String(String::new()),
+        // aggregates: the canonical lift fills them structurally — the
+        // placeholder just needs the right SHAPE (recursively: option<
+        // record<...>> nests)
+        Type::Option(t) => {
+            let inner = default_val(t.ty())?;
+            Val::Option(Some(Box::new(inner)))
+        }
+        Type::Record(r) => {
+            let mut fields = Vec::new();
+            for f in r.fields() {
+                fields.push((f.name.to_string(), default_val(f.ty)?));
+            }
+            Val::Record(fields)
+        }
+        Type::List(_) => Val::List(Vec::new()),
         other => {
             return Err(HostFault::UnsupportedResult(UnsupportedResult {
                 ty: format!("{other:?}"),

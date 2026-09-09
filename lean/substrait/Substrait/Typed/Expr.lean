@@ -49,6 +49,11 @@ def FunctionSig.mkSig (name urn : String) (args : List (SType × Bool))
   { name := name, urn := urn, args := args, ret := ret, retNullable := retNullable,
     deterministic := deterministic, sessionDependent := false }
 
+/-- Helper: a binary-operator signature `name(t, t) → ret`, null when any
+    argument is null. -/
+def mkBinSig (name urn : String) (t ret : SType) (n1 n2 : Bool) : FunctionSig :=
+  FunctionSig.mkSig name urn [(t, n1), (t, n2)] ret (n1 || n2) true
+
 /-- The value payload of a typed literal, indexed by the literal's type. -/
 inductive LiteralValue : SType → Type where
   | bool   : Bool → LiteralValue .bool
@@ -141,70 +146,69 @@ def standardArithmeticUrn : String := "extension:io.substrait:functions_arithmet
 def standardComparisonUrn : String := "extension:io.substrait:functions_comparison"
 
 /-- `add(i32, i32) -> i32`, null when any argument is null. -/
-def opAddSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "add" standardArithmeticUrn [(.i32, n1), (.i32, n2)] .i32 (n1 || n2) true
+def opAddSig (n1 n2 : Bool) : FunctionSig := mkBinSig "add" standardArithmeticUrn .i32 .i32 n1 n2
 
 /-- `subtract(i32, i32) -> i32`. -/
-def opSubSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "subtract" standardArithmeticUrn [(.i32, n1), (.i32, n2)] .i32 (n1 || n2) true
+def opSubSig (n1 n2 : Bool) : FunctionSig := mkBinSig "subtract" standardArithmeticUrn .i32 .i32 n1 n2
 
 /-- `multiply(i32, i32) -> i32`. -/
-def opMulSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "multiply" standardArithmeticUrn [(.i32, n1), (.i32, n2)] .i32 (n1 || n2) true
+def opMulSig (n1 n2 : Bool) : FunctionSig := mkBinSig "multiply" standardArithmeticUrn .i32 .i32 n1 n2
 
 /-- `gt(i32, i32) -> bool`. -/
-def opGtSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "gt" standardComparisonUrn [(.i32, n1), (.i32, n2)] .bool (n1 || n2) true
+def opGtSig (n1 n2 : Bool) : FunctionSig := mkBinSig "gt" standardComparisonUrn .i32 .bool n1 n2
 
 /-- `lt(i32, i32) -> bool`. -/
-def opLtSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "lt" standardComparisonUrn [(.i32, n1), (.i32, n2)] .bool (n1 || n2) true
+def opLtSig (n1 n2 : Bool) : FunctionSig := mkBinSig "lt" standardComparisonUrn .i32 .bool n1 n2
 
 /-- `equal(i32, i32) -> bool`. -/
-def opEqSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "equal" standardComparisonUrn [(.i32, n1), (.i32, n2)] .bool (n1 || n2) true
+def opEqSig (n1 n2 : Bool) : FunctionSig := mkBinSig "equal" standardComparisonUrn .i32 .bool n1 n2
 
 /-- `and(bool, bool) -> bool`. -/
-def opAndSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "and" "extension:io.substrait:functions_boolean" [(.bool, n1), (.bool, n2)] .bool (n1 || n2) true
+def opAndSig (n1 n2 : Bool) : FunctionSig := mkBinSig "and" "extension:io.substrait:functions_boolean" .bool .bool n1 n2
 
 /-- `or(bool, bool) -> bool`. -/
-def opOrSig (n1 n2 : Bool) : FunctionSig :=
-  FunctionSig.mkSig "or" "extension:io.substrait:functions_boolean" [(.bool, n1), (.bool, n2)] .bool (n1 || n2) true
+def opOrSig (n1 n2 : Bool) : FunctionSig := mkBinSig "or" "extension:io.substrait:functions_boolean" .bool .bool n1 n2
 
 namespace Expr
 
+/-- `call` of a two-argument operator signature on matching-typed arguments.
+    The signature's argument list must be exactly the two `(t, n)` pairs —
+    checked by `rfl` at each use. -/
+def binCall (sig : FunctionSig) (a : Expr s t n1) (b : Expr s t n2)
+    (h : sig.args = [(t, n1), (t, n2)] := by rfl) : Expr s sig.ret sig.retNullable :=
+  Expr.call sig (h.symm ▸ Args.cons t n1 a (Args.cons t n2 b Args.nil))
+
 /-- `a +. b` — i32 addition. -/
 def add (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .i32 (n1 || n2) :=
-  Expr.call (opAddSig n1 n2) (Args.cons .i32 n1 a (Args.cons .i32 n2 b Args.nil))
+  binCall (opAddSig n1 n2) a b
 
 /-- `a -. b` — i32 subtraction. -/
 def sub (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .i32 (n1 || n2) :=
-  Expr.call (opSubSig n1 n2) (Args.cons .i32 n1 a (Args.cons .i32 n2 b Args.nil))
+  binCall (opSubSig n1 n2) a b
 
 /-- `a *. b` — i32 multiplication. -/
 def mul (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .i32 (n1 || n2) :=
-  Expr.call (opMulSig n1 n2) (Args.cons .i32 n1 a (Args.cons .i32 n2 b Args.nil))
+  binCall (opMulSig n1 n2) a b
 
 /-- `a >. b` — i32 greater-than. -/
 def gt (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .bool (n1 || n2) :=
-  Expr.call (opGtSig n1 n2) (Args.cons .i32 n1 a (Args.cons .i32 n2 b Args.nil))
+  binCall (opGtSig n1 n2) a b
 
 /-- `a <. b` — i32 less-than. -/
 def lt (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .bool (n1 || n2) :=
-  Expr.call (opLtSig n1 n2) (Args.cons .i32 n1 a (Args.cons .i32 n2 b Args.nil))
+  binCall (opLtSig n1 n2) a b
 
 /-- `a ==. b` — i32 equality. -/
 def eq (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .bool (n1 || n2) :=
-  Expr.call (opEqSig n1 n2) (Args.cons .i32 n1 a (Args.cons .i32 n2 b Args.nil))
+  binCall (opEqSig n1 n2) a b
 
 /-- `a &&. b` — logical conjunction. -/
 def and (a : Expr s .bool n1) (b : Expr s .bool n2) : Expr s .bool (n1 || n2) :=
-  Expr.call (opAndSig n1 n2) (Args.cons .bool n1 a (Args.cons .bool n2 b Args.nil))
+  binCall (opAndSig n1 n2) a b
 
 /-- `a ||. b` — logical disjunction. -/
 def or (a : Expr s .bool n1) (b : Expr s .bool n2) : Expr s .bool (n1 || n2) :=
-  Expr.call (opOrSig n1 n2) (Args.cons .bool n1 a (Args.cons .bool n2 b Args.nil))
+  binCall (opOrSig n1 n2) a b
 
 end Expr
 

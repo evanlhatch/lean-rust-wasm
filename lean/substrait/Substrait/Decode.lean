@@ -624,6 +624,12 @@ theorem parseType_scalar (c : Substrait.ScalarCtor) (rest : List Char)
     List.drop_left]
   exact withNull_required _ rest hrest
 
+/-- The `(p ++ "?")` text as a char list: the prefix, then the `?`. -/
+private theorem toList_append_question (p : String) (rest : List Char) :
+    (p ++ "?").toList ++ rest = p.toList ++ ('?' :: rest) := by
+  rw [String.toList_append, show ("?".toList) = ['?'] from by decide]
+  simp [List.append_assoc]
+
 /-- The nullable-suffix form of `parseType_scalar`: `<prefix>?` parses at
     `.nullable`. ONE lemma for all nine scalar ctors — the nine nullable
     round-trip sites collapse onto it. -/
@@ -732,6 +738,21 @@ private theorem gt_prepend (rest : List Char) : '>' :: rest = ">".toList ++ rest
   rw [show ">".toList = ['>'] by decide]
   rfl
 
+/-- `(toString n).toList` is never empty. -/
+private theorem toString_toList_ne_nil (n : Nat) : (toString n).toList ≠ [] := by
+  have hdig : (toString n).toList = Nat.toDigits 10 n := by simp
+  rw [hdig]
+  exact Nat.toDigits_ne_nil
+
+/-- The head char of a Nat's decimal text is a digit. -/
+private theorem toString_head_isDigit (n : Nat) (c : Char) (cs : List Char)
+    (hn : (toString n).toList = c :: cs) : c.isDigit = true := by
+  have hm : c ∈ Nat.toDigits 10 n := by
+    have hdig : (toString n).toList = Nat.toDigits 10 n := by simp
+    rw [← hdig, hn]
+    simp
+  exact Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide) hm
+
 /-- **The decimal-scan inversion**: a `ToString` number reads back to itself,
     provided the following text stops at a non-digit. -/
 private theorem scanNat_of_toString (n : Nat) (rest : List Char) (hstop : notDigitHead rest) :
@@ -773,10 +794,9 @@ private theorem scanNat_of_toString (n : Nat) (rest : List Char) (hstop : notDig
 -- ── the per-constructor helpers (full type text: base + `?`) ──────────────
 
 /-- **The scalar inversion, ctor-generic**: the emitter's text for a
-    scalar type parses back to it. The nine hand-written helpers
-    (`boolT`…`binaryT`) were nine copies of this proof; the grammar table
-    makes them ONE. The ctor match must come first: `ScalarCtor.toPType` is
-    ctor-indexed, so the emitter equation lemmas only reduce at a concrete
+    scalar type parses back to it. The nine scalar cases are ONE proof via
+    the grammar table. The ctor match must come first: `ScalarCtor.toPType`
+    is ctor-indexed, so the emitter equation lemmas only reduce at a concrete
     ctor. -/
 theorem scalarT (c : Substrait.ScalarCtor) (n : Proto.Nullability) (rest : List Char)
     (hrest : rest.head? ≠ some '?')
@@ -791,192 +811,22 @@ theorem scalarT (c : Substrait.ScalarCtor) (n : Proto.Nullability) (rest : List 
         rw [show b = Substrait.ScalarCtor.prefix _ from hemit.symm]
         exact parseType_scalar _ rest hrest)
   | nullable =>
-      cases c with
-      | bool =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .bool ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .bool ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .bool).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .bool ++ "?").toList =
-              "boolean".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .bool).toList = "boolean".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .bool rest
-      | i8 =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .i8 ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .i8 ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .i8).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .i8 ++ "?").toList =
-              "i8".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .i8).toList = "i8".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .i8 rest
-      | i16 =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .i16 ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .i16 ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .i16).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .i16 ++ "?").toList =
-              "i16".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .i16).toList = "i16".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .i16 rest
-      | i32 =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .i32 ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .i32 ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .i32).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .i32 ++ "?").toList =
-              "i32".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .i32).toList = "i32".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .i32 rest
-      | i64 =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .i64 ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .i64 ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .i64).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .i64 ++ "?").toList =
-              "i64".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .i64).toList = "i64".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .i64 rest
-      | fp32 =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .fp32 ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .fp32 ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .fp32).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .fp32 ++ "?").toList =
-              "fp32".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .fp32).toList = "fp32".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .fp32 rest
-      | fp64 =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .fp64 ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .fp64 ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .fp64).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .fp64 ++ "?").toList =
-              "fp64".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .fp64).toList = "fp64".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .fp64 rest
-      | string =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .string ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .string ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .string).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .string ++ "?").toList =
-              "string".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .string).toList = "string".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .string rest
-      | binary =>
-        rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
-          Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix .binary ++ "?" from hemit.symm]
-        rw [show (Substrait.ScalarCtor.prefix .binary ++ "?").toList ++ rest =
-            (Substrait.ScalarCtor.prefix .binary).toList ++ ('?' :: rest) from by
-          rw [show (Substrait.ScalarCtor.prefix .binary ++ "?").toList =
-              "binary".toList ++ ['?'] from by decide,
-            show (Substrait.ScalarCtor.prefix .binary).toList = "binary".toList
-              from by decide]
-          simp [List.append_assoc]]
-        exact parseType_scalar_nullable .binary rest
+      -- ctor-generic: the base IS the table's prefix (`typeTextBase_scalar`),
+      -- the nullability is `.nullable`, so `b = prefix c ++ "?"`
+      have hn : Proto.PType.nullability (Substrait.ScalarCtor.toPType c .nullable) =
+          .nullable := by
+        cases c <;> rfl
+      rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase_scalar, hn] at hemit
+      have hb : b = Substrait.ScalarCtor.prefix c ++ "?" :=
+        Except.ok.inj (hemit.symm : Except.ok b =
+          Except.ok (Substrait.ScalarCtor.prefix c ++ "?"))
+      rw [hb, toList_append_question]
+      exact parseType_scalar_nullable c rest
   | unspecified =>
       cases c <;> (
         rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
         simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
           Proto.PType.nullability] at hemit)
-
-private theorem boolT (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.bool n) = .ok b) :
-    parseType (typeDepth (.bool n)) (b.toList ++ rest) = some (.bool n, rest) := by
-  simp [typeDepth]
-  exact scalarT .bool n rest hrest hemit
-
-private theorem i8T (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.i8 n) = .ok b) :
-    parseType (typeDepth (.i8 n)) (b.toList ++ rest) = some (.i8 n, rest) := by
-  simp [typeDepth]
-  exact scalarT .i8 n rest hrest hemit
-
-private theorem i16T (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.i16 n) = .ok b) :
-    parseType (typeDepth (.i16 n)) (b.toList ++ rest) = some (.i16 n, rest) := by
-  simp [typeDepth]
-  exact scalarT .i16 n rest hrest hemit
-
-private theorem i32T (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.i32 n) = .ok b) :
-    parseType (typeDepth (.i32 n)) (b.toList ++ rest) = some (.i32 n, rest) := by
-  simp [typeDepth]
-  exact scalarT .i32 n rest hrest hemit
-
-private theorem i64T (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.i64 n) = .ok b) :
-    parseType (typeDepth (.i64 n)) (b.toList ++ rest) = some (.i64 n, rest) := by
-  simp [typeDepth]
-  exact scalarT .i64 n rest hrest hemit
-
-private theorem fp32T (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.fp32 n) = .ok b) :
-    parseType (typeDepth (.fp32 n)) (b.toList ++ rest) = some (.fp32 n, rest) := by
-  simp [typeDepth]
-  exact scalarT .fp32 n rest hrest hemit
-
-private theorem fp64T (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.fp64 n) = .ok b) :
-    parseType (typeDepth (.fp64 n)) (b.toList ++ rest) = some (.fp64 n, rest) := by
-  simp [typeDepth]
-  exact scalarT .fp64 n rest hrest hemit
-
-private theorem stringT (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.string n) = .ok b) :
-    parseType (typeDepth (.string n)) (b.toList ++ rest) = some (.string n, rest) := by
-  simp [typeDepth]
-  exact scalarT .string n rest hrest hemit
-
-private theorem binaryT (n : Proto.Nullability) (rest : List Char)
-    (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (.binary n) = .ok b) :
-    parseType (typeDepth (.binary n)) (b.toList ++ rest) = some (.binary n, rest) := by
-  simp [typeDepth]
-  exact scalarT .binary n rest hrest hemit
 
 /-- The decimal inversion: `decimal<P,S>` scans back (both nullabilities). -/
 private theorem decimalT (p s : Nat) (n : Proto.Nullability) (rest : List Char)
@@ -1406,11 +1256,8 @@ private theorem mapM_ok_mem (l : List Proto.PType) (ts : List String)
         · exact ih tsr hr ht
 
 private theorem sep_cons {l : List String} (d s : String) (hl : l ≠ []) :
-    Emit.Text.sep d (s :: l) = s ++ d ++ Emit.Text.sep d l := by
-  unfold Emit.Text.sep
-  cases l with
-  | nil => exact (hl rfl).elim
-  | cons x xs => simp [String.intercalate_cons_cons]
+    Emit.Text.sep d (s :: l) = s ++ d ++ Emit.Text.sep d l :=
+  String.intercalate_cons_of_ne_nil hl
 
 private theorem sep_len_ge (l : List String) (hl : l ≠ [])
     (he : ∀ s ∈ l, s ≠ "") : l.length ≤ (Emit.Text.sep ", " l).toList.length := by
@@ -1630,7 +1477,9 @@ private theorem parseTypeList_invert (l : List Proto.PType) (fuel0 : Nat) (after
           some (f2 :: fs2, after) := by
         simpa [Nat.sub_add_cancel hlf1] using
           (ih fuel0 after hafter hall' hfield' (tf2 :: ts2) hr (by simp) (lf - 1) hlf')
-      simp [hrec]
+      show (match parseTypeList lf fuel0 ((Emit.Text.sep ", " (tf2 :: ts2)).toList ++ after) with
+        | some (ts, r3) => some (f :: ts, r3) | none => none) = some (f :: f2 :: fs2, after)
+      rw [hrec]
 
 private theorem cons_head_append (c : Char) (cs tail : List Char) :
     (c :: cs ++ tail).head? = some c := rfl
@@ -1978,6 +1827,41 @@ private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : 
     | ok ts =>
       simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
 
+/-- The mutual `Proto.PType` recursor driven on a `PType → Prop` motive:
+    the `PParam` minors are trivial (`True`), the `List PType` minor is the
+    membership induction.  The shared skeleton of `parseType_typeText` and
+    `typeDepth_le_len` (`induction` refuses `Proto.PType` — it lives in a
+    mutual block with `PParam` — so the recursor is driven directly). -/
+private theorem ptypeRec (motive : Proto.PType → Prop)
+    (hbool : ∀ n, motive (.bool n)) (hi8 : ∀ n, motive (.i8 n))
+    (hi16 : ∀ n, motive (.i16 n)) (hi32 : ∀ n, motive (.i32 n))
+    (hi64 : ∀ n, motive (.i64 n)) (hfp32 : ∀ n, motive (.fp32 n))
+    (hfp64 : ∀ n, motive (.fp64 n)) (hstring : ∀ n, motive (.string n))
+    (hbinary : ∀ n, motive (.binary n))
+    (hdecimal : ∀ p s n, motive (.decimal p s n))
+    (hlist : ∀ e n, motive e → motive (.list e n))
+    (hmap : ∀ k v n, motive k → motive v → motive (.map k v n))
+    (hstruct : ∀ fs n, (∀ f, f ∈ fs → motive f) → motive (.struct fs n))
+    (huser : ∀ a ps n, True → motive (.userDefined a ps n))
+    (t : Proto.PType) : motive t := by
+  have hnil : ∀ f, f ∈ ([] : List Proto.PType) → motive f := by
+    intro f hf
+    simp at hf
+  have hcons : ∀ (hd : Proto.PType) (tl : List Proto.PType),
+      motive hd → (∀ f, f ∈ tl → motive f) → ∀ f, f ∈ hd :: tl → motive f := by
+    intro hd tl ihd iht f hf
+    rw [List.mem_cons] at hf
+    rcases hf with hfe | hft
+    · subst hfe; exact ihd
+    · exact iht f hft
+  refine @Proto.PType.rec motive (fun _ => True)
+    (fun (l : List Proto.PType) => ∀ f, f ∈ l → motive f) (fun _ => True)
+    hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary hdecimal
+    hlist hmap hstruct huser
+    (fun _ => trivial) (fun _ => trivial) (fun _ => trivial) (fun _ => trivial)
+    (fun _ _ => trivial) (fun _ _ => trivial)
+    hnil hcons trivial (fun _ _ _ _ => trivial) t
+
 /-- ***Master type-inversion theorem***: `parseType` at fuel `typeDepth t`
     inverts `Emit.Text.typeText` on the whole emit-able fragment (all
     constructors except `userDefined`, which the emitter hard-errors on and
@@ -1999,15 +1883,21 @@ theorem parseType_typeText (t : Proto.PType) (b : String) (rest : List Char)
   let motive : Proto.PType → Prop :=
     fun t => ∀ (b : String) (rest : List Char), rest.head? ≠ some '?' →
       Emit.Text.typeText t = .ok b → parseType (typeDepth t) (b.toList ++ rest) = some (t, rest)
-  have hbool   : ∀ n, motive (.bool n)   := fun n b rest hrest hemit => boolT n rest hrest hemit
-  have hi8     : ∀ n, motive (.i8 n)     := fun n b rest hrest hemit => i8T n rest hrest hemit
-  have hi16    : ∀ n, motive (.i16 n)    := fun n b rest hrest hemit => i16T n rest hrest hemit
-  have hi32    : ∀ n, motive (.i32 n)    := fun n b rest hrest hemit => i32T n rest hrest hemit
-  have hi64    : ∀ n, motive (.i64 n)    := fun n b rest hrest hemit => i64T n rest hrest hemit
-  have hfp32   : ∀ n, motive (.fp32 n)   := fun n b rest hrest hemit => fp32T n rest hrest hemit
-  have hfp64   : ∀ n, motive (.fp64 n)   := fun n b rest hrest hemit => fp64T n rest hrest hemit
-  have hstring : ∀ n, motive (.string n) := fun n b rest hrest hemit => stringT n rest hrest hemit
-  have hbinary : ∀ n, motive (.binary n) := fun n b rest hrest hemit => binaryT n rest hrest hemit
+  have hscalar : ∀ (c : Substrait.ScalarCtor) n,
+      motive (Substrait.ScalarCtor.toPType c n) := by
+    intro c n b rest hrest hemit
+    rw [show typeDepth (Substrait.ScalarCtor.toPType c n) = 1 from by
+      cases c <;> simp [typeDepth, Substrait.ScalarCtor.toPType]]
+    exact scalarT c n rest hrest hemit
+  have hbool   : ∀ n, motive (.bool n)   := hscalar .bool
+  have hi8     : ∀ n, motive (.i8 n)     := hscalar .i8
+  have hi16    : ∀ n, motive (.i16 n)    := hscalar .i16
+  have hi32    : ∀ n, motive (.i32 n)    := hscalar .i32
+  have hi64    : ∀ n, motive (.i64 n)    := hscalar .i64
+  have hfp32   : ∀ n, motive (.fp32 n)   := hscalar .fp32
+  have hfp64   : ∀ n, motive (.fp64 n)   := hscalar .fp64
+  have hstring : ∀ n, motive (.string n) := hscalar .string
+  have hbinary : ∀ n, motive (.binary n) := hscalar .binary
   have hdecimal : ∀ p s n, motive (.decimal p s n) :=
     fun p s n b rest hrest hemit => decimalT p s n rest hrest hemit
   have hlist : ∀ e n, motive e → motive (.list e n) := by
@@ -2025,25 +1915,8 @@ theorem parseType_typeText (t : Proto.PType) (b : String) (rest : List Char)
   have huser : ∀ a ps n, True → motive (.userDefined a ps n) := by
     intro a ps n _ b rest hrest hemit
     simp [Emit.Text.typeText, Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at hemit
-  have hnil : ∀ f, f ∈ ([] : List Proto.PType) → motive f := by
-    intro f hf
-    simp at hf
-  have hcons : ∀ (hd : Proto.PType) (tl : List Proto.PType),
-      motive hd → (∀ f, f ∈ tl → motive f) → ∀ f, f ∈ hd :: tl → motive f := by
-    intro hd tl ihd iht f hf
-    rw [List.mem_cons] at hf
-    rcases hf with hfe | hft
-    · subst hfe; exact ihd
-    · exact iht f hft
-  have hgen : motive t := by
-    refine @Proto.PType.rec motive (fun _ => True)
-      (fun (l : List Proto.PType) => ∀ f, f ∈ l → motive f) (fun _ => True)
-      hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary hdecimal
-      hlist hmap hstruct huser
-      (fun _ => trivial) (fun _ => trivial) (fun _ => trivial) (fun _ => trivial)
-      (fun _ _ => trivial) (fun _ _ => trivial)
-      hnil hcons trivial (fun _ _ _ _ => trivial) t
-  exact hgen b rest hrest hemit
+  exact ptypeRec motive hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary
+    hdecimal hlist hmap hstruct huser t b rest hrest hemit
 
 /-- The nullability marker. Delegates to `Proto.PType.nullability` (one
     accessor, not two — the parallel fold was dead duplication). -/
@@ -2240,22 +2113,13 @@ private theorem scanInt_of_nat (n : Nat) (rest : List Char) (hstop : notDigitHea
     scanInt ((toString n).toList ++ rest) = some ((n : Int), rest) := by
   have hdash : ∀ rest0, ¬ (toString n).toList ++ rest = '-' :: rest0 := by
     intro rest0 h'
-    have hne : (toString n).toList ≠ [] := by
-      have : (toString n).toList = Nat.toDigits 10 n := by simp
-      rw [this]
-      exact Nat.toDigits_ne_nil
     cases hd : (toString n).toList with
-    | nil => exact (hne hd).elim
+    | nil => exact (toString_toList_ne_nil n hd).elim
     | cons c cs =>
       rw [hd] at h'
       rw [List.cons_append] at h'
       injection h' with hcc _
-      have hm : c ∈ Nat.toDigits 10 n := by
-        have hdig : (toString n).toList = Nat.toDigits 10 n := by simp
-        rw [← hdig, hd]
-        simp
-      have hdigc : c.isDigit = true :=
-        Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide) hm
+      have hdigc : c.isDigit = true := toString_head_isDigit n c cs hd
       rw [hcc] at hdigc
       have hnd : Char.isDigit '-' = false := by decide
       rw [hnd] at hdigc
@@ -2363,44 +2227,24 @@ private theorem scanIdent_digit_head (c : Char) (cs : List Char) (hc : c.isDigit
   have hα := Char_isAlpha_of_digit hc
   simpa [hα]
 
-/-- `expect "("` prefix-false when the head isn't `(`. -/
-private theorem startsWith_paren_neg (c : Char) (cs : List Char) (hc : c ≠ '(') :
-    startsWith (c :: cs) "(" = false := by
+/-- `startsWith p` on a cons-headed text is false when the head char differs
+    from the literal `p`'s head (one lemma for every literal prefix the
+    grammar tests). -/
+private theorem startsWith_neg_of_head (c : Char) (cs : List Char) (p : String)
+    (h0 : Char) (hp : p.toList.head? = some h0) (hc : c ≠ h0) :
+    startsWith (c :: cs) p = false := by
   unfold startsWith
-  have hl : "(".toList = ['('] := by decide
-  rw [hl]
-  cases hc0 : c == '(' with
-  | true => exact (hc (beq_iff_eq.mp hc0)).elim
-  | false =>
-    simp [List.isPrefixOf, hc0]
-    intro hz
-    exact (hc hz.symm).elim
-
-/-- Same for `if_then(`. -/
-private theorem startsWith_ifthen_neg (c : Char) (cs : List Char) (hc : c ≠ 'i') :
-    startsWith (c :: cs) "if_then(" = false := by
-  unfold startsWith
-  have hl : "if_then(".toList = ['i','f','_','t','h','e','n','('] := by decide
-  rw [hl]
-  cases hc0 : c == 'i' with
-  | true => exact (hc (beq_iff_eq.mp hc0)).elim
-  | false =>
-    simp [List.isPrefixOf, hc0]
-    intro hz
-    exact (hc hz.symm).elim
-
-/-- Same for `$`. -/
-private theorem startsWith_dollar_neg (c : Char) (cs : List Char) (hc : c ≠ '$') :
-    startsWith (c :: cs) "$" = false := by
-  unfold startsWith
-  have hl : "$".toList = ['$'] := by decide
-  rw [hl]
-  cases hc0 : c == '$' with
-  | true => exact (hc (beq_iff_eq.mp hc0)).elim
-  | false =>
-    simp [List.isPrefixOf, hc0]
-    intro hz
-    exact (hc hz.symm).elim
+  cases hl : p.toList with
+  | nil => simp [hl] at hp
+  | cons h' t =>
+    simp [hl] at hp
+    subst hp
+    cases hc0 : c == h' with
+    | true => exact (hc (beq_iff_eq.mp hc0)).elim
+    | false =>
+      simp [List.isPrefixOf, hc0]
+      intro hz
+      exact (hc hz.symm).elim
 
 /-- The prefix-peeled parseExpr body for a non-call text reduces to the
     literal parse: `scanIdent` is either `none` or its remainder doesn't
@@ -2426,6 +2270,44 @@ private theorem parseExpr_literal_fallback (fuel : Nat) (ctx : FnCtx) (cs : List
     | none => rfl
     | some r2 => exact (by cases (he.symm.trans (hnocall fn r1 hs)))
 
+/-- The word-parameterized bool-literal inversion (the shared body of the
+    `true`/`false` twins): an identifier word `word` heading `c :: cs` that
+    `parseLiteral` scans back to the `.bool b` literal parses as that literal
+    expression.  The caller discharges the literal scan (the only branch-
+    specific part: `parseLiteral.eq_2` for `true`, `eq_3` for `false`). -/
+private theorem parseExpr_lit_word (fuel : Nat) (ctx : FnCtx) (word : String) (b : Bool)
+    (c : Char) (cs rest : List Char)
+    (hword : word.toList = c :: cs)
+    (hident : Emit.Text.isIdentifier word = true)
+    (hsep : rest = [] ∨ ∃ c0 rest0, rest = c0 :: rest0 ∧ Emit.Text.isIdentChar c0 = false)
+    (hnotparen : rest.head? ≠ some '(')
+    (hnot1 : ¬ startsWith (c :: (cs ++ rest)) "(" = true)
+    (hnot2 : ¬ startsWith (c :: (cs ++ rest)) "if_then(" = true)
+    (hnot3 : ¬ startsWith (c :: (cs ++ rest)) "$" = true)
+    (hlit : (match parseLiteral (word.toList ++ rest) with
+              | some (lit, r) => some (Proto.Expression.literal lit, r)
+              | none => none) =
+            some (Proto.Expression.literal { literalType := Proto.LiteralType.bool b,
+                                             nullable := false }, rest)) :
+    parseExpr (fuel + 1) ctx (word.toList ++ rest) =
+      some (Proto.Expression.literal { literalType := Proto.LiteralType.bool b,
+                                       nullable := false }, rest) := by
+  rw [hword, List.cons_append]
+  have hsc : scanIdent (c :: (cs ++ rest)) = some (word, rest) := by
+    rw [← List.cons_append, ← hword]
+    exact scanIdent_of_identifier word hident rest hsep
+  have hnocall : ∀ (fn : String) (r1 : List Char),
+      scanIdent (c :: (cs ++ rest)) = some (fn, r1) → expect "(" r1 = none := by
+    intro fn r1 h'
+    rw [hsc] at h'
+    have hpair : (word, rest) = (fn, r1) := Option.some.inj h'
+    have hr : r1 = rest := (congrArg Prod.snd hpair).symm
+    rw [hr]
+    exact expect_paren_fail rest hnotparen
+  rw [parseExpr_literal_fallback fuel ctx (c :: (cs ++ rest)) hnot1 hnot2 hnot3 hnocall]
+  rw [← List.cons_append, ← hword]
+  exact hlit
+
 /-- `true`/`false` (no suffix) scans back to the required bool literal. -/
 theorem parseExpr_lit_bool (fuel : Nat) (ctx : FnCtx) (b : Bool) (rest : List Char)
     (hsep : rest = [] ∨ ∃ c0 rest0, rest = c0 :: rest0 ∧ Emit.Text.isIdentChar c0 = false)
@@ -2437,63 +2319,27 @@ theorem parseExpr_lit_bool (fuel : Nat) (ctx : FnCtx) (b : Bool) (rest : List Ch
   · -- `false` (Bool's first constructor)
     have hred : (if false = true then ("true" : String) else "false") = "false" := by decide
     rw [hred]
-    have hshape : (("false" : String).toList ++ rest) = 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest := by
-      have ht : "false".toList = ['f', 'a', 'l', 's', 'e'] := by decide
-      rw [ht]
-      rfl
-    rw [hshape]
-    have hnot1 : ¬ startsWith ('f' :: 'a' :: 'l' :: 's' :: 'e' :: rest) "(" = true := by
-      exact (by simpa using (startsWith_paren_neg 'f' ('a' :: 'l' :: 's' :: 'e' :: rest) (by decide)))
-    have hnot2 : ¬ startsWith ('f' :: 'a' :: 'l' :: 's' :: 'e' :: rest) "if_then(" = true := by
-      exact (by simpa using (startsWith_ifthen_neg 'f' ('a' :: 'l' :: 's' :: 'e' :: rest) (by decide)))
-    have hnot3 : ¬ startsWith ('f' :: 'a' :: 'l' :: 's' :: 'e' :: rest) "$" = true := by
-      exact (by simpa using (startsWith_dollar_neg 'f' ('a' :: 'l' :: 's' :: 'e' :: rest) (by decide)))
-    have hscF : scanIdent ('f' :: 'a' :: 'l' :: 's' :: 'e' :: rest) = some ("false", rest) := by
-      rw [← hshape]
-      exact scanIdent_of_identifier "false" (by decide) rest hsep
-    have hnocall : ∀ (fn : String) (r1 : List Char),
-        scanIdent ('f' :: 'a' :: 'l' :: 's' :: 'e' :: rest) = some (fn, r1) → expect "(" r1 = none := by
-      intro fn r1 h'
-      rw [hscF] at h'
-      have hpair : ("false", rest) = (fn, r1) := Option.some.inj h'
-      have hr : r1 = rest := (congrArg Prod.snd hpair).symm
-      rw [hr]
-      exact expect_paren_fail rest hnotparen
-    rw [parseExpr_literal_fallback fuel ctx ('f' :: 'a' :: 'l' :: 's' :: 'e' :: rest)
-      hnot1 hnot2 hnot3 hnocall]
-    rw [parseLiteral.eq_3]
-    rw [scanLitSuffix_none rest hnotcolon]
-    simp [suffixNullable]
+    exact parseExpr_lit_word fuel ctx "false" false 'f' ['a', 'l', 's', 'e'] rest
+      (by decide) (by decide) hsep hnotparen
+      (by simpa using (startsWith_neg_of_head 'f' (['a', 'l', 's', 'e'] ++ rest) "(" '(' (by decide) (by decide)))
+      (by simpa using (startsWith_neg_of_head 'f' (['a', 'l', 's', 'e'] ++ rest) "if_then(" 'i' (by decide) (by decide)))
+      (by simpa using (startsWith_neg_of_head 'f' (['a', 'l', 's', 'e'] ++ rest) "$" '$' (by decide) (by decide)))
+      (by have hshape : (("false" : String).toList ++ rest) = 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest := by
+            have ht : "false".toList = ['f', 'a', 'l', 's', 'e'] := by decide
+            rw [ht]; rfl
+          rw [hshape, parseLiteral.eq_3, scanLitSuffix_none rest hnotcolon]; simp [suffixNullable])
   · -- `true`
     have hred : (if true = true then ("true" : String) else "false") = "true" := by decide
     rw [hred]
-    have hshape : (("true" : String).toList ++ rest) = 't' :: 'r' :: 'u' :: 'e' :: rest := by
-      have ht : "true".toList = ['t', 'r', 'u', 'e'] := by decide
-      rw [ht]
-      rfl
-    rw [hshape]
-    have hnot1 : ¬ startsWith ('t' :: 'r' :: 'u' :: 'e' :: rest) "(" = true := by
-      exact (by simpa using (startsWith_paren_neg 't' ('r' :: 'u' :: 'e' :: rest) (by decide)))
-    have hnot2 : ¬ startsWith ('t' :: 'r' :: 'u' :: 'e' :: rest) "if_then(" = true := by
-      exact (by simpa using (startsWith_ifthen_neg 't' ('r' :: 'u' :: 'e' :: rest) (by decide)))
-    have hnot3 : ¬ startsWith ('t' :: 'r' :: 'u' :: 'e' :: rest) "$" = true := by
-      exact (by simpa using (startsWith_dollar_neg 't' ('r' :: 'u' :: 'e' :: rest) (by decide)))
-    have hscT : scanIdent ('t' :: 'r' :: 'u' :: 'e' :: rest) = some ("true", rest) := by
-      rw [← hshape]
-      exact scanIdent_of_identifier "true" (by decide) rest hsep
-    have hnocall : ∀ (fn : String) (r1 : List Char),
-        scanIdent ('t' :: 'r' :: 'u' :: 'e' :: rest) = some (fn, r1) → expect "(" r1 = none := by
-      intro fn r1 h'
-      rw [hscT] at h'
-      have hpair : ("true", rest) = (fn, r1) := Option.some.inj h'
-      have hr : r1 = rest := (congrArg Prod.snd hpair).symm
-      rw [hr]
-      exact expect_paren_fail rest hnotparen
-    rw [parseExpr_literal_fallback fuel ctx ('t' :: 'r' :: 'u' :: 'e' :: rest)
-      hnot1 hnot2 hnot3 hnocall]
-    rw [parseLiteral.eq_2]
-    rw [scanLitSuffix_none rest hnotcolon]
-    simp [suffixNullable]
+    exact parseExpr_lit_word fuel ctx "true" true 't' ['r', 'u', 'e'] rest
+      (by decide) (by decide) hsep hnotparen
+      (by simpa using (startsWith_neg_of_head 't' (['r', 'u', 'e'] ++ rest) "(" '(' (by decide) (by decide)))
+      (by simpa using (startsWith_neg_of_head 't' (['r', 'u', 'e'] ++ rest) "if_then(" 'i' (by decide) (by decide)))
+      (by simpa using (startsWith_neg_of_head 't' (['r', 'u', 'e'] ++ rest) "$" '$' (by decide) (by decide)))
+      (by have hshape : (("true" : String).toList ++ rest) = 't' :: 'r' :: 'u' :: 'e' :: rest := by
+            have ht : "true".toList = ['t', 'r', 'u', 'e'] := by decide
+            rw [ht]; rfl
+          rw [hshape, parseLiteral.eq_2, scanLitSuffix_none rest hnotcolon]; simp [suffixNullable])
 
 -- ── expressions: numeric/string/null literals ──────────────────────────────
 
@@ -2504,20 +2350,6 @@ private theorem char_ne_digit {c l : Char} (hc : c.isDigit = true) (hl : l.isDig
   rw [hl] at hc
   simp at hc
 
-/-- The `{{binary}}` prefix never prefixes a digit-headed literal. -/
-private theorem startsWith_binary_of_digit_head (c : Char) (cs : List Char) (hc : c.isDigit = true) :
-    startsWith (c :: cs) "{{binary}}" = false := by
-  have hc' : c ≠ '{' := char_ne_digit hc (by decide : '{'.isDigit = false)
-  unfold startsWith
-  have hl : "{{binary}}".toList = ['{', '{', 'b', 'i', 'n', 'a', 'r', 'y', '}', '}'] := by decide
-  rw [hl]
-  cases hc0 : c == '{' with
-  | true => exact (hc' (beq_iff_eq.mp hc0)).elim
-  | false =>
-    simp [List.isPrefixOf, hc0]
-    intro hz
-    exact (hc' hz.symm).elim
-
 /-- The int-literal text's parseExpr prefix conditions (digit head: no
     cast/if_then/field prefix; not an identifier). -/
 private theorem parseExpr_int_prefix (n : Nat) (rest : List Char) :
@@ -2526,30 +2358,20 @@ private theorem parseExpr_int_prefix (n : Nat) (rest : List Char) :
     ¬ startsWith ((toString n).toList ++ rest) "$" = true ∧
     scanIdent ((toString n).toList ++ rest) = none := by
   cases hn : (toString n).toList with
-  | nil =>
-    have hne : (toString n).toList ≠ [] := by
-      have : (toString n).toList = Nat.toDigits 10 n := by simp
-      rw [this]
-      exact Nat.toDigits_ne_nil
-    exact (hne hn).elim
+  | nil => exact (toString_toList_ne_nil n hn).elim
   | cons c cs =>
-    have hdim : c.isDigit = true := by
-      have hm : c ∈ Nat.toDigits 10 n := by
-        have hdig : (toString n).toList = Nat.toDigits 10 n := by simp
-        rw [← hdig, hn]
-        simp
-      exact Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide) hm
+    have hdim : c.isDigit = true := toString_head_isDigit n c cs hn
     constructor
     · rw [List.cons_append]
-      exact (by simpa using (startsWith_paren_neg c (cs ++ rest)
+      exact (by simpa using (startsWith_neg_of_head c (cs ++ rest) "(" '(' (by decide)
         (char_ne_digit hdim (by decide : '('.isDigit = false))))
     · constructor
       · rw [List.cons_append]
-        exact (by simpa using (startsWith_ifthen_neg c (cs ++ rest)
+        exact (by simpa using (startsWith_neg_of_head c (cs ++ rest) "if_then(" 'i' (by decide)
           (char_ne_digit hdim (by decide : 'i'.isDigit = false))))
       · constructor
         · rw [List.cons_append]
-          exact (by simpa using (startsWith_dollar_neg c (cs ++ rest)
+          exact (by simpa using (startsWith_neg_of_head c (cs ++ rest) "$" '$' (by decide)
             (char_ne_digit hdim (by decide : '$'.isDigit = false))))
         · rw [List.cons_append]
           exact scanIdent_digit_head c (cs ++ rest) hdim
@@ -2560,22 +2382,13 @@ private theorem parseLiteral_i64 (n : Nat) (rest : List Char)
     parseLiteral ((toString n).toList ++ rest) =
       some ({ literalType := .i64 (n : Int), nullable := false }, rest) := by
   cases hn : (toString n).toList with
-  | nil =>
-    have hne : (toString n).toList ≠ [] := by
-      have : (toString n).toList = Nat.toDigits 10 n := by simp
-      rw [this]
-      exact Nat.toDigits_ne_nil
-    exact (hne hn).elim
+  | nil => exact (toString_toList_ne_nil n hn).elim
   | cons c cs =>
-    have hdim : c.isDigit = true := by
-      have hm : c ∈ Nat.toDigits 10 n := by
-        have hdig : (toString n).toList = Nat.toDigits 10 n := by simp
-        rw [← hdig, hn]
-        simp
-      exact Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide) hm
+    have hdim : c.isDigit = true := toString_head_isDigit n c cs hn
     rw [List.cons_append]
     have hbin : startsWith (c :: (cs ++ rest)) "{{binary}}" = false :=
-      startsWith_binary_of_digit_head c (cs ++ rest) hdim
+      startsWith_neg_of_head c (cs ++ rest) "{{binary}}" '{' (by decide)
+        (char_ne_digit hdim (by decide : '{'.isDigit = false))
     have hneg : c ≠ '-' := char_ne_digit hdim (by decide : '-'.isDigit = false)
     have hsc := scanNat_of_toString n rest hstop
     rw [hn] at hsc
@@ -2819,6 +2632,7 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
         have hfb : fs.foldl (fun m x => max m (typeDepth x)) 0 ≤
             (Emit.Text.sep ", " ts).toList.length := by
           exact typeDepth_foldl_le_sep fs ts he (fun x hx b'' hb'' => hmem x hx b'' hb'')
+        rw [String.toList_intercalate, show (", " : String).toList = [',', ' '] from rfl] at hfb
         omega
     | nullable =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
@@ -2832,6 +2646,7 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
         have hfb : fs.foldl (fun m x => max m (typeDepth x)) 0 ≤
             (Emit.Text.sep ", " ts).toList.length := by
           exact typeDepth_foldl_le_sep fs ts he (fun x hx b'' hb'' => hmem x hx b'' hb'')
+        rw [String.toList_intercalate, show (", " : String).toList = [',', ' '] from rfl] at hfb
         omega
     | unspecified =>
       rcases typeText_base_ok (.struct fs .unspecified) b' hemit with ⟨b0, hb0⟩
@@ -2840,25 +2655,8 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
   have huser : ∀ a ps n, True → motive (.userDefined a ps n) := by
     intro a ps n _ b' hemit
     simp [Emit.Text.typeText, Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at hemit
-  have hnil : ∀ f, f ∈ ([] : List Proto.PType) → motive f := by
-    intro f hf
-    simp at hf
-  have hcons : ∀ (hd : Proto.PType) (tl : List Proto.PType),
-      motive hd → (∀ f, f ∈ tl → motive f) → ∀ f, f ∈ hd :: tl → motive f := by
-    intro hd tl ihd iht f hf
-    rw [List.mem_cons] at hf
-    rcases hf with hfe | hft
-    · subst hfe; exact ihd
-    · exact iht f hft
-  have hgen : motive t := by
-    refine @Proto.PType.rec motive (fun _ => True)
-      (fun (l : List Proto.PType) => ∀ f, f ∈ l → motive f) (fun _ => True)
-      hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary hdecimal
-      hlist hmap hstruct huser
-      (fun _ => trivial) (fun _ => trivial) (fun _ => trivial) (fun _ => trivial)
-      (fun _ _ => trivial) (fun _ _ => trivial)
-      hnil hcons trivial (fun _ _ _ _ => trivial) t
-  exact hgen b hemit
+  exact ptypeRec motive hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary
+    hdecimal hlist hmap hstruct huser t b hemit
 
 /-- **The parser-fuel inversion**: `parseType` at the call-site fuel (the
     remaining text's length + 1) inverts the type text — shift the
@@ -2906,23 +2704,14 @@ private theorem parseLiteral_i64_nullable (n : Nat) (rest : List Char)
   have hstop' : notDigitHead (([':', 'i', '6', '4', '?'] : List Char) ++ rest) :=
     Or.inr ⟨':', ['i', '6', '4', '?'] ++ rest, rfl, by decide⟩
   cases hn : (toString n).toList with
-  | nil =>
-    have hne : (toString n).toList ≠ [] := by
-      have : (toString n).toList = Nat.toDigits 10 n := by simp
-      rw [this]
-      exact Nat.toDigits_ne_nil
-    exact (hne hn).elim
+  | nil => exact (toString_toList_ne_nil n hn).elim
   | cons c cs =>
-    have hdim : c.isDigit = true := by
-      have hm : c ∈ Nat.toDigits 10 n := by
-        have hdig : (toString n).toList = Nat.toDigits 10 n := by simp
-        rw [← hdig, hn]
-        simp
-      exact Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide) hm
+    have hdim : c.isDigit = true := toString_head_isDigit n c cs hn
     rw [List.append_assoc, List.cons_append]
     have hbin : startsWith (c :: (cs ++ ':' :: 'i' :: '6' :: '4' :: '?' :: rest)) "{{binary}}" = false := by
       simpa using
-        (startsWith_binary_of_digit_head c (cs ++ ([':', 'i', '6', '4', '?'] ++ rest)) hdim)
+        (startsWith_neg_of_head c (cs ++ ([':', 'i', '6', '4', '?'] ++ rest)) "{{binary}}" '{' (by decide)
+          (char_ne_digit hdim (by decide : '{'.isDigit = false)))
     have hneg : c ≠ '-' := char_ne_digit hdim (by decide : '-'.isDigit = false)
     have hscn := scanNat_of_toString n (([':', 'i', '6', '4', '?'] : List Char) ++ rest) hstop'
     rw [hn] at hscn
@@ -2970,11 +2759,11 @@ private theorem parseExpr_quote_prefix (c : Char) (cs : List Char)
     ¬ startsWith (c :: cs) "$" = true ∧
     scanIdent (c :: cs) = none := by
   constructor
-  · exact (by simpa using (startsWith_paren_neg c cs hc))
+  · exact (by simpa using (startsWith_neg_of_head c cs "(" '(' (by decide) hc))
   · constructor
-    · exact (by simpa using (startsWith_ifthen_neg c cs hic))
+    · exact (by simpa using (startsWith_neg_of_head c cs "if_then(" 'i' (by decide) hic))
     · constructor
-      · exact (by simpa using (startsWith_dollar_neg c cs hdc))
+      · exact (by simpa using (startsWith_neg_of_head c cs "$" '$' (by decide) hdc))
       · exact scanIdent_not_alpha c cs hα
 
 /-- The `'…'` string literal (no suffix) scans back. -/
@@ -3559,8 +3348,6 @@ def parsePlanRels (ctx : FnCtx) : Nat → List String → Option (List Proto.Pla
     `.direct` vs absent emit kinds, `advancedExtension`, unsorted extension
     declarations — are documented in the module doc). -/
 def parsePlan (text : String) : Option Proto.Plan := do
-  let lines := (text.dropSuffix "\n" |>.toString).splitOn "\n"
-  -- hmm: String.splitOn exists; dropSuffix trailing newline handling
   let lines := text.splitOn "\n"
   let lines := match lines.getLast? with
     | some "" => lines.dropLast
@@ -3605,20 +3392,8 @@ def plainChar (c : Char) : Prop :=
 /-- A char list all of whose chars are plain. -/
 def Plain (cs : List Char) : Prop := ∀ c ∈ cs, plainChar c
 
-/-- `c ≠ ','` — the `, ` split guard. -/
-theorem plainChar_ne_comma {c : Char} (h : plainChar c) : c ≠ ',' := h.1
-/-- `c ≠ '('` — open-bracket guard. -/
-theorem plainChar_ne_open_paren {c : Char} (h : plainChar c) : c ≠ '(' := h.2.1
-/-- `c ≠ ')'` — close-paren guard. -/
-theorem plainChar_ne_close_paren {c : Char} (h : plainChar c) : c ≠ ')' := h.2.2.1
-/-- `c ≠ '<'` — open-angle guard. -/
-theorem plainChar_ne_open_angle {c : Char} (h : plainChar c) : c ≠ '<' := h.2.2.2.1
-/-- `c ≠ '>'` — close-angle guard. -/
-theorem plainChar_ne_close_angle {c : Char} (h : plainChar c) : c ≠ '>' := h.2.2.2.2.1
-/-- `c ≠ '['` — open-square guard. -/
-theorem plainChar_ne_open_square {c : Char} (h : plainChar c) : c ≠ '[' := h.2.2.2.2.2.1
-/-- `c ≠ ']'` — close-square guard. -/
-theorem plainChar_ne_close_square {c : Char} (h : plainChar c) : c ≠ ']' := h.2.2.2.2.2.2
+-- The seven `plainChar` guards (`,` `(` `)` `<` `>` `[` `]`) are used as the
+-- raw conjunction projections `h.1`, `h.2.1`, … at the split sites below.
 
 /-- A plain char has `c == '(' = false`, etc. (the depth tests fail). -/
 private theorem plain_beq_open (c : Char) (h : plainChar c) :
@@ -3626,15 +3401,15 @@ private theorem plain_beq_open (c : Char) (h : plainChar c) :
   have h1 : (c == '(') = false := by
     apply Bool.eq_false_iff.mpr
     intro j
-    exact plainChar_ne_open_paren h (beq_iff_eq.mp j)
+    exact h.2.1 (beq_iff_eq.mp j)
   have h2 : (c == '<') = false := by
     apply Bool.eq_false_iff.mpr
     intro j
-    exact plainChar_ne_open_angle h (beq_iff_eq.mp j)
+    exact h.2.2.2.1 (beq_iff_eq.mp j)
   have h3 : (c == '[') = false := by
     apply Bool.eq_false_iff.mpr
     intro j
-    exact plainChar_ne_open_square h (beq_iff_eq.mp j)
+    exact h.2.2.2.2.2.1 (beq_iff_eq.mp j)
   rw [h1, h2, h3]
   rfl
 
@@ -3644,15 +3419,15 @@ private theorem plain_beq_close (c : Char) (h : plainChar c) :
   have h1 : (c == ')') = false := by
     apply Bool.eq_false_iff.mpr
     intro j
-    exact plainChar_ne_close_paren h (beq_iff_eq.mp j)
+    exact h.2.2.1 (beq_iff_eq.mp j)
   have h2 : (c == '>') = false := by
     apply Bool.eq_false_iff.mpr
     intro j
-    exact plainChar_ne_close_angle h (beq_iff_eq.mp j)
+    exact h.2.2.2.2.1 (beq_iff_eq.mp j)
   have h3 : (c == ']') = false := by
     apply Bool.eq_false_iff.mpr
     intro j
-    exact plainChar_ne_close_square h (beq_iff_eq.mp j)
+    exact h.2.2.2.2.2.2 (beq_iff_eq.mp j)
   rw [h1, h2, h3]
   rfl
 
@@ -3670,7 +3445,7 @@ theorem splitTopLevel_plain_prefix (x rest cur : List Char) (hplain : Plain x) :
     rw [List.cons_append]
     rw [splitTopLevel.eq_3 0 cur c (cs ++ rest) (by
       intro rest' h0 hc hrest
-      exact (plainChar_ne_comma hp hc).elim)]
+      exact (hp.1 hc).elim)]
     rw [plain_beq_open c hp, plain_beq_close c hp]
     simp
     rw [ih (c :: cur) hcs]
@@ -3705,13 +3480,6 @@ theorem splitTopLevel_comma_head (x rest : List Char) (hplain : Plain x) :
   rw [splitTopLevel.eq_2 (x.reverse ++ []) rest]
   simp [List.reverse_reverse]
 
-/-- The `, `-joined char-list text (mirrors the emitter's `sep " , "`). -/
-def joinCSep (xss : List (List Char)) : List Char :=
-  match xss with
-  | [] => []
-  | [x] => x
-  | x :: rest => x ++ ([',', ' '] ++ joinCSep rest)
-
 /-- `splitTopLevel` over the joined items: the head goes to the result, the
     last item absorbs the tail (`]`). -/
 def splitAppend (xss : List (List Char)) (tail : List Char) : List (List Char) :=
@@ -3719,45 +3487,6 @@ def splitAppend (xss : List (List Char)) (tail : List Char) : List (List Char) :
   | [] => []
   | [x] => [x ++ tail]
   | x :: rest => x :: splitAppend rest tail
-
-/-- **The splitTopLevel inversion**: the `sep ", "`-joined emitted items
-    split back into the items, the trailing `]` (the header-line close)
-    merging into the last one. -/
-theorem splitTopLevel_join_rbracket (xss : List (List Char)) (hne : xss ≠ [])
-    (hplain : ∀ x ∈ xss, Plain x) :
-    splitTopLevel (joinCSep xss ++ [']']) 0 [] = splitAppend xss [']'] := by
-  cases xss with
-  | nil => simp at hne
-  | cons x rest =>
-    cases rest with
-    | nil =>
-      simp [joinCSep, splitAppend]
-      exact splitTopLevel_plain_rbracket x (hplain x (by simp))
-    | cons y rest' =>
-      simp [splitAppend]
-      unfold joinCSep
-      rw [List.append_assoc, List.append_assoc]
-      rw [splitTopLevel_comma_head x (joinCSep (y :: rest') ++ [']'])
-        (hplain x (by simp))]
-      rw [splitTopLevel_join_rbracket (y :: rest') (by simp) (by
-        intro z hz
-        exact hplain z (by simp [hz]))]
-
-/-- The `sep " , "`-joined strings, as char list, are the same joined text. -/
-theorem sep_toList_joinCSep (xs : List String) :
-    (Emit.Text.sep ", " xs).toList = joinCSep (xs.map (·.toList)) := by
-  induction xs with
-  | nil =>
-    simp [Emit.Text.sep, joinCSep]
-  | cons x rest ih =>
-    cases rest with
-    | nil =>
-      simp [Emit.Text.sep, joinCSep]
-    | cons y rest' =>
-      rw [sep_cons ", " x (by simp)]
-      rw [String.toList_append, String.toList_append]
-      rw [ih]
-      simp [joinCSep, String.toList_append]
 
 /-- The rendered `name:type` column text. -/
 def colText (n b : String) : String := Emit.Text.name n ++ ":" ++ b

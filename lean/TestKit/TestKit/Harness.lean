@@ -73,4 +73,54 @@ def mainOfSuites (groups : List (String × TestSeq)) : IO UInt32 :=
 def mainOfChecks (groupName : String) (checks : List (String × CheckResult)) : IO UInt32 :=
   mainOfSuites [(groupName, suiteOf checks)]
 
+/-- Error assertion: `r` must be `.error` AND its message must contain
+    every substring. Substring matching is deliberate here — this is for
+    pin-checking that a diagnostic path fires, not for replacing structured
+    diagnostics (doctrine §4). -/
+def expectErrorContaining (substrings : List String) (r : Except String α) : CheckResult :=
+  match r with
+  | .ok _ => .error s!"expected an error containing {substrings}, got .ok"
+  | .error e =>
+    match substrings.find? (fun s => (e.splitOn s).length == 1) with
+    | none => .ok ()
+    | some s => .error s!"error message missing '{s}': {e}"
+
+/-- Pointwise equality over a finite domain: the first mismatch is an error
+    naming the index (the input's identity in the domain) and the values
+    (Dbsp/Tests' hand-rolled loop-witness, once). -/
+def assertPointwiseEq [BEq β] [ToString β] (name : String) (f g : α → β) (domain : List α)
+    : CheckResult :=
+  match domain.zipIdx.find? (fun (a, _) =>
+      match f a == g a with | true => false | false => true) with
+  | none => .ok ()
+  | some (a, i) =>
+    .error s!"{name}: mismatch at domain index {i}: got {f a}, expected {g a}"
+
+/-- Substring assertion with name. -/
+def assertContains (name haystack needle : String) : CheckResult :=
+  if (haystack.splitOn needle).length > 1 then .ok ()
+  else .error s!"{name}: expected to find '{needle}' in '{haystack}'"
+
+/-- CheckM: a StateT accumulator of named CheckResults for IO drivers
+    (substrait Tests' `results := results ++ …` pattern, once). -/
+abbrev CheckM := StateT (List (String × CheckResult)) IO
+
+/-- Append a named check to the accumulator. -/
+def check (name : String) (r : CheckResult) : CheckM Unit :=
+  modify (· ++ [(name, r)])
+
+/-- Run a CheckM driver: print each failure with its name, exit code 0 iff
+    every check passed. -/
+def runCheckM (m : CheckM Unit) : IO UInt32 := do
+  let ((), results) ← m.run []
+  let mut failures := 0
+  for (name, r) in results do
+    match r with
+    | .ok () => IO.println s!"✓ {name}"
+    | .error e =>
+      IO.println s!"× {name}: {e}"
+      failures := failures + 1
+  if failures == 0 then IO.println s!"{results.length} checks passed"
+  return if failures == 0 then 0 else 1
+
 end TestKit

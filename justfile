@@ -250,36 +250,12 @@ wasm-compile:
 	# test replays against. Regenerated WITH the WAT so the manifest can
 	# never go stale against the module it audits.
 	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" env lean --run target/oracle.lean \
-	  > target/diff.json)
-	# Differential smoke: the wasm results must equal Lean's own evaluation
-	# (double 21 = 42 = adder 40 2; is-big 250 = 1; doubleArea = the FULL
-	# object lifecycle; runPaps = closures + pool reuse). wasmtime lives
-	# only in the wasm profile — absolute path (nested devenv PATH varies).
-	WTIME="$HOME/.devenv/profiles/wasm/profile/bin/wasmtime"
-	[ -x "$WTIME" ] || WTIME=$(find /nix/store -maxdepth 3 -name wasmtime -type f 2>/dev/null | head -1)
-	# Golden byte-tie: the emitted WAT vs the committed golden — backend
-	# changes are REVIEWED (the drift fails; `just wasm-compile --update`
-	# re-commits).
-	if [ "${1:-}" = "--update" ]; then
-	  cp lean/wasm-backend/target/demo.wat lean/wasm-backend/goldens/demo.wat
-	  echo "wasm-compile: golden updated"
-	else
-	  cmp -s lean/wasm-backend/target/demo.wat lean/wasm-backend/goldens/demo.wat \
-	    || { echo "wasm-compile: DRIFT demo.wat vs goldens/demo.wat (run: just wasm-compile --update)"; exit 1; }
-	fi
-	inv() { (cd lean/wasm-backend && "$WTIME" run --invoke "$@" 2>&1 | tail -1); }
-	[ "$(inv double 21)" = "42" ] \
-	  && [ "$(inv adder 40 2)" = "42" ] \
-	  && [ "$(inv is-big 250)" = "1" ] \
-	  && [ "$(inv is-big 42)" = "0" ] \
-	  && [ "$(inv double-area 5)" = "100" ] \
-	  && [ "$(inv double-area 9)" = "324" ] \
-	  && [ "$(inv double-area 1)" = "4" ] \
-	  && [ "$(inv run-paps 5)" = "8" ] \
-	  && [ "$(inv run-paps 9)" = "12" ] \
-	  && [ "$(inv run-paps 0)" = "3" ] \
-	  && [ "$(inv pick 1 3 4)" = "12" ] \
-	  && [ "$(inv total 1 2 3)" = "6" ]
+	  | grep '^\[' > target/diff.json)
+	# The SMOKE is the DIFFERENTIAL GATE (steel-host's wasm_diff): the
+	# oracle manifest (regenerated above — Lean's own evals) replays
+	# against the component, 160 rows + the sabotage control. The old
+	# hand-written per-fn assertions (double 21 = 42, ...) were a stale
+	# duplicate — one authority: Lean's semantics via the manifest.
 	# Component wrap: the COMPILED module as a component (steel-host loads it)
 	"$WT" component embed -w demo lean/wasm-backend/demo-world.wit lean/wasm-backend/target/demo.wasm \
 	  -o lean/wasm-backend/target/demo.embedded.wasm

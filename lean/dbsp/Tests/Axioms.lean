@@ -22,6 +22,11 @@ import Dbsp
 #check_cert Dbsp.seminaive_ok : ∀ {A B : Type} [AddCommGroup A] [AddCommGroup B] (R : B → A → A) (i : B) (n : Nat),
     (R i)^[n + 1] 0 = (R i)^[n] 0 → Dbsp.seminaive R i = (R i)^[n] 0
 
+-- §5.5.4 DeltaSystem influence algebra (Dbsp.Effects)
+#print axioms Dbsp.applySeq_perm
+#print axioms Dbsp.applySeq_swap_at
+#print axioms Dbsp.applySeq_bubble_prefix
+
 -- §4.3 readings (Dbsp.Subsystems)
 #print axioms Dbsp.journal_complete
 #print axioms Dbsp.journal_invertible

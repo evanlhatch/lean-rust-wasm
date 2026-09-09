@@ -179,6 +179,18 @@ def argBool : (Σ t, Option (Cell t)) → Option Bool
   | Sigma.mk SType.bool (some (Cell.bool b)) => some b
   | _ => none
 
+/-- A two-argument scalar kernel: read both args (NULL or other-typed →
+    NULL), combine, wrap.  The eight `evalFunc` arms are this one shape. -/
+def binKernel (args : List (Σ t, Option (Cell t)))
+    (read : (Σ t, Option (Cell t)) → Option α)
+    (op : α → α → β) (wrap : β → Cell r) (err : String) :
+    Except String (Option (Cell r)) :=
+  match args with
+  | [a, b] => match read a, read b with
+                | some x, some y => pure (some (wrap (op x y)))
+                | _, _ => pure none   -- NULL in → NULL out
+  | _ => throw err
+
 /--
 Built-in scalar kernels.  Only the set the typed layer's operators default to;
 anything else fails loudly (the extension catalogue is out of scope here).
@@ -187,53 +199,29 @@ def evalFunc (sig : FunctionSig) (args : List (Σ t, Option (Cell t))) :
     Except String (Option (Cell sig.ret)) :=
   match sig.name, sig.ret with
   | "add", .i32 =>
-      match args with
-      | [a, b] => match argI32 a, argI32 b with
-                    | some x, some y => pure (some (Cell.i32 (x + y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: add expects two non-null i32 arguments"
+      binKernel args argI32 (· + ·) Cell.i32
+        "eval: add expects two non-null i32 arguments"
   | "subtract", .i32 =>
-      match args with
-      | [a, b] => match argI32 a, argI32 b with
-                    | some x, some y => pure (some (Cell.i32 (x - y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: subtract expects two non-null i32 arguments"
+      binKernel args argI32 (· - ·) Cell.i32
+        "eval: subtract expects two non-null i32 arguments"
   | "multiply", .i32 =>
-      match args with
-      | [a, b] => match argI32 a, argI32 b with
-                    | some x, some y => pure (some (Cell.i32 (x * y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: multiply expects two non-null i32 arguments"
+      binKernel args argI32 (· * ·) Cell.i32
+        "eval: multiply expects two non-null i32 arguments"
   | "gt", .bool =>
-      match args with
-      | [a, b] => match argI32 a, argI32 b with
-                    | some x, some y => pure (some (Cell.bool (x > y)))
-                    | _, _ => pure none   -- NULL comparison → NULL
-      | _ => throw s!"eval: gt expects two i32 arguments"
+      binKernel args argI32 (fun x y => decide (x > y)) Cell.bool
+        "eval: gt expects two i32 arguments"
   | "lt", .bool =>
-      match args with
-      | [a, b] => match argI32 a, argI32 b with
-                    | some x, some y => pure (some (Cell.bool (x < y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: lt expects two i32 arguments"
+      binKernel args argI32 (fun x y => decide (x < y)) Cell.bool
+        "eval: lt expects two i32 arguments"
   | "equal", .bool =>
-      match args with
-      | [a, b] => match argI32 a, argI32 b with
-                    | some x, some y => pure (some (Cell.bool (x == y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: equal expects two i32 arguments"
+      binKernel args argI32 (· == ·) Cell.bool
+        "eval: equal expects two i32 arguments"
   | "and", .bool =>
-      match args with
-      | [a, b] => match argBool a, argBool b with
-                    | some x, some y => pure (some (Cell.bool (x && y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: and expects two boolean arguments"
+      binKernel args argBool (· && ·) Cell.bool
+        "eval: and expects two boolean arguments"
   | "or", .bool =>
-      match args with
-      | [a, b] => match argBool a, argBool b with
-                    | some x, some y => pure (some (Cell.bool (x || y)))
-                    | _, _ => pure none
-      | _ => throw s!"eval: or expects two boolean arguments"
+      binKernel args argBool (· || ·) Cell.bool
+        "eval: or expects two boolean arguments"
   | name, _ => throw s!"eval: function {name} not implemented in the skeleton evaluator"
 
 /-! Evaluate an argument spine to runtime values (mutual with `Expr.evalCell`). -/
@@ -462,32 +450,34 @@ def evalMeasure (m : Measure s) (group : Table s) : Except String (Option (Σ t,
           let kept := vs.filter (fun v => match v with
                                           | Sigma.mk _ (some _) => true
                                           | _ => false)
+          -- one runner for the six typed aggregate arms: fold the payload
+          -- projection, wrap in the arm's cell type
+          let run {α : Type}
+              (agg : String → (α → Σ t, Cell t) → List α → Option (Σ t, Cell t))
+              (wrap : α → Σ t, Cell t)
+              (proj : (Σ t, Option (Cell t)) → Option α) :
+              Except String (Option (Σ t, Cell t)) :=
+            pure (agg m.sig.name wrap (kept.filterMap proj))
           match kept with
           | [] => pure none
           | Sigma.mk SType.i8 (some (Cell.i8 _)) :: _ =>
-              pure (aggInt m.sig.name (fun x => Sigma.mk SType.i8 (Cell.i8 x))
-                (kept.filterMap (fun v => match v with
-                  | Sigma.mk SType.i8 (some (Cell.i8 x)) => some x | _ => none)))
+              run aggInt (fun x => Sigma.mk SType.i8 (Cell.i8 x)) (fun v => match v with
+                | Sigma.mk SType.i8 (some (Cell.i8 x)) => some x | _ => none)
           | Sigma.mk SType.i16 (some (Cell.i16 _)) :: _ =>
-              pure (aggInt m.sig.name (fun x => Sigma.mk SType.i16 (Cell.i16 x))
-                (kept.filterMap (fun v => match v with
-                  | Sigma.mk SType.i16 (some (Cell.i16 x)) => some x | _ => none)))
+              run aggInt (fun x => Sigma.mk SType.i16 (Cell.i16 x)) (fun v => match v with
+                | Sigma.mk SType.i16 (some (Cell.i16 x)) => some x | _ => none)
           | Sigma.mk SType.i32 (some (Cell.i32 _)) :: _ =>
-              pure (aggInt m.sig.name (fun x => Sigma.mk SType.i32 (Cell.i32 x))
-                (kept.filterMap (fun v => match v with
-                  | Sigma.mk SType.i32 (some (Cell.i32 x)) => some x | _ => none)))
+              run aggInt (fun x => Sigma.mk SType.i32 (Cell.i32 x)) (fun v => match v with
+                | Sigma.mk SType.i32 (some (Cell.i32 x)) => some x | _ => none)
           | Sigma.mk SType.i64 (some (Cell.i64 _)) :: _ =>
-              pure (aggInt m.sig.name (fun x => Sigma.mk SType.i64 (Cell.i64 x))
-                (kept.filterMap (fun v => match v with
-                  | Sigma.mk SType.i64 (some (Cell.i64 x)) => some x | _ => none)))
+              run aggInt (fun x => Sigma.mk SType.i64 (Cell.i64 x)) (fun v => match v with
+                | Sigma.mk SType.i64 (some (Cell.i64 x)) => some x | _ => none)
           | Sigma.mk SType.fp32 (some (Cell.fp32 _)) :: _ =>
-              pure (aggFloat m.sig.name (fun x => Sigma.mk SType.fp32 (Cell.fp32 x))
-                (kept.filterMap (fun v => match v with
-                  | Sigma.mk SType.fp32 (some (Cell.fp32 x)) => some x | _ => none)))
+              run aggFloat (fun x => Sigma.mk SType.fp32 (Cell.fp32 x)) (fun v => match v with
+                | Sigma.mk SType.fp32 (some (Cell.fp32 x)) => some x | _ => none)
           | Sigma.mk SType.fp64 (some (Cell.fp64 _)) :: _ =>
-              pure (aggFloat m.sig.name (fun x => Sigma.mk SType.fp64 (Cell.fp64 x))
-                (kept.filterMap (fun v => match v with
-                  | Sigma.mk SType.fp64 (some (Cell.fp64 x)) => some x | _ => none)))
+              run aggFloat (fun x => Sigma.mk SType.fp64 (Cell.fp64 x)) (fun v => match v with
+                | Sigma.mk SType.fp64 (some (Cell.fp64 x)) => some x | _ => none)
           | hd :: _ =>
               match hd with
               | Sigma.mk t' _ => throw s!"eval: {m.sig.name}: unsupported argument type {repr t'}"
