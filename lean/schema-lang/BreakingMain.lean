@@ -4,10 +4,21 @@
 Diffs the CURRENT demo registry against the committed baseline
 `goldens/universe.snapshot` (`SchemaLang.Snapshot` is the codec).
 Breaking findings (`Change.removed` / `Change.changed`, the latter with
-field-level evidence) print to stderr and exit 1; additions are safe
-and print as info. `--update` rewrites the baseline (the
-deliberate-change path — it REFUSES to write names the line format
-can't round-trip).
+field-level evidence) print to stderr. The verdict is three-way
+(6.5.2, `SchemaLang.Migration.verdictOf` + `CompatVerdict.exitCode` —
+the ONLY exit-code mapping):
+
+- `clean` (additions only) → exit 0
+- `remedied` (every breaking change has sound remedy evidence) →
+  exit 2, a loud warning: apply the migration, then re-baseline
+- `unremedied` → exit 1
+
+The remedy evidence list is `[]` today: the migration AUTHORING
+surface (registered `Migration`s the exe consumes) is the documented
+follow-up and lands with the first real breaking change that needs
+one — the verdict machinery itself is exercised in `Tests/Main.lean`.
+`--update` rewrites the baseline (the deliberate-change path — it
+REFUSES to write names the line format can't round-trip).
 
 Runs from the package root (the justfile recipe `cd`s there), like the
 golden checks in Tests.
@@ -41,16 +52,26 @@ unsafe def main (args : List String) : IO UInt32 := do
       return 1
   | .ok baseline =>
       let changes := diff baseline items
+      -- 6.5.2: no migration authoring surface yet (see the header) —
+      -- the verdict machinery is `Migration.verdictOf`, tested in Tests
+      let verdict := verdictOf changes []
       let breaking := changes.filter fun
         | .added _ => false
         | _ => true
       for c in changes do
         IO.println s!"  {c}"
-      if breaking.isEmpty then
-        IO.println s!"breaking: clean ({changes.length} safe change(s), {items.length} items)"
-        return 0
-      else
-        IO.eprintln s!"breaking: FAIL — {breaking.length} breaking change(s) vs {path}:"
-        for c in breaking do
-          IO.eprintln s!"  {c}"
-        return 1
+      match verdict with
+      | .clean =>
+          IO.println s!"breaking: clean ({changes.length} safe change(s), {items.length} items)"
+          return verdict.exitCode
+      | .remedied =>
+          IO.eprintln s!"breaking: REMEDIED — {breaking.length} breaking change(s) vs {path}, all with sound remedy evidence:"
+          for c in breaking do
+            IO.eprintln s!"  {c}"
+          IO.eprintln "action required: apply the migration(s) to the event log, then re-baseline (--update)"
+          return verdict.exitCode
+      | .unremedied =>
+          IO.eprintln s!"breaking: FAIL — {breaking.length} unremedied breaking change(s) vs {path}:"
+          for c in breaking do
+            IO.eprintln s!"  {c}"
+          return verdict.exitCode

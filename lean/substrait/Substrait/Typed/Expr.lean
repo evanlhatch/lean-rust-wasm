@@ -24,6 +24,7 @@ tied to a signature (aggregate grouping keys): Lean forbids `Σ`/nested
 inductives under the GADT, so the sigma-pair is encoded as its own inductive.
 -/
 import Substrait.Typed.Schema
+import Substrait.Typed.Binop
 
 namespace Substrait.Typed
 
@@ -145,30 +146,6 @@ def standardArithmeticUrn : String := "extension:io.substrait:functions_arithmet
 /-- The standard comparison extension URN (substrait core function catalogue). -/
 def standardComparisonUrn : String := "extension:io.substrait:functions_comparison"
 
-/-- `add(i32, i32) -> i32`, null when any argument is null. -/
-def opAddSig (n1 n2 : Bool) : FunctionSig := mkBinSig "add" standardArithmeticUrn .i32 .i32 n1 n2
-
-/-- `subtract(i32, i32) -> i32`. -/
-def opSubSig (n1 n2 : Bool) : FunctionSig := mkBinSig "subtract" standardArithmeticUrn .i32 .i32 n1 n2
-
-/-- `multiply(i32, i32) -> i32`. -/
-def opMulSig (n1 n2 : Bool) : FunctionSig := mkBinSig "multiply" standardArithmeticUrn .i32 .i32 n1 n2
-
-/-- `gt(i32, i32) -> bool`. -/
-def opGtSig (n1 n2 : Bool) : FunctionSig := mkBinSig "gt" standardComparisonUrn .i32 .bool n1 n2
-
-/-- `lt(i32, i32) -> bool`. -/
-def opLtSig (n1 n2 : Bool) : FunctionSig := mkBinSig "lt" standardComparisonUrn .i32 .bool n1 n2
-
-/-- `equal(i32, i32) -> bool`. -/
-def opEqSig (n1 n2 : Bool) : FunctionSig := mkBinSig "equal" standardComparisonUrn .i32 .bool n1 n2
-
-/-- `and(bool, bool) -> bool`. -/
-def opAndSig (n1 n2 : Bool) : FunctionSig := mkBinSig "and" "extension:io.substrait:functions_boolean" .bool .bool n1 n2
-
-/-- `or(bool, bool) -> bool`. -/
-def opOrSig (n1 n2 : Bool) : FunctionSig := mkBinSig "or" "extension:io.substrait:functions_boolean" .bool .bool n1 n2
-
 namespace Expr
 
 /-- `call` of a two-argument operator signature on matching-typed arguments.
@@ -178,39 +155,54 @@ def binCall (sig : FunctionSig) (a : Expr s t n1) (b : Expr s t n2)
     (h : sig.args = [(t, n1), (t, n2)] := by rfl) : Expr s sig.ret sig.retNullable :=
   Expr.call sig (h.symm ▸ Args.cons t n1 a (Args.cons t n2 b Args.nil))
 
-/-- `a +. b` — i32 addition. -/
-def add (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .i32 (n1 || n2) :=
-  binCall (opAddSig n1 n2) a b
-
-/-- `a -. b` — i32 subtraction. -/
-def sub (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .i32 (n1 || n2) :=
-  binCall (opSubSig n1 n2) a b
-
-/-- `a *. b` — i32 multiplication. -/
-def mul (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .i32 (n1 || n2) :=
-  binCall (opMulSig n1 n2) a b
-
-/-- `a >. b` — i32 greater-than. -/
-def gt (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .bool (n1 || n2) :=
-  binCall (opGtSig n1 n2) a b
-
-/-- `a <. b` — i32 less-than. -/
-def lt (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .bool (n1 || n2) :=
-  binCall (opLtSig n1 n2) a b
-
-/-- `a ==. b` — i32 equality. -/
-def eq (a : Expr s .i32 n1) (b : Expr s .i32 n2) : Expr s .bool (n1 || n2) :=
-  binCall (opEqSig n1 n2) a b
-
-/-- `a &&. b` — logical conjunction. -/
-def and (a : Expr s .bool n1) (b : Expr s .bool n2) : Expr s .bool (n1 || n2) :=
-  binCall (opAndSig n1 n2) a b
-
-/-- `a ||. b` — logical disjunction. -/
-def or (a : Expr s .bool n1) (b : Expr s .bool n2) : Expr s .bool (n1 || n2) :=
-  binCall (opOrSig n1 n2) a b
-
 end Expr
+
+/-
+The binary-operator table: one `declare_binop` entry per operator generates
+its `op*Sig` signature def and its `Expr.*` typed wrapper (the shapes the
+hand-written pairs had; see `Substrait.Typed.Binop`).  The eval kernels live
+in `Substrait.Eval.evalFunc` (matched on the function name); the infix sugar
+block follows below.
+-/
+
+/-- `add(i32, i32) -> i32`, null when any argument is null. -/
+/-- `a +. b` — i32 addition. -/
+declare_binop add "add", standardArithmeticUrn, .i32, .i32
+
+/-- `subtract(i32, i32) -> i32`. -/
+/-- `a -. b` — i32 subtraction. -/
+declare_binop sub "subtract", standardArithmeticUrn, .i32, .i32
+
+/-- `multiply(i32, i32) -> i32`. -/
+/-- `a *. b` — i32 multiplication. -/
+declare_binop mul "multiply", standardArithmeticUrn, .i32, .i32
+
+/-- `gt(i32, i32) -> bool`. -/
+/-- `a >. b` — i32 greater-than. -/
+declare_binop gt "gt", standardComparisonUrn, .i32, .bool
+
+/-- `lt(i32, i32) -> bool`. -/
+/-- `a <. b` — i32 less-than. -/
+declare_binop lt "lt", standardComparisonUrn, .i32, .bool
+
+/-- `equal(i32, i32) -> bool`. -/
+/-- `a ==. b` — i32 equality. -/
+declare_binop eq "equal", standardComparisonUrn, .i32, .bool
+
+/-- `and(bool, bool) -> bool`. -/
+/-- `a &&. b` — logical conjunction. -/
+declare_binop and "and", "extension:io.substrait:functions_boolean", .bool, .bool
+
+/-- `or(bool, bool) -> bool`. -/
+/-- `a ||. b` — logical disjunction. -/
+declare_binop or "or", "extension:io.substrait:functions_boolean", .bool, .bool
+
+-- Generated-declaration sanity: a table entry's sig carries the expected fields.
+#guard (opAddSig false true).name == "add"
+#guard (opAddSig false true).args == [(.i32, false), (.i32, true)]
+#guard (opAddSig false true).retNullable == true
+#guard (opGtSig true false).ret == .bool
+#guard (opOrSig false false).urn == "extension:io.substrait:functions_boolean"
 
 -- Infix operator sugar.  Dotted to avoid colliding with `=`/`==`.
 

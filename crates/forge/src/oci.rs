@@ -99,6 +99,16 @@ impl OciStore {
         self.root.join("blobs/sha256")
     }
 
+    /// Stored digest for a label, if any (registry push path).
+    pub fn digest(&self, label: &str) -> Option<&Digest> {
+        self.tags.get(label)
+    }
+
+    /// Path of a blob by bare hex digest (registry push uploads from here).
+    pub fn blob_path(&self, digest: &str) -> PathBuf {
+        self.blobs_dir().join(digest)
+    }
+
     /// Content-address a blob: hash with sha256, write (unconditionally,
     /// so a corrupted cache blob self-heals on the next --store), record
     /// `label → digest`, return the hex digest.
@@ -222,8 +232,9 @@ pub fn store_artifacts(
     Ok(digests)
 }
 
-/// sha256 hex digest (64 lowercase hex chars, 256 bits).
-fn sha256_hex(data: &[u8]) -> Digest {
+/// sha256 hex digest (64 lowercase hex chars, 256 bits). Public: the
+/// manifest/registry modules and tests verify against it.
+pub fn sha256_hex(data: &[u8]) -> Digest {
     let hash = Sha256::digest(data);
     hash.iter().map(|b| format!("{b:02x}")).collect()
 }

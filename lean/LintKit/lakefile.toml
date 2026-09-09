@@ -1,0 +1,34 @@
+name = "LintKit"
+defaultTargets = ["LintKit", "LintKitFixtures", "LintKitTests", "guestlang-lint"]
+
+# The guestlang custom linter layer (notes/lean-refactor-guide.md Phase 6):
+# env-linters over each package's own declarations + text lints over sources.
+# Core-only, no LSpec, no mathlib — pure Lean meta code. Downstream packages
+# do NOT import LintKit in their libraries; the `guestlang-lint` exe runs over
+# their oleans via `lake env`, so the linters cost downstream builds nothing.
+# The only exception: a declaration carrying an intentional violation imports
+# LintKit to apply `@[nolint linter.guestlang.<x> "reason"]`.
+
+[[lean_lib]]
+name = "LintKit"
+roots = ["LintKit"]
+
+# Planted-violation fixtures for the self-tests. NOT imported by the LintKit
+# umbrella, so the `just lean-lint` gate (which lints the import closure of
+# the `LintKit` root) never sees them; Tests.Main importModules them itself.
+[[lean_lib]]
+name = "LintKitFixtures"
+roots = ["LintKit.TestFixtures"]
+
+[[lean_exe]]
+name = "LintKitTests"
+root = "Tests.Main"
+# Tests replay the fixtures' oleans via importModules +
+# enableInitializersExecution (the GenMain recipe).
+supportInterpreter = true
+
+[[lean_exe]]
+name = "guestlang-lint"
+root = "LintMain"
+# importModules + enableInitializersExecution over target packages' oleans.
+supportInterpreter = true

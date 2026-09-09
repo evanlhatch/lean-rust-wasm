@@ -23,6 +23,11 @@ replay itself (steel-host, Rust-side).
 import Lean
 import DemoFn
 import GuestlangStd
+import LintKit.PackageNamespace
+
+-- The oracle row surface (`rows`/`resolve`/`jsonRow`/…) is keyed by the
+-- demo world's WIT export names — deliberately unprefixed.
+set_option linter.guestlang.packageNamespace false -- because these decl names key the wasm differential oracle to the WIT export contract, not library API
 
 /-- The demo inputs (deterministic — the manifest is reproducible). -/
 def u64s : List UInt64 :=

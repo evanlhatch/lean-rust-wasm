@@ -18,6 +18,13 @@ path = "../schema-lang"
 name = "CodegenCore"
 path = "../codegen-core"
 
+# LintKit: core-only, meta-only — the `@[nolint]` on the `GuestImpl`
+# decls below (the WIT-contract guest-impl namespace is deliberately
+# unprefixed). Not imported by downstream consumers of GuestlangStd.
+[[require]]
+name = "LintKit"
+path = "../LintKit"
+
 [[lean_lib]]
 name = "GuestlangStd"
 roots = ["GuestlangStd"]

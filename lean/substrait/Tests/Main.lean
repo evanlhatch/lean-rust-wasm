@@ -21,7 +21,6 @@ Run from the package root:
 -/
 import Substrait
 
-import LSpec
 import TestKit
 import Lean
 

@@ -11,10 +11,15 @@ interface demo-types {
     email: string,
     tags: list<string>,
   }
+  variant order-error {
+    empty-cart,
+    invalid-item(u64),
+    insufficient-funds(f64),
+  }
 }
 
 world demo {
-  use demo-types.{user};
+  use demo-types.{user, order-error};
     export double: func(x: u64) -> u64;
     export adder: func(a: u64, b: u64) -> u64;
     export is-big: func(x: u64) -> bool;
@@ -24,5 +29,4 @@ world demo {
     export pick: func(b: bool, a: u64, x: u64) -> u64;
     export str-len-demo: func(n: u64) -> u64;
     export greet: func(n: u64) -> string;
-    export get-user: func(id: u64) -> option<user>;
 }

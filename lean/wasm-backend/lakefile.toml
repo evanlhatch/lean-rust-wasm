@@ -23,6 +23,10 @@ path = "../codegen-core"
 name = "GuestlangStd"
 path = "../std"
 
+[[require]]
+name = "LintKit"
+path = "../LintKit"
+
 # TestKit: core + LSpec only, so the backend's core-only closure is
 # untouched — the Tests exe ships the oracle's corruption-negative
 # DiffSpec (doctrine §4).

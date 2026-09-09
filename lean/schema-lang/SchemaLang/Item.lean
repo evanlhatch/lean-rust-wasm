@@ -5,6 +5,13 @@ Records, variants, functions, resources — the schema vocabulary. The
 universe (`List Item`) is the source the emitters fold and the
 well-formedness predicate guards.
 
+Func items carry SEMANTIC FIELDS AS DATA (6.5.1): `FuncSem` = nullSem
+(`strict | propagate | custom`) + determinism (`pure | stable |
+volatile`), defaulted so existing items are unchanged. The volatile-
+in-pure-context enforcement rule is armed (`SchemaDiag.
+volatileInPureContext`) but unfired — no fold/reorder role exists in
+the item algebra yet (see `Determinism`).
+
 Well-formedness is RESOLUTION, not just syntax: a `.ty "user"` reference
 is valid only if a record/variant named `user` exists in the same
 universe, names are unique, and functions reference resolvable types.
@@ -29,12 +36,70 @@ structure Field where
   ty : Ty
 deriving Repr, BEq, Inhabited
 
+/-- Nullability semantics of a func item, AS DATA (refactor-guide
+    6.5.1; flatland SPEC-core §2): how the fn treats null (`option`)
+    arguments. `strict` = any null arg → error (the body never sees
+    `none`); `propagate` = any null arg → null result (the body runs
+    only when every arg is present); `custom` = the body owns null
+    handling. Emitters and the wasm differential oracle may consume
+    this later; today it is validated data. -/
+inductive NullSem where
+  | strict | propagate | custom
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- Determinism of a func item, AS DATA (6.5.1; SPEC-core §11.5):
+    `pure` = same args → same result, always (reorderable, memoizable);
+    `stable` = pure within one run; `volatile` = may observe the world
+    (clock, rng, host state). The enforcement rule: a `volatile` fn in
+    a purity-required context (aggregation/reorderable operand) fails
+    `universeCheck` — the diag ctor `volatileInPureContext` is armed,
+    but NO such role exists in the item algebra yet, so nothing fires
+    it today (v1: validated data + the armed diag; the firing site
+    lands with the first pure-context consumer, e.g. an aggregation
+    emitter or the wasm oracle). -/
+inductive Determinism where
+  | pure | stable | volatile
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- The semantic contract fields of a func item (6.5.1): nullability +
+    determinism, as DATA. The defaults (`propagate`, `pure`) keep every
+    existing `@[schema_fn]` item unchanged; the attribute's optional
+    ident args override per axis (`SchemaLang.Meta`). -/
+structure FuncSem where
+  nullSem : NullSem := .propagate
+  determinism : Determinism := .pure
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- NullSem tokens — the ONE spelling, consumed by the snapshot codec
+    (`Snapshot`) and the `@[schema_fn]` attr args (`Meta.Reflect`). -/
+def NullSem.toToken : NullSem → String
+  | .strict => "strict" | .propagate => "propagate" | .custom => "custom"
+
+def NullSem.ofToken? : String → Option NullSem
+  | "strict" => some .strict
+  | "propagate" => some .propagate
+  | "custom" => some .custom
+  | _ => none
+
+/-- Determinism tokens (closed set). -/
+def Determinism.toToken : Determinism → String
+  | .pure => "pure" | .stable => "stable" | .volatile => "volatile"
+
+def Determinism.ofToken? : String → Option Determinism
+  | "pure" => some .pure
+  | "stable" => some .stable
+  | "volatile" => some .volatile
+  | _ => none
+
 /-- A function signature: params in order, one return type.
-    Errors are `.result` constructors — no special error channel. -/
+    Errors are `.result` constructors — no special error channel.
+    `sem` carries the semantic contract fields (defaulted — existing
+    constructed and reflected items need no changes). -/
 structure FuncSig where
   name : String
   params : List (String × Ty)
   ret : Ty
+  sem : FuncSem := {}
 deriving Repr, BEq, Inhabited
 
 /-- A variant case: name + optional payload type. -/
@@ -98,6 +163,7 @@ inductive SchemaDiag where
   | noCtor (name : String)
   | binderMismatch (name : String)
   | multiPayload (name : String)
+  | volatileInPureContext (fn context : String)
 deriving Repr, BEq, Inhabited
 
 /-- The boundary fragment, enumerated (the error IS the documentation).
@@ -128,6 +194,9 @@ def render : SchemaDiag → String
       s!"`{n}`: field/binder count mismatch — flat structures without typeclass fields only (v1)"
   | .multiPayload n =>
       s!"`{n}`: variant cases carry at most one payload type (v1 — WIT case shape)"
+  | .volatileInPureContext fn ctx =>
+      s!"func `{fn}` is volatile but `{ctx}` requires purity — valid "
+        ++ "determinisms in a pure context: pure, stable"
 
 end SchemaDiag
 

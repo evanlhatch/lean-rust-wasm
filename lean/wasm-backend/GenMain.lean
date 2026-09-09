@@ -24,10 +24,11 @@ open Lean
     name kebabbed. -/
 def wireNames : List (Name × String) :=
   [ (`GuestImpl.getUserImpl, "get-user")
+  , (`GuestImpl.watchOrdersImpl, "watch-orders")
   , (`GuestImpl.greet, "greet")
   , (`GuestImpl.strLenDemo, "str-len-demo") ]
 
-def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total, `GuestImpl.getUserImpl, `GuestImpl.greet, `GuestImpl.strLenDemo]
+def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total, `GuestImpl.getUserImpl, `GuestImpl.greet, `GuestImpl.strLenDemo, `GuestImpl.watchOrdersImpl]
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm : CoreM String := do
@@ -97,19 +98,29 @@ flattens them (strings/objects), and the KEPT list is the honest
 surface of what the component actually exports.
 -/
 
+/-- The SCHEMA fns (the demo-exports INTERFACE's members; the core
+    exports = the interface-qualified paths). -/
+def interfaceFns : List String := ["get-user", "watch-orders"]
+
 /-- One world export: (wit name, NAMED wit params — WIT requires
-    parameter names, `wit-parser` rejects bare types — wit result). -/
-def worldExports : List (String × List String × String) :=
-  [ ("double", ["x: u64"], "u64")
-  , ("adder", ["a: u64", "b: u64"], "u64")
-  , ("is-big", ["x: u64"], "bool")
-  , ("double-area", ["r: u64"], "u64")
-  , ("run-paps", ["x: u64"], "u64")
-  , ("total", ["a: u64", "b: u64", "c: u64"], "u64")
-  , ("pick", ["b: bool", "a: u64", "x: u64"], "u64")
-  , ("str-len-demo", ["n: u64"], "u64")
-  , ("greet", ["n: u64"], "string")
-  , ("get-user", ["id: u64"], "option<user>") ]
+    parameter names, `wit-parser` rejects bare types — wit result —
+    the async marking: GATED OFF (the async-lift's fused-adapter
+    generation mismatches inside wit-component 0.244's own code-gen;
+    the protocol's shapes = verified against the wit-bindgen 0.61
+    reference + the minimal-module probes — the plan doc's Track 1b)). -/
+
+def worldExports : List (String × List String × String × Bool) :=
+  [ ("double", ["x: u64"], "u64", false)
+  , ("adder", ["a: u64", "b: u64"], "u64", false)
+  , ("is-big", ["x: u64"], "bool", false)
+  , ("double-area", ["r: u64"], "u64", false)
+  , ("run-paps", ["x: u64"], "u64", false)
+  , ("total", ["a: u64", "b: u64", "c: u64"], "u64", false)
+  , ("pick", ["b: bool", "a: u64", "x: u64"], "u64", false)
+  , ("str-len-demo", ["n: u64"], "u64", false)
+  , ("greet", ["n: u64"], "string", false)
+  , ("get-user", ["id: u64"], "option<user>", false)
+  , ("watch-orders", ["into: order-error"], "list<user>", false) ]
 
 /-- The oracle's fn names — mirrors `oracleSrc`'s `rows`/`resultOf`
     (kebab, as the JSON spells them). The drift surface 3.4 pins: an
@@ -120,7 +131,7 @@ def oracleFns : List String :=
 
 -- 3.4: every oracle fn IS a world export (the component contract covers
 -- everything the differential manifest exercises).
-#guard oracleFns.all fun f => worldExports.any fun (w, _, _) => w == f
+#guard oracleFns.all fun f => worldExports.any fun (w, _, _, _) => w == f
 
 /-- The world document (doubleSlash comments; the driver prepends the
     header). -/
@@ -128,10 +139,12 @@ def worldWit : String :=
   "package guestlang:demo;\n\n"
     ++ "interface demo-types {\n"
     ++ "  record user {\n    id: u64,\n    name: string,\n    email: string,\n    tags: list<string>,\n  }\n"
+    ++ "  variant order-error {\n    empty-cart,\n    invalid-item(u64),\n    insufficient-funds(f64),\n  }\n"
     ++ "}\n\nworld demo {\n"
-    ++ "  use demo-types.{user};\n"
+    ++ "  use demo-types.{user, order-error};\n"
     ++ String.intercalate "\n"
-      (worldExports.map fun (name, params, ret) =>
+      ((worldExports.filter fun (name, _params, _ret, _isAsync) =>
+          !(interfaceFns.contains name)).map fun (name, params, ret, _) =>
         s!"    export {name}: func({String.intercalate ", " params}) -> {ret};")
     ++ "\n}\n"
 

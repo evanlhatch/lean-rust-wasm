@@ -21,6 +21,7 @@ inductive FieldDiff where
   | fieldAdded (name : String)
   | fieldRemoved (name : String)
   | fieldTypeChanged (name : String) (oldTy newTy : Ty)
+  | semChanged (old new : FuncSem)
 deriving Repr, BEq, Inhabited
 
 instance : ToString FieldDiff where
@@ -29,6 +30,8 @@ instance : ToString FieldDiff where
     | .fieldRemoved n => s!"removed field {n}"
     | .fieldTypeChanged n oldTy newTy =>
         s!"field {n}: {toString (repr oldTy)} → {toString (repr newTy)}"
+    | .semChanged old new =>
+        s!"func semantics: {toString (repr old)} → {toString (repr new)}"
 
 /-- The fields of an item, name+type pairs (the EqAns comparison surface).
     Records: fields as-is. Variants: payload-carrying cases (payloadless
@@ -43,7 +46,10 @@ def Item.fieldsOf : Item → List Field
   | .resource _ => []
 
 /-- Field-level evidence between two same-name items, old-field order
-    first (removals, then type changes), then additions in new order. -/
+    first (removals, then type changes), then additions in new order,
+    then func-semantic drift (`semChanged` — the `FuncSig.sem` fields
+    (6.5.1) are part of the item shape, so a sem-only change must not
+    surface as `.changed` with EMPTY evidence). -/
 def fieldDiffsOf (prev it : Item) : List FieldDiff :=
   let oldFs := prev.fieldsOf
   let newFs := it.fieldsOf
@@ -59,7 +65,11 @@ def fieldDiffsOf (prev it : Item) : List FieldDiff :=
     | none => none
   let added := newFs.filterMap fun f =>
     if oldNames.contains f.name then none else some (.fieldAdded f.name)
-  removed ++ changed ++ added
+  let sem := match prev, it with
+    | .func a, .func b =>
+        if a.sem == b.sem then [] else [.semChanged a.sem b.sem]
+    | _, _ => []
+  removed ++ changed ++ added ++ sem
 
 /-- One compatibility finding between two universe versions. -/
 inductive Change where

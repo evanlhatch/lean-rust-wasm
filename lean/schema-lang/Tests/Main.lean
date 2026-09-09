@@ -1030,12 +1030,170 @@ unsafe def reflectChecks : IO (String × CheckResult) := do
     | other => pure (.error s!"unexpected reifier diagnostics: {repr other}")
   pure ("reflect", r)
 
+/-! ## 6.5.1: func semantic fields as DATA (nullSem + determinism)
+
+The `@[schema_fn]` probes below pin the REFLECTION round trip at
+compile time (a reflection failure fails this module's build); the
+`funcSemChecks` suite pins the data at runtime. -/
+
+/-- Probe: one ident arg sets the determinism axis only. -/
+@[schema_fn volatile]
+def probeVolatileFn (x : UInt32) : UInt32 := x
+
+/-- Probe: the dot-joined pair sets BOTH axes (either order). -/
+@[schema_fn strict.volatile]
+def probeBothAxesFn (x : Option UInt32) : Option UInt32 := x
+
+/-- Probe: no args — the defaults. -/
+@[schema_fn]
+def probeDefaultFn (x : UInt32) : UInt32 := x
+
+-- Compile-time reflection pin: the attribute's optional ident args
+-- land in the registry as `FuncSem` DATA.
+open Lean Elab Command in
+run_cmd do
+  let items := SchemaLang.Meta.registeredItems (← getEnv)
+  let semOf (n : Name) : CommandElabM FuncSem := do
+    match items.find? (fun (ln, _) => ln == n) with
+    | some (_, .func sig) => pure sig.sem
+    | _ => throwError "{n}: not registered as a func item"
+  unless (← semOf ``probeVolatileFn) == ⟨.propagate, .volatile⟩ do
+    throwError "probeVolatileFn: determinism arg not reflected"
+  unless (← semOf ``probeBothAxesFn) == ⟨.strict, .volatile⟩ do
+    throwError "probeBothAxesFn: dot-joined axes not reflected"
+  unless (← semOf ``probeDefaultFn) == ({} : FuncSem) do
+    throwError "probeDefaultFn: defaults not preserved"
+
+def funcSemChecks : CheckResult := do
+  -- defaults on constructed items: existing fixtures need no changes
+  match demoGetUser with
+  | .func sig =>
+      _ ← assert (sig.sem == ({} : FuncSem)) "constructed func defaults (propagate, pure)"
+  | _ => throw "demoGetUser is not a func"
+  -- a volatile fn CAN be constructed and validates clean (no
+  -- pure-context role exists yet, so nothing fires on it)
+  let volFn : Item := .func { name := "f", params := [("x", .option .u32)]
+                            , ret := .u64, sem := ⟨.strict, .volatile⟩ }
+  _ ← assertEq "volatile fn validates" (universeCheck [volFn]) []
+  -- the armed diag ctor: render names the fn + the context and
+  -- enumerates the valid space (the full-valid-space diag style)
+  let d := SchemaDiag.render (.volatileInPureContext "clock" "aggregator")
+  _ ← assert (d.contains "`clock`") "diag names the fn"
+  _ ← assert (d.contains "aggregator") "diag names the context"
+  _ ← assert (d.contains "pure, stable") "diag enumerates the valid space"
+  -- the attr-arg parser's error paths (positive paths are the probes
+  -- above — attribute errors are elaboration errors, untestable in-build)
+  let mkSimple (arg : String) : Lean.Syntax :=
+    Lean.mkNode `Lean.Parser.Attr.simple
+      #[Lean.mkIdent `schema_fn, Lean.mkNullNode #[Lean.mkIdent arg.toName]]
+  _ ← assert (match SchemaLang.Meta.funcSemOfStx (mkSimple "bogus") with
+    | .error e => e.contains "valid: strict, propagate, custom"
+    | .ok _ => false) "unknown arg rejected with valid space"
+  _ ← assert (match SchemaLang.Meta.funcSemOfStx (mkSimple "volatile.stable") with
+    | .error e => e.contains "duplicate determinism"
+    | .ok _ => false) "duplicated axis rejected"
+  _ ← assert (match SchemaLang.Meta.funcSemOfStx (mkSimple "strict.volatile.pure") with
+    | .error e => e.contains "too many"
+    | .ok _ => false) ">2 parts rejected"
+  _ ← assert (match SchemaLang.Meta.funcSemOfStx (mkSimple "custom.pure") with
+    | .ok sem => sem == ⟨.custom, .pure⟩
+    | .error _ => false) "dot-joined pair parses"
+  -- snapshot codec: the sem line round-trips; defaults stay byte-compatible
+  let text := Snapshot.render [volFn]
+  _ ← assert (text.contains "sem strict volatile") "non-default sem line emitted"
+  _ ← assert (match Snapshot.parse text with
+    | .ok parsed => parsed == [volFn] | .error _ => false) "sem round-trip"
+  let defText := Snapshot.render [demoGetUser]
+  _ ← assert (!defText.contains "sem ") "default sem emits no sem line"
+  _ ← assert (match Snapshot.parse defText with
+    | .ok parsed => parsed == [demoGetUser] | .error _ => false) "default round-trip"
+  -- legacy format (no sem line) parses to the defaults
+  _ ← assert (match Snapshot.parse "func f\nret u64\n" with
+    | .ok [.func sig] => sig.sem == ({} : FuncSem)
+    | _ => false) "legacy snapshot → defaults"
+  -- malformed sem lines are LOUD
+  _ ← assert (isErr (Snapshot.parse "func f\nret u64\nsem bogus pure\n"))
+    "unknown nullSem token rejected"
+  _ ← assert (isErr (Snapshot.parse "func f\nsem strict volatile\n"))
+    "sem before ret rejected"
+  _ ← assert (isErr (Snapshot.parse "record r\nsem strict volatile\n"))
+    "sem outside a func rejected"
+  -- diff evidence: sem-only drift is `changed` WITH evidence
+  let f1 : Item := .func { name := "f", params := [], ret := .u64 }
+  let f2 : Item := .func { name := "f", params := [], ret := .u64
+                         , sem := ⟨.strict, .volatile⟩ }
+  _ ← assertEq "sem-only drift reported with evidence" (diff [f1] [f2])
+    [.changed "f" [.semChanged {} ⟨.strict, .volatile⟩]]
+  .ok ()
+
+/-- Live-registry pin: the reflected Demo funcs carry the defaults
+    (existing items unchanged — 6.5.1 requirement 3). -/
+unsafe def funcSemReflectChecks : IO (String × CheckResult) := do
+  let items ← loadDemoItems
+  let r : CheckResult := do
+    match items.find? (·.name == "getUser") with
+    | some (.func sig) =>
+        _ ← assert (sig.sem == ({} : FuncSem)) "getUser: defaults"
+    | _ => throw "getUser not in the reflected registry"
+    match items.find? (·.name == "watchOrders") with
+    | some (.func sig) =>
+        _ ← assert (sig.sem == ({} : FuncSem)) "watchOrders: defaults"
+    | _ => throw "watchOrders not in the reflected registry"
+  pure ("funcSemReflect", r)
+
+/-! ## 6.5.2: migration soundness (the REMEDY half of the breaking gate) -/
+
+def migrationChecks : CheckResult := do
+  -- the demo: `OrderItem.qty` retyped u32 → u64, remedied by widening
+  let v1 : List Item := [.record "OrderItem" [⟨"id", .u64⟩, ⟨"qty", .u32⟩]]
+  let v2 : List Item := [.record "OrderItem" [⟨"id", .u64⟩, ⟨"qty", .u64⟩]]
+  let changes := diff v1 v2
+  _ ← assertEq "demo change detected" changes
+    [.changed "OrderItem" [.fieldTypeChanged "qty" .u32 .u64]]
+  let m : Migration := { item := "OrderItem", fields := [widenU32U64 "qty"] }
+  -- the soundness theorem, executed (applyMigration old = new shape):
+  -- the widened value IS the same number
+  _ ← assert (((widenU32U64 "qty").apply (42 : UInt32)).toNat == 42)
+    "widen sound at 42"
+  _ ← assert (((widenU32U64 "qty").apply (4294967295 : UInt32)).toNat == 4294967295)
+    "widen sound at u32 max"
+  -- the verdict distinguishes remedied from unremedied
+  _ ← assertEq "remedied verdict" (verdictOf changes [m]) .remedied
+  _ ← assertEq "unremedied without evidence" (verdictOf changes []) .unremedied
+  let v3 := v1 ++ [.record "New" []]
+  _ ← assertEq "clean on additions" (verdictOf (diff v1 v3) []) .clean
+  -- negative controls: the remedy match is not vacuous
+  let wrongItem : Migration := { item := "Other", fields := [widenU32U64 "qty"] }
+  _ ← assertEq "wrong item name: unremedied" (verdictOf changes [wrongItem]) .unremedied
+  let wrongTy : Migration :=
+    { item := "OrderItem"
+    , fields := [{ field := "qty", oldTy := .u16, newTy := .u64
+                 , apply := fun v => v.toUInt64 }] }
+  _ ← assertEq "wrong old type: unremedied" (verdictOf changes [wrongTy]) .unremedied
+  -- removals are honestly unremedied (no value-map target)
+  let vShrink : List Item := [.record "OrderItem" [⟨"id", .u64⟩]]
+  _ ← assertEq "field removal: unremedied even with evidence"
+    (verdictOf (diff v1 vShrink) [m]) .unremedied
+  _ ← assertEq "item removal: unremedied" (verdictOf (diff v1 []) [m]) .unremedied
+  -- semChanged drift is unremedied in v1
+  let f1 : Item := .func { name := "f", params := [], ret := .u64 }
+  let f2 : Item := .func { name := "f", params := [], ret := .u64
+                         , sem := ⟨.propagate, .volatile⟩ }
+  _ ← assertEq "sem drift: unremedied" (verdictOf (diff [f1] [f2]) []) .unremedied
+  -- the exit-code mapping (the ONLY mapping — BreakingMain consumes it)
+  _ ← assertEq "clean exit" CompatVerdict.clean.exitCode 0
+  _ ← assertEq "unremedied exit" CompatVerdict.unremedied.exitCode 1
+  _ ← assertEq "remedied exit (distinct — action required)"
+    CompatVerdict.remedied.exitCode 2
+  .ok ()
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
   let reflect ← reflectChecks
   let vortexWf ← vortexWellFormedChecks
   let snapGate ← snapshotGateChecks
+  let funcSemReflect ← funcSemReflectChecks
   let code ← mainOfChecks "SchemaLang"
     ([ ("resolution", resolutionChecks)
      , ("fieldRes", fieldResolutionChecks)
@@ -1063,6 +1221,9 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("emitterAudit", emitterAuditChecks)
      , ("typedSession", typedSessionChecks)
      , ("propCoverage", PropSweep.propCoverageChecks)
+     , ("funcSem", funcSemChecks)
+     , funcSemReflect
+     , ("migration", migrationChecks)
      ])
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control

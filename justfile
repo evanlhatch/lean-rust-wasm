@@ -152,7 +152,9 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # std sits after schema-lang/codegen-core (its requires) and BEFORE
 # wasm-backend (the backend requires GuestlangStd — it re-runs std's
 # LCNF at compile time, importing the oleans).
-lean_pkgs := "TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend"
+# LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
+# is the `lean-lint` gate's driver.
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -185,6 +187,33 @@ lean-build:
 	done
 
 lean-test: lean-build
+
+# Custom env/text linters (LintKit — notes/lean-refactor-guide.md Phase 6).
+# The `guestlang-lint` driver runs over each package's own oleans via
+# `lake env` (downstream libraries never import the linter machinery; the
+# only LintKit imports in the tree are the recorded nolint/opt-out sites).
+# Default-on linters: axiomAllowlist, dupDefBodies, packageNamespace,
+# noLinterDisable, testImportDiscipline. recursiveSimpEqns is registered
+# but default-OFF (2026-11 census: 83 hits, dominated by doctrine-§8
+# raw-equation parsers — see its option comment); census run:
+#   cd lean/<pkg> && lake env <LK> --enable=linter.guestlang.recursiveSimpEqns <roots>
+lean-lint: lean-build
+	#!/usr/bin/env bash
+	set -euo pipefail
+	LK="{{justfile_directory()}}/lean/LintKit/.lake/build/bin/guestlang-lint"
+	# wasm-backend's Tests exe is not in its defaultTargets (guide 2.4)
+	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build WasmBackendTests)
+	run() { (cd "lean/$1" && shift && PATH="{{lean_tc}}:$PATH" && {{lean_tc}}/lake env "$LK" "$@"); }
+	run LintKit LintKit
+	run TestKit TestKit Tests.Main
+	run Machines Machines Tests.Main
+	run codegen-core CodegenCore Tests.Main
+	run substrait Substrait Tests.Main
+	run schema-lang SchemaLang Demo Tests.Main
+	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
+	run dbsp Dbsp Tests.Main
+	run std GuestlangStd
+	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
 
 # Codegen pipeline shim — all logic lives in the forge crate.
 gen:
@@ -243,7 +272,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schema breaking splice-smoke
+gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schema breaking splice-smoke lean-lint
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed

@@ -7,7 +7,7 @@
 //! Never contains: emitters (Lean owns those — they read the elaborated
 //! environment), devenv logic (shell stays thin).
 
-mod oci;
+use forge::{manifest, oci, registry};
 
 // GENERATED driver surface (byte-tied): the pipeline stage machine.
 // (path is relative to THIS file's dir: crates/forge/src)
@@ -166,6 +166,57 @@ fn read_if_exists(p: &Path) -> Option<Vec<u8>> {
     fs::read(p).ok()
 }
 
+/// `forge push <label> <registry>/<repo>:<tag>`: pack the stored artifact
+/// into an OCI image manifest and upload blobs + manifest to the registry.
+fn cli_push(store: &mut oci::OciStore, args: &[String]) -> Result<(), String> {
+    let usage = "usage: forge push <label> <registry>/<repo>:<tag>";
+    let label = args.get(2).ok_or(usage)?;
+    let target = args.get(3).ok_or(usage)?;
+    let (reg, tag) = registry::Registry::parse(target)?;
+
+    let m = manifest::pack(store, label).map_err(|e| format!("pack {label}: {e}"))?;
+    let layer = m.layers.first().ok_or("manifest: zero layers")?;
+    // Config + layer blobs, read from the content-addressed store; the
+    // client re-hashes each, so a drifted cache blob fails the push.
+    let blobs = vec![
+        store.blob_path(&m.config.digest),
+        store.blob_path(&layer.digest),
+    ];
+    reg.push(&tag, &m, &blobs)?;
+
+    println!(
+        "forge: push {label} → {}/{}:{} (layer sha256:{}, config sha256:{})",
+        reg.base, reg.repo, tag, layer.digest, m.config.digest
+    );
+    // Persist the config-blob entry pack() added to the store.
+    store.write_index().map_err(|e| format!("write index: {e}"))
+}
+
+/// `forge pull <registry>/<repo>:<tag>`: fetch the manifest, verify +
+/// store every blob into target/oci/, and materialize the artifact at
+/// its annotated label (repo-root-relative).
+fn cli_pull(store: &mut oci::OciStore, root: &Path, args: &[String]) -> Result<(), String> {
+    let usage = "usage: forge pull <registry>/<repo>:<tag>";
+    let target = args.get(2).ok_or(usage)?;
+    let (reg, tag) = registry::Registry::parse(target)?;
+
+    let pulled = reg.pull(&tag, store, root)?;
+    println!(
+        "forge: pull {target}: image `{}` ({} annotation[s])",
+        pulled.manifest.label,
+        pulled.manifest.annotations.len()
+    );
+    for (label, digest, bytes) in &pulled.artifacts {
+        println!(
+            "forge: pull {label} → sha256:{digest} ({} bytes) at {}",
+            bytes.len(),
+            root.join(label).display()
+        );
+    }
+    // Persist the pulled label → digest mappings in the local index.
+    store.write_index().map_err(|e| format!("write index: {e}"))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let check = args.iter().any(|a| a == "--check");
@@ -177,6 +228,27 @@ fn main() {
     // read-only for drift checks with --check).
     let oci_root = root.join("target/oci");
     let mut store = oci::OciStore::open(&oci_root).expect("oci store init");
+
+    // Registry verbs: `forge push <label> <registry>/<repo>:<tag>` and
+    // `forge pull <registry>/<repo>:<tag>`. Everything else stays the
+    // gen pipeline.
+    match args.get(1).map(String::as_str) {
+        Some("push") => {
+            if let Err(e) = cli_push(&mut store, &args) {
+                eprintln!("forge: push failed: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Some("pull") => {
+            if let Err(e) = cli_pull(&mut store, &root, &args) {
+                eprintln!("forge: pull failed: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        _ => {}
+    }
 
     let jobs = match load_jobs(&root) {
         Ok(j) => j,

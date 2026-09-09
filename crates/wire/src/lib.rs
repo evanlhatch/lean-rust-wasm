@@ -9,8 +9,11 @@
 //! transport type OUT of the trait signatures.
 //!
 //! [`noq`] (n0-computer's Quinn fork) is the FIRST adapter via
-//! [`NoqTransport`]/[`NoqConn`]. The WIT-native RPC layer lands on top
-//! of this seam later; nothing in this crate knows about WIT or RPC.
+//! [`NoqTransport`]/[`NoqConn`]. On top of the seam sits the WIT-native
+//! RPC layer: [`rpc`] defines the length-prefixed JSON frame protocol
+//! and the generic [`rpc::RpcTarget`] call surface; [`proxy::RemoteCaller`]
+//! is the caller half. Neither module knows about WIT types or any
+//! host — the value vocabulary is the wire's own tagged JSON.
 //!
 //! # Security posture
 //!
@@ -37,6 +40,9 @@
 use std::fmt;
 use std::net::SocketAddr;
 
+pub mod proxy;
+pub mod rpc;
+
 /// Error type for every fallible `wire` operation.
 ///
 /// String-backed on purpose: this crate compiles fast, and callers
@@ -55,6 +61,11 @@ pub enum WireError {
     Send(String),
     /// Reading from a recv stream failed.
     Recv(String),
+    /// A frame violated the RPC protocol (malformed JSON, out-of-range
+    /// length prefix, id mismatch).
+    Protocol(String),
+    /// The remote target reported a call error (the `err` frame).
+    Remote(String),
 }
 
 impl fmt::Display for WireError {
@@ -65,6 +76,8 @@ impl fmt::Display for WireError {
             WireError::Connection(e) => write!(f, "wire: connection lost: {e}"),
             WireError::Send(e) => write!(f, "wire: send failed: {e}"),
             WireError::Recv(e) => write!(f, "wire: recv failed: {e}"),
+            WireError::Protocol(e) => write!(f, "wire: protocol violation: {e}"),
+            WireError::Remote(e) => write!(f, "wire: remote error: {e}"),
         }
     }
 }

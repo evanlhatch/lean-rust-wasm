@@ -13,13 +13,19 @@ The buf-breaking storage layer: a STABLE TEXT encoding of a universe
     func <name>
     param <name> <ty>
     ret <ty>
+    sem <nullsem> <determinism>   -- OPTIONAL, last; written only when
+                                  -- non-default (6.5.1). Absent = the
+                                  -- `FuncSem` defaults, so pre-6.5.1
+                                  -- baselines parse unchanged.
     resource <name>
 
 `<ty>` is `Ty.toSnapshot`'s paren encoding (`option(u64)`,
-`result(string,ty(User))`, …). The format carries NO spaces inside a
-`<ty>` and forbids whitespace/separators in names — the write side
-VALIDATES (`namesEncodable`) and the exe refuses to write otherwise,
-so parse failures are always corruption, never writer drift.
+`result(string,ty(User))`, …); `<nullsem>` is `strict | propagate |
+custom`, `<determinism>` is `pure | stable | volatile`. The format
+carries NO spaces inside a `<ty>` and forbids whitespace/separators in
+names — the write side VALIDATES (`namesEncodable`) and the exe
+refuses to write otherwise, so parse failures are always corruption,
+never writer drift.
 
 Deliberately omitted: ordering normalization (the snapshot preserves
 registry order; `diff` is order-insensitive over names), item-kind
@@ -49,6 +55,11 @@ def Ty.toSnapshot : Ty → String
   | .future a => s!"future({a.toSnapshot})"
   | .stream a => s!"stream({a.toSnapshot})"
   | .ty n => s!"ty({n})"
+
+-- the `<nullsem>`/`<determinism>` tokens are `NullSem.toToken` /
+-- `Determinism.toToken` (Item.lean — the one spelling, shared with the
+-- `@[schema_fn]` attr args); the parse side (`ofToken?`) is loud on
+-- anything outside the closed sets.
 
 namespace Snapshot
 
@@ -136,6 +147,10 @@ def itemLines : Item → List String
       s!"func {s.name}"
         :: s.params.map (fun (n, t) => s!"param {n} {t.toSnapshot}")
           ++ [s!"ret {s.ret.toSnapshot}"]
+          -- the sem line is written ONLY when non-default: pre-6.5.1
+          -- baselines (and all-default universes) render byte-identically
+          ++ if s.sem == ({} : FuncSem) then []
+             else [s!"sem {s.sem.nullSem.toToken} {s.sem.determinism.toToken}"]
   | .resource n => [s!"resource {n}"]
 
 /-- The whole universe as snapshot text (registry order, trailing
@@ -149,6 +164,7 @@ private inductive Open where
   | record (n : String) (fields : List Field)
   | variant (n : String) (cases : List VariantCase)
   | func (n : String) (params : List (String × Ty)) (ret : Option Ty)
+    (sem : Option FuncSem)
   | resource (n : String)
 
 /-- Close the open item (member order restored). A func without `ret`
@@ -156,8 +172,8 @@ private inductive Open where
 private def Open.close : Open → Except String Item
   | .record n fs => .ok (.record n fs.reverse)
   | .variant n cs => .ok (.variant n cs.reverse)
-  | .func n ps (some r) => .ok (.func ⟨n, ps.reverse, r⟩)
-  | .func n _ none => .error s!"snapshot: func `{n}` has no `ret` line"
+  | .func n ps (some r) sem => .ok (.func ⟨n, ps.reverse, r, sem.getD {}⟩)
+  | .func n _ none _ => .error s!"snapshot: func `{n}` has no `ret` line"
   | .resource n => .ok (.resource n)
 
 /-- The fold state: closed items (reversed) plus the currently open
@@ -175,7 +191,7 @@ private def parseLine (st : State) (line : String) : State := do
   match line.splitOn " " with
   | ["record", n] => restart (.record n [])
   | ["variant", n] => restart (.variant n [])
-  | ["func", n] => restart (.func n [] none)
+  | ["func", n] => restart (.func n [] none none)
   | ["resource", n] => restart (.resource n)
   | ["field", n, tyText] =>
       match cur? with
@@ -195,20 +211,35 @@ private def parseLine (st : State) (line : String) : State := do
       | _ => throw s!"snapshot: `case` outside a variant (line `{line}`)"
   | ["param", n, tyText] =>
       match cur? with
-      | some (.func fn ps none) => do
+      | some (.func fn ps none sem?) => do
           let t ← parseTyText tyText
-          pure (done, some (.func fn ((n, t) :: ps) none))
-      | some (.func _ _ (some _)) =>
+          pure (done, some (.func fn ((n, t) :: ps) none sem?))
+      | some (.func _ _ (some _) _) =>
           throw s!"snapshot: `param` after `ret` (line `{line}`)"
       | _ => throw s!"snapshot: `param` outside a func (line `{line}`)"
   | ["ret", tyText] =>
       match cur? with
-      | some (.func fn ps none) => do
+      | some (.func fn ps none sem?) => do
           let t ← parseTyText tyText
-          pure (done, some (.func fn ps (some t)))
-      | some (.func _ _ (some _)) =>
+          pure (done, some (.func fn ps (some t) sem?))
+      | some (.func _ _ (some _) _) =>
           throw s!"snapshot: duplicate `ret` (line `{line}`)"
       | _ => throw s!"snapshot: `ret` outside a func (line `{line}`)"
+  | ["sem", nsTok, dsTok] =>
+      match cur? with
+      | some (.func fn ps (some r) none) => do
+          let ns ← match NullSem.ofToken? nsTok with
+            | some v => pure v
+            | none => throw s!"snapshot: unknown nullSem token `{nsTok}` — valid: strict, propagate, custom"
+          let ds ← match Determinism.ofToken? dsTok with
+            | some v => pure v
+            | none => throw s!"snapshot: unknown determinism token `{dsTok}` — valid: pure, stable, volatile"
+          pure (done, some (.func fn ps (some r) (some ⟨ns, ds⟩)))
+      | some (.func _ _ (some _) (some _)) =>
+          throw s!"snapshot: duplicate `sem` (line `{line}`)"
+      | some (.func _ _ none _) =>
+          throw s!"snapshot: `sem` before `ret` (line `{line}`)"
+      | _ => throw s!"snapshot: `sem` outside a func (line `{line}`)"
   | _ => throw s!"snapshot: unrecognized line `{line}`"
 
 /-- Parse snapshot text back to a universe. The empty snapshot is the

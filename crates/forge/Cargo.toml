@@ -9,6 +9,9 @@ license = "MIT OR Apache-2.0"
 # Deps land with each phase (serde, sha2, oci-wasm, wasm-encoder...).
 serde_json = "1"
 sha2 = "0.10"
+# OCI distribution client (registry push/pull): blocking, small, rustls
+# bundled for https registries. No reqwest/hyper.
+ureq = "2"
 # xxh3 retained for non-OCI framework hashing (build-cache keys, artifact dedup);
 # the OCI store itself uses sha256.
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

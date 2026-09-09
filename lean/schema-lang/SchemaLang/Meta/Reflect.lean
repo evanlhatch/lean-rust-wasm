@@ -10,7 +10,10 @@ Reflection coverage (the four item kinds):
 - `@[schema]` on a structure  → `Item.record`
 - `@[schema]` on an inductive → `Item.variant` (payload-carrying ctors)
 - `@[schema_fn]` on a def     → `Item.func` (the SIGNATURE is the spec;
-                                 the body is irrelevant to emission)
+                                 the body is irrelevant to emission).
+                                 Optional ident arg sets the semantic
+                                 fields (6.5.1): `@[schema_fn volatile]`,
+                                 `@[schema_fn strict.volatile]`, …
 - `@[schema_resource]` on a def/type → `Item.resource` (opaque handle)
 
 Reifier scope (v1, honest limits):
@@ -241,6 +244,61 @@ initialize registerBuiltinAttribute {
 
 /-! ## Functions — `@[schema_fn]` on a def -/
 
+/-- One optional attr-arg node → its ident name (present = the node
+    wraps the ident at `[0]`; absent = `null`). -/
+def optArgIdent? (stx : Syntax) : Except String (Option String) :=
+  if stx.isNone then .ok none
+  else if stx[0]!.isIdent then .ok (some stx[0]!.getId.toString)
+  else .error s!"unexpected @[schema_fn] argument: {stx}"
+
+/-- Parse the optional `@[schema_fn]` semantic args into a `FuncSem`
+    (6.5.1). The builtin `simple` attr parser admits ONE optional
+    ident — a dedicated two-ident attr parser was tried and is
+    SHADOWED (`simple` wins every parse it can consume; there is no
+    fallback across attr parsers), so both axes travel in ONE ident,
+    dot-separated: `@[schema_fn volatile]` (determinism only),
+    `@[schema_fn strict]` (nullSem only), `@[schema_fn
+    strict.volatile]` (both, either order). Each part names a NullSem
+    or Determinism ctor; unknown names, duplicated axes, and >2 parts
+    are LOUD errors enumerating the valid space. -/
+def funcSemOfStx (stx : Syntax) : Except String FuncSem := do
+  let step (acc : Option NullSem × Option Determinism) (name : String)
+      : Except String (Option NullSem × Option Determinism) :=
+    let (nullSem?, det?) := acc
+    match name with
+    | "strict" | "propagate" | "custom" =>
+        if nullSem?.isSome then
+          .error s!"duplicate nullSem argument `{name}` — one of strict, propagate, custom"
+        else
+          .ok (NullSem.ofToken? name, det?)
+    | "pure" | "stable" | "volatile" =>
+        if det?.isSome then
+          .error s!"duplicate determinism argument `{name}` — one of pure, stable, volatile"
+        else
+          .ok (nullSem?, Determinism.ofToken? name)
+    | other =>
+        .error (s!"unknown @[schema_fn] argument `{other}` — valid: "
+          ++ "strict, propagate, custom (nullSem); pure, stable, volatile (determinism)")
+  -- `simple` shape: [name ident, one optional arg]; .missing =
+  -- programmatic application (no args)
+  let opts := match stx with
+    | .missing => []
+    | _ => stx.getArgs.toList.drop 1
+  match opts.mapM optArgIdent? with
+  | .error e => .error e
+  | .ok idents =>
+    let parts := (idents.filterMap id).flatMap (String.splitOn · ".")
+    if parts.length > 2 then
+      .error s!"too many @[schema_fn] arguments ({parts.length}) — at most one nullSem and one determinism"
+    else
+      let init : Option NullSem × Option Determinism := (none, none)
+      match parts.foldlM (fun (acc : Option NullSem × Option Determinism) name =>
+          step acc name) init with
+      | .error e => .error e
+      | .ok (nullSem?, det?) =>
+          .ok { nullSem := nullSem?.getD .propagate
+              , determinism := det?.getD .pure }
+
 /-- Walk a def's type: gather the EXPLICIT binder (param) types and the
     return type. The signature is the spec; the body is never read. -/
 def funcSignature (env : Environment) (declName : Name) :
@@ -262,20 +320,31 @@ def funcSignature (env : Environment) (declName : Name) :
         | none => throw s!"return type not in the boundary fragment: {t}"
   go [] di.type
 
-/-- Register one reflected function signature. -/
-def registerSchemaFunc (declName : Name) : CoreM Unit := do
+/-- Register one reflected function signature, with its semantic
+    contract fields (6.5.1). -/
+def registerSchemaFunc (declName : Name) (sem : FuncSem := {}) : CoreM Unit := do
   let env ← getEnv
   match funcSignature env declName with
   | .error msg => throwError ("@[schema_fn] `" ++ declName.toString ++ "`: " ++ msg)
-  | .ok sig => registerSchemaItem declName (.func sig)
+  | .ok sig => registerSchemaItem declName (.func { sig with sem })
 
 /-- `@[schema_fn]` — reflect a function's SIGNATURE into the schema
-    registry (params + return type; the body is not part of the spec). -/
+    registry (params + return type; the body is not part of the spec).
+    Optional ident args set the semantic fields (one ident, dot-joined
+    for both axes — see `funcSemOfStx`): `@[schema_fn volatile]`,
+    `@[schema_fn strict.volatile]`, … -/
 initialize registerBuiltinAttribute {
   name := `schema_fn
   descr := "register a function signature as a schema func item"
   applicationTime := .afterCompilation
-  add := fun decl _stx _kind => (registerSchemaFunc decl : CoreM Unit)
+  add := fun decl stx _kind => do
+    let sem ← match stx with
+      | .missing => pure ({} : FuncSem)
+      | _ => match funcSemOfStx stx with
+        | .ok sem => pure sem
+        | .error msg =>
+            throwError ("@[schema_fn] `" ++ decl.toString ++ "`: " ++ msg)
+    registerSchemaFunc decl sem
 }
 
 /-! ## Resources — `@[schema_resource]` on an opaque type -/

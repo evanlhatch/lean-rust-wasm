@@ -17,6 +17,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Self-signed certs for the dev/test loop ONLY (see lib.rs — LOUD caveat).
 rcgen = "0.14"
+# Frame encoding for the RPC layer (rpc.rs): serde_json::Value
+# navigation only — no serde derive (workspace pattern, see
+# steel-host's test note).
+serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }

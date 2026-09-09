@@ -1,9 +1,14 @@
 import WasmBackend.Check
+import LintKit.PackageNamespace
 
 /- DemoFn — the functions the WASM backend compiles (compiler-line demo
    stage). `@[guest]` checks each def at ELABORATION: banned runtimes
    (Nat/GMP, String, IO, Task, Thunk) fail `lake build` at the decl —
    the earliest possible error, zero proofs. -/
+
+-- The declaration names in this module ARE the demo world's WIT export
+-- names (demo-world.wit) — they deliberately stay unprefixed.
+set_option linter.guestlang.packageNamespace false -- because these decl names are the WIT export contract (demo-world.wit), not library API
 
 /-- The backend's hello-world: pure integer arithmetic. -/
 @[guest]

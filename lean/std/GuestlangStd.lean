@@ -19,6 +19,7 @@ flattens string results through the canonical ABI (greet: done).
 import CodegenCore.GuestGate
 import Demo
 import GuestlangStd.StrOps
+import LintKit.Basic
 
 -- the ops (strlen/strcat) are declared in GuestlangStd.StrOps — the
 -- root imports them; the impls below are the schema functions' bodies.
@@ -30,7 +31,7 @@ open GuestlangStd
 /-- The `get-user` implementation: none for the sentinel id, a real
     record otherwise (strings via the std intrinsics; a two-element
     tag list — List cons cells the adapter must walk + flatten). -/
-@[guest_std]
+@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
 def getUserImpl (id : UInt64) : Option User :=
   if id == 0 then none
   else some
@@ -44,7 +45,7 @@ def getUserImpl (id : UInt64) : Option User :=
     the embedder's MAX_FLAT_RESULTS=1 convention: the adapter writes
     (bytes-ptr, byte-len) into a static return area and returns its
     pointer. Lean body = the differential oracle. -/
-@[guest_std]
+@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
 def greet (n : UInt64) : String :=
   if n > 0 then strcat "hello " "guest" else "bye"
 
@@ -52,8 +53,18 @@ def greet (n : UInt64) : String :=
     the branch depends on the argument), appended, then measured. The
     differential gate compares Lean's real eval against the wasm
     intrinsics: n > 0 → strlen("hello world") = 11; else 1. -/
-@[guest_std]
+@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
 def strLenDemo (n : UInt64) : UInt64 :=
   strlen (if n > 0 then strcat "hello" " world" else "!")
+
+/-- The `watch-orders` implementation (the ASYNC schema fn): the list
+    of users = the delta batch. The body = SYNC-computable (the list
+    computes immediately) — the async-ness lives in the SIGNATURE (the
+    canon lift's async option + the task machinery); wit-bindgen's own
+    guests are the same shape. The DIFFERENTIAL ORACLE. -/
+@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def watchOrdersImpl (_into : OrderError) : List User :=
+  [ { id := 1, name := "first", email := "1@g.dev", tags := ["a"] }
+  , { id := 2, name := "second", email := "2@g.dev", tags := ["b"] } ]
 
 end GuestImpl
