@@ -176,9 +176,16 @@ aren't matchable (no GMP — recursion waits for guestlang-std loops).
 
 ### What the compiler line still needs (in order)
 
-1. **Bump allocator + ctor emission** (~100 lines WAT runtime + emitter
-   `.ctor` arm): `$alloc` + field stores + tag write; makes `area`
-   runnable with constructed Shape values.
+1. **Pooled allocator + ctor emission** (DECISION: size-class free
+   lists, NOT a pure bump allocator): Perceus `dec→0` returns blocks to
+   size-class free lists (8/16/32/64/… bytes), `memory.grow` refills;
+   O(1) alloc AND free, deterministic, no GC, works in wasmi. Bump
+   rollback only handles LIFO — free lists handle the general case.
+   This is Lean's own runtime model (lean_malloc + size pools),
+   guestlang-owned. (wasm-gc is the later alternative — structurally
+   cleaner but wasmi lacks GC support, which blocks guestlang-rt.)
+   Emitter: `.ctor` → `$alloc(size)` + tag store + field stores;
+   `inc`/`dec` → `$rc_inc`/`$rc_dec` calls.
 2. **RC runtime**: `$rc_inc`/`$rc_dec` translation of inc/dec (v1 leak →
    real refcounting; dec-0 returns the block to the bump top when
    possible).
