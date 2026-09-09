@@ -177,3 +177,45 @@ fn fault_registry_resolves_host_and_guest_codes() {
     assert!(guest.display.contains("not found"), "{guest:?}");
     assert!(lookup_error("E103").is_some(), "E103 registered");
 }
+
+/// Stage B async: `watch-orders` is `async func` in the GENERATED WIT —
+/// wasi 0.3 async ABI. wasmtime 47 binds the export as a Rust `async fn`
+/// (inferred from the function TYPE — no bindgen! option needed; the
+/// crate's `async` feature is on by default). The host awaits the guest's
+/// future; the guest runs on wasmtime's async stack (epoch/fuel still
+/// bound it).
+#[tokio::test]
+async fn gateway_typed_watch_orders_async_abi() -> Result<(), Box<dyn std::error::Error>> {
+    use steel_host::bindings::{GatewayOrderError, GatewayPre};
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/wasm32-unknown-unknown/debug/guest_demo.gateway.component.wasm");
+    let Ok(path) = std::fs::canonicalize(&path) else {
+        eprintln!("skipping: build with `just wasm-guest-gateway` for {path:?}");
+        return Ok(());
+    };
+    let engine = SteelEngine::new()?;
+    let component = engine.load_component(&path)?;
+
+    let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
+    let pre = rt.instantiate_pre(&component)?;
+    let gw = GatewayPre::new(pre)?
+        .instantiate_async(rt.store_mut())
+        .await?;
+    let iface = gw.demo_gateway_gateway_exports();
+
+    // wasi 0.3 async ABI: the generated call takes an `Accessor` (wasmtime
+    // 47's concurrent-call model) — run inside `run_concurrent`.
+    let users = rt
+        .store_mut()
+        .run_concurrent(async |accessor| {
+            iface
+                .call_watch_orders(accessor, GatewayOrderError::EmptyCart)
+                .await
+        })
+        .await??;
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].id, 7);
+    assert_eq!(users[0].name, "Grace");
+    Ok(())
+}

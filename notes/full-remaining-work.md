@@ -39,12 +39,16 @@ byte-ties them.
 ### B. Typed host bindings from WIT — DONE
 
 `bindings.rs`: `bindgen!({ path: "../../wit/gateway.wit", world:
-"gateway" })` (NO `async` option — wasmtime 47 removed it). Test:
-`get_user(42)` returns structured `User` through `GatewayPre::new(
-instance_pre).instantiate_async(store)` + `iface.call_get_user`.
-Watch-orders uses the wasi 0.3 async ABI (`async func` in WIT — see
-the emitter fix below). WASI p3 + bindgen check needs the nix cc
-wrapper: `export CC=.../profiles/wasm/profile/bin/cc`.
+"gateway" })`. wasmtime 47's crate-level `async` feature is on by
+default and FULLY supported — only the `bindgen!` macro OPTION is gone:
+async-ness is inferred from the WIT function TYPES (`async func` →
+generated `async fn call_*` taking wasmtime 47's `Accessor`). Typed
+tests: `get_user(42)` returns structured `User` (sync path);
+`watch-orders` runs through the wasi 0.3 async ABI end-to-end —
+`store.run_concurrent(async |accessor| iface.call_watch_orders(
+accessor, EmptyCart).await)` (test `gateway_typed_watch_orders_async_abi`).
+WASI p3 + bindgen check needs the nix cc wrapper:
+`export CC=.../profiles/wasm/profile/bin/cc`.
 
 ### C. Generated host faults — DONE
 
