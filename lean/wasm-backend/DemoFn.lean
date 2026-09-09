@@ -51,3 +51,15 @@ def applyAll (fs : List (UInt64 → UInt64)) (x : UInt64) : UInt64 :=
 
 @[guest]
 def runPaps (x : UInt64) : UInt64 := applyAll [adder 1, adder 2] x
+
+/-- Tail recursion: `let r := fap ...; return r` fuses to return_call
+    (the tail-call proposal) — flat WASM stack. Structural on the list
+    (no WF proof needed); accumulator style. -/
+@[guest]
+def sumList (xs : List UInt64) (acc : UInt64) : UInt64 :=
+  match xs with
+  | [] => acc
+  | x :: rest => sumList rest (acc + x)
+
+@[guest]
+def total (a b c : UInt64) : UInt64 := sumList [a, b, c] 0

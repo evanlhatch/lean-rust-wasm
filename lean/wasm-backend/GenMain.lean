@@ -19,7 +19,7 @@ component wrap, and the differential smoke.
 open Lean
 
 /-- The functions to compile — DemoFn (the compiler-line demo stage). -/
-def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps]
+def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `sumList, `total]
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm : CoreM String := do
@@ -78,6 +78,8 @@ def rows : List (String × List String) :=
   ++ (u64s.map fun a => (\"adder\", [toString a, toString (a + 3)]))
   ++ (u64s.map fun a => (\"double-area\", [toString a]))
   ++ (u64s.map fun a => (\"run-paps\", [toString a]))
+  ++ ((List.range 20).map fun i =>
+    (\"total\", [toString (i * 3), toString (i + 1), toString (i * 2)]))
   ++ (u64s.map fun a => (\"pick\", [if a % 2 == 0 then \"1\" else \"0\", toString a, toString (a + 1)]))
 
 def resultOf (fn : String) (args : List String) : String :=
@@ -87,6 +89,7 @@ def resultOf (fn : String) (args : List String) : String :=
   | \"adder\", [a, b] => toString (adder a.toNat!.toUInt64 b.toNat!.toUInt64)
   | \"double-area\", [a] => toString (doubleArea a.toNat!.toUInt64)
   | \"run-paps\", [a] => toString (runPaps a.toNat!.toUInt64)
+  | \"total\", [a, b, c] => toString (total a.toNat!.toUInt64 b.toNat!.toUInt64 c.toNat!.toUInt64)
   | \"pick\", [b, a, x] => toString (pick (b == \"1\") a.toNat!.toUInt64 x.toNat!.toUInt64)
   | _, _ => \"?\"
 

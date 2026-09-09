@@ -15,6 +15,7 @@ error → False) with a `Testable` instance that carries the failure message.
 Run: `lake build DbspTests && .lake/build/bin/DbspTests`
 -/
 import Dbsp
+import Plausible
 import TestKit
 
 namespace DbspTests
@@ -22,6 +23,7 @@ namespace DbspTests
 open Dbsp
 open LSpec
 open TestKit
+open Plausible
 
 /-- A concrete strict operator: `F s = 1 + z⁻¹ s` (pointwise over ℤ).
     Strict: output at n+1 reads input at n; output at 0 is constant. -/
@@ -123,8 +125,69 @@ def suite : TestSeq :=
   test "seminaive-witness" (checkPasses seminaiveWitness) $
   test "delay-sanity" (checkPasses delaySanity)
 
+/-! ## Property sweep (with mandatory negative control)
+
+The theory-side `example`s above PROVE the group laws for ALL ZSets;
+the witnesses check the ported constructions compute on CONCRETE inputs.
+NEITHER exercises a GENERATED input — the AGENTS.md negative-control
+mandate targets property sweeps, and dbsp had none.
+
+This sweep samples finite `Int` lists, lifts each to a stream, and checks
+the D/I inverse pair (`derivative_integral` / `integral_derivative`) at
+each tick — a GENERATED-input sweep over a COMPUTABLE surface (ZSet
+itself is noncomputable, so the group laws stay as proofs above). The
+sabotaged control (`D(I s) t = s t + 1`) is caught iff the generator
+produces a non-trivial stream — a vacuous generator is flagged as a
+failure (TestKit.PropSpec). -/
+namespace PropSweep
+
+/-- Lift a finite list to a stream (0-padded past the list). -/
+def liftStream (xs : List Int) : Stream Int := fun n =>
+  if h : n < xs.length then xs.get ⟨n, h⟩ else 0
+
+/-- The D/I inverse pair holds at every tick up to the list length
+    (both directions: `D (I s) = s` and `I (D s) = s`). Computable: `D`,
+    `I`, `delay`, `Int` arithmetic all reduce. -/
+def diOk (xs : List Int) : Bool :=
+  let s := liftStream xs
+  (List.range (xs.length + 1)).all fun t =>
+    D (I s) t == s t && I (D s) t == s t
+
+/-- The sabotaged control: `D (I s) t = s t + 1` — refuted for any
+    non-trivial stream (the theorem gives `D (I s) t = s t`, so the
+    off-by-one bites whenever the tick is in range). -/
+def diOkCtrl (xs : List Int) : Bool :=
+  let s := liftStream xs
+  (List.range (xs.length + 1)).all fun t => D (I s) t == s t + 1
+
+instance : Arbitrary (List Int) where
+  arbitrary := Gen.listOf (Arbitrary.arbitrary : Gen Int)
+
+/-- The property: the D/I inverse pair over generated streams. -/
+def suite : TestSeq :=
+  checkPlausibleIO "D/I inverse pair (generated streams)"
+    (∀ (xs : List Int), diOk xs = true)
+    .done { numInst := 500, randomSeed := some 20260909 }
+
+/-- The negative control: the off-by-one variant must be CAUGHT (fail). -/
+def controlSuite : TestSeq :=
+  checkPlausibleIO "sabotaged: D(I s) t = s t + 1 (must be caught)"
+    (∀ (xs : List Int), diOkCtrl xs = true)
+    .done { numInst := 500, randomSeed := some 20260909 }
+
+def spec : TestKit.PropSpec :=
+  { name := "D/I inverse pair"
+  , suite := suite
+  , control := controlSuite
+  , controlName := "off-by-one" }
+
+end PropSweep
+
 end DbspTests
 
 open DbspTests in
-def main : IO UInt32 :=
-  LSpec.lspecIO (.ofList [("DbspTests", [suite])]) []
+def main : IO UInt32 := do
+  let code ← LSpec.lspecIO (.ofList [("DbspTests", [suite])]) []
+  if code != 0 then return code
+  -- the property sweep WITH its mandatory negative control
+  TestKit.runSpecs [PropSweep.spec]

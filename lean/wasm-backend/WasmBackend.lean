@@ -108,7 +108,18 @@ mutual
 
 partial def emitCode (code : Code .impure) : M Unit := do
   match code with
-  | .let decl k => emitLet decl; emitCode k
+  | .let decl k =>
+      -- TAIL-CALL FUSION: `let x := fap f args; return x` → return_call
+      -- (the tail-call proposal; wasm-tools parse --enable-tail-call).
+      -- The WASM stack stays flat for tail-recursive Lean functions.
+      match k, decl.value with
+      | .return rv, .fap fn args _ =>
+          if rv == decl.fvarId && (binop? fn).isNone then
+            for a in args do emitArg a
+            emit s!"return_call ${fn.toString}"
+          else
+            emitLet decl; emitCode k
+      | _, _ => emitLet decl; emitCode k
   | .return fvarId => emitReturn fvarId
   | .cases c => emitCases c
   | .inc fvarId _ _ _ k =>

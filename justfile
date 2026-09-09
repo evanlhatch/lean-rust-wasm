@@ -246,28 +246,28 @@ wasm-compile:
 	"$WT" parse -g lean/wasm-backend/target/demo.wat -o lean/wasm-backend/target/demo.wasm
 	"$WT" validate lean/wasm-backend/target/demo.wasm
 	# Differential smoke: the wasm results must equal Lean's own evaluation
-	# (double 21 = 42 = adder 40 2; isBig 250 = 1; isBig 42 = 0; doubleArea
-	# exercises the FULL object lifecycle: ctor alloc → sset → sproj read →
-	# Perceus dec → pooled free — reuse across calls must not corrupt).
-	devenv shell --profile wasm -- bash -c 'cd lean/wasm-backend; \
-	  [ "$(wasmtime run --invoke double target/demo.wasm 21)" = "42" ] \
-	  && [ "$(wasmtime run --invoke adder target/demo.wasm 40 2)" = "42" ] \
-	  && [ "$(wasmtime run --invoke is-big target/demo.wasm 250)" = "1" ] \
-	  && [ "$(wasmtime run --invoke is-big target/demo.wasm 42)" = "0" ] \
-	  && [ "$(wasmtime run --invoke double-area target/demo.wasm 5)" = "100" ] \
-	  && [ "$(wasmtime run --invoke double-area target/demo.wasm 9)" = "324" ] \
-	  && [ "$(wasmtime run --invoke double-area target/demo.wasm 1)" = "4" ] \
-	  && [ "$(wasmtime run --invoke run-paps target/demo.wasm 5)" = "8" ] \
-	  && [ "$(wasmtime run --invoke run-paps target/demo.wasm 9)" = "12" ] \
-	  && [ "$(wasmtime run --invoke run-paps target/demo.wasm 0)" = "3" ] \
-	  && [ "$(wasmtime run --invoke pick target/demo.wasm 1 3 4)" = "12" ]'
-	# NOTE: pick's bool lifts to a RAW i32 via canonical ABI but the core
-	# func wants a boxed object — the CANONICAL-ABI ADAPTER (next step)
-	# fixes this; the smoke asserts the mul-branch value until then.
+	# (double 21 = 42 = adder 40 2; is-big 250 = 1; doubleArea = the FULL
+	# object lifecycle; runPaps = closures + pool reuse). wasmtime lives
+	# only in the wasm profile — absolute path (nested devenv PATH varies).
+	WTIME="$HOME/.devenv/profiles/wasm/profile/bin/wasmtime"
+	[ -x "$WTIME" ] || WTIME=$(find /nix/store -maxdepth 3 -name wasmtime -type f 2>/dev/null | head -1)
+	inv() { (cd lean/wasm-backend && "$WTIME" run --invoke "$@" 2>&1 | tail -1); }
+	[ "$(inv double 21)" = "42" ] \
+	  && [ "$(inv adder 40 2)" = "42" ] \
+	  && [ "$(inv is-big 250)" = "1" ] \
+	  && [ "$(inv is-big 42)" = "0" ] \
+	  && [ "$(inv double-area 5)" = "100" ] \
+	  && [ "$(inv double-area 9)" = "324" ] \
+	  && [ "$(inv double-area 1)" = "4" ] \
+	  && [ "$(inv run-paps 5)" = "8" ] \
+	  && [ "$(inv run-paps 9)" = "12" ] \
+	  && [ "$(inv run-paps 0)" = "3" ] \
+	  && [ "$(inv pick 1 3 4)" = "12" ] \
+	  && [ "$(inv total 1 2 3)" = "6" ]
 	# Component wrap: the COMPILED module as a component (steel-host loads it)
 	"$WT" component embed -w demo lean/wasm-backend/demo-world.wit lean/wasm-backend/target/demo.wasm \
 	  -o lean/wasm-backend/target/demo.embedded.wasm
 	"$WT" component new lean/wasm-backend/target/demo.embedded.wasm \
 	  -o lean/wasm-backend/target/demo.component.wasm
 	"$WT" validate lean/wasm-backend/target/demo.component.wasm
-	echo "wasm-compile: lean/wasm-backend/target/demo.wasm VALID + differential smoke green"
+	echo "wasm-compile: demo.wasm VALID + differential smoke green + component VALID"
