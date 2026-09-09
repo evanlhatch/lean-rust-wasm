@@ -137,7 +137,7 @@ end
 theorem typeTextBase_scalar (c : Substrait.ScalarCtor) (n : Proto.Nullability) :
     typeTextBase (Substrait.ScalarCtor.toPType c n) = .ok (Substrait.ScalarCtor.prefix c) := by
   cases c <;> simp [typeTextBase, Substrait.ScalarCtor.toPType,
-    Substrait.ScalarCtor.prefix, Except.ok]
+    Substrait.ScalarCtor.prefix]
   all_goals rfl
 
 /-- A single `Proto.PParam`. -/

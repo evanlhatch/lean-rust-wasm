@@ -53,13 +53,17 @@ mutants name:
 # `gen`/`check`/`breaking` run identically in CI and in watchers. The
 # watcher never changes what runs, only when.
 
-# Fast type-check only, no emission (buf lint analog).
+# Fast type-check only, no emission (buf lint analog): universeCheck
+# over the demo registry; any diagnostic fails the gate.
 check-schema:
-	@echo "TODO: guestlangc check"
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema-check
 
-# Schema-compat diff vs last released schema (buf breaking analog).
+# Schema-compat diff vs the committed baseline (buf breaking analog):
+# goldens/universe.snapshot vs the current demo registry; breaking
+# changes (removed/reshaped items) fail the gate. Re-baseline with
+# `cd lean/schema-lang && lake exe schema-breaking --update`.
 breaking:
-	@echo "TODO: schema diff"
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema-breaking
 
 # Watchers — watchexec wraps the SAME commands, no redefinition.
 # --restart: kill in-flight gen on new save (codegen is idempotent).
@@ -145,7 +149,33 @@ check-wasm:
 # ── Lean workspace (packages in dependency order) ────────────────────
 # elan shims broken — invoke toolchain bin directly.
 lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" / "bin"
-lean_pkgs := "TestKit Machines codegen-core substrait schema-lang faults dbsp wasm-backend"
+# std sits after schema-lang/codegen-core (its requires) and BEFORE
+# wasm-backend (the backend requires GuestlangStd — it re-runs std's
+# LCNF at compile time, importing the oleans).
+lean_pkgs := "TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend"
+
+# Inventory gate: every lean/*/lakefile.toml package must appear in
+# lean_pkgs — a missing entry silently skips build/test/axiom gates
+# (std rode unlisted until 2026-11; never again).
+lean-pkg-inventory:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	fail=0
+	for d in lean/*/; do
+	  p="${d%/}"; p="${p#lean/}"
+	  if [ -f "$d/lakefile.toml" ]; then
+	    hit=0
+	    for k in {{lean_pkgs}}; do
+	      if [ "$k" = "$p" ]; then hit=1; fi
+	    done
+	    if [ "$hit" = 0 ]; then
+	      echo "FAIL: lean/$p has a lakefile.toml but is absent from lean_pkgs"
+	      fail=1
+	    fi
+	  fi
+	done
+	[ "$fail" = 0 ] || exit 1
+	echo "lean-pkg-inventory: every package listed"
 
 lean-build:
 	#!/usr/bin/env bash
@@ -213,7 +243,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-build gen-check wit-check lean-axioms splice-smoke
+gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schema breaking splice-smoke
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed

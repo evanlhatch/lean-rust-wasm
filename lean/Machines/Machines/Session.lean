@@ -93,7 +93,7 @@ theorem dual_dual (p : Protocol) : dual (dual p) = p := by
 theorem dual_map_payload (q : Protocol) : (dual q).map (·.2) = q.map (·.2) := by
   induction q with
   | nil => rfl
-  | cons s rest ih => simp [dual, ih]
+  | cons s rest ih => simp [dual]
 
 /-! ## The session machine (Label = the script's indices) -/
 
@@ -124,7 +124,7 @@ def session (p : Protocol) : Machine where
     for dual peers. -/
 theorem session_mid_deadlockFree (p : Protocol) (pos : Nat) (hpos : pos < p.length) :
     ∃ l : (session p).Label, ((session p).event l).guard pos = true := by
-  exact ⟨Fin.mk pos hpos, by simp [session, decide_eq_true_iff]⟩
+  exact ⟨Fin.mk pos hpos, by simp [session]⟩
 
 /-- Termination: every fired step strictly decreases the distance to the
     end — the Convergent certificate (n firings from 0 reach n; no
@@ -145,7 +145,7 @@ theorem Dir.flip_ne (d : Dir) : d ≠ d.flip := by
 @[simp] theorem dual_length (p : Protocol) : (dual p).length = p.length := by
   induction p with
   | nil => rfl
-  | cons s rest ih => simp [dual, ih]
+  | cons s rest ih => simp [dual]
 
 /-- At the same position, dual peers see the same payload TYPE in
     OPPOSITE directions: `p[i] = (d₁, t)` and `(dual p)[i] = (d₂, t)`

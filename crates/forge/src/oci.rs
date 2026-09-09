@@ -1,17 +1,21 @@
 //! OCI image-layout store for pipeline artifacts.
 //!
-//! Content-addressed by xxh3-128 (fast, non-cryptographic — these are
-//! local build caches, not security boundaries). The layout follows the
-//! OCI image-spec directory structure so standard tooling can inspect
-//! it, but the digest algorithm is xxh3 instead of sha256 for speed.
-//! Switch to sha256 when registry push/pull is needed.
+//! Content-addressed by sha256 (64 lowercase hex chars). OCI registries
+//! require sha256 digests; once registry push/pull lands, the digest is
+//! both the content address and the security boundary, so it must be
+//! cryptographic. The layout follows the OCI image-spec directory
+//! structure so standard tooling can inspect it.
+//!
+//! Note: xxh3 remains the framework-wide fast hash for non-OCI purposes
+//! (build-cache keys, artifact dedup) — see the xxhash-rust comment in
+//! Cargo.toml. The OCI store itself is sha256 only.
 //!
 //! ```text
 //! target/oci/
 //! ├── oci-layout                    {"imageLayoutVersion":"1.0.0"}
 //! ├── index.json                    label → manifest digest (annotations)
 //! └── blobs/
-//!     └── xxh3/
+//!     └── sha256/
 //!         └── <hex digest>          content-addressed artifact
 //! ```
 
@@ -20,9 +24,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use xxhash_rust::xxh3::xxh3_128;
+use sha2::{Digest as _, Sha256};
 
-/// xxh3-128 digest as a lowercase hex string (32 chars).
+/// sha256 digest as a lowercase hex string (64 chars).
 pub type Digest = String;
 
 /// Annotation key holding the artifact label (repo-root-relative path).
@@ -49,7 +53,7 @@ pub enum Verify {
 impl OciStore {
     /// Open (or lazily create) an OCI layout at `root`.
     pub fn open(root: &Path) -> io::Result<Self> {
-        let blobs = root.join("blobs/xxh3");
+        let blobs = root.join("blobs/sha256");
         fs::create_dir_all(&blobs)?;
         let layout = root.join("oci-layout");
         if !layout.exists() {
@@ -82,7 +86,7 @@ impl OciStore {
                 manifests
                     .iter()
                     .filter_map(|m| {
-                        let digest = m["digest"].as_str()?.strip_prefix("xxh3:")?.to_string();
+                        let digest = m["digest"].as_str()?.strip_prefix("sha256:")?.to_string();
                         let label = m["annotations"][LABEL_ANNOTATION].as_str()?.to_string();
                         Some((label, digest))
                     })
@@ -92,14 +96,14 @@ impl OciStore {
     }
 
     fn blobs_dir(&self) -> PathBuf {
-        self.root.join("blobs/xxh3")
+        self.root.join("blobs/sha256")
     }
 
-    /// Content-address a blob: hash with xxh3-128, write (unconditionally,
+    /// Content-address a blob: hash with sha256, write (unconditionally,
     /// so a corrupted cache blob self-heals on the next --store), record
     /// `label → digest`, return the hex digest.
     pub fn put(&mut self, label: &str, data: &[u8]) -> io::Result<Digest> {
-        let digest = xxh3_hex(data);
+        let digest = sha256_hex(data);
         fs::write(self.blobs_dir().join(&digest), data)?;
         self.tags.insert(label.to_string(), digest.clone());
         Ok(digest)
@@ -127,7 +131,7 @@ impl OciStore {
         let file = fs::read(path).map_err(|e| {
             io::Error::new(e.kind(), format!("verify {label}: {}: {e}", path.display()))
         })?;
-        let actual = xxh3_hex(&file);
+        let actual = sha256_hex(&file);
         if &actual != stored {
             return Ok(Verify::Mismatch {
                 stored: stored.clone(),
@@ -162,7 +166,7 @@ impl OciStore {
                 .unwrap_or(0);
             manifests.push(serde_json::json!({
                 "mediaType": "application/vnd.guestlang.artifact",
-                "digest": format!("xxh3:{digest}"),
+                "digest": format!("sha256:{digest}"),
                 "size": size,
                 "annotations": { LABEL_ANNOTATION: label },
             }));
@@ -183,7 +187,7 @@ impl OciStore {
                     .unwrap_or(0);
                 manifests.push(serde_json::json!({
                     "mediaType": "application/vnd.guestlang.artifact",
-                    "digest": format!("xxh3:{digest}"),
+                    "digest": format!("sha256:{digest}"),
                     "size": size,
                 }));
             }
@@ -218,7 +222,8 @@ pub fn store_artifacts(
     Ok(digests)
 }
 
-/// xxh3-128 hex digest (32 hex chars, 128 bits).
-fn xxh3_hex(data: &[u8]) -> Digest {
-    format!("{:032x}", xxh3_128(data))
+/// sha256 hex digest (64 lowercase hex chars, 256 bits).
+fn sha256_hex(data: &[u8]) -> Digest {
+    let hash = Sha256::digest(data);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }

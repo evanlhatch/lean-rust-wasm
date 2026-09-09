@@ -83,7 +83,7 @@ theorem typed_wire_payloads_agree (p : TProtocol) :
 theorem tdual_types (p : TProtocol) : (tdual p).map (·.2) = p.map (·.2) := by
   induction p with
   | nil => rfl
-  | cons s rest ih => simp [tdual, ih]
+  | cons s rest ih => simp [tdual]
 
 /-- Directions oppose pairwise: every send on one side is a receive on
     the other (the typed lockstep condition, executed form). -/

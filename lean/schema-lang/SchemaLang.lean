@@ -5,6 +5,7 @@ import SchemaLang.DidYouMean
 import SchemaLang.Ty
 import SchemaLang.Item
 import SchemaLang.Diff
+import SchemaLang.Snapshot
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta

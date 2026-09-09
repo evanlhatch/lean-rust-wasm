@@ -54,6 +54,16 @@ inductive Ty where
   | ty (name : TyRef)
 deriving Repr, BEq, DecidableEq, Inhabited
 
+/-- `ReflBEq`/`LawfulBEq` for the derived structural `BEq` (core's
+    `DecidableEq → LawfulBEq` instance is tied to the decidable-equality
+    `BEq`, not the derived one — so the instances are discharged here
+    with Init's own deriving tactics, `Init.LawfulBEqTactics`). -/
+instance : ReflBEq Ty where
+  rfl := by deriving_ReflEq_tactic
+
+instance : LawfulBEq Ty where
+  eq_of_beq := by deriving_LawfulEq_tactic
+
 /-! ## Value payloads, indexed by type ((a) → (b) bridge)
 
 A `Value t` can only hold data of type `t` — test vectors, fuzz corpora
@@ -105,6 +115,24 @@ because `Option` cannot carry a `Prop`. -/
     `.yes` branch. Returns substrait's `EqAns`. -/
 def Ty.eqAns (a b : Ty) : Substrait.Typed.EqAns a b :=
   if h : a = b then .yes h else .no
+
+/-- Boolean projection of the directed answer — the surface `Diff`
+    routes its field comparison through. Callers that reindex keep
+    `eqAns` itself (the `.yes` proof); the Bool is for verdicts. -/
+def Ty.eqViaAns (a b : Ty) : Bool :=
+  match Ty.eqAns a b with | .yes _ => true | .no => false
+
+/-- The proof-carrying decision AGREES with derived `BEq` — routing the
+    diff through `eqViaAns` changes no verdict (the Diff.lean comment's
+    claim, discharged). -/
+theorem Ty.eqViaAns_beq (a b : Ty) : Ty.eqViaAns a b = (a == b) := by
+  by_cases h : a = b
+  · subst h; simp [Ty.eqViaAns, Ty.eqAns]
+  · have hno : Ty.eqViaAns a b = false := by simp [Ty.eqViaAns, Ty.eqAns, h]
+    rw [hno]
+    cases hb : a == b with
+    | true => exact absurd (eq_of_beq hb) h
+    | false => rfl
 
 /-! ## Reification: the schema universe as Lean types
 

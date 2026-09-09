@@ -12,6 +12,10 @@
 6. CheckM: the accumulator driver reports failures and exit codes.
 7. GateKit: byteTie detects drift, writes under update; parseGateArgs
    accepts exactly --check / --update / --help.
+8. DiffSpec: the corruption-negative discipline for differential gates —
+   a good gate (positive + 2 context-naming corruptions) passes; an
+   IDENTITY corruption (gate vacuous), a context-poor rejection, and an
+   empty corruption list are each flagged as gate failures.
 -/
 import TestKit
 import Plausible
@@ -100,6 +104,45 @@ def harnessAdditionSpecs : List DetSpec :=
       assertContains "haystack" "the quick brown fox" "MISSING",
       "absent needle (must error)"⟩ ]
 
+-- ── DiffSpec: a miniature differential gate ──────────────────────────
+
+/-- A tiny "replay fold" oracle: sums a column of cells; a cell over the
+    bound is a divergence error naming the row, the value, and the bound
+    (flatland ReplayGate's tick/column lesson, miniaturized). -/
+def foldColumn (cells : List Nat) : CheckResult :=
+  match cells.zipIdx.find? (fun (v, _) => v > 100) with
+  | some (v, i) => .error s!"replay divergence at row {i}: cell value {v} exceeds bound 100"
+  | none => .ok ()
+
+/-- The clean input every spec below shares. -/
+def cleanColumn : List Nat := [3, 10, 17, 24, 42]
+
+/-- The good gate: positive passes, both corruptions are rejected WITH
+    context. -/
+def diffGood : DiffSpec := ⟨"replay fold rejects sabotaged cells",
+  foldColumn cleanColumn,
+  [ corrupt "oversized first cell" (fun c => 999 :: c.drop 1) cleanColumn foldColumn
+      ["row 0", "exceeds bound"]
+  , corrupt "oversized last cell" (fun c => c.take 4 ++ [999]) cleanColumn foldColumn
+      ["row 4", "exceeds bound"] ]⟩
+
+/-- GATE FAILURE demo 1: the identity "corruption" — the sabotage changes
+    nothing, the check passes, the gate is vacuous. Must be flagged. -/
+def diffVacuous : DiffSpec := ⟨"identity-corruption demo (must fail)",
+  foldColumn cleanColumn,
+  [ corrupt "identity sabotage" id cleanColumn foldColumn ]⟩
+
+/-- GATE FAILURE demo 2: the corruption IS caught but the error lacks the
+    required context (no row named). Must be flagged. -/
+def diffNoContext : DiffSpec := ⟨"context-poor rejection demo (must fail)",
+  foldColumn cleanColumn,
+  [ corrupt "oversized first cell" (fun c => 999 :: c.drop 1) cleanColumn foldColumn
+      ["tick 0", "old-assert"] ]⟩
+
+/-- GATE FAILURE demo 3: no corruptions at all. Must be flagged. -/
+def diffEmpty : DiffSpec := ⟨"corruption-free demo (must fail)",
+  foldColumn cleanColumn, []⟩
+
 def main : IO UInt32 := do
   let mut failures := 0
   -- harness suite
@@ -175,5 +218,25 @@ def main : IO UInt32 := do
     IO.println "FAIL: parseGateArgs surface"
     failures := failures + 1
   else IO.println "✓ parseGateArgs surface"
+  -- DiffSpec: the good gate passes via runDiffs
+  let diffCode ← runDiffs [diffGood]
+  if diffCode != 0 then failures := failures + 1
+  -- DiffSpec negative controls (pure runner): each bad gate shape must
+  -- be flagged, with the right verdict shape.
+  let (vacD, vacDVerdict) := diffVacuous.run
+  IO.println vacDVerdict
+  if vacD || (vacDVerdict.splitOn "unexpectedly succeeded").length == 1 then
+    IO.println "FAIL: identity corruption was not flagged as 'unexpectedly succeeded'"
+    failures := failures + 1
+  let (noCtx, noCtxVerdict) := diffNoContext.run
+  IO.println noCtxVerdict
+  if noCtx || (noCtxVerdict.splitOn "lacks context").length == 1 then
+    IO.println "FAIL: context-poor rejection was not flagged"
+    failures := failures + 1
+  let (empD, empDVerdict) := diffEmpty.run
+  IO.println empDVerdict
+  if empD || (empDVerdict.splitOn "VACUOUS").length == 1 then
+    IO.println "FAIL: corruption-free gate was not flagged"
+    failures := failures + 1
   if failures == 0 then IO.println "all checks passed" else IO.eprintln s!"{failures} FAILURES"
   return if failures == 0 then 0 else 1

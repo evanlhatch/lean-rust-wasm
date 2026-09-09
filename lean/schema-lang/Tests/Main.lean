@@ -8,6 +8,7 @@ import Lean
 import SchemaLang
 import Demo
 import TestKit
+import LSpec
 
 open SchemaLang TestKit
 open SchemaLang.Session (toWire tdual gatewayTyped)
@@ -528,6 +529,169 @@ def extDTypeChecks : CheckResult := do
     (some "../../src/ext_dtypes_generated.rs")
   .ok ()
 
+/-! ## Vortex well-formedness gate (3.5): every emitted dtype is wellFormed -/
+
+/-- EVERY dtype the Vortex emitter emits for the demo universe
+    satisfies the fork's construction-time well-formedness
+    (`DType.wellFormed`, previously dead spec surface). An emitter
+    emitting an ill-formed dtype while the spec says it can't is a REAL
+    bug — this check is where it surfaces. -/
+unsafe def vortexWellFormedChecks : IO (String × CheckResult) := do
+  let items ← loadDemoItems
+  let rds := SchemaLang.Vortex.Emit.recordDTypes items
+  let nRecords := items.filter (fun it => match it with
+    | .record _ _ => true | _ => false) |>.length
+  let r : CheckResult := do
+    -- non-vacuous: every demo record produced a dtype (the emitter's
+    -- defensive skip would silently drop one)
+    _ ← assert (rds.length > 0) "demo universe has records"
+    _ ← assertEq "dtype count = record count" rds.length nRecords
+    -- the gate: the exact dtype `recordItems` emits, well-formed
+    for (n, fs) in rds do
+      _ ← assert ((SchemaLang.Vortex.DType.struct fs .nonNullable).wellFormed)
+        s!"{n}: emitted dtype well-formed"
+    -- negative controls: the predicate CATCHES ill-formedness (incl. nested)
+    _ ← assert (!(SchemaLang.Vortex.DType.decimal ⟨0, 3⟩ .nullable).wellFormed)
+      "decimal precision 0 caught"
+    _ ← assert (!(SchemaLang.Vortex.DType.decimal ⟨77, 0⟩ .nonNullable).wellFormed)
+      "decimal precision 77 caught"
+    _ ← assert (!(SchemaLang.Vortex.DType.list (.decimal ⟨0, 0⟩ .nonNullable) .nullable).wellFormed)
+      "nested ill-formed caught"
+    _ ← assert ((SchemaLang.Vortex.DType.decimal ⟨38, 2⟩ .nullable).wellFormed)
+      "valid decimal accepted"
+  pure ("vortexWellFormed", r)
+
+/-! ## PType byteWidth / engineName wiring (3.5) -/
+
+def ptypeChecks : CheckResult := do
+  let all : List SchemaLang.Vortex.PType :=
+    [.u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64]
+  -- the exact width table the Rust side assumes (the proved
+  -- `PType.byteWidth_pos` is the invariant; this pins the VALUES)
+  _ ← assertEq "byteWidth table" (all.map (·.byteWidth)) [1, 2, 4, 8, 1, 2, 4, 8, 2, 4, 8]
+  _ ← assertEq "byteWidth > 0 (theorem, executed)" (all.all (·.byteWidth > 0)) true
+  -- engineName: total + collision-free (the `engineName_inj` theorem,
+  -- executed). No Rust-side name mapping exists in the tree yet
+  -- (no crate consumes vortex), so this is the wiring for now.
+  _ ← assertEq "engineName distinct" (decide ((all.map (·.engineName)).Nodup)) true
+  _ ← assertEq "discriminant round-trip"
+    (all.all fun p => SchemaLang.Vortex.PType.ofDiscriminant p.toDiscriminant == some p) true
+  .ok ()
+
+/-! ## EqAns routing (3.6): the diff's verdicts ARE the eqAns verdicts -/
+
+/-- Reference shape equality built from `Ty.eqViaAns` ONLY (no derived
+    `BEq` on the item structure) — the pin that the diff's item-level
+    gate (`prev == it`, derived BEq) cannot drift from the EqAns-routed
+    field comparison inside `fieldDiffsOf`. -/
+def refShapeEq (a b : Item) : Bool :=
+  a.name == b.name &&
+    match a, b with
+    | .record _ af, .record _ bf =>
+        af.length == bf.length &&
+          (af.zip bf).all fun (x, y) => x.name == y.name && x.ty.eqViaAns y.ty
+    | .variant _ ac, .variant _ bc =>
+        ac.length == bc.length &&
+          (ac.zip bc).all fun ((cn, ct), (dn, dt)) =>
+            cn == dn && match ct, dt with
+            | some t, some s => t.eqViaAns s
+            | none, none => true
+            | _, _ => false
+    | .func sigA, .func sigB =>
+        sigA.params.length == sigB.params.length &&
+          (sigA.params.zip sigB.params).all (fun ((n, t), (m, s)) =>
+            n == m && t.eqViaAns s)
+            && sigA.ret.eqViaAns sigB.ret
+    | .resource _, .resource _ => true
+    | _, _ => false
+
+def eqAnsRoutingChecks : CheckResult := do
+  -- eqViaAns verdicts on fixture types
+  _ ← assert (Ty.eqViaAns (.option .u64) (.option .u64)) "eqViaAns yes"
+  _ ← assert (!Ty.eqViaAns (.option .u64) (.option .u32)) "eqViaAns no"
+  _ ← assert (!Ty.eqViaAns (.ty "a") (.ty "b")) "eqViaAns ty refs no"
+  -- agreement over the whole demo universe squared (the `eqViaAns_beq`
+  -- theorem, executed on the item gate)
+  _ ← assertEq "BEq agrees with eqAns reference (demo²)"
+    (demoItems.all fun a => demoItems.all fun b => (a == b) == refShapeEq a b) true
+  -- same-name shape drift: both verdicts false, both ways
+  let userRetyped : Item := .record "user" [{ name := "id", ty := .u32 }]
+  _ ← assert (!(userRetyped == demoUser) && !refShapeEq userRetyped demoUser)
+    "retyped field: both false"
+  let rolePayload : Item := .variant "role" [("admin", some .u8)]
+  _ ← assert (!(rolePayload == demoRole) && !refShapeEq rolePayload demoRole)
+    "variant payload drift: both false"
+  let retChanged : Item :=
+    .func { name := "get-user", params := [("id", .u64)], ret := .ty "user" }
+  _ ← assert (!(retChanged == demoGetUser) && !refShapeEq retChanged demoGetUser)
+    "func ret drift: both false"
+  -- positive: identical items, both true
+  _ ← assert (demoUser == demoUser && refShapeEq demoUser demoUser) "identical: both true"
+  .ok ()
+
+/-! ## Snapshot codec (3.7): round-trip + malformed rejection -/
+
+private def isErr (e : Except String α) : Bool :=
+  match e with | .error _ => true | .ok _ => false
+
+def snapshotChecks : CheckResult := do
+  -- codec round-trip over the item-algebra fixture
+  _ ← assert (match Snapshot.parse (Snapshot.render demoItems) with
+    | .ok parsed => parsed == demoItems | .error _ => false) "fixture round-trip"
+  -- ty codec pins (paren encoding, nesting, named refs)
+  _ ← assertEq "ty encode"
+    (Ty.toSnapshot (.option (.result (.ty "user") .string)))
+    "option(result(ty(user),string))"
+  _ ← assert (match Snapshot.parseTyText "option(result(ty(user),string))" with
+    | .ok t => t == .option (.result (.ty "user") .string) | .error _ => false)
+    "ty parse"
+  -- malformed input is LOUD, never a silent skip
+  _ ← assert (isErr (Snapshot.parse "field id u64\n"))
+    "member without open item rejected"
+  _ ← assert (isErr (Snapshot.parse "record a\nfield id option(u8\n"))
+    "unbalanced paren rejected"
+  _ ← assert (isErr (Snapshot.parse "record a\nbogus x\n"))
+    "unknown line rejected"
+  _ ← assert (isErr (Snapshot.parseTyText "u8x")) "unknown ty token rejected"
+  _ ← assert (isErr (Snapshot.parseTyText "u8 u16")) "trailing garbage rejected"
+  -- write-side gate: the fixture's names all round-trip
+  _ ← assert (Snapshot.namesEncodable demoItems) "fixture names encodable"
+  _ ← assert (!Snapshot.nameOk "has space") "nameOk rejects spaces"
+  _ ← assert (!Snapshot.nameOk "has(paren") "nameOk rejects parens"
+  .ok ()
+
+/-- The `breaking` gate, replayed inside `lake test`: parse the
+    COMMITTED baseline, diff against the live registry, and show the
+    detector CATCHES sabotage (the negative-control discipline — a
+    breaking-change detector that can't fire is vacuous). -/
+unsafe def snapshotGateChecks : IO (String × CheckResult) := do
+  let items ← loadDemoItems
+  let text ← IO.FS.readFile "goldens/universe.snapshot"
+  let r : CheckResult := do
+    let baseline ← match Snapshot.parse text with
+      | .ok b => .ok b
+      | .error e => .error s!"committed snapshot unparsable: {e}"
+    -- the gate itself: no breaking changes vs the committed baseline
+    _ ← assertEq "no breaking vs snapshot"
+      ((diff baseline items).all fun | .added _ => true | _ => false) true
+    _ ← assert (backwardCompatible baseline items) "positive control: baseline compatible"
+    -- round-trip on the LIVE registry (names as reflected, not the fixture)
+    _ ← assert (match Snapshot.parse (Snapshot.render items) with
+      | .ok parsed => parsed == items | .error _ => false)
+      "snapshot round-trip (live registry)"
+    _ ← assert (Snapshot.namesEncodable items) "live names encodable"
+    -- negative controls against the REAL baseline
+    let retyped := baseline.map fun it => match it with
+      | .record "User" _ => Item.record "User" [{ name := "id", ty := .u32 }]
+      | _ => it
+    _ ← assert (!(backwardCompatible retyped items)) "retype sabotage caught"
+    -- removal = the CURRENT universe missing an item the baseline has
+    let shrunk := items.filter (·.name != "User")
+    _ ← assert (!(backwardCompatible baseline shrunk)) "removal sabotage caught"
+    -- sabotage realism: the controls actually changed the inputs
+    _ ← assert (retyped != baseline && shrunk != items) "sabotage non-vacuous"
+  pure ("snapshotGate", r)
+
 /-! ## Pipeline machine (Machines conformance battery) -/
 
 /-- The positive battery: all three checks must pass over the full
@@ -593,6 +757,244 @@ def emitterAuditChecks : CheckResult := do
   _ ← assert (traitText.contains "fn valid(&self, base: &Row) -> bool;") "trait valid = ChangeSpec field"
   .ok ()
 
+/-! ## Property sweep (5.3): generated universes never yield unknownRef
+
+`Ty` is a CLOSED universe — the generator emits only constructible
+types over a fixed name supply, and the universe always anchors one
+record/variant per supply name, so every generated `.ty` ref resolves.
+The property: `universeCheck` over an anchored generated universe
+reports ZERO `unknownRef` diagnostics. Other findings are legitimate
+and NOT the property's subject: item names are drawn from the same
+supply (so `dupName` fires) and generated record fields may carry
+future/stream (so `asyncField` fires) — the property isolates NAME
+RESOLUTION only.
+
+The negative control (TestKit.PropSpec discipline): the sabotaged
+sibling injects a `.ty "ghost"` ref into every sample — `universeCheck`
+MUST flag it. A control that passes proves `noUnknownRef` vacuous and
+the suite FAILS. -/
+namespace PropSweep
+
+open Plausible LSpec
+
+/-- The fixed name supply: every generated `.ty` ref resolves against
+    the anchors. -/
+def nameSupply : List String := ["alpha", "beta", "gamma"]
+
+/-- The anchors: one record/variant per supply name, so EVERY `.ty` ref
+    drawn from the supply resolves no matter what the generator adds
+    (duplicates only add `dupName` findings; they never remove
+    resolvability). -/
+def anchors : List Item :=
+  [ .record "alpha" [], .record "beta" [], .variant "gamma" [] ]
+
+/-- Small field/case/param name supply (not the property's subject). -/
+def fieldSupply : List String := ["id", "name", "data"]
+
+/-- Pick a name from a supply. -/
+def pickName (supply : List String) : Gen String := do
+  let n ← Gen.chooseNat
+  pure (supply[n % supply.length]?.getD "alpha")
+
+/-- Leaf types: the closed scalars plus a named ref from the supply.
+    `oneOfWithDefault`, NOT `chooseNat % 14` — `chooseNat` ranges over
+    [0, size], so a modulo with more branches than the size silently
+    starves the tail branches (the 2026-11 `.ty`-leaf starvation: the
+    coverage witness caught a generator that never emitted named refs). -/
+def genTyLeaf (supply : List String) : Gen Ty :=
+  Gen.oneOfWithDefault (pure .bool)
+    [pure .u8, pure .u16, pure .u32, pure .u64,
+     pure .i8, pure .i16, pure .i32, pure .i64,
+     pure .f32, pure .f64, pure .string, pure .bytes,
+     do pure (.ty (← pickName supply))]
+
+/-- Sized random `Ty` over the closed universe: option/result/list/
+    future/stream wrap smaller types; leaves are scalars or a named ref
+    drawn from the supply. -/
+def genTy (supply : List String) : Nat → Gen Ty
+  | 0 => genTyLeaf supply
+  | fuel + 1 => do
+    let branch ← Gen.chooseNat
+    match branch % 9 with
+    | 0 => pure (.option (← genTy supply fuel))
+    | 1 => pure (.result (← genTy supply fuel) (← genTy supply fuel))
+    | 2 => pure (.list (← genTy supply fuel))
+    | 3 => pure (.future (← genTy supply fuel))
+    | 4 => pure (.stream (← genTy supply fuel))
+    | _ => genTyLeaf supply
+
+/-- The plausible instances: fueled generation driven by the size
+    parameter. -/
+instance : ArbitraryFueled Ty where
+  arbitraryFueled := genTy nameSupply
+
+instance : Arbitrary Ty where
+  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
+
+/-- Shrink toward subterms — a failing nested type minimizes to the
+    smallest failing fragment. -/
+partial def shrinkTy : Ty → List Ty
+  | .option a => a :: shrinkTy a
+  | .result a b => a :: b :: (shrinkTy a ++ shrinkTy b)
+  | .list a => a :: shrinkTy a
+  | .future a => a :: shrinkTy a
+  | .stream a => a :: shrinkTy a
+  | t => [t]
+
+instance : Shrinkable Ty where
+  shrink t := (shrinkTy t).filter (· != t)
+
+/-- A short list combinator (bounded length) over the small supplies. -/
+def genShortList (g : Gen α) (maxLen : Nat) : Gen (List α) := do
+  let len ← Gen.chooseNat
+  let rec go : Nat → Gen (List α)
+    | 0 => pure []
+    | k + 1 => do pure ((← g) :: (← go k))
+  go (len % (maxLen + 1))
+
+/-- A generated field: name from the field supply, type from the fueled
+    type generator. -/
+def genField (supply : List String) (fuel : Nat) : Gen Field := do
+  pure { name := (← pickName fieldSupply), ty := (← genTy supply fuel) }
+
+/-- Sized random item over the closed vocabulary: record / variant /
+    func / resource, all names from the supply, all types constructible. -/
+def genItem (supply : List String) (fuel : Nat) : Gen Item := do
+  let branch ← Gen.chooseNat
+  match branch % 4 with
+  | 0 => pure (.record (← pickName supply) (← genShortList (genField supply fuel) 3))
+  | 1 => do
+    let genCase : Gen VariantCase := do
+      let c ← pickName fieldSupply
+      let p ← Gen.chooseNat
+      if p % 2 == 0 then pure (c, none)
+      else pure (c, some (← genTy supply fuel))
+    pure (.variant (← pickName supply) (← genShortList genCase 3))
+  | 2 => do
+    let genParam : Gen (String × Ty) := do
+      pure (← pickName fieldSupply, ← genTy supply fuel)
+    pure (.func { name := (← pickName supply)
+                , params := (← genShortList genParam 2)
+                , ret := (← genTy supply fuel) })
+  | _ => pure (.resource (← pickName supply))
+
+instance : ArbitraryFueled Item where
+  arbitraryFueled := genItem nameSupply
+
+instance : Arbitrary Item where
+  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
+
+/-- Shrink an item: drop fields/cases/params. Names never shrink — the
+    property is about name resolution, and shrinking names would only
+    move a counterexample sideways. -/
+def shrinkItem : Item → List Item
+  | .record n fs => .record n [] :: fs.mapIdx fun i _ => .record n (fs.eraseIdx i)
+  | .variant n cs => .variant n [] :: cs.mapIdx fun i _ => .variant n (cs.eraseIdx i)
+  | .func s => [.func { s with params := [] }]
+  | .resource _ => []
+
+instance : Shrinkable Item where
+  shrink := shrinkItem
+
+/-- A generated universe TAIL (the anchors are fixed separately):
+    bounded item count so `universeCheck` stays fast at 1000 instances. -/
+structure UniverseTail where
+  items : List Item
+deriving Repr
+
+instance : Arbitrary UniverseTail where
+  arbitrary := Gen.sized fun fuel => do
+    pure ⟨← genShortList (genItem nameSupply fuel) 5⟩
+
+instance : Shrinkable UniverseTail where
+  shrink u := (Shrinkable.shrink u.items).map UniverseTail.mk
+
+/-- The property predicate: the universe's `universeCheck` reports NO
+    `unknownRef` — every generated ref resolved. -/
+def noUnknownRef (items : List Item) : Bool :=
+  (universeCheck items).all fun d =>
+    match d with | .unknownRef .. => false | _ => true
+
+/-- The suite: 1000 instances, PINNED SEED — a CI failure replays
+    byte-identically, and plausible's shrinker minimizes any
+    counterexample. -/
+def suite : TestSeq :=
+  checkPlausibleIO "generated universes: zero unknownRef diagnostics"
+    (∀ tail : UniverseTail, noUnknownRef (anchors ++ tail.items) = true)
+    .done { numInst := 1000, randomSeed := some 20261104 }
+
+/-- The negative control: a `.ty "ghost"` ref injected into EVERY
+    sample — `universeCheck` MUST flag it (deterministic catch: the
+    empty tail alone fails). If this suite passes, `noUnknownRef` is
+    vacuous and the sweep proves nothing. -/
+def controlSuite : TestSeq :=
+  checkPlausibleIO "sabotaged: ghost ref injected (must be caught)"
+    (∀ tail : UniverseTail,
+      noUnknownRef (anchors ++ [.record "zz-saboteur" [{ name := "x", ty := .ty "ghost" }]]
+        ++ tail.items) = true)
+    .done { numInst := 1000, randomSeed := some 20261104 }
+
+/-- The property spec: sweep + its mandatory negative control. -/
+def spec : TestKit.PropSpec :=
+  { name := "universeCheck: no unknownRef on generated universes"
+  , suite := suite
+  , control := controlSuite
+  , controlName := "inject-ghost-ref" }
+
+/-- Run a generator deterministically, purely (fixed seed and size) —
+    the coverage witness below needs samples WITHOUT IO. -/
+def runGenPure (g : Gen α) (seed : Nat) (size : Nat) : Except Plausible.GenError α :=
+  (ReaderT.run (StateT.run g (ULift.up (mkStdGen seed))) ⟨size⟩).map (·.1)
+
+/-- All types appearing in an item, constructors included (the coverage
+    witness flattens generated universes with this). -/
+partial def tysOf (t : Ty) : List Ty :=
+  t :: match t with
+  | .option a | .list a | .future a | .stream a => tysOf a
+  | .result a b => tysOf a ++ tysOf b
+  | _ => []
+
+def itemTys : Item → List Ty
+  | .record _ fs => fs.flatMap fun f => tysOf f.ty
+  | .variant _ cs => (cs.filterMap (·.2)).flatMap tysOf
+  | .func s => (s.params.map (·.2)).flatMap tysOf ++ tysOf s.ret
+  | .resource _ => []
+
+/-- The COVERAGE witness (deterministic, pinned seeds): across 20 fixed
+    seeds the generator MUST emit named refs from the supply AND reach
+    every recursive `Ty` constructor — otherwise the sweep is
+    generator-vacuous even though the control bites (the control
+    catches predicate vacuity, not generator silence). Also pins the
+    property predicate on hand-built cases. -/
+def propCoverageChecks : CheckResult := do
+  let tails := (List.range 20).filterMap fun s =>
+    match runGenPure (Arbitrary.arbitrary (α := UniverseTail)) (20261104 + s) 8 with
+    | .ok t => some t.items
+    | .error _ => none
+  _ ← assertEq "generator produced samples" tails.isEmpty false
+  let allTys := tails.flatten.flatMap itemTys
+  let refs := tails.flatten.flatMap Item.tyRefs
+  _ ← assert (refs.any fun r => nameSupply.contains r)
+    "generator emits named refs from the supply"
+  _ ← assert (allTys.any fun t => match t with | .option _ => true | _ => false)
+    "generator reaches option"
+  _ ← assert (allTys.any fun t => match t with | .result .. => true | _ => false)
+    "generator reaches result"
+  _ ← assert (allTys.any fun t => match t with | .list _ => true | _ => false)
+    "generator reaches list"
+  _ ← assert (allTys.any fun t => match t with | .future _ => true | _ => false)
+    "generator reaches future"
+  _ ← assert (allTys.any fun t => match t with | .stream _ => true | _ => false)
+    "generator reaches stream"
+  -- the predicate, pinned: a resolving ref passes, a bogus ref fails
+  _ ← assertEq "predicate accepts resolving ref"
+    (noUnknownRef (anchors ++ [.record "extra" [{ name := "x", ty := .ty "beta" }]])) true
+  _ ← assertEq "predicate flags bogus ref"
+    (noUnknownRef (anchors ++ [.record "extra" [{ name := "x", ty := .ty "ghost" }]])) false
+  .ok ()
+
+end PropSweep
+
 /-! ## Typed session choreography (SchemaLang.Session) -/
 
 def typedSessionChecks : CheckResult := do
@@ -632,7 +1034,9 @@ unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
   let reflect ← reflectChecks
-  mainOfChecks "SchemaLang"
+  let vortexWf ← vortexWellFormedChecks
+  let snapGate ← snapshotGateChecks
+  let code ← mainOfChecks "SchemaLang"
     ([ ("resolution", resolutionChecks)
      , ("fieldRes", fieldResolutionChecks)
      , ("codec", codecChecks)
@@ -640,10 +1044,15 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("envelope", envelopeChecks)
      , ("eqAns", eqAnsChecks)
      , ("diff", diffChecks)
+     , ("ptype", ptypeChecks)
+     , ("eqAnsRouting", eqAnsRoutingChecks)
+     , ("snapshot", snapshotChecks)
      ] ++ goldens ++
      [ ("lower", lowerChecks)
      , ("derives", derivesChecks)
      , reflect
+     , vortexWf
+     , snapGate
      , ("bridge", bridgeChecks)
      , ("bridgeSchema", bridgeSchemaChecks)
      , ("delta", deltaChecks)
@@ -653,4 +1062,10 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("pipelineRun", pipelineRunChecks)
      , ("emitterAudit", emitterAuditChecks)
      , ("typedSession", typedSessionChecks)
+     , ("propCoverage", PropSweep.propCoverageChecks)
      ])
+  if code != 0 then return code
+  -- the property sweep WITH its mandatory negative control
+  -- (TestKit.PropSpec: the property must pass AND the sabotaged sibling
+  -- must be caught — a vacuous sweep fails the gate)
+  TestKit.runSpecs [PropSweep.spec]

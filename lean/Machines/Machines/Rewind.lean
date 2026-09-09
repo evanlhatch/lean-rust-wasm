@@ -224,7 +224,7 @@ theorem runLogged_length (m : RewindableMachine) :
     tick-segmented overlay instantiates this with per-tick segments. -/
 theorem rewind_suffix (m : RewindableMachine)
     (ls : List m.Label) (init : m.State) (tr : m.Trace) (ds : List m.Δ) (fin : m.State)
-    (h : runLogged m init ls = some (tr, ds, fin)) (K : Nat) (hK : K ≤ ls.length) :
+    (h : runLogged m init ls = some (tr, ds, fin)) (K : Nat) (_hK : K ≤ ls.length) :
     ∃ mid tr1 ds1,
       runLogged m init (ls.take (ls.length - K)) = some (tr1, ds1, mid) ∧
       m.rewind (ds.drop (ls.length - K)).reverse fin = mid := by

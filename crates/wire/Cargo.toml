@@ -1,0 +1,22 @@
+[package]
+name = "wire"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# The first transport adapter: noq (n0-computer's Quinn fork).
+# Default features bring: rustls + ring crypto + tokio runtime.
+noq = "1.3"
+# noq does NOT re-export its `proto` crate — the QUIC-TLS config types
+# (QuicClientConfig / QuicServerConfig) live here. Version must match noq.
+noq-proto = "1.3"
+# rustls config builder for the QUIC TLS handshake; pki-types comes via
+# rustls::pki_types. Version pinned to what noq itself builds against.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+# Self-signed certs for the dev/test loop ONLY (see lib.rs — LOUD caveat).
+rcgen = "0.14"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }

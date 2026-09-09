@@ -330,7 +330,7 @@ theorem sem_blocked_acquire_unblocks (s : SemState)
 /-- A blocked latch wait (incomplete) becomes enabled after the final
     count_down — the epoch boundary's progress property. -/
 theorem latch_blocked_wait_unblocks (cap : Nat) (s : LatchState)
-    (hinv : LatchInv cap s) (hone : s.count = 1) :
+    (_hinv : LatchInv cap s) (hone : s.count = 1) :
     ∃ s', (latch cap).step? s .countDown = some s' ∧
           (latch cap).enabled s' .wait = true := by
   refine ⟨{ s with count := s.count - 1, arrived := s.arrived + 1 }, ?_, ?_⟩

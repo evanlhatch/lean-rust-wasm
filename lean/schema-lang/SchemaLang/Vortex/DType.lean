@@ -74,6 +74,12 @@ def PType.byteWidth : PType → Nat
   | .u32 | .i32 | .f32 => 4
   | .u64 | .i64 | .f64 => 8
 
+/-- No zero-width scalar: every physical layout occupies at least one
+    byte. (The emitter-side pin — exact widths per constructor — lives
+    in Tests; this is the invariant Rust allocation code assumes.) -/
+theorem PType.byteWidth_pos (p : PType) : 0 < p.byteWidth := by
+  cases p <;> decide
+
 /-- Fork `DecimalDType`: precision and scale over the i256 storage. -/
 structure DecimalDType where
   precision : Nat

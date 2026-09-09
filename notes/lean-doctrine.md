@@ -52,6 +52,33 @@ TestKit, codegen-core            (core-only — importable by everything)
 | Unsupported constructs in a backend THROW; never emit comments | structural | `WasmBackend.unsupported`; pure-only ctors discharged by `absurd`. |
 | Boundary policies are pure predicates + elab-time attribute gates with `#guard` positive AND negative controls | structural + test | `WasmBackend.Check` (`@[guest]`, `Ban.strict/.std`). The shape: policy as pure data, attribute only renders. |
 
+### Dependency policy: core / Batteries / mathlib (verdict 2026-09-09)
+
+**The split holds — no blanket mathlib adoption.** mathlib belongs in
+packages whose subject matter is math (dbsp: Finsupp Z-sets, big
+operators; Machines: well-founded recursion, Order machinery). The
+wire/emitter/test packages (substrait, codegen-core, TestKit) stay
+core-only: mathlib would buy them almost nothing and costs them their
+role as the dependency-light public surface.
+
+Evidence from the audit of what core-only code actually handrolls — every
+finding had a CORE v4.33 replacement, no mathlib needed:
+`String.intercalate` + `toList_intercalate` / `intercalate_cons_of_ne_nil`
+(the sep/joinCSep collapses), `List.zipIdx`, `List.eraseDups`,
+`Lean.Data.EditDistance.levenshtein`, `Expr.getUsedConstants`,
+`List.mergeSort` (stable), `Option.map_eq_some_iff`, `List.getElem?`.
+The tactics the core packages use (`omega`, `decide`, `native_decide`,
+`simp`) are all core. Mathlib's unique value (Finsupp, the algebraic
+hierarchy, big operators, Order) is irrelevant to wire codecs and emitter
+folds. Cost side: mathlib drags the transitive closure (batteries, aesop,
+Qq, …) into every downstream package — wasm-backend's manifest went
+17→5 entries when its accidental SchemaLang require was dropped.
+
+**Batteries**: already vendored transitively at a pinned rev; mathlib
+packages MAY import it selectively where it replaces a handroll (e.g.
+`List.IsChain`). Core-only packages do NOT take Batteries — the public
+wire library's purity is the product (substrait/lakefile comment).
+
 ## 2. Definitions, instances, simp
 
 | Rule | Level | Notes |
@@ -127,7 +154,80 @@ here; when a note disagrees with a stale comment, the note wins (then fix
 the comment). Verdicts are verified by build test before being recorded
 (decision-wasip3-linking.md is the model).
 
-## 8. What we deliberately do NOT do
+## 8. The enforcement ladder and design rules
+
+(Transferred from the flatland lineage's TOOLKIT.md/kimi notes — the
+philosophy this template embodies, stated once.)
+
+### The four-tier ladder
+
+0. **Proved in Lean, erased** — manifests as the ABSENCE of defensive code
+   downstream. If the spec proves it, nothing below checks it.
+1. **Compile-time Rust** — types make bad states unrepresentable.
+2. **Runtime checks** — only at trust boundaries (host↔guest, network,
+   hand-written↔generated seams).
+3. **Hand-written code** — only behind generated seams.
+
+Pressure rules: wanting a mid-logic runtime check = promote the invariant
+into the spec. Hand-written code fighting a type = the spec's domain model
+is wrong; fix the spec, not the code.
+
+### Design rules (the generalizations of the repo's known traps)
+
+- **Bridge kit, in order** (new exec data structure checklist): (1)
+  canonical form with proved semantics — pick the representation with
+  lemma support (`List.mergeSort`, not `Array.qsort`); (2) `@[simp]`
+  equations land in the SAME commit; (3) observer bridges
+  (`getElem?`/`find?` characterizations); (4) membership/permutation
+  facts; (5) THEN the laws, pointwise via `List.ext_getElem?`. Proving a
+  bridge lemma about a structure that landed last week means the
+  structure shipped without its kit.
+- **Index ceiling**: three indices max at author-facing surfaces; a
+  fourth becomes a predicate. Compute by reduction, prove by search.
+- **Type-class search assembles proofs, never calculates values.**
+- **Quotients quarantined to proof-land** — never in codegen-consumed
+  data. HEq/John-Major needed between two indexed families = redesign
+  signal.
+- **Machines are SETS of transitions** (any enabled event may fire);
+  **protocols are SEQUENCES** (order is the artifact). Session/indexed
+  machinery serves sequences; plain `Machine` serves sets. Don't reach
+  for Session types for unordered event sets.
+- **Canon discipline**: a new subsystem names which known shape row it is
+  (delta / stream / machine / fixpoint / partial-iso / codec) and
+  inherits that row's laws, oracle coverage, and codegen path. Matching
+  no row is a finding — the canon grows deliberately.
+- **Proved counterexample → boundary lint**: a proved negative (e.g.
+  dbsp Ordering's monotone-vs-D counterexample) justifies a boundary gate
+  rejecting the unprovable shape at elaboration, the error CITING the
+  counterexample. Hypothesis in theorem = field in item = code in host.
+- **Elaboration traps** (from Dbsp.Circuit): interpretation functions
+  over type-family-valued section variables take EXPLICIT binders
+  (binder-info-mismatched eta-expansions fail defeq downstream); split
+  flag-computation (plain recursive def) from soundness (induction
+  theorem), wrap as a Subtype at the end; never ascribe section-variable
+  types inside an induction arm.
+
+### Discharge ladder (order of preference)
+
+`rfl`/`decide` → `simp` with the def's own equation lemmas → `omega` /
+`native_decide` (disclosed trust base) → `bv_decide` for fixed-width/
+overflow contracts (verified LRAT — unlike SMT bridges) → explicit term.
+`partial_fixpoint` exists for honestly-possibly-divergent loop
+definitions before per-instance convergence is proved.
+
+### Differential-testing doctrine
+
+- The oracle only validates what reaches it — keep the observable surface
+  generous in test builds (test-only flags may expose more state).
+- Conformance compares operation SEQUENCES; "engine accepted what the
+  spec rejects" is the most important bug class — generators should
+  include a small invalid-mutation rate (DiffSpec's Corruption is the
+  gate-level instance; generators need it too).
+- Every historical divergence becomes a committed minimized case — the
+  corpus grows from bugs.
+- Floats compare bit-exact, never approximately.
+
+## 9. What we deliberately do NOT do
 
 - No verifier-framework deps (loom/veil/velvet/lean-machines) — pattern-
   match instead.

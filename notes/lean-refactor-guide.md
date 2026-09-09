@@ -124,9 +124,47 @@ combinators + Envelope, payoff `composite_decode_encode` closed by simp
 alone). Decode.lean dead pair `splitTopLevel_join_rbracket`/
 `sep_toList_joinCSep` was transformed (not deleted) — deletion candidate.
 
-REMAINING: 3.1–3.7 (gates/decisions), 4.4 (`declare_binop`), 4.1's
-parseExpr_lit_bool twin-merge (skipped by the sweep), 5.3 (plausible
-instances), 5.5, 5.5.2–5.5.4 (ports), 6.x (linters).
+REMAINING: 4.4 (`declare_binop` elab), 6.x (linters). Optional/hygiene:
+pre-existing linter warnings (unusedSimpArgs/unnecessarySimpa in
+Decode.lean; unusedVariables in Session.lean/Reflect.lean) — worth a sweep
+once 6.7 flips core linters on package-wide.
+
+Wave-5 additions LANDED + gate-verified: 3.1 (substrait axiom gate 1→23),
+3.5 (wellFormed asserted over every emitted dtype + negative controls;
+byteWidth wired with axiom-free `byteWidth_pos`; engineName pinned
+injectivity — no Rust-side names exist to tie yet), 3.6 (`Ty.eqViaAns` +
+`eqViaAns_beq`; Diff field comparison genuinely eqAns-routed; required
+ReflBEq/LawfulBEq Ty instances), 3.7 (`check-schema`/`breaking` wired via
+SchemaLang/Snapshot.lean + schema-check/schema-breaking exes, both in
+`gates:`; sabotage-tested), lean-pkg-inventory gate (`std` was missing
+from lean_pkgs — caught exactly the drift class; all 9 packages now
+gated), 5.3 (substrait expression PropSpec ×3 controls; schema-lang
+Ty/Item generators + universeCheck PropSpec + coverage witnesses — caught
+a real generator starvation bug), 5.5.2 (CertifiedEmitter in codegen-core),
+5.5.3 (TestKit.DiffSpec — Corruption/DiffSpec/runDiffs; ADOPTED by the
+wasm differential oracle: sabotaged fn-name/arity rows must fail with
+context), 5.5.4 (dbsp/Dbsp/Effects.lean DeltaSystem via core
+List.Perm.pairwise + pointDeltaSystem demo instance).
+
+## Phase 6.5 — flatland-notes transfers (2026-09-09 mining, 19 files)
+
+Doc-tier transfers LANDED in lean-doctrine.md §8 (enforcement ladder,
+design rules, discharge ladder, differential-testing doctrine). Code-tier
+items:
+
+| # | Item | Where | Status |
+|---|---|---|---|
+| 6.5.1 | Fn-registry items carry `nullSem : strict \| propagate \| custom` + `determinism : pure \| stable \| volatile` + `body : Name` (mandatory executable Lean semantics — "unsigned code doesn't ship") as DATA; `volatile` in a fold/reorder context fails universeCheck | schema-lang `@[schema_fn]` items + emitters + oracle | TO DO |
+| 6.5.2 | Migration soundness for schema evolution: migration = total fn old-values → new-values + theorem `replay ∘ migrate ≡ migrate ∘ replay` on preserved columns; the breaking-gate detects, this is the REMEDY story (event-sourcing upcasting) | schema-lang Diff/Snapshot — optional `migrate` payload on compatible-with-migration verdicts | TO DO |
+| 6.5.3 | Emitter-output self-audit: emitters ship grep/lint audits of their OWN generated text (banned patterns fail CI) — GuestGate bans constructs in guest SOURCE; this audits EMITTED artifacts | GateKit recipe + one audit per emitter, wired into gates | TO DO |
+| 6.5.4 | Extra lint rules folded into LintKit scope (steered mid-run): simp-normal-form duplicates, simp-set members listed by hand, linter-disable justification, unused-exported-structure census (report-only), Tests-never-import-LSpec | LintKit | IN FLIGHT |
+| 6.5.5 | Deferred tooling notes: Reservoir criteria (public repo, root lake-manifest, OSI license), lean-action CI eligibility check, gonzalgo per-package TSV → TestKit `--affected` (run only suites depending on changed decls) | notes/full-remaining-work.md append | TO DO (notes only) |
+
+Explicitly NOT transferred (verified superseded or flatland-specific):
+Lake-facet codegen (driver-exe + byte-tie is simpler and host-language-
+agnostic), lentil liveness vocabulary (lrw removed Machines.Live as dead),
+Lean-zh/protobuf wire (Codec.lean covers binary in-house), cslib, PHOAS/
+graded monads, all game/engine semantics.
 
 ## Phase 6 — enforcement (linters), wired into `just gates`
 

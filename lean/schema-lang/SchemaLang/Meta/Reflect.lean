@@ -61,7 +61,7 @@ def schemaNameOf (leanName : Name) : String := leanName.toString
     (`OrderError.invalidItem` → `invalidItem`; emission kebabs it).
     `splitOn` + `getLast!` is robust to namespaced ctors
     (`Foo.Role.admin` → `admin`). -/
-def ctorNameOf (declName ctor : Name) : String :=
+def ctorNameOf (_declName ctor : Name) : String :=
   (String.splitOn ctor.toString ".").getLast!
 
 /-- Already-registered schema names (dup detection + did-you-mean space). -/

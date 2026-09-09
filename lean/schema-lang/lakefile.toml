@@ -48,3 +48,16 @@ root = "GenMain"
 # imported initializers through the interpreter — needs the core native
 # impls (IO.getRandomBytes) linked in.
 supportInterpreter = true
+
+# `just check-schema`: universeCheck over the demo registry (buf lint analog).
+[[lean_exe]]
+name = "schema-check"
+root = "CheckMain"
+supportInterpreter = true
+
+# `just breaking`: Diff.diff of the demo registry against the committed
+# goldens/universe.snapshot baseline (buf breaking analog).
+[[lean_exe]]
+name = "schema-breaking"
+root = "BreakingMain"
+supportInterpreter = true

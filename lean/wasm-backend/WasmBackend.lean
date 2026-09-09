@@ -697,6 +697,16 @@ def emitModule (decls : List (Decl .impure))
         let shape := if stringResult? n then "string" else adapterShape? kebab |>.getD "default"
         let (a, _) ← emitAdapter d shape |>.run st
         abiFuncs := abiFuncs ++ [a]
+  -- DECISION (the post-return functions): wit-bindgen's modules carry
+  -- `cabi_post_<name>` (the dealloc hook the canon lift calls after
+  -- copying the results). OURS don't — the adapters use the STATIC
+  -- return area (nothing to free — the leak-free-by-construction case)
+  -- and `component new`'s encoder accepts the post-return's ABSENCE
+  -- (emitting one with a wrong shape FAILS the encode: the encoder
+  -- validates cabi_post_* against the function's flat params — the
+  -- empirically-discovered shape). Omit until the async work needs the
+  -- real task dealloc.
+
   let exports := exportTargets.map fun (kebab, n) =>
     s!"  (export \"{kebab}\" (func ${n.toString}_abi))"
   let sp := " "

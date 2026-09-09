@@ -98,8 +98,8 @@ namespace Convergent
 def countDown (m : Machine) (variant : m.State → Nat) (k : m.Label → Nat)
     (hact : ∀ (s : m.State) (l : m.Label) (h : (m.event l).guard s = true),
       variant ((m.event l).action s h) = variant s - k l)
-    (hmk : ∀ (s : m.State) (l : m.Label) (h : (m.event l).guard s = true), k l ≥ 1)
-    (hsk : ∀ (s : m.State) (l : m.Label) (h : (m.event l).guard s = true), k l ≤ variant s)
+    (hmk : ∀ (s : m.State) (l : m.Label) (_h : (m.event l).guard s = true), k l ≥ 1)
+    (hsk : ∀ (s : m.State) (l : m.Label) (_h : (m.event l).guard s = true), k l ≤ variant s)
     : Convergent m where
   variant := variant
   decreases := by

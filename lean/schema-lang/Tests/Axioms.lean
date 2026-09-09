@@ -7,6 +7,8 @@ import SchemaLang
 
 #print axioms SchemaLang.Vortex.PType.ofDiscriminant_toDiscriminant
 #print axioms SchemaLang.Vortex.PType.engineName_inj
+#print axioms SchemaLang.Vortex.PType.byteWidth_pos
+#print axioms SchemaLang.Ty.eqViaAns_beq
 #print axioms SchemaLang.Codec.decode_encodeBool
 #print axioms SchemaLang.Codec.decode_encodeU8
 #print axioms SchemaLang.Codec.decVarNat_append

@@ -1,5 +1,8 @@
+import Lean
 import WasmBackend
 import WasmBackend.Check
+import Oracle
+import TestKit
 
 /-!
 # WasmBackend tests — the `@[guest]` gate's pure predicate
@@ -9,7 +12,11 @@ assumed. `checkExpr` is pure — no elaboration needed to test it.
 Leaves are `.bvar 0` (a de Bruijn leaf — no constant-lookup coupling).
 -/
 
-open WasmBackend.Check Lean
+-- The gate MOVED to CodegenCore.GuestGate; WasmBackend.Check re-exports
+-- the surface as ROOT aliases (`export`), so no `open` for it — an
+-- `open WasmBackend.Check` poisoned the whole open command (unknown
+-- namespace) and took `open Lean`'s `mkApp2` down with it.
+open Lean CodegenCore.GuestGate
 
 def leaf : Expr := .bvar 0
 
@@ -60,6 +67,44 @@ def leaf : Expr := .bvar 0
 #guard (reasons .std ["IO"]) ==
   "- `IO` — IO is a host capability — guest functions must be pure over guestlang-std's WASI layer"
 
--- #guard-driven (elab-time); the exe entry point exists so the lakefile's
--- testDriver has a runnable target.
-def main : IO UInt32 := pure 0
+/-! ## The differential oracle's corruption-negative gate (DiffSpec)
+
+The differential gate (steel-host's wasm_diff) replays the oracle manifest
+against the component; its sabotage control is Rust-side (flipped
+instruction). The LEAN side now proves its own half: the oracle row
+universe REJECTS a sabotaged row, naming context. -/
+
+open TestKit
+
+/-- The positive case: every manifest row resolves (no unknown fn, no
+    arity drift between `rows` and `resultOf`). -/
+def oracleRowsResolve (rs : List (String × List String)) : CheckResult :=
+  allOf (rs.map fun (fn, args) =>
+    (s!"row {fn} {args}", match resolve fn args with
+      | .ok _ => .ok ()
+      | .error e => .error e))
+
+/-- The gate: positive fold + two engineered corruptions, each pinned to
+    its context. A corruption that passes (or rejects context-free) is a
+    gate failure. -/
+def oracleDiffSpec : DiffSpec := ⟨"oracle rejects sabotaged rows",
+  oracleRowsResolve rows,
+  [ corrupt "unknown fn" (fun rs => ("doble", ["3"]) :: rs) rows oracleRowsResolve
+      ["unknown fn", "doble"]
+  , corrupt "arity sabotage" (fun rs => ("double", ["3", "4"]) :: rs) rows oracleRowsResolve
+      ["'double' expects 1 args", "got 2"] ]⟩
+
+-- #guard-driven (elab-time) for the `@[guest]` predicate; the exe entry
+-- point runs the oracle DiffSpec (plus its own vacuous-control demo).
+def main : IO UInt32 := do
+  let code ← runDiffs [oracleDiffSpec]
+  -- Negative control for the control: an identity "corruption" must be
+  -- flagged (proves the runner can't go vacuously green here either).
+  let (vacOk, vacVerdict) := (⟨"identity control",
+      oracleRowsResolve rows,
+      [corrupt "identity sabotage" id rows oracleRowsResolve]⟩ : DiffSpec).run
+  IO.println vacVerdict
+  if vacOk then
+    IO.eprintln "FAIL: identity corruption not flagged"
+    return 1
+  return code

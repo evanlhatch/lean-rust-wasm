@@ -23,6 +23,13 @@ path = "../codegen-core"
 name = "GuestlangStd"
 path = "../std"
 
+# TestKit: core + LSpec only, so the backend's core-only closure is
+# untouched — the Tests exe ships the oracle's corruption-negative
+# DiffSpec (doctrine §4).
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
 [[lean_lib]]
 name = "WasmBackend"
 roots = ["WasmBackend"]
@@ -30,6 +37,13 @@ roots = ["WasmBackend"]
 [[lean_lib]]
 name = "DemoFn"
 roots = ["DemoFn"]
+
+# The differential oracle's row universe (extracted from
+# target/oracle.lean so Tests can import it — module header owns the
+# byte-compat invariant).
+[[lean_lib]]
+name = "Oracle"
+roots = ["Oracle"]
 
 [[lean_exe]]
 name = "wasm-gen"

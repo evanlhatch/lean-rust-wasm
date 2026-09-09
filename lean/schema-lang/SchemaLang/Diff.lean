@@ -53,7 +53,9 @@ def fieldDiffsOf (prev it : Item) : List FieldDiff :=
     if newNames.contains f.name then none else some (.fieldRemoved f.name)
   let changed := oldFs.filterMap fun f =>
     match newFs.find? (fun g => g.name == f.name) with
-    | some g => if g.ty == f.ty then none else some (.fieldTypeChanged f.name f.ty g.ty)
+    -- the type comparison IS `Ty.eqAns` (Bool projection) — proof-carrying,
+    -- per the header; `Ty.eqViaAns_beq` proves it agrees with derived BEq
+    | some g => if f.ty.eqViaAns g.ty then none else some (.fieldTypeChanged f.name f.ty g.ty)
     | none => none
   let added := newFs.filterMap fun f =>
     if oldNames.contains f.name then none else some (.fieldAdded f.name)
@@ -84,7 +86,10 @@ def diff (old new : List Item) : List Change :=
   let changed := new.filterMap fun it =>
     match old.find? (fun o => o.name == it.name) with
     | some prev =>
-        -- BEq (EqAns-backed shape inequality) triggers; FieldDiffs are the evidence
+        -- the item-level gate is derived BEq; the FIELD comparison inside
+        -- `fieldDiffsOf` is EqAns-routed (`Ty.eqViaAns`), and
+        -- `Ty.eqViaAns_beq` + the `diffAgreement` test pin the two to the
+        -- same verdicts. FieldDiffs are the evidence.
         if prev == it then none else some (.changed it.name (fieldDiffsOf prev it))
     | none => none
   removed ++ changed ++ added

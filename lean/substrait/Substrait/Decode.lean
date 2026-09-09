@@ -530,13 +530,13 @@ theorem parseType_mono (fuel : Nat) (cs : List Char) (r : Proto.PType × List Ch
         | some p =>
           have hpt := ih _ _ hx
           cases h2 : expect ", " p.2 with
-          | none => simp_all [hx, h2, hpt]
+          | none => simp_all
           | some r2 =>
             cases hy : parseTypeList lf f r2 with
-            | none => simp_all [hx, h2, hy, hpt]
+            | none => simp_all
             | some q =>
               have hlist := ihl _ _ hy
-              simp_all [hx, h2, hpt, hlist]
+              simp_all
     intro h
     unfold parseType at h ⊢
     -- lexing is fuel-free: both sides dispatch on the same ctor. The old
@@ -551,26 +551,26 @@ theorem parseType_mono (fuel : Nat) (cs : List Char) (r : Proto.PType × List Ch
       | decimal => exact h
       | list =>
         cases he : parseType f (cs.drop 5) with
-        | none => simp_all [he]
+        | none => simp_all
         | some x =>
           cases hgt : expect ">" x.2 with
-          | none => simp_all [he, hgt]
+          | none => simp_all
           | some r2 =>
             have hih := ih _ _ he
-            simp_all [hih, hgt]
+            simp_all
       | map =>
         cases hk : parseType f (cs.drop 4) with
-        | none => simp_all [hk]
+        | none => simp_all
         | some x =>
           cases hsep : expect ", " x.2 with
-          | none => simp_all [hk, hsep]
+          | none => simp_all
           | some r2 =>
             cases hv : parseType f r2 with
-            | none => simp_all [hk, hsep, hv]
+            | none => simp_all
             | some y =>
               have ihk := ih _ _ hk
               have ihv := ih _ _ hv
-              simp_all [ihk, ihv, hsep]
+              simp_all
       | struct =>
         cases he0 : expect ">" (cs.drop 7) with
         | some r2 =>
@@ -579,13 +579,13 @@ theorem parseType_mono (fuel : Nat) (cs : List Char) (r : Proto.PType × List Ch
           | cons c cs' => simp_all
         | none =>
           cases hlist : parseTypeList (cs.length + 1) f (cs.drop 7) with
-          | none => simp_all [he0, hlist]
+          | none => simp_all
           | some x =>
             cases hgt : expect ">" x.2 with
-            | none => simp_all [he0, hlist, hgt]
+            | none => simp_all
             | some r2 =>
               have hlm := hlist_mono (cs.length + 1) _ _ hlist
-              simp_all [he0, hlm, hgt]
+              simp_all
 
 /-- **Fuel monotonicity (k steps)**: any extra fuel preserves a successful
     parse. The form inversion proofs consume. -/
@@ -600,7 +600,7 @@ theorem parseType_mono_of_le (f k : Nat) (cs : List Char) (r : Proto.PType × Li
     larger fuel. -/
 theorem parseType_at_depth (t : Proto.PType) (cs : List Char) (r : Proto.PType × List Char)
     (h : parseType (typeDepth t) cs = some r) : ∀ k, parseType (typeDepth t + k) cs = some r :=
-  fun k => parseType_mono_of_le _ _ _ _ h
+  fun _k => parseType_mono_of_le _ _ _ _ h
 
 -- ── types: the inversion theorems ─────────────────────────────────────────
 
@@ -841,7 +841,7 @@ private theorem decimalT (p s : Nat) (n : Proto.Nullability) (rest : List Char)
     have hb : b = "decimal<" ++ toString p ++ "," ++ toString s ++ ">" := hemit.symm
     rw [hb]
     unfold parseType
-    simp [startsWith, List.isPrefixOf]
+    simp
     have hA : notDigitHead (',' :: (Nat.toDigits 10 s ++ '>' :: rest)) := by
       right
       exact ⟨',', Nat.toDigits 10 s ++ '>' :: rest, rfl, by decide⟩
@@ -869,7 +869,7 @@ private theorem decimalT (p s : Nat) (n : Proto.Nullability) (rest : List Char)
     have hb : b = "decimal<" ++ toString p ++ "," ++ toString s ++ ">" ++ "?" := hemit.symm
     rw [hb]
     unfold parseType
-    simp [startsWith, List.isPrefixOf]
+    simp
     have hA : notDigitHead (',' :: (Nat.toDigits 10 s ++ '>' :: '?' :: rest)) := by
       right
       exact ⟨',', Nat.toDigits 10 s ++ '>' :: '?' :: rest, rfl, by decide⟩
@@ -1159,7 +1159,7 @@ private theorem mapM_cons_ok {α β ε : Type} (a : α) (rest : List α)
 private theorem app_ne_prefix (pre tail : String) (hp : pre.toList ≠ []) :
     pre ++ tail ≠ "" := by
   intro hz
-  have h' : (pre ++ tail).toList = [] := by simpa [hz]
+  have h' : (pre ++ tail).toList = [] := by simp [hz]
   have htl : pre.toList ++ tail.toList = [] := by simpa [String.toList_append] using h'
   exact hp ((List.append_eq_nil_iff.mp htl).1)
 
@@ -1182,11 +1182,11 @@ private theorem typeTextBase_nonempty (t : Proto.PType) (b0 : String)
   | string n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
   | binary n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
   | decimal p s n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     rw [h.symm]
     exact app_ne_prefix "decimal<" (toString p ++ "," ++ toString s ++ ">") (by decide)
   | list e n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     cases he : Emit.Text.typeText e with
     | error em => simp [he] at h
     | ok es =>
@@ -1194,7 +1194,7 @@ private theorem typeTextBase_nonempty (t : Proto.PType) (b0 : String)
       rw [h.symm]
       exact app_ne_prefix "list<" (es ++ ">") (by decide)
   | map k v n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     cases he : Emit.Text.typeText k with
     | error em => simp [he] at h
     | ok es =>
@@ -1205,7 +1205,7 @@ private theorem typeTextBase_nonempty (t : Proto.PType) (b0 : String)
         rw [h.symm]
         exact app_ne_prefix "map<" (es ++ ", " ++ es2 ++ ">") (by decide)
   | struct fs n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     cases he : fs.mapM Emit.Text.typeText with
     | error em => simp [he] at h
     | ok es =>
@@ -1227,7 +1227,7 @@ private theorem typeText_nonempty (t : Proto.PType) (s : String) (h : Emit.Text.
       have hne0 : b0 ≠ "" := typeTextBase_nonempty t b0 hb
       exact hne0 (by
         have hbs : b0 ++ ns = "" := h.trans hz
-        have h' : (b0 ++ ns).toList = [] := by simpa [hbs]
+        have h' : (b0 ++ ns).toList = [] := by simp [hbs]
         have htl : b0.toList ++ ns.toList = [] := by simpa [String.toList_append] using h'
         have hpl : b0.toList = [] := (List.append_eq_nil_iff.mp htl).1
         exact String.toList_inj.mp (by simpa using hpl))
@@ -1314,7 +1314,7 @@ private theorem expect_fail (p : String) (rest : List Char) (hp : p ≠ "")
         have hc0 : c0 ≠ c := by
           intro hcc
           exact hh0 (by rw [hcc])
-        simp [List.isPrefixOf, hr, hc0.symm]
+        simp [List.isPrefixOf, hc0.symm]
   simp [hs]
 
 private theorem expect_comma_fail (rest : List Char) (hh : rest.head? ≠ some ',') :
@@ -1375,7 +1375,7 @@ private theorem expect_gt_fail_char (c : Char) (rest : List Char) (hc : c ≠ '>
       unfold startsWith
       have hl : (">" : String).toList = ['>'] := by decide
       rw [hl]
-      simp [List.isPrefixOf, hc0]
+      simp [List.isPrefixOf]
       exact fun hz : '>' = c => hc hz.symm
     rw [if_neg (by intro hz; rw [hpre] at hz; simp at hz)]
 
@@ -1386,7 +1386,7 @@ private theorem expect_gt_fail_head (cs : List Char) (hh : cs ≠ [] ∧ cs.head
   | cons c cs0 =>
     have hc : c ≠ '>' := by
       intro hcc
-      exact hh.2 (by simpa [hcc])
+      exact hh.2 (by simp [hcc])
     exact expect_gt_fail_char c cs0 hc
 
 private theorem parseTypeList_invert (l : List Proto.PType) (fuel0 : Nat) (after : List Char)
@@ -1433,7 +1433,7 @@ private theorem parseTypeList_invert (l : List Proto.PType) (fuel0 : Nat) (after
       have hinput : ((Emit.Text.sep ", " (tf :: tf2 :: ts2)).toList ++ after) = tf.toList ++ cont := by
         have hc := sep_cons (l := (tf2 :: ts2)) ", " tf (by simp)
         have hsept : Emit.Text.sep ", " (tf :: tf2 :: ts2) = tf ++ ", " ++ Emit.Text.sep ", " (tf2 :: ts2) := by
-          simpa [Emit.Text.sep] using hc
+          simp [Emit.Text.sep]
         rw [hsept, toList_append3]
         simp [cont, List.append_assoc]
       rw [hinput]
@@ -1510,12 +1510,12 @@ private theorem typeText_base_head (t : Proto.PType) (b0 : String)
   | string n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
   | binary n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
   | decimal p s n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     rw [h.symm]
     exact prefix_head "decimal<" 'd' "ecimal<".toList (toString p ++ "," ++ toString s ++ ">") (by decide)
       (by decide : "decimal<".toList = 'd' :: "ecimal<".toList)
   | list e n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     cases he : Emit.Text.typeText e with
     | error em => simp [he] at h
     | ok es =>
@@ -1524,7 +1524,7 @@ private theorem typeText_base_head (t : Proto.PType) (b0 : String)
       exact prefix_head "list<" 'l' "ist<".toList (es ++ ">") (by decide)
         (by decide : "list<".toList = 'l' :: "ist<".toList)
   | map k v n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     cases he : Emit.Text.typeText k with
     | error em => simp [he] at h
     | ok es =>
@@ -1536,7 +1536,7 @@ private theorem typeText_base_head (t : Proto.PType) (b0 : String)
         exact prefix_head "map<" 'm' "ap<".toList (es ++ ", " ++ es2 ++ ">") (by decide)
           (by decide : "map<".toList = 'm' :: "ap<".toList)
   | struct fs n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase] at h
     cases he : fs.mapM Emit.Text.typeText with
     | error em => simp [he] at h
     | ok es =>
@@ -1670,7 +1670,7 @@ private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : 
               _ ≤ (Emit.Text.sep ", " (tb :: tsr)).toList.length := hsepl
               _ ≤ (( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest).length := by
                 rw [String.toList_append, String.toList_append]
-                simp only [List.length_append, List.length_cons, List.length_nil]
+                simp only [List.length_append]
                 have hc8 : (("struct<".toList).length) ≥ 7 := by decide
                 omega
           have hall : ∀ x ∈ f :: fs0, typeDepth x ≤ (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 := by
@@ -1914,7 +1914,7 @@ theorem parseType_typeText (t : Proto.PType) (b : String) (rest : List Char)
       (fun f hf b' rest' hr' he' => ih f hf b' rest' hr' he') hemit
   have huser : ∀ a ps n, True → motive (.userDefined a ps n) := by
     intro a ps n _ b rest hrest hemit
-    simp [Emit.Text.typeText, Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at hemit
+    simp [Emit.Text.typeText, Emit.Text.typeTextBase] at hemit
   exact ptypeRec motive hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary
     hdecimal hlist hmap hstruct huser t b rest hrest hemit
 
@@ -2225,7 +2225,7 @@ private theorem scanIdent_digit_head (c : Char) (cs : List Char) (hc : c.isDigit
     scanIdent (c :: cs) = none := by
   unfold scanIdent
   have hα := Char_isAlpha_of_digit hc
-  simpa [hα]
+  simp [hα]
 
 /-- `startsWith p` on a cons-headed text is false when the head char differs
     from the literal `p`'s head (one lemma for every literal prefix the
@@ -2242,7 +2242,7 @@ private theorem startsWith_neg_of_head (c : Char) (cs : List Char) (p : String)
     cases hc0 : c == h' with
     | true => exact (hc (beq_iff_eq.mp hc0)).elim
     | false =>
-      simp [List.isPrefixOf, hc0]
+      simp [List.isPrefixOf]
       intro hz
       exact (hc hz.symm).elim
 
@@ -2481,7 +2481,7 @@ private theorem typeDepth_foldl_le_sep (fs : List Proto.PType) (ts : List String
   omega
 
 /-- A depth-1 type's text (any emitted spelling) has length ≥ 1. -/
-private theorem typeDepth_one_le_len {t : Proto.PType} (hd : typeDepth t = 1) (b : String)
+private theorem typeDepth_one_le_len {t : Proto.PType} (_hd : typeDepth t = 1) (b : String)
     (hemit : Emit.Text.typeText t = .ok b) : 1 ≤ b.toList.length := by
   have hne := typeText_nonempty t b hemit
   have hpos : 0 < b.toList.length := by
@@ -2654,7 +2654,7 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
       simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
   have huser : ∀ a ps n, True → motive (.userDefined a ps n) := by
     intro a ps n _ b' hemit
-    simp [Emit.Text.typeText, Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at hemit
+    simp [Emit.Text.typeText, Emit.Text.typeTextBase] at hemit
   exact ptypeRec motive hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary
     hdecimal hlist hmap hstruct huser t b hemit
 
@@ -2748,7 +2748,7 @@ private theorem parseLiteral_i64_nullable (n : Nat) (rest : List Char)
 private theorem scanIdent_not_alpha (c : Char) (cs : List Char) (hc : c.isAlpha = false) :
     scanIdent (c :: cs) = none := by
   unfold scanIdent
-  simpa [hc]
+  simp [hc]
 
 /-- The prefix conditions for a quoted/named-head expression text (no cast /
     if_then / field / call prefix). -/
@@ -3022,7 +3022,7 @@ def parseAggregateHeader (ctx : FnCtx) (cs : List Char) : Option HeaderShape := 
       | none => none)
 
 /-- The Sort header: `($n, &Dir), … => cols`. -/
-def parseSortHeader (ctx : FnCtx) (cs : List Char) : Option HeaderShape := do
+def parseSortHeader (_ctx : FnCtx) (cs : List Char) : Option HeaderShape := do
   let rec sorts (lfuel : Nat) (acc : List Proto.SortField) (cc : List Char) :
       Option (List Proto.SortField × List Char) :=
     match lfuel with
@@ -3562,11 +3562,11 @@ theorem splitAppend_getElem? : ∀ (xss : List (List Char)) (tail : List Char)
                   (if j + 1 = (x :: y :: rest').length - 1 then tail else []) := by
                 by_cases hJ : j = (y :: rest').length - 1
                 · have hpos : j + 1 = (x :: y :: rest').length - 1 := hiff.mpr hJ
-                  simp [hJ, hpos]
+                  simp [hJ]
                 · have hnj : ¬ j + 1 = (x :: y :: rest').length - 1 := by
                     intro h
                     exact hJ (hiff.mp h)
-                  simp [hJ, hnj]
+                  simp
               simp only [splitAppend, List.getElem?_cons_succ]
               rw [ih tail j hj]
               rw [hc]
@@ -3605,7 +3605,7 @@ theorem splitAppend_map_parseNamedCol
     · intro h; omega
   have htext : texts[i]'(by simpa [hlen] using hi) =
       (colText (cols[i]'hi).1 (cols[i]'hi).2).toList := by
-    simpa [texts] using colTexts_getElem cols i hi (by simpa [texts, hlen] using hi)
+    simp [texts]
   by_cases hlast : i = cols.length - 1
   · let t : Proto.PType := (htype (cols[i]'hi) (List.getElem_mem (l := cols) hi)).choose
     have hemit : Emit.Text.typeText t = .ok (cols[i]'hi).2 :=
