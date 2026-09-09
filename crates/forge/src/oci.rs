@@ -60,7 +60,10 @@ impl OciStore {
             fs::write(&index, r#"{"schemaVersion":2,"manifests":[]}"#)?;
         }
         let tags = Self::load_tags(&index);
-        Ok(Self { root: root.to_path_buf(), tags })
+        Ok(Self {
+            root: root.to_path_buf(),
+            tags,
+        })
     }
 
     /// Read label → digest from an existing index.json. Missing or
@@ -126,13 +129,19 @@ impl OciStore {
         })?;
         let actual = xxh3_hex(&file);
         if &actual != stored {
-            return Ok(Verify::Mismatch { stored: stored.clone(), actual });
+            return Ok(Verify::Mismatch {
+                stored: stored.clone(),
+                actual,
+            });
         }
         // Digest matches; confirm the cached blob bytes too. A corrupted
         // blob self-heals on the next `--store` (put overwrites).
         if let Ok(blob) = self.get(stored) {
             if blob != file {
-                return Ok(Verify::Mismatch { stored: stored.clone(), actual });
+                return Ok(Verify::Mismatch {
+                    stored: stored.clone(),
+                    actual,
+                });
             }
         }
         Ok(Verify::Match)
@@ -184,7 +193,10 @@ impl OciStore {
             "schemaVersion": 2,
             "manifests": manifests,
         });
-        fs::write(self.root.join("index.json"), serde_json::to_string_pretty(&index)?)?;
+        fs::write(
+            self.root.join("index.json"),
+            serde_json::to_string_pretty(&index)?,
+        )?;
         Ok(())
     }
 }

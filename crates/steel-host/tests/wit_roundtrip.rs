@@ -13,8 +13,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use wit_parser::{
-    Case, Function, FunctionKind, Interface, Resolve, Type, TypeDef, TypeDefKind, TypeId, WorldKey,
-    WorldItem,
+    Case, Function, FunctionKind, Interface, Resolve, Type, TypeDef, TypeDefKind, TypeId,
+    WorldItem, WorldKey,
 };
 
 /// The generated WIT, relative to this crate.
@@ -67,10 +67,13 @@ fn follow_alias(resolve: &Resolve, mut id: TypeId) -> TypeId {
     id
 }
 
-/// Fail with a message without `panic!` (workspace denies `clippy::panic`).
+/// Fail with a message. The workspace denies `clippy::panic` globally;
+/// this test helper is the sanctioned escape hatch — the message IS the
+/// output.
 #[track_caller]
+#[allow(clippy::panic, reason = "test helper: fail loud, fail clear")]
 fn fail(msg: &str) {
-    assert!(false, "{msg}");
+    panic!("{msg}");
 }
 
 #[test]
@@ -78,14 +81,24 @@ fn gateway_wit_package_and_interfaces_resolve() -> Result<(), Box<dyn std::error
     let (resolve, pkg) = resolve_gateway()?;
 
     let pkg = &resolve.packages[pkg];
-    assert_eq!(pkg.name.namespace, "demo", "namespace from package demo:gateway");
-    assert_eq!(pkg.name.name, "gateway", "package name from package demo:gateway");
+    assert_eq!(
+        pkg.name.namespace, "demo",
+        "namespace from package demo:gateway"
+    );
+    assert_eq!(
+        pkg.name.name, "gateway",
+        "package name from package demo:gateway"
+    );
     assert_eq!(
         pkg.interfaces.keys().collect::<Vec<_>>(),
         vec!["gateway-types", "gateway-exports"],
         "package interfaces"
     );
-    assert_eq!(pkg.worlds.keys().collect::<Vec<_>>(), vec!["gateway"], "package worlds");
+    assert_eq!(
+        pkg.worlds.keys().collect::<Vec<_>>(),
+        vec!["gateway"],
+        "package worlds"
+    );
     Ok(())
 }
 
@@ -96,7 +109,10 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
 
     // All six schema declarations are present by name.
     for name in ["user", "order-item", "order", "role", "order-error", "db"] {
-        assert!(types.types.contains_key(name), "gateway-types is missing type `{name}`");
+        assert!(
+            types.types.contains_key(name),
+            "gateway-types is missing type `{name}`"
+        );
     }
 
     // ── record user: exact fields, exact types ──
@@ -106,13 +122,26 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         return Ok(());
     };
     let field_names: Vec<&str> = record.fields.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(field_names, ["id", "name", "email", "tags"], "user record fields");
+    assert_eq!(
+        field_names,
+        ["id", "name", "email", "tags"],
+        "user record fields"
+    );
     fn field_ty<'a>(fields: &'a [wit_parser::Field], name: &str) -> Option<&'a Type> {
         fields.iter().find(|f| f.name == name).map(|f| &f.ty)
     }
-    assert!(field_ty(&record.fields, "id") == Some(&Type::U64), "user.id should be u64");
-    assert!(field_ty(&record.fields, "name") == Some(&Type::String), "user.name should be string");
-    assert!(field_ty(&record.fields, "email") == Some(&Type::String), "user.email should be string");
+    assert!(
+        field_ty(&record.fields, "id") == Some(&Type::U64),
+        "user.id should be u64"
+    );
+    assert!(
+        field_ty(&record.fields, "name") == Some(&Type::String),
+        "user.name should be string"
+    );
+    assert!(
+        field_ty(&record.fields, "email") == Some(&Type::String),
+        "user.email should be string"
+    );
     match field_ty(&record.fields, "tags") {
         Some(ty) => assert_list_of_string(&resolve, ty, "user.tags"),
         None => fail("user.tags missing"),
@@ -121,13 +150,26 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
     // ── record order-item ──
     let order_item = typedef(&resolve, types, "order-item")?;
     let TypeDefKind::Record(order_item) = &order_item.kind else {
-        fail(&format!("`order-item` should be a record, got {:?}", order_item.kind));
+        fail(&format!(
+            "`order-item` should be a record, got {:?}",
+            order_item.kind
+        ));
         return Ok(());
     };
     let field_names: Vec<&str> = order_item.fields.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(field_names, ["id", "qty", "price"], "order-item record fields");
-    assert!(field_ty(&order_item.fields, "id") == Some(&Type::U64), "order-item.id should be u64");
-    assert!(field_ty(&order_item.fields, "qty") == Some(&Type::U32), "order-item.qty should be u32");
+    assert_eq!(
+        field_names,
+        ["id", "qty", "price"],
+        "order-item record fields"
+    );
+    assert!(
+        field_ty(&order_item.fields, "id") == Some(&Type::U64),
+        "order-item.id should be u64"
+    );
+    assert!(
+        field_ty(&order_item.fields, "qty") == Some(&Type::U32),
+        "order-item.qty should be u32"
+    );
     assert!(
         field_ty(&order_item.fields, "price") == Some(&Type::F64),
         "order-item.price should be f64"
@@ -162,7 +204,10 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         }
         _ => fail("order.items: expected a list<order-item> type"),
     }
-    assert!(field_ty(&order.fields, "total") == Some(&Type::F64), "order.total should be f64");
+    assert!(
+        field_ty(&order.fields, "total") == Some(&Type::F64),
+        "order.total should be f64"
+    );
 
     // ── variant role: 3 caseless cases ──
     let role = typedef(&resolve, types, "role")?;
@@ -171,13 +216,23 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         return Ok(());
     };
     let case_names: Vec<&str> = role.cases.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(case_names, ["admin", "editor", "viewer"], "role variant cases");
-    assert!(role.cases.iter().all(|c: &Case| c.ty.is_none()), "role cases should have no payloads");
+    assert_eq!(
+        case_names,
+        ["admin", "editor", "viewer"],
+        "role variant cases"
+    );
+    assert!(
+        role.cases.iter().all(|c: &Case| c.ty.is_none()),
+        "role cases should have no payloads"
+    );
 
     // ── variant order-error: 3 cases, 2 with payloads ──
     let order_error = typedef(&resolve, types, "order-error")?;
     let TypeDefKind::Variant(order_error) = &order_error.kind else {
-        fail(&format!("`order-error` should be a variant, got {:?}", order_error.kind));
+        fail(&format!(
+            "`order-error` should be a variant, got {:?}",
+            order_error.kind
+        ));
         return Ok(());
     };
     let case_names: Vec<&str> = order_error.cases.iter().map(|c| c.name.as_str()).collect();
@@ -187,10 +242,20 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         "order-error cases"
     );
     let payload = |name: &str| -> Option<&Type> {
-        order_error.cases.iter().find(|c| c.name == name).and_then(|c| c.ty.as_ref())
+        order_error
+            .cases
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.ty.as_ref())
     };
-    assert!(payload("empty-cart").is_none(), "empty-cart should be caseless");
-    assert!(payload("invalid-item") == Some(&Type::U64), "invalid-item should carry u64");
+    assert!(
+        payload("empty-cart").is_none(),
+        "empty-cart should be caseless"
+    );
+    assert!(
+        payload("invalid-item") == Some(&Type::U64),
+        "invalid-item should carry u64"
+    );
     assert!(
         payload("insufficient-funds") == Some(&Type::F64),
         "insufficient-funds should carry f64"
@@ -240,16 +305,24 @@ fn gateway_exports_interface_has_schema_functions() -> Result<(), Box<dyn std::e
     }
     let user_id = follow_alias(
         &resolve,
-        *exports.types.get("user").ok_or("gateway-exports missing alias `user`")?,
+        *exports
+            .types
+            .get("user")
+            .ok_or("gateway-exports missing alias `user`")?,
     );
     let order_error_id = follow_alias(
         &resolve,
-        *exports.types.get("order-error").ok_or("gateway-exports missing alias `order-error`")?,
+        *exports
+            .types
+            .get("order-error")
+            .ok_or("gateway-exports missing alias `order-error`")?,
     );
 
     // ── get-user: func(id: u64) -> option<user> ──
-    let get_user: &Function =
-        exports.functions.get("get-user").ok_or("gateway-exports missing `get-user`")?;
+    let get_user: &Function = exports
+        .functions
+        .get("get-user")
+        .ok_or("gateway-exports missing `get-user`")?;
     assert!(
         matches!(get_user.kind, FunctionKind::Freestanding),
         "get-user should be a plain (non-async) freestanding func, got {:?}",
@@ -257,7 +330,10 @@ fn gateway_exports_interface_has_schema_functions() -> Result<(), Box<dyn std::e
     );
     assert_eq!(get_user.params.len(), 1, "get-user takes one param");
     assert_eq!(get_user.params[0].name, "id", "get-user param name");
-    assert!(get_user.params[0].ty == Type::U64, "get-user param should be u64");
+    assert!(
+        get_user.params[0].ty == Type::U64,
+        "get-user param should be u64"
+    );
     let result = get_user.result.ok_or("get-user should have a result")?;
     match result {
         Type::Id(id) => match &resolve.types[id].kind {
@@ -276,25 +352,36 @@ fn gateway_exports_interface_has_schema_functions() -> Result<(), Box<dyn std::e
                     "get-user result should be option<user>, got option of {inner:?}"
                 );
             }
-            kind => fail(&format!("get-user result: expected option<...>, got {kind:?}")),
+            kind => fail(&format!(
+                "get-user result: expected option<...>, got {kind:?}"
+            )),
         },
-        ty => fail(&format!("get-user result: expected option<user>, got {ty:?}")),
+        ty => fail(&format!(
+            "get-user result: expected option<user>, got {ty:?}"
+        )),
     }
 
     // ── watch-orders: async func(into: order-error) -> list<user> ──
-    let watch_orders: &Function =
-        exports.functions.get("watch-orders").ok_or("gateway-exports missing `watch-orders`")?;
+    let watch_orders: &Function = exports
+        .functions
+        .get("watch-orders")
+        .ok_or("gateway-exports missing `watch-orders`")?;
     assert!(
         matches!(watch_orders.kind, FunctionKind::AsyncFreestanding),
         "watch-orders should be `async func`, got {:?}",
         watch_orders.kind
     );
     assert_eq!(watch_orders.params.len(), 1, "watch-orders takes one param");
-    assert_eq!(watch_orders.params[0].name, "into", "watch-orders param name");
+    assert_eq!(
+        watch_orders.params[0].name, "into",
+        "watch-orders param name"
+    );
     let into_ty = match &watch_orders.params[0].ty {
         Type::Id(id) => *id,
         ty => {
-            fail(&format!("watch-orders `into` should be order-error, got {ty:?}"));
+            fail(&format!(
+                "watch-orders `into` should be order-error, got {ty:?}"
+            ));
             return Ok(());
         }
     };
@@ -302,7 +389,9 @@ fn gateway_exports_interface_has_schema_functions() -> Result<(), Box<dyn std::e
         follow_alias(&resolve, into_ty) == order_error_id,
         "watch-orders `into` should be order-error"
     );
-    let result = watch_orders.result.ok_or("watch-orders should have a result")?;
+    let result = watch_orders
+        .result
+        .ok_or("watch-orders should have a result")?;
     match result {
         Type::Id(id) => match &resolve.types[id].kind {
             TypeDefKind::List(elem) => {
@@ -320,9 +409,13 @@ fn gateway_exports_interface_has_schema_functions() -> Result<(), Box<dyn std::e
                     "watch-orders result should be list<user>, got list of {elem:?}"
                 );
             }
-            kind => fail(&format!("watch-orders result: expected list<...>, got {kind:?}")),
+            kind => fail(&format!(
+                "watch-orders result: expected list<...>, got {kind:?}"
+            )),
         },
-        ty => fail(&format!("watch-orders result: expected list<user>, got {ty:?}")),
+        ty => fail(&format!(
+            "watch-orders result: expected list<user>, got {ty:?}"
+        )),
     }
 
     Ok(())
@@ -336,7 +429,10 @@ fn assert_list_of_string(resolve: &Resolve, ty: &Type, what: &str) {
     };
     match &resolve.types[*id].kind {
         TypeDefKind::List(elem) => {
-            assert!(*elem == Type::String, "{what}: list element should be string, got {elem:?}");
+            assert!(
+                *elem == Type::String,
+                "{what}: list element should be string, got {elem:?}"
+            );
         }
         kind => fail(&format!("{what}: expected list<...>, got {kind:?}")),
     }
@@ -346,8 +442,11 @@ fn assert_list_of_string(resolve: &Resolve, ty: &Type, what: &str) {
 fn gateway_world_exports_gateway_exports_interface() -> Result<(), Box<dyn std::error::Error>> {
     let (resolve, pkg) = resolve_gateway()?;
 
-    let world_id =
-        resolve.packages[pkg].worlds.get("gateway").copied().ok_or("package has no world `gateway`")?;
+    let world_id = resolve.packages[pkg]
+        .worlds
+        .get("gateway")
+        .copied()
+        .ok_or("package has no world `gateway`")?;
     let world = &resolve.worlds[world_id];
     assert_eq!(world.name, "gateway");
 

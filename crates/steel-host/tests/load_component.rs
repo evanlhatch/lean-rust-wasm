@@ -123,7 +123,8 @@ async fn missing_export_faults_cleanly() -> Result<(), Box<dyn std::error::Error
 /// "Lean defines the ABI" proof: the host's API is generated from the
 /// Lean-defined world.
 #[tokio::test]
-async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn std::error::Error>> {
+async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn std::error::Error>>
+{
     use steel_host::bindings::{GatewayPre, GatewayUser};
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -137,7 +138,9 @@ async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn 
 
     let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
     let pre = rt.instantiate_pre(&component)?;
-    let gw = GatewayPre::new(pre)?.instantiate_async(rt.store_mut()).await?;
+    let gw = GatewayPre::new(pre)?
+        .instantiate_async(rt.store_mut())
+        .await?;
     let iface = gw.demo_gateway_gateway_exports();
 
     // Miss: unknown id → none.

@@ -5,7 +5,7 @@
 //! This is the CONCEPTUAL framework's trait — NOT the Feldera `dbsp`
 //! crate. Generated delta enums (`delta_generated.rs`) impl this trait;
 //! the certified-delta tests execute the patch/validity shape on concrete
-//! values (Stage E: the ChangeSpec laws, executed).
+//! values (Stage E: the `ChangeSpec` laws, executed).
 //!
 //! Generality note: `patch : Row → Δ → Row` with `valid` keeping the base
 //! mirrors the Lean class exactly — a change is only meaningful against a

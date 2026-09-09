@@ -112,7 +112,7 @@ def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
               [ ("patch(&self, base: &" ++ full ++ ") -> " ++ full
                 , "match self { Self::Insert(u) | Self::Update(u) => "
                   ++ "u.clone(), Self::Remove(_) => base.clone() }")
-              , ("valid(&self, base: &" ++ full ++ ") -> bool", "true")
+              , ("valid(&self, _base: &" ++ full ++ ") -> bool", "true")
               ]
           ]
   | _ => []
@@ -158,7 +158,9 @@ def Item.changeTestItems : Item → List CodegenCore.Emit.Rust.Item
             , s!"assert_eq!(dbsp::Change::patch(&delta, &base), base);"
             , s!"assert!(dbsp::Change::valid(&delta, &base));"
             ]
-          [ .raw "#[test]"
+          [ .raw "/// # Panics"
+          , .raw "/// - the change laws are violated — that is the point of the test."
+          , .raw "#[test]"
           , .fn s!"fn {snake n}_change_roundtrip()" body
           ]
       | _, _ => []
@@ -187,12 +189,16 @@ def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   specSource := "Demo.lean"
   outputs := ["../../src/delta_generated.rs"]
   run items :=
+    let recordUses :=
+      items.filterMap fun it =>
+        match it with
+        | .record n _ => some (CodegenCore.Emit.Rust.Item.use_ s!"crate::schema_generated::{CodegenCore.Emit.pascal n}")
+        | _ => none
     [{ path := "../../src/delta_generated.rs"
        contents :=
          CodegenCore.Emit.Rust.renderModule
-           ([ .use_ "crate::dbsp"
-            , .use_ "crate::schema_generated::*"
-            ]
+           ([ .use_ "crate::dbsp" ]
+            ++ recordUses
             ++ items.flatMap Item.changeRustItems
             ++ Item.changeTestModule items) }]
 

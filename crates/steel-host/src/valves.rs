@@ -9,12 +9,13 @@
 
 // The generated module lives at the repo root's src/ (one-writer
 // discipline: the faults emitter owns it; `just gen` regenerates).
+// rustfmt::skip: the EMITTER's output is the formatting authority —
+// rustfmt reflowing a generated file would fight the byte-tie.
+#[rustfmt::skip]
 #[path = "../../../src/host_faults_generated.rs"]
 pub mod host_faults_generated;
 
-pub use host_faults_generated::{
-    Engine, HostFault, MissingExport, UnsupportedResult, init_host,
-};
+pub use host_faults_generated::{Engine, HostFault, MissingExport, UnsupportedResult, init_host};
 
 /// Register the host fault entries — call once at startup (native builds
 /// would resolve codes at link time via linkme; explicit call is the

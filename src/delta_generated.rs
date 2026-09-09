@@ -2,7 +2,9 @@
 // spec source: Demo.lean
 // regenerate via `just gen`; drift fails CI (byte-tie)
 use crate::dbsp;
-use crate::schema_generated::*;
+use crate::schema_generated::User;
+use crate::schema_generated::OrderItem;
+use crate::schema_generated::Order;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UserChange {
   Insert(User),
@@ -14,7 +16,7 @@ impl dbsp::Change<User> for UserChange {
   fn patch(&self, base: &User) -> User {
     match self { Self::Insert(u) | Self::Update(u) => u.clone(), Self::Remove(_) => base.clone() }
   }
-  fn valid(&self, base: &User) -> bool {
+  fn valid(&self, _base: &User) -> bool {
     true
   }
 }
@@ -29,7 +31,7 @@ impl dbsp::Change<OrderItem> for OrderItemChange {
   fn patch(&self, base: &OrderItem) -> OrderItem {
     match self { Self::Insert(u) | Self::Update(u) => u.clone(), Self::Remove(_) => base.clone() }
   }
-  fn valid(&self, base: &OrderItem) -> bool {
+  fn valid(&self, _base: &OrderItem) -> bool {
     true
   }
 }
@@ -44,13 +46,15 @@ impl dbsp::Change<Order> for OrderChange {
   fn patch(&self, base: &Order) -> Order {
     match self { Self::Insert(u) | Self::Update(u) => u.clone(), Self::Remove(_) => base.clone() }
   }
-  fn valid(&self, base: &Order) -> bool {
+  fn valid(&self, _base: &Order) -> bool {
     true
   }
 }
 #[cfg(test)]
 pub mod tests {
   use super::*;
+  /// # Panics
+  /// - the change laws are violated — that is the point of the test.
   #[test]
   pub fn user_change_roundtrip() {
     let base = User {id : 1, name : "a".into(), email : "a".into(), tags : vec![]};
@@ -58,6 +62,8 @@ pub mod tests {
     assert_eq!(dbsp::Change::patch(&delta, &base), base);
     assert!(dbsp::Change::valid(&delta, &base));
   }
+  /// # Panics
+  /// - the change laws are violated — that is the point of the test.
   #[test]
   pub fn order_item_change_roundtrip() {
     let base = OrderItem {id : 1, qty : 1, price : 1.0};
@@ -65,6 +71,8 @@ pub mod tests {
     assert_eq!(dbsp::Change::patch(&delta, &base), base);
     assert!(dbsp::Change::valid(&delta, &base));
   }
+  /// # Panics
+  /// - the change laws are violated — that is the point of the test.
   #[test]
   pub fn order_change_roundtrip() {
     let base = Order {id : 1, items : vec![], total : 1.0};

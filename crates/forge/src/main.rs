@@ -29,7 +29,11 @@ const JOBS: &[Job] = &[
     Job {
         package: "schema-lang",
         exe: "schema-gen",
-        outputs: &["wit/gateway.wit", "src/schema_generated.rs", "src/vortex_generated.rs"],
+        outputs: &[
+            "wit/gateway.wit",
+            "src/schema_generated.rs",
+            "src/vortex_generated.rs",
+        ],
     },
     Job {
         package: "faults",
@@ -107,7 +111,11 @@ fn main() {
     if !check {
         let mut failed = false;
         for job in JOBS {
-            println!("forge: gen {} ({} artifacts)", job.package, job.outputs.len());
+            println!(
+                "forge: gen {} ({} artifacts)",
+                job.package,
+                job.outputs.len()
+            );
             if let Err(e) = run_job(&tc, &root, job) {
                 eprintln!("forge: FAIL {e}");
                 failed = true;
@@ -177,8 +185,11 @@ fn main() {
     // drift — regenerate with `just gen`, never hand-edit.
     let mut drifted = Vec::new();
     for job in JOBS {
-        let before: Vec<Option<Vec<u8>>> =
-            job.outputs.iter().map(|o| read_if_exists(&root.join(o))).collect();
+        let before: Vec<Option<Vec<u8>>> = job
+            .outputs
+            .iter()
+            .map(|o| read_if_exists(&root.join(o)))
+            .collect();
         if let Err(e) = run_job(&tc, &root, job) {
             eprintln!("forge: FAIL {e}");
             std::process::exit(1);
