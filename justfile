@@ -230,3 +230,19 @@ lean-axioms:
 	  if [ -n "$bad" ]; then echo "FAIL: $p unexpected axioms:"; echo "$bad"; exit 1; fi
 	  echo "$p: axioms clean"
 	done
+
+# ── The compiler line: LCNF → WAT → binary WASM ──────────────────────
+# The backend re-runs Lean's LCNF pipeline (the leanir pattern) and emits
+# WAT; wasm-tools parses (-g: DWARF + name section) and validates.
+# Smoke: wasmtime --invoke runs the exports (double 21 = 42).
+wasm-compile:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	TC="$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" build DemoFn wasm-gen \
+	  && PATH="$TC:$PATH" "$TC/lake" exe wasm-gen)
+	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
+	[ -x "$WT" ] || WT=wasm-tools
+	"$WT" parse -g lean/wasm-backend/target/demo.wat -o lean/wasm-backend/target/demo.wasm
+	"$WT" validate lean/wasm-backend/target/demo.wasm
+	echo "wasm-compile: lean/wasm-backend/target/demo.wasm VALID"
