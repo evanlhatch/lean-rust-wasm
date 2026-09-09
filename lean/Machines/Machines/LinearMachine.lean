@@ -157,7 +157,7 @@ theorem LinearMachine.guard_patch_stable (m : Machine) [AddCommGroup m.State]
   | false =>
     have e1 : m.step? s l = none := step?_eq_none m s l hs
     rw [e1] at h
-    simp [patchOpt] at h
+    simp only [patchOpt] at h
     cases hp : (m.event l).guard (patch s δ) with
     | false => rfl
     | true =>
@@ -166,7 +166,7 @@ theorem LinearMachine.guard_patch_stable (m : Machine) [AddCommGroup m.State]
   | true =>
     have e1 : m.step? s l = some ((m.event l).action s hs) := step?_eq_true m s l hs
     rw [e1] at h
-    simp [patchOpt] at h
+    simp only [patchOpt] at h
     cases hp : (m.event l).guard (patch s δ) with
     | true => rfl
     | false =>

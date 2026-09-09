@@ -144,24 +144,24 @@ theorem reset_from_failed :
     pipeline.run (.failed "tie" ["artifact drift"]) [.reset] = some ([(.reset, .idle)], .idle) :=
   rfl
 
-/-! ## The transition table — DATA, emitted to the Rust driver
+/-! ## The stage machine, as the driver consumes it
 
-The forge driver (crates/forge) sequences its gen/check phases through
-THE SAME machine: the table below is folded into
-`src/pipeline_generated.rs` (pipelineEmitter), forge includes it and
-steps Idle→…→Tied — an illegal transition aborts the driver. The
-agreement theorem makes the emitted table the machine's step?, so the
-proved properties (`rank_advances`, `happy_path`, `reject_out_of_order`)
-govern the Rust driver. This is the connection the old "Pipeline is a
-model forge never reads" gap lacked: the driver consumes the spec.
+forge (crates/forge) sequences its gen/check phases through the
+GENERATED stage machine (`src/pipeline_generated.rs`, emitted by the
+`pipelineEmitter`). `tableStep?` is the STRUCTURAL match over the
+machine's own Label + State — and `tableStep?_eq_step?` PROVES it is
+the machine's `step?`, so the emitted Rust (which mirrors this match —
+the Rust-side `happy_path_assertions` + the spliced-run tests are its
+drift guards) is the machine, not a sketch of it: the proved
+`rank_advances`/`reject_out_of_order` govern the driver.
 -/
 
-/-- The transition table as plain data: (event, from, to) over the
-    machine's GENERATED `Label` (one ctor per event — the same type the
-    proofs case-split). One row per enabled (event, from) with CONCRETE
-    from-states; the `failed` state (arbitrary strings — data can't
-    wildcard it) is handled structurally in `tableStep?`.
-    `tableStep?_eq_step?` PROVES the composition is the machine. -/
+/-- The transition DATA the emitter folds (`Emit.Registry.pipelineArms`
+    generates the Rust match from these rows, with the reset-wildcard
+    collapse checked against this table). The DATA and the structural
+    `tableStep?` below are two readings of one machine — the theorem
+    pins the structural reading to the machine; the emitter's
+    wildcard-check + the Rust-side assertions guard the data reading. -/
 def pipelineTrans : List (pipeline.Label × PipelineState × PipelineState) :=
   [ (.reflect, .idle, .reflecting)
   , (.check, .reflecting, .checked)
@@ -173,23 +173,23 @@ def pipelineTrans : List (pipeline.Label × PipelineState × PipelineState) :=
   , (.reset, .emitted, .idle)
   , (.reset, .tied, .idle) ]
 
-/-- Table lookup: the first row matching (event, from); `none` = illegal
-    (the machine's guard failed). `failed` is structural: `reset` recovers
-    (the recovery edge), every other event is rejected. -/
-def tableStep? (e : pipeline.Label) (s : PipelineState) : Option PipelineState :=
-  match s with
-  | .failed _ _ => match e with | .reset => some .idle | _ => none
-  | _ =>
-      (pipelineTrans.filter fun (e', s', _) => e' == e && s' == s)
-        |>.head?.map fun (_, _, to') => to'
+/-- The stage machine as a total lookup (STRUCTURAL — the theorem's
+    subject): the machine's guards are equality tests on the state, so
+    the match arms are exactly the enabled (event, from, to) triples;
+    `reset` fires from EVERY state (the recovery edge — `failed`
+    included); everything else is illegal. -/
+def tableStep? : pipeline.Label → PipelineState → Option PipelineState
+  | .reflect, .idle => some .reflecting
+  | .check, .reflecting => some .checked
+  | .emit, .checked => some .emitted
+  | .tie, .emitted => some .tied
+  | .reset, _ => some .idle
+  | _, _ => none
 
-/-- The emitted table IS the machine: same total step function. Every
-    guard in `machine! pipeline` is an equality on the state, so the
-    table (+ the structural failed arm) enumerates exactly the enabled
-    (event, from, to) triples. -/
+/-- The emitted table IS the machine. -/
 theorem tableStep?_eq_step? (e : pipeline.Label) (s : PipelineState) :
     tableStep? e s = pipeline.step? s e := by
   cases s <;> cases e <;>
-    simp [tableStep?, pipeline, pipeline.spec, PipelineState.rank] <;> rfl
+    simp [tableStep?, pipeline, pipeline.spec]
 
 end SchemaLang

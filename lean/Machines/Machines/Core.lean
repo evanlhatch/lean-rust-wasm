@@ -112,7 +112,7 @@ theorem step?_preserves (s : m.State) (l : m.Label) (s' : m.State)
 -- construction rule 1) — proofs consume `simp [Machine.run]`, never walk the
 -- match structure by hand.
 
-theorem step?_eq (s : m.State) (l : m.Label) :
+@[simp] theorem step?_eq (s : m.State) (l : m.Label) :
     m.step? s l = if h : (m.event l).guard s = true
       then some ((m.event l).action s h) else none := rfl
 

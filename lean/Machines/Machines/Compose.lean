@@ -58,88 +58,49 @@ def compose (m1 m2 : Machine) : Machine where
           action := fun s h => (s.1, (m2.event l2).action s.2 h)
           safety := fun s h hi => ⟨hi.1, (m2.event l2).safety s.2 h hi.2⟩ }
 
+variable (m1 m2 : Machine) (s : m1.State × m2.State)
+
 /-- A composite `inl` step is the left machine's step, with the right
     component pinned. The map-on-Option shape is the statement of "the two
     projections cannot conflict". -/
-theorem compose_step_inl (m1 m2 : Machine) (s : m1.State × m2.State) (l1 : m1.Label) :
+theorem compose_step_inl (l1 : m1.Label) :
     (Machine.compose m1 m2).step? s (Sum.inl l1) =
       (m1.step? s.1 l1).map (fun s1' => (s1', s.2)) := by
   unfold Machine.step? Machine.compose
-  by_cases hg : (m1.event l1).guard s.1 = true
-  · simp [hg]
-  · simp [hg]
+  by_cases hg : (m1.event l1).guard s.1 = true <;> simp [hg]
 
 /-- Symmetric: composite `inr` step = right machine's step, left pinned. -/
-theorem compose_step_inr (m1 m2 : Machine) (s : m1.State × m2.State) (l2 : m2.Label) :
+theorem compose_step_inr (l2 : m2.Label) :
     (Machine.compose m1 m2).step? s (Sum.inr l2) =
       (m2.step? s.2 l2).map (fun s2' => (s.1, s2')) := by
   unfold Machine.step? Machine.compose
-  by_cases hg : (m2.event l2).guard s.2 = true
-  · simp [hg]
-  · simp [hg]
+  by_cases hg : (m2.event l2).guard s.2 = true <;> simp [hg]
 
 /-- The step?/projection biconditional for `inl`: the composite reaches
     `s'` exactly when `m1` reaches `s'.1` and `m2`'s component is untouched. -/
-theorem compose_step_inl_proj (m1 m2 : Machine) (s : m1.State × m2.State)
-    (l1 : m1.Label) (s' : m1.State × m2.State) :
+theorem compose_step_inl_proj (l1 : m1.Label) (s' : m1.State × m2.State) :
     (Machine.compose m1 m2).step? s (Sum.inl l1) = some s' ↔
       m1.step? s.1 l1 = some s'.1 ∧ s'.2 = s.2 := by
-  rw [compose_step_inl]
-  constructor
-  · intro h
-    cases hms : m1.step? s.1 l1 with
-    | none => simp [hms] at h
-    | some a1 =>
-      simp [hms] at h
-      cases s' with
-      | mk b1 b2 =>
-        have hb1 : a1 = b1 := congrArg Prod.fst h
-        have hb2 : s.2 = b2 := congrArg Prod.snd h
-        constructor
-        · simp [hb1]
-        · exact hb2.symm
-  · rintro ⟨hm, hs⟩
-    rw [hm]
-    cases s' with
-    | mk a b =>
-      change some (a, s.2) = some (a, b)
-      have hbs : b = s.2 := by simpa using hs
-      rw [hbs]
+  rw [compose_step_inl, Option.map_eq_some_iff]
+  exact ⟨fun ⟨a1, hm, hmk⟩ =>
+      ⟨congrArg Prod.fst hmk ▸ hm, (congrArg Prod.snd hmk).symm⟩,
+    fun ⟨hm, hs⟩ => ⟨s'.1, hm, Prod.ext rfl hs.symm⟩⟩
 
 /-- The step?/projection biconditional for `inr`: the composite reaches
     `s'` exactly when `m2` reaches `s'.2` and `m1`'s component is untouched. -/
-theorem compose_step_inr_proj (m1 m2 : Machine) (s : m1.State × m2.State)
-    (l2 : m2.Label) (s' : m1.State × m2.State) :
+theorem compose_step_inr_proj (l2 : m2.Label) (s' : m1.State × m2.State) :
     (Machine.compose m1 m2).step? s (Sum.inr l2) = some s' ↔
       m2.step? s.2 l2 = some s'.2 ∧ s'.1 = s.1 := by
-  rw [compose_step_inr]
-  constructor
-  · intro h
-    cases hms : m2.step? s.2 l2 with
-    | none => simp [hms] at h
-    | some a2 =>
-      simp [hms] at h
-      cases s' with
-      | mk b1 b2 =>
-        have hb1 : s.1 = b1 := congrArg Prod.fst h
-        have hb2 : a2 = b2 := congrArg Prod.snd h
-        constructor
-        · simp [hb2]
-        · exact hb1.symm
-  · rintro ⟨hm, hs⟩
-    rw [hm]
-    cases s' with
-    | mk a b =>
-      change some (s.1, b) = some (a, b)
-      have has : a = s.1 := by simpa using hs
-      rw [has]
+  rw [compose_step_inr, Option.map_eq_some_iff]
+  exact ⟨fun ⟨a2, hm, hmk⟩ =>
+      ⟨congrArg Prod.snd hmk ▸ hm, (congrArg Prod.fst hmk).symm⟩,
+    fun ⟨hm, hs⟩ => ⟨s'.2, hm, Prod.ext hs.symm rfl⟩⟩
 
 /-- The diamond — interleaving is safe. If `e1` (left) and `e2` (right) are
     both enabled at `s`, doing e1-then-e2 and e2-then-e1 reach the SAME
     state. Each event touches only its own projection (`compose_step_*_proj`),
     so the two interleavings coincide pointwise. -/
-theorem compose_commute (m1 m2 : Machine) (s : m1.State × m2.State)
-    (l1 : m1.Label) (l2 : m2.Label)
+theorem compose_commute (l1 : m1.Label) (l2 : m2.Label)
     (s' s'' t1 t2 : m1.State × m2.State)
     (h1 : (Machine.compose m1 m2).step? s (Sum.inl l1) = some s')
     (h2 : (Machine.compose m1 m2).step? s' (Sum.inr l2) = some t1)
@@ -166,8 +127,7 @@ theorem compose_commute (m1 m2 : Machine) (s : m1.State × m2.State)
     projection: labels re-tagged `inl`, every recorded right component
     pinned to its initial value, final state pinned likewise. Pure-left
     workloads never disturb the right projection. -/
-theorem compose_run_inl (m1 m2 : Machine) (s : m1.State × m2.State)
-    (ls : List m1.Label) :
+theorem compose_run_inl (ls : List m1.Label) :
     (Machine.compose m1 m2).run s (ls.map Sum.inl) =
       (m1.run s.1 ls).map
         (fun p : Machine.Trace m1 × m1.State =>
@@ -191,8 +151,7 @@ theorem compose_run_inl (m1 m2 : Machine) (s : m1.State × m2.State)
 
 /-- Symmetric: an all-`inr` run is the `m2.run` of the second projection,
     left component pinned. -/
-theorem compose_run_inr (m1 m2 : Machine) (s : m1.State × m2.State)
-    (ls : List m2.Label) :
+theorem compose_run_inr (ls : List m2.Label) :
     (Machine.compose m1 m2).run s (ls.map Sum.inr) =
       (m2.run s.2 ls).map
         (fun p : Machine.Trace m2 × m2.State =>

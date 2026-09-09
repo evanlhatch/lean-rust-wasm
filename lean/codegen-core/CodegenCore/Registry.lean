@@ -84,7 +84,7 @@ unsafe def importModulesReplayed (modules : Array Name)
   initSearchPath (← findSysroot)
   searchPathRef.modify fun sp => sp ++ extraPaths
   enableInitializersExecution
-  importModules modules (opts := {}) (loadExts := true)
+  importModules (modules.map ({ module := · })) (opts := {}) (loadExts := true)
 
 /-- Load the items registered into `ext` by `modules` (the whole
     importModules+loadExts preamble). -/

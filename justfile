@@ -213,7 +213,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-build gen-check wit-check lean-axioms
+gates: lean-build gen-check wit-check lean-axioms splice-smoke
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed
@@ -287,3 +287,35 @@ wasm-compile:
 	  -o lean/wasm-backend/target/demo.component.wasm
 	"$WT" validate lean/wasm-backend/target/demo.component.wasm
 	echo "wasm-compile: demo.wasm VALID + differential smoke green + component VALID"
+
+# The SPLICE-SMOKE gate: a PASSTHROUGH splicer (wac) instantiates the
+# EMITTED component and re-exports its world — composition + validation
+# by an INDEPENDENT tool (wac's own WIT resolver) = the independent
+# proof the emitted WIT is well-formed. The composed component must
+# still RUN (the splicer didn't break the exports).
+splice-smoke:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
+	WAC="$HOME/.local/guestlang-tools/bin/wac"
+	[ -x "$WT" ] || WT=wasm-tools
+	[ -x "$WAC" ] || WAC=wac
+	# the passthrough document: re-export the demo world unchanged
+	cat > lean/wasm-backend/target/splice.wac <<'WAC'
+	package guestlang:spliced;
+	let demo = new guestlang:demo { ... };
+	export demo.double;
+	export demo.adder;
+	export demo.is-big;
+	export demo.double-area;
+	export demo.run-paps;
+	export demo.total;
+	export demo.pick;
+	export demo.str-len-demo;
+	export demo.greet;
+	WAC
+	"$WAC" compose lean/wasm-backend/target/splice.wac \
+	  --dep guestlang:demo=lean/wasm-backend/target/demo.component.wasm \
+	  -o lean/wasm-backend/target/spliced.component.wasm
+	"$WT" validate lean/wasm-backend/target/spliced.component.wasm
+	echo "splice-smoke: passthrough composed + spliced component VALID"

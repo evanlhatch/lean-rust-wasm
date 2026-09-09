@@ -29,6 +29,7 @@ whose CONTRACT is load-bearing for the offload architecture.
 -/
 
 import Machines.Core
+import Machines.Tactics
 
 namespace Machines.Sync
 
@@ -40,13 +41,13 @@ open Machines
 structure LatchState where
   count : Nat
   arrived : Nat
-deriving Repr, BEq
+deriving Repr, BEq, DecidableEq
 
 /-- Latch events. -/
 inductive LatchEvent where
   | countDown
   | wait
-deriving Repr, BEq
+deriving Repr, BEq, DecidableEq
 
 /-- The contract: `count + arrived = cap` — the sum is invariant, so a
     count-down past zero is impossible (the guard would need count = 0,
@@ -59,35 +60,35 @@ def latchSpec (cap : Nat) : LatchEvent → EventSpec LatchState (LatchInv cap)
   | .countDown =>
     { guard := fun s => decide (s.count > 0)
     , action := fun s _ => { s with count := s.count - 1, arrived := s.arrived + 1 }
-    , safety := by
-        intro s h hinv
-        simp only [decide_eq_true_eq] at h
-        unfold LatchInv at hinv ⊢
-        simp only at hinv ⊢
-        omega }
+    , safety := by guard_omega LatchInv }
   | .wait =>
     { guard := fun s => decide (s.count = 0)
     , action := fun s _ => s
-    , safety := by intro s h hinv; exact hinv }
+    , safety := fun _ _ hinv => hinv }
 
 /-- The latch machine. -/
 @[reducible] def latch (cap : Nat) : Machine := {
   State := LatchState, Label := LatchEvent, Inv := LatchInv cap, event := latchSpec cap }
 
+section latch_theorems
+variable (cap : Nat) (s : LatchState)
+
 /-- count_down enabled iff incomplete. -/
-theorem latch_countDown_enabled (cap : Nat) (s : LatchState) :
+theorem latch_countDown_enabled :
     (latch cap).enabled s .countDown = true ↔ s.count > 0 := by
   simp [Machine.enabled, latch, latchSpec]
 
 /-- wait at count=0 is a no-op (the completed latch is stable). -/
-theorem latch_wait_stable (cap : Nat) (s : LatchState) (h : s.count = 0) :
+theorem latch_wait_stable (h : s.count = 0) :
     (latch cap).step? s .wait = some s := by
   simp [Machine.step?, latch, latchSpec, h]
 
 /-- count_down at count=0 is rejected (can't count past zero). -/
-theorem latch_countDown_closed (cap : Nat) (s : LatchState) (h : s.count = 0) :
+theorem latch_countDown_closed (h : s.count = 0) :
     (latch cap).step? s .countDown = none := by
   simp [Machine.step?, latch, latchSpec, h]
+
+end latch_theorems
 
 -- ═══ mpsc::bounded ═══
 
@@ -96,13 +97,14 @@ structure MpscState (α : Type) where
   buf : List α
   cap : Nat
   closed : Bool
-deriving Repr
+deriving Repr, DecidableEq
 
 /-- Channel events. -/
 inductive MpscEvent (α : Type) where
   | send (v : α)
   | recv
   | close
+deriving DecidableEq
 
 /-- The contract: the buffer never exceeds capacity. (Closed-rejects-send is
     the guard's job; the invariant is the capacity bound.) -/
@@ -136,7 +138,7 @@ def mpscSpec (α : Type) : MpscEvent α → EventSpec (MpscState α) MpscInv
   | .close =>
     { guard := fun _ => true
     , action := fun s _ => { s with closed := true }
-    , safety := by intro s h hinv; exact hinv }
+    , safety := fun _ _ hinv => hinv }
 
 /-- The mpsc machine. -/
 @[reducible] def mpsc (α : Type) : Machine := {
@@ -158,11 +160,12 @@ theorem mpsc_closed_rejected (α : Type) (s : MpscState α) (h : s.closed = true
 /-- Oneshot state: empty → sent → received. -/
 inductive OneshotState (α : Type) where
   | empty | sent (v : α) | received (v : α)
-deriving Repr
+deriving Repr, DecidableEq
 
 /-- Oneshot events. -/
 inductive OneshotEvent (α : Type) where
   | send (v : α) | recv
+deriving DecidableEq
 
 /-- The oneshot machine's event spec (the contract is the state machine
     itself: send from empty only, recv from sent only). -/
@@ -197,13 +200,13 @@ structure BarrierState where
   arrived : Nat
   parties : Nat
   released : Bool
-deriving Repr, BEq
+deriving Repr, BEq, DecidableEq
 
 /-- Barrier events. -/
 inductive BarrierEvent where
   | arrive
   | proceed
-deriving Repr, BEq
+deriving Repr, BEq, DecidableEq
 
 /-- The contract: arrivals never exceed the party count; proceed only after
     release (full arrival). -/
@@ -234,7 +237,7 @@ def barrierSpec : BarrierEvent → EventSpec BarrierState BarrierInv
   | .proceed =>
     { guard := fun s => s.released
     , action := fun s _ => s
-    , safety := by intro s h hinv; exact hinv }
+    , safety := fun _ _ hinv => hinv }
 
 /-- The barrier machine. (The `parties` count lives in `BarrierState`;
     the machine itself takes no parameter.) -/
@@ -255,12 +258,12 @@ theorem barrier_arrive_full_rejected (s : BarrierState) (h : s.arrived = s.parti
 structure SemState where
   permits : Nat
   cap : Nat
-deriving Repr, BEq
+deriving Repr, BEq, DecidableEq
 
 /-- Semaphore events. -/
 inductive SemEvent where
   | acquire | release
-deriving Repr, BEq
+deriving Repr, BEq, DecidableEq
 
 /-- The contract: permits never exceed capacity. -/
 def SemInv (s : SemState) : Prop := s.permits ≤ s.cap
@@ -270,21 +273,11 @@ def semSpec : SemEvent → EventSpec SemState SemInv
   | .acquire =>
     { guard := fun s => decide (s.permits > 0)
     , action := fun s _ => { s with permits := s.permits - 1 }
-    , safety := by
-        intro s h hinv
-        simp only [decide_eq_true_eq] at h
-        unfold SemInv at hinv ⊢
-        simp only at hinv ⊢
-        omega }
+    , safety := by guard_omega SemInv }
   | .release =>
     { guard := fun s => decide (s.permits < s.cap)
     , action := fun s _ => { s with permits := s.permits + 1 }
-    , safety := by
-        intro s h hinv
-        simp only [decide_eq_true_eq] at h
-        unfold SemInv at hinv ⊢
-        simp only at hinv ⊢
-        omega }
+    , safety := by guard_omega SemInv }
 
 /-- The semaphore machine. (The `cap` lives in `SemState`; the machine
     itself takes no parameter.) -/

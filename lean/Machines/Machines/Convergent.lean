@@ -104,8 +104,8 @@ def countDown (m : Machine) (variant : m.State → Nat) (k : m.Label → Nat)
   variant := variant
   decreases := by
     intro s l h
-    have h1 : 1 ≤ k l := by exact hmk s l h
-    have h2 : k l ≤ variant s := by exact hsk s l h
+    have h1 : 1 ≤ k l := hmk s l h
+    have h2 : k l ≤ variant s := hsk s l h
     rw [hact s l h]
     omega
 
@@ -150,17 +150,11 @@ theorem run_length_le (c : Convergent m) :
       split at h
       · next => contradiction
       · next tr' fin' hr =>
-        have htwo : ((l, s') :: tr') = tr ∧ fin' = fin := by simpa using h
-        obtain ⟨htr, hfin⟩ := htwo
-        subst htr
-        subst hfin
+        obtain ⟨rfl, rfl⟩ := by simpa using h
         rw [Machine.step?_eq] at hs
         split at hs
         · next hg =>
-          have hdec : c.variant s' < c.variant s := by
-            have hd := c.decreases s l hg
-            rw [Option.some.inj hs] at hd
-            exact hd
+          have hdec : c.variant s' < c.variant s := (Option.some.inj hs) ▸ c.decreases s l hg
           have hih := ih s' tr' fin' hr
           simp only [List.length_cons]
           omega
@@ -184,13 +178,8 @@ theorem terminates (c : Convergent m) (steps : Nat → m.State)
     (fun n => c.variant (steps n))
     (by
       intro n
-      obtain ⟨l, hl⟩ := h n
-      rcases hl with ⟨hg, hact⟩
-      have hdec : c.variant (steps (n + 1)) < c.variant (steps n) := by
-        have hd := c.decreases (steps n) l hg
-        rw [hact] at hd
-        exact hd
-      exact hdec)
+      obtain ⟨l, hg, hact⟩ := h n
+      exact hact ▸ c.decreases (steps n) l hg)
 
 end Convergent
 

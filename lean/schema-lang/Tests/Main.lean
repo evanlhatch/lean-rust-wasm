@@ -109,6 +109,21 @@ def resolutionChecks : CheckResult := do
   let fwd : List Item :=
     [ .record "a" [{ name := "x", ty := .ty "b" }], .record "b" [] ]
   _ ← assertEq "forward ref accepted" (universeWellFormed fwd) true
+  -- 0.6: variant payloads are inside the async ban (a `variant v
+  -- { c(future<u8>) }` emits WIT the canonical parser rejects)
+  let asyncVariant : List Item := [.variant "v" [("c", some (.future .u8))]]
+  _ ← assertEq "variant async payload rejected" (universeCheck asyncVariant)
+    [.asyncField "v" "c"]
+  _ ← assertEq "variant async not wellFormed" (universeWellFormed asyncVariant) false
+  -- positive control: async in a FUNC signature stays legal
+  let asyncFunc : List Item := [.func { name := "f", params := [], ret := .future .u8 }]
+  _ ← assertEq "func async accepted" (universeCheck asyncFunc) []
+  -- 0.7: a non-boundary field type names the FIELD and appends the
+  -- boundary fragment (not an unknown-TYPE did-you-mean)
+  let nb := SchemaDiag.render (.nonBoundaryType "count" "Nat")
+  _ ← assert (nb.contains "`count`") "nonBoundaryType names the field"
+  _ ← assert (nb.contains "boundary types are")
+    "nonBoundaryType appends the boundary fragment"
   .ok ()
 
 def eqAnsChecks : CheckResult := do
@@ -170,18 +185,19 @@ def diffChecks : CheckResult := do
 
 /-! ## Golden byte-tie: registry emitters vs committed goldens -/
 
-open Lean SchemaLang.Meta in
-/-- The reflected Demo registry, loaded at runtime (GenMain's pattern).
-    `importModules` resolves oleans at RUNTIME — initialize the search
-    path, then add the package build dir (a direct binary run lacks
-    LEAN_PATH; the tests run from the package root). -/
+open Lean in
+/-- The Demo environment, loaded at runtime via the CodegenCore driver
+    preamble (GenMain's pattern). `importModules` resolves oleans at
+    RUNTIME — the package build dirs are passed explicitly (a direct
+    binary run lacks LEAN_PATH; the tests run from the package root). -/
+unsafe def loadDemoEnv : IO Environment :=
+  CodegenCore.importModulesReplayed #[`Demo]
+    [(".lake/build/lib" : System.FilePath), (".lake/build/lib/lean" : System.FilePath)]
+
+open SchemaLang.Meta in
+/-- The reflected Demo registry, loaded at runtime. -/
 unsafe def loadDemoItems : IO (List SchemaLang.Item) := do
-  Lean.initSearchPath (← Lean.findSysroot)
-  Lean.searchPathRef.modify fun sp =>
-    sp ++ [(".lake/build/lib" : System.FilePath), (".lake/build/lib/lean" : System.FilePath)]
-  Lean.enableInitializersExecution
-  let env ← Lean.importModules #[`Demo] (opts := {}) (loadExts := true)
-  pure ((registeredItems env).map (·.2))
+  pure ((registeredItems (← loadDemoEnv)).map (·.2))
 
 /-- Run every registry emitter over the CURRENT reflected Demo registry
     and byte-compare each output (header prepended, matching `schema-gen`'s
@@ -194,13 +210,86 @@ unsafe def goldenChecks (update : Bool) : IO (List (String × CheckResult)) := d
     for f in e.run items do
       let file := ((f.path : String).splitOn "/").getLast!
       let golden : System.FilePath := s!"goldens/{e.name}/{file}"
-      let dir := String.intercalate "/" ((golden.toString.splitOn "/").dropLast)
-      IO.FS.createDirAll dir
-      let out := CodegenCore.Emit.header e.style "schema-lang" "Demo.lean"
+      CodegenCore.Emit.createParentDirs golden
+      -- the header cites the emitter's OWN specSource — the goldens
+      -- byte-tie what production (`schema-gen`) actually writes
+      let out := CodegenCore.Emit.header e.style "schema-lang" e.specSource
         ++ CodegenCore.Emit.GeneratedFile.contents f
       let r ← TestKit.Golden.checkAgainstGolden e.name out golden update
       results := results ++ [(s!"{e.name}/{file}", r)]
   return results
+
+/-! ## Vortex lowering pins (0.1) -/
+
+/-- 0.1: nullability composition + refusal of `.result`. -/
+def lowerChecks : CheckResult := do
+  let semNone : SchemaLang.Vortex.VortexSem := fun _ => none
+  -- option's nullability lands on the OUTER dtype only:
+  -- option<list<u8>> → a NULLABLE list of NON-NULLABLE u8
+  _ ← assert (
+    SchemaLang.Vortex.Ty.lower semNone .nonNullable (.option (.list .u8))
+      == some (.list (.primitive .u8 .nonNullable) .nullable))
+    "option<list<u8>>: nullable list of non-nullable u8"
+  -- a nullable named ref THREADS the requested nullability onto the
+  -- resolved dtype (was: `.ty n => sem n` dropped it)
+  let rec1 : Item := .record "r" [{ name := "id", ty := .u64 }]
+  let semR := SchemaLang.Vortex.Emit.refSem [rec1] 8
+  _ ← assert (
+    SchemaLang.Vortex.Ty.lower semR .nullable (.ty "r")
+      == some (.struct [("id", .primitive .u64 .nonNullable)] .nullable))
+    "nullable ref: requested nullability stamped"
+  -- non-nullable ref stays non-nullable
+  _ ← assert (
+    SchemaLang.Vortex.Ty.lower semR .nonNullable (.ty "r")
+      == some (.struct [("id", .primitive .u64 .nonNullable)] .nonNullable))
+    "non-nullable ref unchanged"
+  -- `.result` refuses (the promised tag+payload union has not landed;
+  -- the header must not ship a wrong artifact that succeeds)
+  _ ← assert (
+    SchemaLang.Vortex.Ty.lower semNone .nonNullable (.result .u64 .string) == none)
+    "result lowers to none"
+  _ ← assert (
+    SchemaLang.Vortex.Ty.lower semNone .nullable (.result .u64 .string) == none)
+    "nullable result still none"
+  .ok ()
+
+/-! ## Eq-eligibility (0.3 + 4.5): `derivesFor`, refs resolved -/
+
+/-- 0.3: a float behind a NAMED REF blocks `Eq` on the referencing type
+    (was: `.ty n` treated as float-free → `#[derive(Eq)]` on a struct
+    whose ref'd type doesn't implement Eq → generated Rust didn't
+    compile). 4.5: one `derivesFor` fold is the single fix site. -/
+def derivesChecks : CheckResult := do
+  let inner : Item := .record "inner" [{ name := "x", ty := .f64 }]
+  let outer : Item := .record "outer" [{ name := "i", ty := .ty "inner" }]
+  let clean : Item := .record "clean" [{ name := "n", ty := .u32 }]
+  let viaClean : Item := .record "via-clean" [{ name := "c", ty := .ty "clean" }]
+  let uni : List Item := [inner, outer, clean, viaClean]
+  _ ← assertEq "float behind ref blocks Eq"
+    (SchemaLang.Emit.Rust.derivesFor uni [.ty "inner"])
+    ["Clone", "Debug", "PartialEq"]
+  _ ← assertEq "resolvable-clean ref keeps Eq"
+    (SchemaLang.Emit.Rust.derivesFor uni [.ty "clean"])
+    ["Clone", "Debug", "PartialEq", "Eq"]
+  _ ← assertEq "unresolvable ref conservative"
+    (SchemaLang.Emit.Rust.derivesFor uni [.ty "ghost"])
+    ["Clone", "Debug", "PartialEq"]
+  _ ← assertEq "direct float blocks Eq"
+    (SchemaLang.Emit.Rust.derivesFor uni [.f64])
+    ["Clone", "Debug", "PartialEq"]
+  -- the emitted struct carries the verdict
+  let outerOut := CodegenCore.Emit.Rust.renderModule
+    [SchemaLang.Emit.Rust.recordItem
+      (SchemaLang.Emit.Rust.derivesFor uni [.ty "inner"]) outer]
+  _ ← assert (outerOut.contains "#[derive(Clone, Debug, PartialEq)]")
+    "outer derive line drops Eq"
+  _ ← assert (!outerOut.contains ", Eq)]") "outer has no Eq derive"
+  let cleanOut := CodegenCore.Emit.Rust.renderModule
+    [SchemaLang.Emit.Rust.recordItem
+      (SchemaLang.Emit.Rust.derivesFor uni [.ty "clean"]) viaClean]
+  _ ← assert (cleanOut.contains "#[derive(Clone, Debug, PartialEq, Eq)]")
+    "via-clean keeps Eq"
+  .ok ()
 
 /-! ## Bridge: Ty → SType -/
 
@@ -309,6 +398,19 @@ def extDTypeChecks : CheckResult := do
   _ ← assert (out.contains "ExtId::new(\"vortex.fixedshape.tensor\")") "tensor id correct"
   -- external (fork-owned) entries are registered but NOT emitted
   _ ← assert (!out.contains "GeoExt") "external skipped"
+  -- 0.2: a SECOND u8Enum shape binds its OWN suffix in
+  -- `deserialize_metadata` (was: hardcoded "position" — the second
+  -- enum would emit the first's metadata type)
+  let lvl : SchemaLang.Vortex.ExtDTypeItem :=
+    { rustName := "LevelExt", id := "test.level"
+    , metadata := .u8Enum [1, 2] "level", storage := .free, external := false }
+  let lvlOut := CodegenCore.Emit.Rust.renderModule
+    [SchemaLang.Vortex.Emit.extVTableImpl lvl]
+  _ ← assert (lvlOut.contains "type Metadata = LevelMetadata;")
+    "assoc type from the shape's suffix"
+  _ ← assert (lvlOut.contains "Some(LevelMetadata(bytes[0]))")
+    "deserialize binds the shape's own suffix"
+  _ ← assert (!lvlOut.contains "PositionMetadata") "no hardcoded suffix"
   -- determinism
   _ ← assertEq "ext deterministic" out
     (CodegenCore.Emit.Rust.renderModule
@@ -368,6 +470,11 @@ def emitterAuditChecks : CheckResult := do
   -- the forge-driver audit: every registered emitter's output is in the
   -- job manifest forge consumes — no artifact silently outside byte-tie
   _ ← assertEq "jobs cover emitters" SchemaLang.Emit.jobsCoverEmitters true
+  -- 1.6: every file `run` produces is a DECLARED output — `run` cannot
+  -- re-state a path the one-writer audit doesn't know about
+  _ ← assertEq "run outputs ⊆ declared outputs"
+    (SchemaLang.Emit.emitters.all fun e =>
+      (e.run demoItems).all fun f => e.outputs.contains f.path) true
   -- the GENERATED ChangeSpec trait: emitted from `Dbsp.ChangeSpec`'s
   -- class fields (`patch`/`valid`) — the method names ARE the class
   -- field names, pinned here so the emitter and the Lean class cannot
@@ -401,9 +508,23 @@ def typedSessionChecks : CheckResult := do
         (fun x => x.1 != x.2)) true
   .ok ()
 
+/-- 0.7 end-to-end: the reifier diagnoses a non-boundary FIELD TYPE as
+    `nonBoundaryType` (naming the field, appending the boundary
+    fragment) — not an unknown-type did-you-mean against TYPE names.
+    `SchemaLang.Field` (in the Demo-imported env) has a `ty : Ty` field;
+    `Ty` is not in the boundary fragment. -/
+unsafe def reflectChecks : IO (String × CheckResult) := do
+  let env ← loadDemoEnv
+  let r ← match SchemaLang.Meta.checkStruct env ``SchemaLang.Field with
+    | .inl [SchemaDiag.nonBoundaryType nm _] =>
+        pure (assertEq "reifier names the field" nm "ty")
+    | other => pure (.error s!"unexpected reifier diagnostics: {repr other}")
+  pure ("reflect", r)
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
+  let reflect ← reflectChecks
   mainOfChecks "SchemaLang"
     ([ ("resolution", resolutionChecks)
      , ("fieldRes", fieldResolutionChecks)
@@ -411,7 +532,10 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("eqAns", eqAnsChecks)
      , ("diff", diffChecks)
      ] ++ goldens ++
-     [ ("bridge", bridgeChecks)
+     [ ("lower", lowerChecks)
+     , ("derives", derivesChecks)
+     , reflect
+     , ("bridge", bridgeChecks)
      , ("bridgeSchema", bridgeSchemaChecks)
      , ("delta", deltaChecks)
      , ("extDType", extDTypeChecks)

@@ -145,6 +145,13 @@ def reachesFuel : Nat → Fin n → Fin n → Bool
   | 0, _, _ => false
   | fuel + 1, a, b => (d.deps a).any (fun c => c == b || reachesFuel fuel c b)
 
+-- the @[simp] equation set for the recursive def (the package discipline).
+@[simp] theorem reachesFuel_zero (a b : Fin n) : d.reachesFuel 0 a b = false := rfl
+
+@[simp] theorem reachesFuel_succ (fuel : Nat) (a b : Fin n) :
+    d.reachesFuel (fuel + 1) a b =
+      (d.deps a).any (fun c => c == b || d.reachesFuel fuel c b) := rfl
+
 theorem reachesFuel_sound {fuel : Nat} {a b : Fin n} :
     d.reachesFuel fuel a b = true → d.Reachable a b := by
   induction fuel generalizing a b with
@@ -206,6 +213,14 @@ initial value AND passes the convergence check; callers discharge
 def iterateBounded (step : α → α) (converged : α → Bool) : Nat → α → Option α
   | 0, _ => none
   | fuel + 1, x => if converged x then some x else iterateBounded step converged fuel (step x)
+
+-- the @[simp] equation set (same discipline).
+@[simp] theorem iterateBounded_zero (step : α → α) (converged : α → Bool) (init : α) :
+    iterateBounded step converged 0 init = none := rfl
+
+@[simp] theorem iterateBounded_succ (step : α → α) (converged : α → Bool) (fuel : Nat) (init : α) :
+    iterateBounded step converged (fuel + 1) init =
+      if converged init then some init else iterateBounded step converged fuel (step init) := rfl
 
 /-- Soundness: a returned value is an iterate and passes the check. -/
 theorem iterateBounded_sound {step : α → α} {converged : α → Bool} :
