@@ -56,9 +56,13 @@ def emitChecks : CheckResult := do
   .ok ()
 
 /-- The one-writer audit: no two faults emitters claim the same output
-    path (mirrors `SchemaLang.Emit.pathsUnique`). -/
+    path (mirrors `SchemaLang.Emit.pathsUnique`), AND the forge job row
+    covers exactly the registry's outputs (same pattern as schema-lang's
+    `jobsCoverEmitters` — an emitter whose artifact forge never byte-ties
+    fails here, not silently). -/
 def emitterAuditChecks : CheckResult := do
   _ ← assertEq "emitter paths unique" Faults.Emit.pathsUnique true
+  _ ← assertEq "jobs cover emitters" Faults.Emit.jobsCoverEmitters true
   .ok ()
 
 def main : IO UInt32 :=
