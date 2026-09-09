@@ -17,3 +17,4 @@ import SchemaLang.Vortex.Lower
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
 import SchemaLang.Pipeline
+import SchemaLang.Session

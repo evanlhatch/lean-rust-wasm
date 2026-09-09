@@ -10,6 +10,7 @@ import Demo
 import TestKit
 
 open SchemaLang TestKit
+open SchemaLang.Session (toWire tdual gatewayTyped)
 
 /-! ## Item-algebra fixtures (test data, not spec)
 
@@ -376,6 +377,28 @@ def emitterAuditChecks : CheckResult := do
   _ ← assert (traitText.contains "fn valid(&self, base: &Row) -> bool;") "trait valid = ChangeSpec field"
   .ok ()
 
+/-! ## Typed session choreography (SchemaLang.Session) -/
+
+def typedSessionChecks : CheckResult := do
+  -- the gateway conversation: real Tys; wire names from the ONE renderer
+  _ ← assertEq "gateway wire view" (toWire gatewayTyped).length 4
+  _ ← assertEq "get-user payload on the wire"
+      ((toWire gatewayTyped)[1].2) "option<user>"
+  _ ← assertEq "watch-orders payload on the wire"
+      ((toWire gatewayTyped)[3].2) "stream<user>"
+  -- the bridge: the typed dual's wire view IS the wire dual (the
+  -- string-layer guarantees transfer — Machines.Session proved them once)
+  _ ← assert ((toWire (tdual gatewayTyped)) ==
+      (Machines.Session.dual (toWire gatewayTyped))) "typed dual bridge"
+  -- the typed dual keeps the schema types (payloads survive dualing)
+  _ ← assert (((tdual gatewayTyped).map (·.2)) == (gatewayTyped.map (·.2)))
+      "dual keeps types"
+  -- directions oppose pairwise (lockstep)
+  _ ← assertEq "directions oppose"
+      (List.all (List.zip (gatewayTyped.map (·.1)) ((tdual gatewayTyped).map (·.1)))
+        (fun x => x.1 != x.2)) true
+  .ok ()
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
@@ -394,4 +417,5 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("pipelineGuardControl", pipelineGuardControl)
      , ("pipelineRun", pipelineRunChecks)
      , ("emitterAudit", emitterAuditChecks)
+     , ("typedSession", typedSessionChecks)
      ])

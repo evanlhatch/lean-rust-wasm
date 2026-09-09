@@ -86,6 +86,15 @@ theorem dual_dual (p : Protocol) : dual (dual p) = p := by
       show ((s.1.flip, s.2).1.flip, (s.1.flip, s.2).2) :: dual (dual rest) = s :: rest
       rw [flip_step, ih]
 
+/-- Dualizing keeps the payload SEQUENCE: the message TYPES the peers
+    exchange are unchanged — only the directions flip. The payload-type
+    agreement the typed layer consumes (no index gymnastics: a map
+    equation). -/
+theorem dual_map_payload (q : Protocol) : (dual q).map (·.2) = q.map (·.2) := by
+  induction q with
+  | nil => rfl
+  | cons s rest ih => simp [dual, ih]
+
 /-! ## The session machine (Label = the script's indices) -/
 
 /-- The session invariant: the position is at most the script's length.
