@@ -68,8 +68,16 @@ def emitModuleWasm : CoreM String := do
   for d in decls do
     let fmt ← Lean.Compiler.LCNF.ppDecl' d .impure
     IO.eprintln s!"--- {d.name}\n{fmt}"
+  -- core export names must be WIT-kebab (isBig → is-big) for embed
+  let kebab (s : String) : String :=
+    let rec go (acc : String) : List Char → String
+      | [] => acc
+      | c :: rest =>
+        if c.isUpper then go (acc ++ "-" ++ String.singleton c.toLower) rest
+        else go (acc ++ String.singleton c) rest
+    String.intercalate "-" ((go "" s.toList).splitOn "-" |>.filter (fun p => !p.isEmpty))
   let exports := targetDecls.toList.map fun n =>
-    s!"  (export \"{n.toString}\" (func ${n.toString}))"
+    s!"  (export \"{kebab n.toString}\" (func ${n.toString}))"
   let res : Except String (String × WasmBackend.S) :=
     StateT.run (WasmBackend.emitModule decls exports) {}
   match res with

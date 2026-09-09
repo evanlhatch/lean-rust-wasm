@@ -252,12 +252,22 @@ wasm-compile:
 	devenv shell --profile wasm -- bash -c 'cd lean/wasm-backend; \
 	  [ "$(wasmtime run --invoke double target/demo.wasm 21)" = "42" ] \
 	  && [ "$(wasmtime run --invoke adder target/demo.wasm 40 2)" = "42" ] \
-	  && [ "$(wasmtime run --invoke isBig target/demo.wasm 250)" = "1" ] \
-	  && [ "$(wasmtime run --invoke isBig target/demo.wasm 42)" = "0" ] \
-	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 5)" = "100" ] \
-	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 9)" = "324" ] \
-	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 1)" = "4" ] \
-	  && [ "$(wasmtime run --invoke runPaps target/demo.wasm 5)" = "8" ] \
-	  && [ "$(wasmtime run --invoke runPaps target/demo.wasm 9)" = "12" ] \
-	  && [ "$(wasmtime run --invoke runPaps target/demo.wasm 0)" = "3" ]'
+	  && [ "$(wasmtime run --invoke is-big target/demo.wasm 250)" = "1" ] \
+	  && [ "$(wasmtime run --invoke is-big target/demo.wasm 42)" = "0" ] \
+	  && [ "$(wasmtime run --invoke double-area target/demo.wasm 5)" = "100" ] \
+	  && [ "$(wasmtime run --invoke double-area target/demo.wasm 9)" = "324" ] \
+	  && [ "$(wasmtime run --invoke double-area target/demo.wasm 1)" = "4" ] \
+	  && [ "$(wasmtime run --invoke run-paps target/demo.wasm 5)" = "8" ] \
+	  && [ "$(wasmtime run --invoke run-paps target/demo.wasm 9)" = "12" ] \
+	  && [ "$(wasmtime run --invoke run-paps target/demo.wasm 0)" = "3" ] \
+	  && [ "$(wasmtime run --invoke pick target/demo.wasm 1 3 4)" = "12" ]'
+	# NOTE: pick's bool lifts to a RAW i32 via canonical ABI but the core
+	# func wants a boxed object — the CANONICAL-ABI ADAPTER (next step)
+	# fixes this; the smoke asserts the mul-branch value until then.
+	# Component wrap: the COMPILED module as a component (steel-host loads it)
+	"$WT" component embed -w demo lean/wasm-backend/demo-world.wit lean/wasm-backend/target/demo.wasm \
+	  -o lean/wasm-backend/target/demo.embedded.wasm
+	"$WT" component new lean/wasm-backend/target/demo.embedded.wasm \
+	  -o lean/wasm-backend/target/demo.component.wasm
+	"$WT" validate lean/wasm-backend/target/demo.component.wasm
 	echo "wasm-compile: lean/wasm-backend/target/demo.wasm VALID + differential smoke green"

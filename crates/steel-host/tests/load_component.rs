@@ -219,3 +219,32 @@ async fn gateway_typed_watch_orders_async_abi() -> Result<(), Box<dyn std::error
     assert_eq!(users[0].name, "Grace");
     Ok(())
 }
+
+/// The COMPILED component: Lean logic → LCNF re-run → WAT → binary →
+/// component embed/new (just wasm-compile). steel-host runs the backend's
+/// output — the full guestlang pipeline, no wit-bindgen guest involved.
+#[tokio::test]
+async fn compiled_lean_component_runs() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lean/wasm-backend/target/demo.component.wasm");
+    let Ok(path) = std::fs::canonicalize(&path) else {
+        eprintln!("skipping: run `just wasm-compile` to build {path:?}");
+        return Ok(());
+    };
+    let engine = SteelEngine::new()?;
+    let component = engine.load_component(&path)?;
+
+    let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
+    rt.instantiate(&component).await?;
+
+    // double 21 = 42 — Lean logic, natively compiled to WASM.
+    let r = rt.call("double", &[Val::U64(21)]).await?;
+    assert_eq!(r, vec![Val::U64(42)]);
+    // runPaps 5 = 8 — closures + pooled allocator inside the guest.
+    let r = rt.call("run-paps", &[Val::U64(5)]).await?;
+    assert_eq!(r, vec![Val::U64(8)]);
+    // doubleArea 5 = 100 — ctor alloc → sproj read → Perceus dec → pool.
+    let r = rt.call("double-area", &[Val::U64(5)]).await?;
+    assert_eq!(r, vec![Val::U64(100)]);
+    Ok(())
+}

@@ -1,0 +1,10 @@
+package guestlang:demo;
+
+world demo {
+    export double: func(x: u64) -> u64;
+    export adder: func(a: u64, b: u64) -> u64;
+    export is-big: func(x: u64) -> bool;
+    export double-area: func(r: u64) -> u64;
+    export run-paps: func(x: u64) -> u64;
+    export pick: func(b: bool, a: u64, x: u64) -> u64;
+}
