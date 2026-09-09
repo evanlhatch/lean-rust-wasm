@@ -1,0 +1,25 @@
+name = "WasmBackend"
+defaultTargets = ["WasmBackend"]
+
+# The compiler line: LCNF → WASM. A separate executable (the `leanir`
+# pattern): imports the target module's oleans, RE-RUNS the LCNF pipeline
+# (the impure-phase LCNF is not persisted), and emits WAT for each final
+# `Decl`. DemoFn is the compiled-functions module (the demo stage).
+
+[[require]]
+name = "SchemaLang"
+path = "../schema-lang"
+
+[[lean_lib]]
+name = "WasmBackend"
+roots = ["WasmBackend"]
+
+[[lean_lib]]
+name = "DemoFn"
+roots = ["DemoFn"]
+
+[[lean_exe]]
+name = "wasm-gen"
+root = "GenMain"
+# importModules + LCNF re-run: replay Demo's initializers + compile in-process.
+supportInterpreter = true
