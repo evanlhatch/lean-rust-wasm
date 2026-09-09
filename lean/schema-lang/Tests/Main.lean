@@ -335,7 +335,7 @@ def pipelineConformanceChecks : CheckResult := do
 /-- The negative control: `pipelineDead` (a never-enabled event) must FAIL
     guard coverage — the battery is not vacuous. -/
 def pipelineGuardControl : CheckResult :=
-  match Machines.Testing.guardCoverage pipelineDead pipelineDead.labels [0, 1, 2] with
+  match Machines.Testing.guardCoverage pipelineDead pipelineDead.labels [0, 1, 2] pipelineDead.labels_complete with
   | .error _ => .ok ()
   | .ok () => .error "dead event not caught — the battery is vacuous"
 

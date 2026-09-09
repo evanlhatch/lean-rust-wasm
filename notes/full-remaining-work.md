@@ -176,25 +176,50 @@ aren't matchable (no GMP — recursion waits for guestlang-std loops).
 
 ### What the compiler line still needs (in order)
 
-1. **Pooled allocator + ctor emission** (DECISION: size-class free
-   lists, NOT a pure bump allocator): Perceus `dec→0` returns blocks to
-   size-class free lists (8/16/32/64/… bytes), `memory.grow` refills;
-   O(1) alloc AND free, deterministic, no GC, works in wasmi. Bump
-   rollback only handles LIFO — free lists handle the general case.
-   This is Lean's own runtime model (lean_malloc + size pools),
-   guestlang-owned. (wasm-gc is the later alternative — structurally
-   cleaner but wasmi lacks GC support, which blocks guestlang-rt.)
-   Emitter: `.ctor` → `$alloc(size)` + tag store + field stores;
-   `inc`/`dec` → `$rc_inc`/`$rc_dec` calls.
-2. **RC runtime**: `$rc_inc`/`$rc_dec` translation of inc/dec (v1 leak →
-   real refcounting; dec-0 returns the block to the bump top when
-   possible).
-3. **Closures** (pap): (funcref, env) pairs; adder already eta-reduced
-   by mono — pap appears only for real partial applications.
-4. **Canonical ABI + component wrap**: adapter funcs lifting the core
-   exports to the gateway world's signatures (option<user>, async
-   watch-orders); `component embed` + `new`; steel-host loads the
-   COMPILED component (not the wit-bindgen one).
+**DONE since (13fec9db): the differential gate + canonical-ABI adapters
++ elab-time gate + gate/axiom coverage — the hardening plan's 5 steps,
+all green.**
+
+1. **Pooled allocator + ctor emission** — DONE (a0332a26): size-class
+   free lists (Lean runtime model, NOT pure bump), $alloc/$rc_inc/
+   $rc_dec; the ctor+sset split handled; full object lifecycle
+   verified (reuse across calls, values intact).
+2. **RC runtime** — DONE: inc/dec emit real rc calls.
+3. **Closures** — DONE (be8f685a): pap objects, funcref table,
+   call_indirect trampolines (2 flavors: boxed-target pass-through /
+   raw-target unbox+box); oproj; typed box/unbox.
+4. **Canonical-ABI adapters** — DONE (13fec9db): _abi wrappers box
+   borrowed-scalar params / unbox object results; scalar cases (Bool/
+   UInt8) branch on the VALUE (the tag load was objects-only); pick
+   works through the component world.
+5. **Differential gate** — DONE (13fec9db): GenMain emits the oracle
+   program (real Lean calls over generated inputs — 120 rows incl.
+   zero/threshold negatives); `lean --run` → diff.json; steel-host's
+   wasm_diff test replays every row — 120/120. Lean semantics govern
+   the shipped bytes.
+6. **@[guest] elab gate** — DONE (349606fc): pure predicate
+   (checkExpr) + reasons renderer; Tests/Main.lean positive/negative
+   controls (7 guards).
+7. **Robustness contract** — DONE (c37edd1d): unsupported constructs
+   throw (never silent comments); wasm-backend in lean_pkgs (axiom
+   gate covers it).
+
+### Still open (the next session's list)
+
+1. **Strings/arrays** (guestlang-std): UTF-8 (ptr,len) objects;
+   Array with capacity; the ops' LCNF = ctor/sset/oset + helper calls.
+2. **return_call**: tail-call proposal for tail-recursive functions
+   (wabt lacks it; wasm-tools supports `--enable-tail-call`).
+3. **multi-arity closures**: sig_1box covers (boxed) → (boxed);
+   generalize the trampoline table per signature.
+4. **guestlang-rt**: wasmi 2.0 crate — CORE wasm only (the component
+   wrapper is wasmtime-side); fuel metering; snapshot/restore via rkyv
+   (the object model is ours); worker pool (Monty pattern).
+5. **wRPC/QUIC + OCI registry push/pull + splicer middleware** —
+   transport/distribution layer (the local OCI store exists).
+4. **Canonical ABI + component wrap** — DONE (13fec9db): the demo
+   world's adapters; the GATEWAY world's adapters (option<user>, async
+   watch-orders) still open.
 5. **Strings/arrays**: UTF-8 (ptr,len) objects; guestlang-std.
 6. **Tail calls**: `return_call` for tail-recursive functions.
 

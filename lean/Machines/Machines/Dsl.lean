@@ -116,7 +116,7 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   let binderNames : Array (TSyntax `ident) := binders.flatMap fun b =>
     (b.raw[1]!.getArgs).map (⟨·⟩)
   elabCommand (← `(command|
-    inductive $labelId:ident where $[$ctors:ctor]* deriving Repr))
+    inductive $labelId:ident where $[$ctors:ctor]* deriving Repr, DecidableEq))
   elabCommand (← `(command|
     def $specId:ident $[$binders]* : $labelId:ident → EventSpec $sty $invty $[$arms:matchAlt]*))
   -- @[reducible]: tests/uses write `door.run ⟨0⟩ …` with concrete states;
@@ -138,7 +138,7 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   let completeId := mkIdentFrom stx (name.getId ++ `labels_complete)
   elabCommand (← `(command|
     theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
-      intro l; cases l <;> simp [$labelsId]))
+      intro l; cases l <;> decide))
 
 /-- The registration form the attribute accepts: the type must be the
     literal `CommandElab` synonym, so the impl is a separate def. -/
