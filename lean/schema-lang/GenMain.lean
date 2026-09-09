@@ -34,5 +34,5 @@ unsafe def main : IO Unit := do
       let p := CodegenCore.Emit.GeneratedFile.path f
       let dir := String.intercalate "/" (((p : String).splitOn "/").dropLast)
       IO.FS.createDirAll dir
-      IO.FS.writeFile p (CodegenCore.Emit.header e.style "schema-lang" "Demo.lean" ++ CodegenCore.Emit.GeneratedFile.contents f)
+      IO.FS.writeFile p (CodegenCore.Emit.header e.style "schema-lang" e.specSource ++ CodegenCore.Emit.GeneratedFile.contents f)
       IO.println s!"wrote {p}"

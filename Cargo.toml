@@ -6,7 +6,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["crates/forge", "crates/guest-demo", "crates/steel-host"]
+members = ["crates/forge", "crates/guest-demo", "crates/steel-host", "crates/guestlang-rt"]
 resolver = "2"
 
 [dependencies]

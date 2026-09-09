@@ -214,3 +214,37 @@ def deltaWitEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
     [{ path := "../../wit/delta.wit"
        contents :=
          String.join ((items.flatMap Item.changeWitDecl).map (· ++ "\n")) }]
+
+/-! ## The ChangeSpec trait — GENERATED from the Lean class
+
+`Dbsp.ChangeSpec`'s `Change` class (`patch` + `valid`) is the
+kernel-checked spec; the Rust trait the delta enums impl was HAND-WRITTEN
+in `src/dbsp.rs` — the one artifact with no Lean-side authority (the
+drift this file's header warns about). Now it's an emitter output:
+specSource cites the class, the method names are the class field names
+(`patch`/`valid` — asserted in Tests), one writer, byte-tied.
+`src/dbsp.rs` re-exports the generated trait; the hand-written copy is
+gone. -/
+
+def changeSpecEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+  name := "change-spec"
+  style := .doubleSlash
+  specSource := "Dbsp.ChangeSpec (lean/dbsp) — the kernel-checked Change class"
+  outputs := ["../../src/dbsp_change_generated.rs"]
+  run _ :=
+    [{ path := "../../src/dbsp_change_generated.rs"
+       contents := CodegenCore.Emit.Rust.renderModule
+         [ .comment "The guestlang change algebra — the Rust mirror of"
+         , .comment "`Dbsp.ChangeSpec` (Lean's kernel-checked class: `Change (α Δα)`"
+         , .comment "with `patch : α → Δα → α`, `valid : α → Δα → Prop`, and the"
+         , .comment "diff/invert laws). GENERATED — edit the Lean class, not this."
+         , .comment ""
+         , .comment "Generality note: `patch : Row → Δ → Row` with `valid` keeping the"
+         , .comment "base mirrors the Lean class exactly — a change is only meaningful"
+         , .comment "against a base (Remove's `patch` keeps it; deletion is the key"
+         , .comment "join's signal)."
+         , .trait_ "Change<Row>"
+             [ "patch(&self, base: &Row) -> Row"
+             , "valid(&self, base: &Row) -> bool"
+             ]
+         ] }]

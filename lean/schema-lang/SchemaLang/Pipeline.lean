@@ -46,15 +46,6 @@ inductive PipelineState where
   | failed (stage : String) (diags : List String)
 deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- The pipeline events. -/
-inductive PipelineEvent where
-  | reflect      -- run @[schema] reflection (importModules)
-  | check        -- run universeCheck
-  | emit         -- run all registered emitters
-  | tie          -- run byte-tie comparison
-  | reset        -- back to idle
-deriving Repr, BEq, DecidableEq, Inhabited
-
 -- The pipeline machine. Every stage's guard is its predecessor state;
 -- `reset` is always enabled (the recovery edge, including out of
 -- `failed`). The invariant excludes ONLY `failed` — an error state is
@@ -152,5 +143,53 @@ theorem reject_out_of_order :
 theorem reset_from_failed :
     pipeline.run (.failed "tie" ["artifact drift"]) [.reset] = some ([(.reset, .idle)], .idle) :=
   rfl
+
+/-! ## The transition table — DATA, emitted to the Rust driver
+
+The forge driver (crates/forge) sequences its gen/check phases through
+THE SAME machine: the table below is folded into
+`src/pipeline_generated.rs` (pipelineEmitter), forge includes it and
+steps Idle→…→Tied — an illegal transition aborts the driver. The
+agreement theorem makes the emitted table the machine's step?, so the
+proved properties (`rank_advances`, `happy_path`, `reject_out_of_order`)
+govern the Rust driver. This is the connection the old "Pipeline is a
+model forge never reads" gap lacked: the driver consumes the spec.
+-/
+
+/-- The transition table as plain data: (event, from, to) over the
+    machine's GENERATED `Label` (one ctor per event — the same type the
+    proofs case-split). One row per enabled (event, from) with CONCRETE
+    from-states; the `failed` state (arbitrary strings — data can't
+    wildcard it) is handled structurally in `tableStep?`.
+    `tableStep?_eq_step?` PROVES the composition is the machine. -/
+def pipelineTrans : List (pipeline.Label × PipelineState × PipelineState) :=
+  [ (.reflect, .idle, .reflecting)
+  , (.check, .reflecting, .checked)
+  , (.emit, .checked, .emitted)
+  , (.tie, .emitted, .tied)
+  , (.reset, .idle, .idle)
+  , (.reset, .reflecting, .idle)
+  , (.reset, .checked, .idle)
+  , (.reset, .emitted, .idle)
+  , (.reset, .tied, .idle) ]
+
+/-- Table lookup: the first row matching (event, from); `none` = illegal
+    (the machine's guard failed). `failed` is structural: `reset` recovers
+    (the recovery edge), every other event is rejected. -/
+def tableStep? (e : pipeline.Label) (s : PipelineState) : Option PipelineState :=
+  match s with
+  | .failed _ _ => match e with | .reset => some .idle | _ => none
+  | _ =>
+      (pipelineTrans.filter fun (e', s', _) => e' == e && s' == s)
+        |>.head?.map fun (_, _, to') => to'
+
+/-- The emitted table IS the machine: same total step function. Every
+    guard in `machine! pipeline` is an equality on the state, so the
+    table (+ the structural failed arm) enumerates exactly the enabled
+    (event, from, to) triples. -/
+theorem tableStep?_eq_step? (e : pipeline.Label) (s : PipelineState) :
+    tableStep? e s = pipeline.step? s e := by
+  cases s <;> cases e <;>
+    simp [tableStep?, pipeline, pipeline.spec, PipelineState.rank] <;> rfl
 
 end SchemaLang

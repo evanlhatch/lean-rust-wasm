@@ -1,0 +1,17 @@
+[package]
+name = "guestlang-rt"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata.notes]
+scope = "standalone embeddable runtime — the wasmi half of the dual-engine story"
+
+# wasmi: pure-Rust interpreter — deterministic, fuel-metered, ~1MB.
+# CORE wasm only (the component wrapper is the wasmtime host's job).
+[dependencies]
+wasmi = "2.0"
+
+[dev-dependencies]
+# The conformance test compares against the wasmtime run of the SAME module.
+wasmtime = { version = "47", default-features = false, features = ["cranelift"] }

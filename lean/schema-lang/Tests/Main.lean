@@ -362,6 +362,9 @@ def pipelineRunChecks : CheckResult := do
     here, not just stated in a header. -/
 def emitterAuditChecks : CheckResult := do
   _ ← assertEq "emitter paths unique" SchemaLang.Emit.pathsUnique true
+  -- the forge-driver audit: every registered emitter's output is in the
+  -- job manifest forge consumes — no artifact silently outside byte-tie
+  _ ← assertEq "jobs cover emitters" SchemaLang.Emit.jobsCoverEmitters true
   .ok ()
 
 unsafe def main (args : List String) : IO UInt32 := do

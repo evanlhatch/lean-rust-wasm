@@ -53,6 +53,7 @@ inductive Item where
   | fn (sig : String) (body : Body)
   | macroCall (name : String) (args : List String)
   | mod_ (name : String) (items : List Item)
+  | trait_ (name : String) (methodSigs : List String)
   | comment (content : String)
   | raw (content : String)   -- escape hatch; AUDITED and counted
 deriving Repr, Inhabited
@@ -88,6 +89,8 @@ partial def Item.format : Item → Std.Format
       (Std.Format.joinSep args (f!"," ++ line))) ++ line ++ f!"}"
   | .mod_ name items =>
     f!"pub mod {name}" ++ block (items.map Item.format)
+  | .trait_ name methodSigs =>
+    f!"pub trait {name}" ++ block (methodSigs.map fun sig => f!"fn {sig};")
   | .comment content => f!"// {content}"
   | .raw content => content
 where
