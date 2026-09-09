@@ -89,6 +89,14 @@ def bindLocal (fvarId : FVarId) (ty : String) : M String := do
 def bindNamed (fvarId : FVarId) (name : String) : M Unit :=
   modify fun s => { s with fvars := s.fvars.insert fvarId name }
 
+/-- Fresh local WITHOUT an fvar binding (temps: the ctor tag). Binding
+the discr's fvarId here would shadow it — alt codes still read the
+OBJECT pointer through it. -/
+def bindFresh (ty : String) : M String := do
+  let name := s!"l{S.n (← get)}"
+  modify fun s => { s with locals := s.locals.push (name, ty), n := s.n + 1 }
+  pure name
+
 def load (fvarId : FVarId) : M String := do
   let s ← get
   match s.fvars[fvarId]? with
@@ -123,14 +131,31 @@ partial def emitCode (code : Code .impure) : M Unit := do
   | .let decl k => emitLet decl; emitCode k
   | .return fvarId => emitReturn fvarId
   | .cases c => emitCases c
-  | .inc _ _ _ _ k => emitCode k  -- Perceus inc: leak (v1; pooled allocator next)
-  | .dec _ _ _ _ _ k => emitCode k  -- Perceus dec: leak (v1)
+  | .inc fvarId _ _ _ k =>
+      emit (← load fvarId)
+      emit "call $rc_inc"
+      emitCode k
+  | .dec fvarId _ _ _ _ k =>
+      emit (← load fvarId)
+      emit "call $rc_dec"
+      emitCode k
   | .del _ k => emitCode k
   | .jp _ k => emitCode k  -- v1: join points inlined-away by elim (not observed)
   | .jmp .. => unsupported "Code.jmp"
   | .unreach _ => emit "unreachable"
-  | .oset .. | .uset .. | .sset .. | .setTag .. =>
-    unsupported "in-place mutation (oset/uset/sset/setTag)"
+  | .sset f _i offset y ty k =>
+      -- field store (the RC pass splits ctor-alloc from field-init):
+      -- sset var[i, offset] := y → mem[var + 8 + offset] = y
+      -- (_i = field index; offset = BYTE offset from the dump)
+      emit (← load f)
+      emit (← load y)
+      let op := match wasmTyOf? ty with
+        | some "i32" => "i32.store"
+        | _ => "i64.store"
+      emit s!"{op} offset={8 + offset}"
+      emitCode k
+  | .oset .. | .uset .. | .setTag .. =>
+    unsupported "in-place mutation (oset/uset/setTag)"
   | .fun _ _ h => absurd h (by simp)  -- pure-only ctor: unreachable
 
 /-- One let binding. -/
@@ -178,8 +203,23 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       let loadOp := if tyS == "i64" then "i64.load" else "i32.load"
       emit s!"{loadOp} offset={8 + offset}"
       emit s!"local.set ${l}"
-  | .ctor _ _ _ =>
-      unsupported "ctor allocation (needs the pooled allocator — next up)"
+  | .ctor info args _ =>
+      -- ptr = alloc(8 + ssize): $alloc sets rc=1 + the class byte;
+      -- then tag store + one 8-byte slot per scalar field (v1: scalars
+      -- only — ref fields arrive with oset support).
+      let p ← bindLocal decl.fvarId "i32"
+      emit s!"i32.const {8 + info.ssize}"
+      emit "call $alloc"
+      emit s!"local.set ${p}"
+      emit (← load decl.fvarId)
+      emit s!"i32.const {info.cidx}"
+      emit "i32.store8 offset=4"
+      let mut off := 8
+      for a in args do
+        emit (← load decl.fvarId)
+        emitArg a
+        emit s!"i64.store offset={off}"
+        off := off + 8
   | .box _ var _ =>
       -- scalar → object: v1 passes the scalar raw (boundary layer decides)
       let l ← bindLocal decl.fvarId "i32"
@@ -211,7 +251,7 @@ if/else on the tag, each arm leaves the result on the stack. -/
 partial def emitCases (c : Cases .impure) : M Unit := do
   emit (← load c.discr)
   emit "i32.load8_u offset=4"
-  let tag ← bindLocal c.discr "i32"  -- fresh local holding the tag
+  let tag ← bindFresh "i32"  -- fresh local holding the tag
   emit s!"local.set ${tag}"
   goAlts tag c.alts.toList
 
@@ -243,14 +283,25 @@ partial def resultTyOfAlt : Alt .impure → Option String
   | .default code => resultTyOf code
   | .alt _ _ _ h => absurd h (by simp)
 
-/-- The wasm result type of a code block (the final let's type). -/
-partial def resultTyOf : Code .impure → Option String
-  | .let decl k =>
-    match k with
-    | .return _ => wasmTyOf? decl.type
-    | _ => resultTyOf k
+/-- The wasm result type of a code block: walk to the `.return`,
+carrying the LAST let's type (the returned fvar's binding) through all
+continuation nodes (sset/inc/dec/del/fun/jp interleave the chain). -/
+partial def resultTyOf : Code .impure → Option String :=
+  resultTyOfWalk none
+
+partial def resultTyOfWalk (acc : Option String) : Code .impure → Option String
+  | .let decl k => resultTyOfWalk (wasmTyOf? decl.type) k
+  | .return _ => acc
   | .cases c => (c.alts.toList.filterMap resultTyOfAlt).head?
-  | _ => none
+  | .sset _ _ _ _ _ k => resultTyOfWalk acc k
+  | .inc _ _ _ _ k => resultTyOfWalk acc k
+  | .dec _ _ _ _ _ k => resultTyOfWalk acc k
+  | .del _ k => resultTyOfWalk acc k
+  | .jp _ k => resultTyOfWalk acc k
+  | .unreach _ => none
+  | .jmp .. => none
+  | .oset .. | .uset .. | .setTag .. => none
+  | .fun _ _ h => absurd h (by simp)
 
 end
 
