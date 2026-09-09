@@ -5,12 +5,12 @@
 // `Dbsp.ChangeSpec` (Lean's kernel-checked class: `Change (α Δα)`
 // with `patch : α → Δα → α`, `valid : α → Δα → Prop`, and the
 // diff/invert laws). GENERATED — edit the Lean class, not this.
-// 
+//
 // Generality note: `patch : Row → Δ → Row` with `valid` keeping the
 // base mirrors the Lean class exactly — a change is only meaningful
 // against a base (Remove's `patch` keeps it; deletion is the key
 // join's signal).
 pub trait Change<Row> {
-  fn patch(&self, base: &Row) -> Row;
-  fn valid(&self, base: &Row) -> bool;
+    fn patch(&self, base: &Row) -> Row;
+    fn valid(&self, base: &Row) -> bool;
 }

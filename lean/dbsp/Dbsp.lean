@@ -2,6 +2,7 @@
 import Dbsp.Stream
 import Dbsp.Operators
 import Dbsp.ZSet
+import Dbsp.Replicas
 import Dbsp.Linear
 import Dbsp.Incremental
 import Dbsp.Relational

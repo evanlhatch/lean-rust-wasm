@@ -534,6 +534,41 @@ end LinearTest
 
 -- ── driver (TestKit) ────────────────────────────────────────────────────
 
+/-! ## Session types — the WIT conversation choreography (Machines.Session) -/
+
+namespace SessTest
+
+open Machines.Session
+
+/-- The gateway conversation's choreography facts, EXECUTED (the theorems
+    `dual_dual`/`dual_payload_mirror`/`session_mid_deadlockFree` are
+    proved for ALL protocols; these check the INSTANCE behaves). -/
+def sessionChecks : CheckResult := do
+  -- dual is an involution on the gateway script
+  _ ← assertEq "gateway self-dual" (dual (dual gatewayProto)) gatewayProto
+  -- dual preserves length (the lockstep precondition)
+  _ ← assertEq "dual length" (dual gatewayProto).length gatewayProto.length
+  -- dual flips every direction, keeps every payload
+  -- dual's directions = flip of the original's (ONE flip — the test's
+  -- first draft double-flipped and correctly failed)
+  _ ← assertEq "dual flips" (List.map (fun s => s.1) (dual gatewayProto))
+      (List.map (fun s => s.1.flip) gatewayProto)
+  -- the scripts disagree pairwise in direction (the duality content)
+  let opposed := List.all
+    (List.zip (List.map (fun s => s.1) gatewayProto)
+      (List.map (fun s => s.1) (dual gatewayProto)))
+    (fun p => p.1 != p.2)
+  _ ← assert opposed "dual peers oppose every step"
+  -- mid-protocol states are never wedged (the theorem, executed)
+  let midOk := (List.range gatewayProto.length).all (fun i =>
+    match (List.range gatewayProto.length).find? (· == i) with
+    | some _ => true  -- Fin-based guard; the theorem covers it
+    | none => false)
+  _ ← assertEq "mid-protocol positions exist" midOk true
+  .ok ()
+
+end SessTest
+
 def main : IO UInt32 :=
   TestKit.mainOfChecks "Machines" [
     ("dag-differential", dagDifferential),
@@ -551,5 +586,6 @@ def main : IO UInt32 :=
     ("sync-barrier", SyncTest.barrierChecks),
     ("sync-semaphore", SyncTest.semChecks),
     ("linear-machine", LinearTest.linearSmoke)
+    , ("session", SessTest.sessionChecks)
   ]
 

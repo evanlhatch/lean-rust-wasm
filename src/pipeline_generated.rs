@@ -8,22 +8,22 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 
 pub enum PipelineStage {
-  Idle,
-  Reflecting,
-  Checked,
-  Emitted,
-  Tied,
-  Failed { stage: &'static str },
+    Idle,
+    Reflecting,
+    Checked,
+    Emitted,
+    Tied,
+    Failed { stage: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 
 pub enum PipelineEvent {
-  Reflect,
-  Check,
-  Emit,
-  Tie,
-  Reset,
+    Reflect,
+    Check,
+    Emit,
+    Tie,
+    Reset,
 }
 
 /// The machine's step: None = illegal (guard failed). `Reset` fires

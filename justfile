@@ -251,6 +251,16 @@ wasm-compile:
 	# only in the wasm profile — absolute path (nested devenv PATH varies).
 	WTIME="$HOME/.devenv/profiles/wasm/profile/bin/wasmtime"
 	[ -x "$WTIME" ] || WTIME=$(find /nix/store -maxdepth 3 -name wasmtime -type f 2>/dev/null | head -1)
+	# Golden byte-tie: the emitted WAT vs the committed golden — backend
+	# changes are REVIEWED (the drift fails; `just wasm-compile --update`
+	# re-commits).
+	if [ "${1:-}" = "--update" ]; then
+	  cp lean/wasm-backend/target/demo.wat lean/wasm-backend/goldens/demo.wat
+	  echo "wasm-compile: golden updated"
+	else
+	  cmp -s lean/wasm-backend/target/demo.wat lean/wasm-backend/goldens/demo.wat \
+	    || { echo "wasm-compile: DRIFT demo.wat vs goldens/demo.wat (run: just wasm-compile --update)"; exit 1; }
+	fi
 	inv() { (cd lean/wasm-backend && "$WTIME" run --invoke "$@" 2>&1 | tail -1); }
 	[ "$(inv double 21)" = "42" ] \
 	  && [ "$(inv adder 40 2)" = "42" ] \

@@ -41,3 +41,13 @@ def leaf : Expr := .bvar 0
 -- the scan up for LCNF-only shapes.
 
 def main : IO UInt32 := pure 0
+
+-- The STD surface: match-only Nat is LEGAL (a Nat.zero/succ app is
+-- ctor-shaped — the backend handles it via cases); arithmetic stays banned.
+#guard (checkExprAt .std (mkApp2 (.const ``Nat.succ []) leaf leaf)) == []
+#guard (checkExprAt .std (mkApp2 (.const ``Nat.add []) leaf leaf)) == ["Nat"]
+#guard (checkExprAt .std (.const ``String.length [])) == []
+#guard (checkExprAt .std (.const ``IO.println [])) == ["IO"]
+-- The STRICT surface still bans everything the std surface allows.
+#guard (checkExprAt .strict (mkApp2 (.const ``Nat.succ []) leaf leaf)) == ["Nat"]
+#guard (checkExprAt .strict (.const ``String.length [])) == ["String"]
