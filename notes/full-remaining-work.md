@@ -154,6 +154,43 @@ generalization trap is avoided entirely.
 
 ### The toolchain: wasm-tools (not wabt)
 
+**STATUS: WORKING END-TO-END (9d83bc56).** `just wasm-compile`:
+DemoFn → LCNF re-run → WAT → `wasm-tools parse -g` → validate →
+wasmtime `--invoke` (double 21→42, adder 40 2→42, isBig 250→1/42→0).
+
+The emitter (lean/wasm-backend/WasmBackend.lean, ~250 lines):
+- scalar ABI: UInt64→i64, UInt8/Bool/UInt32→i32, objects→i32 ptr
+  (borrowed scalars are objects — the `@&s : UInt64` shape)
+- guestlang layout {rc u32@0, tag u8@4, fields@8}: sproj byte offsets →
+  `i64.load offset=8+off`; tag → `i32.load8_u offset=4`
+- handled: let/return/cases (tag in temp local, nested if)/fap-
+  primitives (binop table)/lits/sproj; inc/dec/del erased (v1 leak);
+  pure-only ctors (.fun/.alt on impure code) discharged by absurd
+- name section: every func/param/local named in the WAT — profiler +
+  backtrace symbols free (parse -g adds DWARF)
+
+Lean gotchas hit: impure-phase applications are `.fap` (NOT `.const` —
+pp renders both identically); `s!` interpolates with `{}` (`\{` is a
+LITERAL brace); docstrings can't precede `mutual`; UInt64 patterns
+aren't matchable (no GMP — recursion waits for guestlang-std loops).
+
+### What the compiler line still needs (in order)
+
+1. **Bump allocator + ctor emission** (~100 lines WAT runtime + emitter
+   `.ctor` arm): `$alloc` + field stores + tag write; makes `area`
+   runnable with constructed Shape values.
+2. **RC runtime**: `$rc_inc`/`$rc_dec` translation of inc/dec (v1 leak →
+   real refcounting; dec-0 returns the block to the bump top when
+   possible).
+3. **Closures** (pap): (funcref, env) pairs; adder already eta-reduced
+   by mono — pap appears only for real partial applications.
+4. **Canonical ABI + component wrap**: adapter funcs lifting the core
+   exports to the gateway world's signatures (option<user>, async
+   watch-orders); `component embed` + `new`; steel-host loads the
+   COMPILED component (not the wit-bindgen one).
+5. **Strings/arrays**: UTF-8 (ptr,len) objects; guestlang-std.
+6. **Tail calls**: `return_call` for tail-recursive functions.
+
 | Step | Tool | Gives |
 |---|---|---|
 | Validate + DWARF | `wasm-tools validate -g` | Spec check + DWARF from WAT |
