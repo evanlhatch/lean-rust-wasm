@@ -142,7 +142,7 @@ noncomputable def ZSet.fromSet (s : Finset A) : ZSet A := Finsupp.indicator s (f
   by_cases h : a ∈ s <;> simp [h]
 
 /-- The finset of present elements of a Z-set (the source's `zset.to_set`). -/
-def ZSet.toSet (m : ZSet A) : Finset A := m.support
+abbrev ZSet.toSet (m : ZSet A) : Finset A := m.support
 
 @[simp] theorem ZSet.elem_toSet (a : A) (m : ZSet A) : a ∈ ZSet.toSet m ↔ a ∈ m := by
   rw [ZSet.elem_mp]
@@ -160,7 +160,7 @@ def ZSet.funPositive2 (f : ZSet A → ZSet B → ZSet C) : Prop :=
 /-- Lifting a function on the domain, summing multiplicities — the source's
     `zset.map`, implemented as `Finsupp.mapDomain` (which equals
     `flatmap (λ a, {f a})`). -/
-def ZSet.map (f : A → B) (m : ZSet A) : ZSet B := Finsupp.mapDomain f m
+abbrev ZSet.map (f : A → B) (m : ZSet A) : ZSet B := Finsupp.mapDomain f m
 
 /-- The value of `ZSet.map f m` at `b` is the sum of the multiplicities of the
     preimages of `b` (the source's `flatmap_at`/`ZSet.map_apply` for the ZSet.map). -/
@@ -171,9 +171,8 @@ theorem ZSet.map_apply (f : A → B) (m : ZSet A) (b : B) :
 
 /-- `ZSet.map` is linear (mathlib's `mapDomain_add`). -/
 theorem ZSet.map_linear (f : A → B) (m1 m2 : ZSet A) :
-    ZSet.map f (m1 + m2) = ZSet.map f m1 + ZSet.map f m2 := by
-  unfold ZSet.map
-  exact (Finsupp.mapDomain_add (f := f) (v₁ := m1) (v₂ := m2))
+    ZSet.map f (m1 + m2) = ZSet.map f m1 + ZSet.map f m2 :=
+  Finsupp.mapDomain_add
 
 /-- Pointwise nonnegativity of `ZSet.map` on bags (used by `map_pos`). -/
 theorem ZSet.map_at_nonneg (f : A → B) (m : ZSet A) (b : B) :

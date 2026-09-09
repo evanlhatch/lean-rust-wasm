@@ -100,7 +100,7 @@ def resolutionChecks : CheckResult := do
     _ ← assertEq "got" got "usr"
     _ ← assertEq "didYouMean finds user" (cands.contains "user") true
     _ ← assertEq "valid space enumerated" (valid.contains "user") true
-  | ds => throw s!"unexpected diagnostics: {ds}"
+  | ds => throw s!"unexpected diagnostics: {SchemaDiag.renderList ds}"
   -- duplicate names rejected
   let dup : List Item :=
     [ .record "user" [], .variant "user" [] ]
@@ -270,9 +270,11 @@ def deltaChecks : CheckResult := do
   _ ← assert (wit.contains "remove(u64)") "wit remove carries key ty"
   _ ← assert (Item.changeWitDecl demoRole == []) "variant item: no change decl"
   -- Rust: enum + ChangeSpec impl
-  let out := CodegenCore.Emit.Rust.renderModule (demoItems.flatMap Item.changeRustItems)
+  let out := CodegenCore.Emit.Rust.renderModule
+    (demoItems.flatMap (Item.changeRustItems demoItems))
   _ ← assertEq "deterministic" out
-    (CodegenCore.Emit.Rust.renderModule (demoItems.flatMap Item.changeRustItems))
+    (CodegenCore.Emit.Rust.renderModule
+      (demoItems.flatMap (Item.changeRustItems demoItems)))
   _ ← assert (out.contains "pub enum UserChange {") "change enum"
   _ ← assert (out.contains "#[derive(Clone, Debug, PartialEq, Eq)]") "derives"
   _ ← assert (out.contains "Insert(User),") "insert payload"

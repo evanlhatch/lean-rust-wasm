@@ -71,6 +71,35 @@ def runLogged (s : m.State) (ls : List m.Label) :
         some ((l, (m.event l).action s h) :: tr, m.deltaOf l s h :: ds, fin)
     else none := rfl
 
+/-- Inversion at `nil`: a successful empty logged run is the trivial
+    journal. (Kills the `Prod.mk.inj (Option.some.inj h)` ladder at the
+    call sites.) -/
+theorem runLogged_nil_some {s : m.State} {tr : m.Trace} {ds : List m.Δ} {fin : m.State}
+    (h : runLogged m s [] = some (tr, ds, fin)) : tr = [] ∧ ds = [] ∧ fin = s := by
+  obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
+  obtain ⟨h12, h3⟩ := Prod.mk.inj h2
+  exact ⟨h1.symm, h12.symm, h3.symm⟩
+
+/-- Inversion at `cons`: a successful logged run passes the guard, steps,
+    and recurses; trace and deltas are the cons of the step's record. -/
+theorem runLogged_cons_some {s : m.State} {l : m.Label} {ls : List m.Label}
+    {tr : m.Trace} {ds : List m.Δ} {fin : m.State}
+    (h : runLogged m s (l :: ls) = some (tr, ds, fin)) :
+    ∃ (hg : (m.event l).guard s = true) (tr' : m.Trace) (ds' : List m.Δ),
+      runLogged m ((m.event l).action s hg) ls = some (tr', ds', fin) ∧
+      tr = (l, (m.event l).action s hg) :: tr' ∧ ds = m.deltaOf l s hg :: ds' := by
+  simp only [runLogged] at h
+  split at h
+  · next hg =>
+    split at h
+    · contradiction
+    · next tr' ds' fin' hrest =>
+      obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
+      obtain ⟨h2a, h2b⟩ := Prod.mk.inj h2
+      subst h1 h2a h2b
+      exact ⟨hg, tr', ds', hrest, rfl, rfl⟩
+  · contradiction
+
 /-- Revert a list of deltas onto a state, in list order. Callers pass
     `ds.reverse` for last-first (the overlay's segment rewind). -/
 def rewind (m : RewindableMachine) (ds : List m.Δ) (s : m.State) : m.State :=
@@ -86,27 +115,17 @@ theorem runLogged_run (m : RewindableMachine) :
   induction ls with
   | nil =>
     intro init tr ds fin h
-    obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-    obtain ⟨h12, h3⟩ := Prod.mk.inj h2
-    subst h1 h12 h3
+    obtain ⟨rfl, rfl, rfl⟩ := runLogged_nil_some m h
     rfl
   | cons l rest ih =>
     intro init tr ds fin h
-    simp only [runLogged] at h
-    split at h
-    · next hguard =>
-      split at h
-      · contradiction
-      · next tr' ds' fin' hrest =>
-        obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-        obtain ⟨h2a, h2b⟩ := Prod.mk.inj h2
-        subst h1 h2b
-        have hstep : m.step? init l = some ((m.event l).action init hguard) := by
-          unfold Machine.step?
-          rw [dif_pos hguard]
-        have hrun' := ih ((m.event l).action init hguard) tr' ds' fin' hrest
-        simp only [Machine.run, hstep, hrun']
-    · next => contradiction
+    obtain ⟨hguard, tr', ds', hrest, htr, hds⟩ := runLogged_cons_some m h
+    subst htr hds
+    have hstep : m.step? init l = some ((m.event l).action init hguard) := by
+      unfold Machine.step?
+      rw [dif_pos hguard]
+    have hrun' := ih ((m.event l).action init hguard) tr' ds' fin hrest
+    simp only [Machine.run, hstep, hrun']
 
 /-- **Rewind undoes the run**: reverting the recorded deltas last-first
     restores the initial state. -/
@@ -118,30 +137,20 @@ theorem rewind_runLogged (m : RewindableMachine) :
   induction ls with
   | nil =>
     intro init tr ds fin h
-    obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-    obtain ⟨h12, h3⟩ := Prod.mk.inj h2
-    subst h1 h12 h3
+    obtain ⟨rfl, rfl, rfl⟩ := runLogged_nil_some m h
     rfl
   | cons l rest ih =>
     intro init tr ds fin h
-    simp only [runLogged] at h
-    split at h
-    · next hguard =>
-      split at h
-      · contradiction
-      · next tr' ds' fin' hrest =>
-        obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-        obtain ⟨h2a, h2b⟩ := Prod.mk.inj h2
-        subst h1 h2a h2b
-        show m.rewind ((m.deltaOf l init hguard :: ds').reverse) fin' = init
-        rw [List.reverse_cons]
-        show m.rewind (ds'.reverse ++ [m.deltaOf l init hguard]) fin' = init
-        rw [rewind, List.foldl_append]
-        have ihr := ih ((m.event l).action init hguard) tr' ds' fin' hrest
-        show m.revert (m.deltaOf l init hguard) (m.rewind ds'.reverse fin') = init
-        rw [ihr]
-        exact m.revert_left l init hguard
-    · next => contradiction
+    obtain ⟨hguard, tr', ds', hrest, htr, hds⟩ := runLogged_cons_some m h
+    subst htr hds
+    show m.rewind ((m.deltaOf l init hguard :: ds').reverse) fin = init
+    rw [List.reverse_cons]
+    show m.rewind (ds'.reverse ++ [m.deltaOf l init hguard]) fin = init
+    rw [rewind, List.foldl_append]
+    have ihr := ih ((m.event l).action init hguard) tr' ds' fin hrest
+    show m.revert (m.deltaOf l init hguard) (m.rewind ds'.reverse fin) = init
+    rw [ihr]
+    exact m.revert_left l init hguard
 
 /-- A logged run absorbs an appended label sequence. -/
 theorem runLogged_append (m : RewindableMachine) :
@@ -153,25 +162,15 @@ theorem runLogged_append (m : RewindableMachine) :
   induction ls1 with
   | nil =>
     intro ls2 init tr1 ds1 mid tr2 ds2 fin h1 h2
-    obtain ⟨ha, hb⟩ := Prod.mk.inj (Option.some.inj h1)
-    obtain ⟨hb1, hb2⟩ := Prod.mk.inj hb
-    subst ha hb1 hb2
+    obtain ⟨rfl, rfl, rfl⟩ := runLogged_nil_some m h1
     simpa [runLogged] using h2
   | cons l rest ih =>
     intro ls2 init tr1 ds1 mid tr2 ds2 fin h1 h2
-    simp only [runLogged] at h1
-    split at h1
-    · next hguard =>
-      split at h1
-      · contradiction
-      · next tr1' ds1' mid' hrest =>
-        obtain ⟨h1a, h1b⟩ := Prod.mk.inj (Option.some.inj h1)
-        obtain ⟨h1c, h1d⟩ := Prod.mk.inj h1b
-        subst h1a h1c h1d
-        have hcont := ih ls2 ((m.event l).action init hguard) tr1' ds1' mid' tr2 ds2 fin hrest h2
-        simp only [List.cons_append, runLogged]
-        rw [dif_pos hguard, hcont]
-    · next => contradiction
+    obtain ⟨hguard, tr1', ds1', hrest, htr, hds⟩ := runLogged_cons_some m h1
+    subst htr hds
+    have hcont := ih ls2 ((m.event l).action init hguard) tr1' ds1' mid tr2 ds2 fin hrest h2
+    simp only [List.cons_append, runLogged]
+    rw [dif_pos hguard, hcont]
 
 /-- The converse decomposition: a successful run over an append splits
     into the two prefix runs. -/
@@ -189,26 +188,19 @@ theorem runLogged_split (m : RewindableMachine) :
     exact ⟨init, [], [], tr, ds, rfl, rfl, rfl, h⟩
   | cons l rest ih =>
     intro ls2 init tr ds fin h
-    simp only [List.cons_append, runLogged] at h
-    split at h
-    · next hguard =>
-      split at h
-      · contradiction
-      · next tr' ds' fin' hrest =>
-        obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-        obtain ⟨h2a, h2b⟩ := Prod.mk.inj h2
-        subst h1 h2a h2b
-        obtain ⟨mid, tr1, ds1, tr2, ds2, htr1, hds1, hr1, hr2⟩ :=
-          ih ls2 ((m.event l).action init hguard) tr' ds' fin' hrest
-        refine ⟨mid, (l, (m.event l).action init hguard) :: tr1,
-          m.deltaOf l init hguard :: ds1, tr2, ds2, ?_, ?_, ?_, hr2⟩
-        · rw [htr1]
-          rfl
-        · rw [hds1]
-          rfl
-        · simp only [runLogged]
-          rw [dif_pos hguard, hr1]
-    · next => contradiction
+    simp only [List.cons_append] at h
+    obtain ⟨hguard, tr', ds', hrest, htr, hds⟩ := runLogged_cons_some m h
+    subst htr hds
+    obtain ⟨mid, tr1, ds1, tr2, ds2, htr1, hds1, hr1, hr2⟩ :=
+      ih ls2 ((m.event l).action init hguard) tr' ds' fin hrest
+    refine ⟨mid, (l, (m.event l).action init hguard) :: tr1,
+      m.deltaOf l init hguard :: ds1, tr2, ds2, ?_, ?_, ?_, hr2⟩
+    · rw [htr1]
+      rfl
+    · rw [hds1]
+      rfl
+    · simp only [runLogged]
+      rw [dif_pos hguard, hr1]
 
 /-- The delta log has one entry per event. -/
 theorem runLogged_length (m : RewindableMachine) :
@@ -218,24 +210,14 @@ theorem runLogged_length (m : RewindableMachine) :
   induction ls with
   | nil =>
     intro init tr ds fin h
-    obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-    obtain ⟨h12, -⟩ := Prod.mk.inj h2
-    subst h12
+    obtain ⟨rfl, rfl, rfl⟩ := runLogged_nil_some m h
     rfl
   | cons l rest ih =>
     intro init tr ds fin h
-    simp only [runLogged] at h
-    split at h
-    · next hguard =>
-      split at h
-      · contradiction
-      · next tr' ds' fin' hrest =>
-        obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
-        obtain ⟨hds, -⟩ := Prod.mk.inj h2
-        subst hds
-        have hlen := ih ((m.event l).action init hguard) tr' ds' fin' hrest
-        simp [List.length_cons, hlen]
-    · next => contradiction
+    obtain ⟨hguard, tr', ds', hrest, -, hds⟩ := runLogged_cons_some m h
+    subst hds
+    have hlen := ih ((m.event l).action init hguard) tr' ds' fin hrest
+    simp [List.length_cons, hlen]
 
 /-- **rewind-K = undo-K**: reverting the last K recorded deltas restores
     the state after the first (length − K) events. The engine's

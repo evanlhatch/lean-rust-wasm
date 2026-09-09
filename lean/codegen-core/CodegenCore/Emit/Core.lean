@@ -19,14 +19,15 @@ namespace CodegenCore.Emit
 /-- The generated-file header. Every artifact, always. `tool` names the
     emitting package (e.g. `"schema-lang"`), `specSource` the registry or
     spec module the artifacts derive from. Comment prefix per target:
-    Lean/SQL `--`, Rust/WIT `//`, YAML/Python `#`. -/
+    Lean/SQL `--`, Rust/WIT `//`, YAML/Python `#`, WAT `;;`. -/
 inductive CommentStyle where
-  | lean | doubleSlash | hash
+  | lean | doubleSlash | hash | wat
 
 def CommentStyle.prefix : CommentStyle → String
   | .lean => "-- "
   | .doubleSlash => "// "
   | .hash => "# "
+  | .wat => ";; "
 
 def CommentStyle.line (s : CommentStyle) (text : String) : String :=
   s.prefix ++ text
@@ -49,6 +50,24 @@ function from spec to files; the driver prepends headers and writes. -/
 structure GeneratedFile where
   path : String
   contents : String
+
+/-! ## The driver's write path
+
+Emitters are pure (`run`); only DRIVERS write. The parent-dir
+computation + `createDirAll` lives here once — every driver
+(GenMains, golden updaters) shares it. -/
+
+/-- Create the parent directories of `path` (all generated paths are
+    slash-separated, so the drop-last computation always names a real
+    directory). -/
+def createParentDirs (path : System.FilePath) : IO Unit :=
+  let dir := String.intercalate "/" ((path.toString.splitOn "/").dropLast)
+  IO.FS.createDirAll dir
+
+/-- Write one generated file, creating parent directories first. -/
+def writeFileCreatingDirs (path : System.FilePath) (contents : String) : IO Unit := do
+  createParentDirs path
+  IO.FS.writeFile path contents
 
 /-- An emitter plugin: one language target. -/
 structure Emitter (Spec : Type) where
@@ -111,6 +130,13 @@ def snake (s : String) : String := String.intercalate "_" (words s)
 
 /-- `foo_bar` → `foo-bar` (WIT identifiers are kebab-case). -/
 def kebab (s : String) : String := String.intercalate "-" (words s)
+
+/-- Package-relative output → repo-root-relative (emitters run with CWD
+    = the lean package dir and declare `../..`-paths; forge joins from
+    the repo root). ONE copy, here: the manifest emitters (schema-lang's
+    `jobJson`, faults' `forgeJobsLines`) must apply it exactly once. -/
+def rootRel (p : String) : String :=
+  match p.dropPrefix? "../../" with | some rest => rest.toString | none => p
 
 /-- Escape a JSON string (paths + names only — quotes and backslashes
     are the whole story). Shared by every manifest emitter (schema-lang's

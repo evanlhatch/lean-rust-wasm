@@ -86,11 +86,12 @@ def Item.changeWitDecl : Item → List String
     `remove` keeps the last-seen value (the deletion is the key join's
     signal). Empty list for non-records / key-less records.
 
-    Derives follow the Rust emitter's Eq discipline: a change enum whose
-    payload record is float-free gets `Eq` (the same `hasFloat` check
-    `schemaItems` uses). The full record is the payload, so the check is
-    over the record's own fields. -/
-def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
+    Derives follow the Rust emitter's Eq discipline — the SAME
+    `derivesFor` fold `schemaItems` uses (refs resolved against the
+    universe `items`, so a float behind a named ref blocks `Eq` here
+    too). The full record is the payload, so the checked parts are the
+    record's own field types. -/
+def Item.changeRustItems (items : List Item) : Item → List CodegenCore.Emit.Rust.Item
   | .record n fields =>
       match fields.head? with
       | none => []
@@ -98,9 +99,8 @@ def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
           let change := Item.changeTypeName (.record n fields)
           let full := SchemaLang.Emit.Rust.tyRust (.ty n)
           let keyTy := SchemaLang.Emit.Rust.tyRust key.ty
-          let eqOk := !(fields.any (fun f => SchemaLang.Emit.Rust.hasFloat f.ty))
-          let derives := if eqOk then SchemaLang.Emit.Rust.baseDerives ++ ["Eq"]
-                         else SchemaLang.Emit.Rust.baseDerives
+          let derives :=
+            SchemaLang.Emit.Rust.derivesFor items (fields.map (·.ty))
           [ .enum change derives
               [ s!"Insert({full})"
               , s!"Update({full})"
@@ -199,7 +199,7 @@ def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
          CodegenCore.Emit.Rust.renderModule
            ([ .use_ "crate::dbsp" ]
             ++ recordUses
-            ++ items.flatMap Item.changeRustItems
+            ++ items.flatMap (Item.changeRustItems items)
             ++ Item.changeTestModule items) }]
 
 /-- The WIT delta emitter: all change variants, one file (see the module

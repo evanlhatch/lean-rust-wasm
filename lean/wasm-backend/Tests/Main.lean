@@ -1,6 +1,5 @@
 import WasmBackend
 import WasmBackend.Check
-import TestKit
 
 /-!
 # WasmBackend tests — the `@[guest]` gate's pure predicate
@@ -40,8 +39,6 @@ def leaf : Expr := .bvar 0
 -- error renders `reasons`), and the backend's `unsupported` throw backs
 -- the scan up for LCNF-only shapes.
 
-def main : IO UInt32 := pure 0
-
 -- The STD surface: match-only Nat is LEGAL (a Nat.zero/succ app is
 -- ctor-shaped — the backend handles it via cases); arithmetic stays banned.
 #guard (checkExprAt .std (mkApp2 (.const ``Nat.succ []) leaf leaf)) == []
@@ -51,3 +48,18 @@ def main : IO UInt32 := pure 0
 -- The STRICT surface still bans everything the std surface allows.
 #guard (checkExprAt .strict (mkApp2 (.const ``Nat.succ []) leaf leaf)) == ["Nat"]
 #guard (checkExprAt .strict (.const ``String.length [])) == ["String"]
+
+-- Bug 0.5: `reasons` renders at the attribute's OWN ban level. A
+-- std-level Nat violation is ARITHMETIC (match-only Nat is std-legal),
+-- so the std error must not show the strict bignum reason.
+#guard (reasons .strict ["Nat"]) ==
+  "- `Nat` — Nat is bignum (GMP) — the guest has fixed-width integers only (use UInt64/Int64)"
+#guard (reasons .std ["Nat"]) ==
+  "- `Nat` — Nat arithmetic is GMP — std code may only MATCH on Nat (zero/succ patterns)"
+-- IO is banned at BOTH levels; the std render keeps the host-capability reason.
+#guard (reasons .std ["IO"]) ==
+  "- `IO` — IO is a host capability — guest functions must be pure over guestlang-std's WASI layer"
+
+-- #guard-driven (elab-time); the exe entry point exists so the lakefile's
+-- testDriver has a runnable target.
+def main : IO UInt32 := pure 0

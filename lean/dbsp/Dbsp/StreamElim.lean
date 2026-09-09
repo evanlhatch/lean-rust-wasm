@@ -147,23 +147,13 @@ theorem sum_vals_linear (s1 s2 : Stream a) (n : Nat) :
 theorem sum_zero_after {s1 s2 : Stream a} {n1 : Nat} (pf1 : ZeroAfter s1 n1)
     {n2 : Nat} (pf2 : ZeroAfter s2 n2) :
     ZeroAfter (s1 + s2) (if n1 ≥ n2 then n1 else n2) := by
-  split_ifs with h
-  · intro m hge
-    show s1 m + s2 m = 0
-    rw [pf1 m (by omega), pf2 m (by omega), add_zero]
-  · intro m hge
-    show s1 m + s2 m = 0
+  split_ifs with h <;> intro m hge <;> show s1 m + s2 m = 0 <;>
     rw [pf1 m (by omega), pf2 m (by omega), add_zero]
 
 theorem sub_zero_after {s1 s2 : Stream a} {n1 : Nat} (pf1 : ZeroAfter s1 n1)
     {n2 : Nat} (pf2 : ZeroAfter s2 n2) :
     ZeroAfter (s1 - s2) (if n1 ≥ n2 then n1 else n2) := by
-  split_ifs with h
-  · intro m hge
-    show s1 m - s2 m = 0
-    rw [pf1 m (by omega), pf2 m (by omega), sub_self]
-  · intro m hge
-    show s1 m - s2 m = 0
+  split_ifs with h <;> intro m hge <;> show s1 m - s2 m = 0 <;>
     rw [pf1 m (by omega), pf2 m (by omega), sub_self]
 
 /-- streamElim is linear (given convergence certificates for the inputs). -/

@@ -13,7 +13,9 @@ Lowering (target-neutral universe → Rust):
   the flatland audit doctrine: the emitter may assume checked input)
 - `.ty n` → `Pascal n`
 
-Derives are a parameter (v1: Clone/Debug/PartialEq/Eq; fast-observe,
+Derives come from `derivesFor`: `baseDerives` + conditional `Eq`
+(f32/f64 don't implement Eq, and named refs are RESOLVED against the
+universe — a float behind a `.ty` ref still blocks `Eq`; fast-observe,
 bon, serde land with the faults/tabular packages). Names pre-mangled via
 `Emit.pascal`/`rustIdent` — the AST never case-converts.
 -/
@@ -29,15 +31,49 @@ open CodegenCore.Emit (pascal rustIdent)
     conditionally — f32/f64 don't implement Eq. -/
 def baseDerives : List String := ["Clone", "Debug", "PartialEq"]
 
-/-- Check whether a Ty's Rust lowering contains a float type. -/
-def hasFloat : Ty → Bool
+/-- Float check with a ref-semantics: structural on the Ty; refs
+    consult `sem` (an already-resolved verdict per name). -/
+def hasFloatWith (sem : String → Bool) : Ty → Bool
   | .f32 | .f64 => true
-  | .option a => hasFloat a
-  | .result ok err => hasFloat ok || hasFloat err
-  | .list a => hasFloat a
-  | .future a => hasFloat a
-  | .stream a => hasFloat a
+  | .option a => hasFloatWith sem a
+  | .result ok err => hasFloatWith sem ok || hasFloatWith sem err
+  | .list a => hasFloatWith sem a
+  | .future a => hasFloatWith sem a
+  | .stream a => hasFloatWith sem a
+  | .ty n => sem n
   | _ => false
+
+/-- The ref verdicts, fuel-bounded like `Vortex.Emit.refSem`: a name is
+    float-CONTAINING unless resolvable-and-clean. The failure mode this
+    conservatism prevents: a record deriving `Eq` while the type behind
+    its named ref doesn't implement it (generated Rust that doesn't
+    compile). Fuel exhaustion / unresolvable / non-type refs → `true`. -/
+def floatRefs (items : List Item) : Nat → String → Bool
+  | 0, _ => true
+  | fuel + 1, n =>
+      match items.find? (·.name == n) with
+      | some (.record _ fields) =>
+          fields.any fun f => hasFloatWith (floatRefs items fuel) f.ty
+      | some (.variant _ cases) =>
+          cases.any fun (_, payload) =>
+            match payload with
+            | some t => hasFloatWith (floatRefs items fuel) t
+            | none => false
+      | _ => true
+
+/-- Check whether a Ty's Rust lowering contains a float type, resolving
+    named refs against the universe (fuel-bounded; unresolvable or
+    over-deep refs are conservatively float-CONTAINING). -/
+def hasFloat (items : List Item) (t : Ty) (fuel : Nat := 8) : Bool :=
+  hasFloatWith (floatRefs items fuel) t
+
+/-- The derives for a type whose parts are `tys` (record fields or
+    variant payloads): `Eq` joins the base derives iff NO part — refs
+    resolved against the universe — contains a float. The ONE
+    Eq-eligibility fold: the Rust emitter and the Delta change enums
+    both consume it (single fix site for the `Eq`-behind-a-ref bug). -/
+def derivesFor (items : List Item) (tys : List Ty) : List String :=
+  if tys.any (hasFloat items) then baseDerives else baseDerives ++ ["Eq"]
 
 /-- Lower a `Ty` to Rust type text. `future`/`stream` cannot reach this
     in field position (wellFormed bans them); if a func-signature
@@ -73,23 +109,17 @@ def variantItem (derives : List String) : Item → CodegenCore.Emit.Rust.Item
   | _ => .comment "variantItem: not a variant"
 
 /-- A full universe → the Rust module items (types only; funcs are the
-    WIT world's exports, not Rust-side types). Eq is added per-record
-    only when no field contains a float. -/
-def schemaItems (derives : List String) (items : List Item) :
+    WIT world's exports, not Rust-side types). Derives come from
+    `derivesFor` — `Eq` exactly when the fields/payloads (refs resolved
+    against `items`) are float-free. -/
+def schemaItems (items : List Item) :
     List CodegenCore.Emit.Rust.Item :=
   items.filterMap fun it =>
     match it with
     | .record _ fields =>
-        let eqOk := !(fields.any (fun f => hasFloat f.ty))
-        let ds := if eqOk then derives ++ ["Eq"] else derives
-        some (recordItem ds it)
+        some (recordItem (derivesFor items (fields.map (·.ty))) it)
     | .variant _ cases =>
-        let eqOk := !(cases.any fun (_, payload) =>
-          match payload with
-          | some t => hasFloat t
-          | none => false)
-        let ds := if eqOk then derives ++ ["Eq"] else derives
-        some (variantItem ds it)
+        some (variantItem (derivesFor items (cases.filterMap (·.2))) it)
     | _ => none
 
 end SchemaLang.Emit.Rust
@@ -102,5 +132,5 @@ def rustEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   outputs := ["../../src/schema_generated.rs"]
   run items := [
     { path := "../../src/schema_generated.rs"
-      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems SchemaLang.Emit.Rust.baseDerives items) }
+      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems items) }
   ]

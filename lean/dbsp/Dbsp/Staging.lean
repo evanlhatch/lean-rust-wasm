@@ -92,6 +92,18 @@ def jointOpN (F : Fin n → (Fin n → Stream A) → Stream A) :
     Operator (Fin n → A) (Fin n → A) :=
   fun s t i => F i (fun j u => s u j) t
 
+/-- The head fixpoint of the staged walk: block 0's loop with the
+    not-yet-computed tail held at 0 (previously 15 inlined copies of
+    `fix (fun α => F 0 (Fin.cons α 0))`). -/
+def headFix (F : Fin (n + 1) → (Fin (n + 1) → Stream A) → Stream A) : Stream A :=
+  fix (fun α => F 0 (Fin.cons α 0))
+
+/-- The tail operator of the staged walk: the remaining blocks with the
+    head fixpoint plugged in. -/
+def tailF (F : Fin (n + 1) → (Fin (n + 1) → Stream A) → Stream A) :
+    Fin n → (Fin n → Stream A) → Stream A :=
+  fun j γ' => F j.succ (Fin.cons (headFix F) γ')
+
 /-- The N-block staged computation — the stage walker's walk as data:
     block 0's loop to fixpoint first (triangularity makes the
     not-yet-computed tail irrelevant), then the tail staged with block 0's
@@ -99,9 +111,7 @@ def jointOpN (F : Fin n → (Fin n → Stream A) → Stream A) :
 def stagedN : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream A) → Fin n → Stream A
   | 0, _ => fun i => i.elim0
   | _ + 1, F =>
-      Fin.cons (fix (fun α => F 0 (Fin.cons α 0)))
-        (stagedN _ (fun j γ' => F j.succ
-          (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ')))
+      Fin.cons (headFix F) (stagedN _ (tailF F))
 
 /-- The strictness ledger for the staged walk (SPEC §7.4's H1, per stage):
     every successive tail's joint operator — the loops the walk actually
@@ -110,10 +120,7 @@ def stagedN : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream A) �
 def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream A) → Prop
   | 0, _ => True
   | n + 1, F =>
-      Strict (jointOpN (fun j γ' => F j.succ
-        (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ'))) ∧
-      stagedStrict n (fun j γ' => F j.succ
-        (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ'))
+      Strict (jointOpN (tailF F)) ∧ stagedStrict n (tailF F)
 
 /-- **The N-block triangular decomposition** (iterated Bekič for strict
     stream operators): the staged walk computes the joint fixpoint.
@@ -159,11 +166,10 @@ def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream 
       exact hloops 0 0
     -- the head fixpoint absorbs any tail (triangularity at 0)
     have hhead : ∀ rest : Fin n → Stream A,
-        F 0 (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) rest) =
-          fix (fun α => F 0 (Fin.cons α (0 : Fin n → Stream A))) := by
+        F 0 (Fin.cons (headFix F) rest) = headFix F := by
       intro rest
-      have htri0 := htri 0 (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) rest)
-        (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) 0) (fun j hj => by
+      have htri0 := htri 0 (Fin.cons (headFix F) rest)
+        (Fin.cons (headFix F) 0) (fun j hj => by
           have h0 : j = 0 := by
             apply Fin.ext
             rw [Fin.le_def] at hj
@@ -176,8 +182,7 @@ def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream 
     -- the tail inherits triangularity and per-stage strictness
     have htri' : ∀ (j : Fin n) (γ₁ γ₂ : Fin n → Stream A),
         (∀ j' : Fin n, j' ≤ j → γ₁ j' = γ₂ j') →
-        F j.succ (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ₁) =
-          F j.succ (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ₂) := by
+        tailF F j γ₁ = tailF F j γ₂ := by
       intro j γ₁ γ₂ h
       apply htri j.succ
       intro j' hj'
@@ -190,14 +195,13 @@ def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream 
         rw [Fin.val_succ, Fin.val_succ] at hj'
         omega
     have hloops' : ∀ (j : Fin n) (fixed : Fin n → Stream A),
-        Strict (fun α => F j.succ (Fin.cons (fix (fun α => F 0 (Fin.cons α 0)))
-          (Function.update fixed j α))) := by
+        Strict (fun α => tailF F j (Function.update fixed j α)) := by
       intro j fixed
-      have heq : (fun α => F j.succ (Fin.cons (fix (fun α => F 0 (Fin.cons α 0)))
-            (Function.update fixed j α))) =
+      have heq : (fun α => tailF F j (Function.update fixed j α)) =
           (fun α => F j.succ (Function.update
-            (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) fixed) j.succ α)) := by
+            (Fin.cons (headFix F) fixed) j.succ α)) := by
         funext α
+        show F j.succ (Fin.cons (headFix F) (Function.update fixed j α)) = _
         congr 1
         funext j'
         cases j' using Fin.cases with
@@ -221,22 +225,16 @@ def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream 
         (fun t i => stagedN (n + 1) F i t) := by
       funext t i
       have hunfold : stagedN (n + 1) F =
-          Fin.cons (fix (fun α => F 0 (Fin.cons α (0 : Fin n → Stream A))))
-            (stagedN n (fun j γ' => F j.succ
-              (Fin.cons (fix (fun α => F 0 (Fin.cons α (0 : Fin n → Stream A)))) γ'))) := rfl
+          Fin.cons (headFix F) (stagedN n (tailF F)) := rfl
       rw [hunfold]
       cases i using Fin.cases with
       | zero =>
         rw [Fin.cons_zero]
-        show (F 0 (Fin.cons (fix (fun α => F 0 (Fin.cons α 0)))
-            (stagedN n (fun j γ' => F j.succ
-              (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ')))) t) = _
+        show (F 0 (Fin.cons (headFix F) (stagedN n (tailF F))) t) = _
         rw [hhead]
       | succ j =>
         rw [Fin.cons_succ]
-        show (F j.succ (Fin.cons (fix (fun α => F 0 (Fin.cons α 0)))
-            (stagedN n (fun j' γ' => F j'.succ
-              (Fin.cons (fix (fun α => F 0 (Fin.cons α 0))) γ')))) t) = _
+        show (F j.succ (Fin.cons (headFix F) (stagedN n (tailF F))) t) = _
         have hfe := fix_eq _ hstaged1
         have hpoint := congrFun (congrFun hfe t) j
         rw [ih'] at hpoint

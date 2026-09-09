@@ -21,12 +21,6 @@ import SchemaLang.Item
 
 namespace SchemaLang
 
-/-- The nth field of a field list, `none` out of range. -/
-def Field.get? : List Field → Nat → Option Field
-  | [], _ => none
-  | f :: _, 0 => some f
-  | _ :: rest, n + 1 => Field.get? rest n
-
 /--
 `HasField fs name t` — evidence that field `name` sits at a known
 ordinal in `fs`, with type `t`. Both `t` is an `outParam` so a lookup
@@ -38,9 +32,11 @@ class HasField (fs : List Field) (name : String) (t : outParam Ty) where
   /-- The ordinal of the field in `fs`. -/
   index : Nat
   /-- The resolution is CORRECT: the list's `index`-th field IS this
-      (name, type) pair. (Flatland HasCol's proof-obligation-as-field
-      discipline: stated in the type, checked at elaboration.) -/
-  resolves : Field.get? fs index = some { name := name, ty := t }
+      (name, type) pair — stated over CORE `List.getElem?`, so the
+      standard `getElem?` lemma set applies. (Flatland HasCol's
+      proof-obligation-as-field discipline: stated in the type, checked
+      at elaboration.) -/
+  resolves : fs[index]? = some { name := name, ty := t }
 
 instance (priority := high) : HasField ({ name := n, ty := t } :: fs) n t where
   index := 0
@@ -48,7 +44,7 @@ instance (priority := high) : HasField ({ name := n, ty := t } :: fs) n t where
 
 instance [h : HasField fs n t] : HasField (f :: fs) n t where
   index := h.index + 1
-  resolves := h.resolves
+  resolves := List.getElem?_cons_succ.trans h.resolves
 
 /-- Resolve a field name to its ordinal via instance search. -/
 def fieldIndex (fs : List Field) (name : String) (t : Ty)

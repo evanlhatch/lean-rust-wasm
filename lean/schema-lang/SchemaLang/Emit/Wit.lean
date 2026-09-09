@@ -93,7 +93,7 @@ def worldOf (packageName worldName : String) (items : List Item) : String :=
   let refs :=
     (funcs.flatMap fun s => s.params.map (·.2) ++ [s.ret])
       |>.flatMap Ty.tyRefs
-      |>.foldl (fun acc r => if acc.contains r then acc else acc ++ [r]) []
+      |>.eraseDups
   let useLine :=
     if refs.isEmpty then ""
     else "  use " ++ kebab worldName ++ "-types.{"

@@ -94,9 +94,9 @@ private def serializeBody : MetadataShape → String
     from plain-string segments (s! treats `{{` as `{...}` notation). -/
 private def deserializeBody : MetadataShape → String
   | .unit => "if bytes.is_empty() { Some(vortex::EmptyMetadata) } else { None }"
-  | .u8Enum allowed _ =>
+  | .u8Enum allowed suffix =>
       let allowedStr := String.intercalate ", " (allowed.map fun b => s!"{b}u8")
-      let tyName := metadataRust (.u8Enum allowed "position")
+      let tyName := metadataRust (.u8Enum allowed suffix)
       "if bytes.len() == 1 && [" ++ allowedStr
         ++ "].contains(&bytes[0]) { Some(" ++ tyName ++ "(bytes[0])) } else { None }"
   | .utf8NonEmpty _ =>

@@ -21,6 +21,7 @@ instead of a hand-copied stale table.
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Pipeline
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
@@ -48,26 +49,63 @@ were registered here but never byte-tied there):
    (`jobsCoverEmitters`), not a silent gap.
 -/
 
-/-- Package-relative output → repo-root-relative (emitters run with CWD
-    = the lean package dir and declare `../..`-paths; forge joins from
-    the repo root). -/
-def rootRel (p : String) : String :=
-  match p.dropPrefix? "../../" with | some rest => rest.toString | none => p
-
-/-- One job row → the JSON object text (paths REPO-ROOT-relative — forge
-    joins from the root). -/
+/-- One job row → the JSON object text. Takes the registry's RAW
+    package-relative outputs and roots them itself (`CodegenCore.Emit.rootRel`
+    — callers pass raw paths so rooting happens exactly once). Paths in
+    the JSON are REPO-ROOT-relative — forge joins from the root. -/
 def jobJson (package exe : String) (outputs : List String) : String :=
   "  { \"package\": " ++ CodegenCore.Emit.jsonStr package ++ ", \"exe\": " ++ CodegenCore.Emit.jsonStr exe
-    ++ ", \"outputs\": [" ++ String.intercalate ", " ((outputs.map rootRel).map CodegenCore.Emit.jsonStr) ++ "] }"
+    ++ ", \"outputs\": [" ++ String.intercalate ", " ((outputs.map CodegenCore.Emit.rootRel).map CodegenCore.Emit.jsonStr) ++ "] }"
+
+/-- The Rust constructor name for a pipeline event label (the enum the
+    emitted `step` matches on). -/
+def pipelineEventRust : pipeline.Label → String
+  | .reflect => "Reflect" | .check => "Check" | .emit => "Emit"
+  | .tie => "Tie" | .reset => "Reset"
+
+/-- The Rust expression for a CONCRETE pipeline state. `failed` carries
+    arbitrary strings — data can't wildcard it; `tableStep?` handles it
+    structurally and so does the arm fold below (it never reaches this
+    function). -/
+def pipelineStateRust : PipelineState → String
+  | .idle => "Idle" | .reflecting => "Reflecting" | .checked => "Checked"
+  | .emitted => "Emitted" | .tied => "Tied"
+  | .failed _ _ => "Failed { .. }"
+
+/-- The `step` match arms, folded from the PROVED `pipelineTrans` table
+    (not a hand copy of it): one arm per non-`reset` row, and — when the
+    `reset` rows send EVERY concrete (non-`failed`) state to the same
+    target, which is also the structural `failed` arm's target
+    (`tableStep?`: only `reset` recovers from `failed`) — a single
+    wildcard arm. The wildcard collapse is checked against the table,
+    so the emitted Rust stays a function of the proved data. -/
+def pipelineArms : List String :=
+  let isReset := fun (e : pipeline.Label) => decide (e = .reset)
+  let specific := pipelineTrans.filter (fun (e, _, _) => !isReset e)
+  let resets := pipelineTrans.filter (fun (e, _, _) => isReset e)
+  let armOf := fun (e : pipeline.Label) (f t : PipelineState) =>
+    s!"        ({pipelineStateRust f}, PipelineEvent::{pipelineEventRust e}) => Some({pipelineStateRust t}),"
+  let concrete : List PipelineState :=
+    [.idle, .reflecting, .checked, .emitted, .tied]
+  let resetTos := (resets.map fun (_, _, t) => t).eraseDups
+  let resetFroms := resets.map fun (_, f, _) => f
+  let wildcardOk :=
+    match resetTos with
+    | [t] => t == PipelineState.idle && concrete.all (resetFroms.contains ·)
+    | _ => false
+  specific.map (fun (e, f, t) => armOf e f t)
+    ++ if wildcardOk then ["        (_, PipelineEvent::Reset) => Some(Idle),"]
+       else resets.map fun (_, f, t) => armOf .reset f t
 
 /-- The pipeline stage machine as Rust: the `PipelineStage` enum + the
     `step` fn, mirroring `Pipeline.pipelineTrans` (+ the structural
-    `failed` arm the table can't express — data can't wildcard strings).
-    Consumed by forge; the proved agreement (`tableStep?_eq_step?`)
+    `failed` arm the table can't express — data can't wildcard strings;
+    the wildcard fold above covers it exactly when the table justifies
+    it). Consumed by forge; the proved agreement (`tableStep?_eq_step?`)
     makes the generated Rust the machine, not a sketch of it. -/
 def pipelineRust : String :=
   CodegenCore.Emit.Rust.renderModule
-    [ .comment "GENERATED from SchemaLang.Pipeline (pipelineTrans) — the forge"
+    ([ .comment "GENERATED from SchemaLang.Pipeline (pipelineTrans) — the forge"
     , .comment "driver's stage machine. Agreement with the Lean machine is a"
     , .comment "THEOREM there (tableStep?_eq_step?); do not edit — regenerate."
     , .raw ""
@@ -85,12 +123,9 @@ def pipelineRust : String :=
     , .raw "pub fn step(s: PipelineStage, e: PipelineEvent) -> Option<PipelineStage> {"
     , .raw "    use PipelineStage::*;"
     , .raw "    match (s, e) {"
-    , .raw "        (Idle, PipelineEvent::Reflect) => Some(Reflecting),"
-    , .raw "        (Reflecting, PipelineEvent::Check) => Some(Checked),"
-    , .raw "        (Checked, PipelineEvent::Emit) => Some(Emitted),"
-    , .raw "        (Emitted, PipelineEvent::Tie) => Some(Tied),"
-    , .raw "        (_, PipelineEvent::Reset) => Some(Idle),"
-    , .raw "        _ => None,"
+    ]
+    ++ (pipelineArms.map CodegenCore.Emit.Rust.Item.raw)
+    ++ [ .raw "        _ => None,"
     , .raw "    }"
     , .raw "}"
     , .raw ""
@@ -108,7 +143,7 @@ def pipelineRust : String :=
     , .raw "        Some(Idle)"
     , .raw "    );"
     , .raw "}"
-    ]
+    ])
 
 def pipelineEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   name := "pipeline"

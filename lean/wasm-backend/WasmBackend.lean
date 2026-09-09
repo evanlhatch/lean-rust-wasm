@@ -126,6 +126,29 @@ def emitArg : Arg .impure → M Unit
 
 mutual
 
+partial def resultTyOfAlt : Alt .impure → Option String
+  | .ctorAlt _ code => resultTyOf code
+  | .default code => resultTyOf code
+  | .alt _ _ _ h => absurd h (by simp)
+
+partial def resultTyOf : Code .impure → Option String :=
+  resultTyOfWalk none
+
+partial def resultTyOfWalk (acc : Option String) : Code .impure → Option String
+  | .let decl k => resultTyOfWalk (some ((wasmTyOf? decl.type).getD "i32")) k
+  -- (object-typed lets — ctor/pap/fn-typed — are i32 pointers)
+  | .return _ => acc
+  | .cases c => (c.alts.toList.filterMap resultTyOfAlt).head?
+  | .sset _ _ _ _ _ k => resultTyOfWalk acc k
+  | .inc _ _ _ _ k => resultTyOfWalk acc k
+  | .dec _ _ _ _ _ k => resultTyOfWalk acc k
+  | .del _ k => resultTyOfWalk acc k
+  | .jp _ k => resultTyOfWalk acc k
+  | .unreach _ => none
+  | .jmp .. => none
+  | .oset .. | .uset .. | .setTag .. => none
+  | .fun _ _ h => absurd h (by simp)
+
 partial def emitCode (code : Code .impure) : M Unit := do
   match code with
   | .let decl k =>
@@ -191,7 +214,10 @@ partial def goAltsRaw (value : String) : List (Alt .impure) → M Unit
           emit value
           emit s!"i32.const {info.cidx}"
           emit "i32.eq"
-          emit "if (result i64)"
+          -- the if's result = the branch value's type (i64 scalar OR i32
+          -- object — greet's string branches are the first object case)
+          let resTy := resultTyOf code |>.getD "i64"
+          emit s!"if (result {resTy})"
           emitCode code
           emit "else"
           goAltsRaw value rest
@@ -207,7 +233,9 @@ partial def goAlts (tag : String) : List (Alt .impure) → M Unit
           emit s!"local.get ${tag}"
           emit s!"i32.const {info.cidx}"
           emit "i32.eq"
-          emit "if (result i64)"
+          -- same: the branch value's type decides (scalar i64 / object i32)
+          let resTy := resultTyOf code |>.getD "i64"
+          emit s!"if (result {resTy})"
           emitCode code
           emit "else"
           goAlts tag rest
@@ -381,35 +409,6 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
 
 end
 
-/-! ## Result types -/
-
-mutual
-
-partial def resultTyOfAlt : Alt .impure → Option String
-  | .ctorAlt _ code => resultTyOf code
-  | .default code => resultTyOf code
-  | .alt _ _ _ h => absurd h (by simp)
-
-partial def resultTyOf : Code .impure → Option String :=
-  resultTyOfWalk none
-
-partial def resultTyOfWalk (acc : Option String) : Code .impure → Option String
-  | .let decl k => resultTyOfWalk (some ((wasmTyOf? decl.type).getD "i32")) k
-  -- (object-typed lets — ctor/pap/fn-typed — are i32 pointers)
-  | .return _ => acc
-  | .cases c => (c.alts.toList.filterMap resultTyOfAlt).head?
-  | .sset _ _ _ _ _ k => resultTyOfWalk acc k
-  | .inc _ _ _ _ k => resultTyOfWalk acc k
-  | .dec _ _ _ _ _ k => resultTyOfWalk acc k
-  | .del _ k => resultTyOfWalk acc k
-  | .jp _ k => resultTyOfWalk acc k
-  | .unreach _ => none
-  | .jmp .. => none
-  | .oset .. | .uset .. | .setTag .. => none
-  | .fun _ _ h => absurd h (by simp)
-
-end
-
 /-! ## Decl emission -/
 
 def emitDecl (d : Decl .impure) : M String := do
@@ -443,7 +442,36 @@ convention. Borrowed-scalar params (objects in the impl) get BOXED;
 raw scalars pass through; an object RESULT gets unboxed to the flat
 i64. Exported under the WIT name; the impl stays internal (internal
 callers keep calling it directly). -/
-def emitAdapter (d : Decl .impure) : M String := do
+def emitAdapter (d : Decl .impure) (stringResult? : Bool) : M String := do
+  -- STRING result: the post-return convention — the core signature takes
+  -- the return-area pointer as its LAST param; the adapter calls the impl
+  -- (→ the string object), then writes (bytes-ptr, byte-len) into it.
+  -- The host's canonical lift reads the UTF-8 from the bytes-ptr. The
+  -- guest string's bytes live INLINE at +16 (see the stdOp? layout).
+  -- (The STRING-ness comes from the ORIGINAL def type — GenMain looks it
+  -- up in the imported env — the LCNF type is erased to `obj` for every
+  -- object result, Shape and String alike.)
+  if stringResult? then do
+    -- the shim: pass the flat args through, call the impl, write the
+    -- canonical-ABI string flattening (bytes-ptr, byte-len) into a STATIC
+    -- return area, return the area pointer — the embedder's convention
+    -- (`[I64] -> [I32]`: MAX_FLAT_RESULTS=1 — an oversized result flattens
+    -- to a single i32 pointer to the results tuple; the caller copies out
+    -- of OUR memory via the canon-lift memory option). The area is the
+    -- fixed scratch slot at 48 (the freelist owns 0..24, the heap starts
+    -- at 64; 24..64 is dead space — single-threaded, no clobber). The
+    -- guest string's bytes live INLINE at +16, so bytes-ptr = obj + 16.
+    let sigParams := String.intercalate " "
+      (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
+      ++ " (result i32)"
+    let pass := d.params.toList.map fun p => s!"local.get ${p.binderName.toString}"
+    let tail := [s!"call ${d.name.toString}", "local.set $p"
+      , "i32.const 48", "local.get $p", "i32.const 16", "i32.add", "i32.store"
+      , "i32.const 48", "local.get $p", "i32.load offset=8", "i32.store offset=4"
+      , "i32.const 48"]
+    let body := String.intercalate "\n  " (pass ++ tail)
+    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $p i32)\n  {body}\n)"
+  else do
   let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
   let resultTy := resultTyOf code
   let mut flats : List String := []
@@ -487,7 +515,8 @@ def emitAdapter (d : Decl .impure) : M String := do
 /-- Emit the module: runtime + funcs + trampolines + table + adapters +
 exports. The state THREADS across decls (tramps accumulate). -/
 def emitModule (decls : List (Decl .impure))
-    (exportTargets : List (String × Name)) : M String := do
+    (exportTargets : List (String × Name))
+    (stringResult? : Name → Bool := fun _ => false) : M String := do
   let mut st : S := {}
   let mut funcs : List String := []
   for d in decls do
@@ -555,7 +584,7 @@ def emitModule (decls : List (Decl .impure))
   for (kebab, n) in exportTargets do
     for d in decls do
       if d.name.toString == n.toString then
-        let (a, _) ← emitAdapter d |>.run st
+        let (a, _) ← emitAdapter d (stringResult? n) |>.run st
         abiFuncs := abiFuncs ++ [a]
   let exports := exportTargets.map fun (kebab, n) =>
     s!"  (export \"{kebab}\" (func ${n.toString}_abi))"
@@ -565,6 +594,9 @@ def emitModule (decls : List (Decl .impure))
     [s!"  (table {st.tramps.size} funcref)",
      s!"  (elem (i32.const 0) {String.intercalate sp elem})"]
   else []
-  pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs ++ abiFuncs ++ trampFuncs ++ table) ++ exports ++ [")"])
+  -- the canon lift reads guest memory (string/list results are copied
+  -- out of it) — the memory MUST be exported under the canonical name
+  let memExport := ["  (export \"memory\" (memory 0))"]
+  pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs ++ abiFuncs ++ trampFuncs ++ table) ++ exports ++ memExport ++ [")"])
 
 end WasmBackend

@@ -77,9 +77,7 @@ def delay [Zero a] (s : Stream a) : Stream a
 
 theorem delay_strict [Zero a] : Strict (@delay a _) := by
   intro s s' t hpre
-  cases t with
-  | zero => rfl
-  | succ n => exact hpre n (Nat.lt_succ_self n)
+  cases t <;> simp_all
 
 /-- causal ∘ strict is strict. -/
 theorem causal_strict_strict (F : Operator a b) (hstrict : Strict F)
@@ -270,9 +268,7 @@ theorem uncurryOp_lifting2 (f : a → b → c) :
 /-- Delay away from zero reads the predecessor. -/
 theorem delay_sub_1 [Zero a] (s : Stream a) (t : Nat) (h : 0 < t) :
     delay s t = s (t - 1) := by
-  cases t with
-  | zero => exact absurd h (Nat.lt_irrefl 0)
-  | succ n => rfl
+  cases t <;> simp_all
 
 /-- The zero stream delayed is the zero stream. -/
 theorem delay_zero_stream [Zero a] : delay (0 : Stream a) = 0 := by
@@ -305,9 +301,7 @@ theorem lifting_time_invariant [Zero a] [Zero b] (f : a → b) (h : f 0 = 0) :
     TimeInvariant (lifting f) := by
   intro s
   funext t
-  cases t with
-  | zero => show f (delay s 0) = 0; rw [delay_zero]; exact h
-  | succ n => rfl
+  cases t <;> simp [h]
 
 /-- An operator over pairs of streams applied to a pair of streams. -/
 theorem uncurryOp_intro (T : Operator2 a b c) (s1 : Stream a) (s2 : Stream b) :
@@ -363,11 +357,7 @@ theorem lifting2_time_invariant [Zero a] [Zero b] [Zero c] (f : a → b → c) :
     exact hh
   · intro h0 s
     funext t
-    cases t with
-    | zero =>
-      show f (delay s 0).1 (delay s 0).2 = 0
-      exact h0
-    | succ n => rfl
+    cases t <;> simp [uncurryOp, lifting2, h0]
 
 /-! ## The two-input agreement and circuit feedback facts
 

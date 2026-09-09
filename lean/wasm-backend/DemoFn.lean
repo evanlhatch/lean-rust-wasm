@@ -119,3 +119,13 @@ end GuestlangStd
 def strLenDemo (n : UInt64) : UInt64 :=
   GuestlangStd.strlen
     (if n > 0 then GuestlangStd.strcat "hello" " world" else "!")
+
+/-- The FIRST string through the component boundary: a `string`-returning
+    export. The canonical ABI flattens a string result to (ptr, len) —
+    two flat values — so the core signature takes a POST-RETURN pointer:
+    the adapter writes (bytes-ptr, byte-len) into it and the host's
+    canonical lift reads the UTF-8. Lean body = the differential oracle
+    (n > 0 → "hello guest", else "bye"). -/
+@[guest_std]
+def greet (n : UInt64) : String :=
+  if n > 0 then GuestlangStd.strcat "hello " "guest" else "bye"

@@ -186,9 +186,8 @@ theorem filter_ok (s : Finset A) :
     simp [ZSet.filter_apply, ZSet.fromSet_apply, hpa, has]
 
 theorem filter_linear (m1 m2 : ZSet A) :
-    ZSet.filter p (m1 + m2) = ZSet.filter p m1 + ZSet.filter p m2 := by
-  unfold ZSet.filter
-  exact Finsupp.filter_add
+    ZSet.filter p (m1 + m2) = ZSet.filter p m1 + ZSet.filter p m2 :=
+  Finsupp.filter_add
 
 theorem filter_pos : ZSet.funPositive (ZSet.filter p) := by
   intro m hm a
@@ -419,10 +418,37 @@ end group_by
 
 /-! ## A few properties about `distinct` -/
 
-@[simp]
-theorem ite_ite {c1 : Prop} [Decidable c1] {c2 : Prop} [Decidable c2] (x z : A) :
-    (if c1 then (if c2 then x else z) else z) = if c1 ∧ c2 then x else z := by
-  by_cases hc1 : c1 <;> by_cases hc2 : c2 <;> simp [hc1, hc2]
+/-- ℤ sign analysis for a product of bags: threshold-of-product equals
+    product-of-thresholds (the shared core of `product_distinct_comm` and
+    `intersect_distinct_comm`). -/
+private theorem distinct_mul {x y : ℤ} (hx : 0 ≤ x) (hy : 0 ≤ y) :
+    (if 0 < y ∧ 0 < x then (1 : ℤ) else 0) = if 0 < x * y then 1 else 0 := by
+  by_cases h1p : 0 < x <;> by_cases h2p : 0 < y
+  · have hmul : 0 < x * y := mul_pos h1p h2p
+    simp [h1p, h2p, hmul]
+  · have h2z : y = 0 := le_antisymm (le_of_not_gt h2p) hy
+    simp [h1p, h2z]
+  · have h1z : x = 0 := le_antisymm (le_of_not_gt h1p) hx
+    simp [h2p, h1z]
+  · have h1z : x = 0 := le_antisymm (le_of_not_gt h1p) hx
+    have h2z : y = 0 := le_antisymm (le_of_not_gt h2p) hy
+    simp [h1z, h2z]
+
+/-- ℤ sign analysis for a sum of bags: threshold-of-sum equals
+    threshold-of-(sum of thresholds). -/
+private theorem distinct_add {x y : ℤ} (hx : 0 ≤ x) (hy : 0 ≤ y) :
+    (if 0 < (if 0 < x then (1 : ℤ) else 0) + (if 0 < y then 1 else 0) then (1 : ℤ) else 0)
+      = if 0 < x + y then 1 else 0 := by
+  by_cases h1p : 0 < x <;> by_cases h2p : 0 < y
+  · have hsum : 0 < x + y := add_pos h1p h2p
+    simp [h1p, h2p, hsum] <;> norm_num
+  · have h2z : y = 0 := le_antisymm (le_of_not_gt h2p) hy
+    simp [h1p, h2z]
+  · have h1z : x = 0 := le_antisymm (le_of_not_gt h1p) hx
+    simp [h2p, h1z]
+  · have h1z : x = 0 := le_antisymm (le_of_not_gt h1p) hx
+    have h2z : y = 0 := le_antisymm (le_of_not_gt h2p) hy
+    simp [h1z, h2z]
 
 /-- Filtering commutes with distinct (no `is_bag` hypothesis needed). -/
 theorem filter_distinct_comm (p : A → Prop) [DecidablePred p] (i : ZSet A) :
@@ -436,19 +462,8 @@ theorem product_distinct_comm (i1 : ZSet A) (i2 : ZSet B) :
   intro hpos1 hpos2
   ext ab <;> cases ab with
   | mk a b =>
-    simp only [product_apply, distinct_apply, mul_ite, mul_one, mul_zero, ite_ite]
-    have h1 : 0 ≤ i1 a := hpos1 a
-    have h2 : 0 ≤ i2 b := hpos2 b
-    by_cases h1p : 0 < i1 a <;> by_cases h2p : 0 < i2 b
-    · have hmul : 0 < i1 a * i2 b := mul_pos h1p h2p
-      simp [h1p, h2p, hmul] <;> norm_num
-    · have h2z : i2 b = 0 := le_antisymm (le_of_not_gt h2p) h2
-      simp [h1p, h2z]
-    · have h1z : i1 a = 0 := le_antisymm (le_of_not_gt h1p) h1
-      simp [h2p, h1z]
-    · have h1z : i1 a = 0 := le_antisymm (le_of_not_gt h1p) h1
-      have h2z : i2 b = 0 := le_antisymm (le_of_not_gt h2p) h2
-      simp [h1z, h2z]
+    simp only [product_apply, distinct_apply, mul_ite, mul_one, mul_zero, ← ite_and]
+    exact distinct_mul (hpos1 a) (hpos2 b)
 
 theorem join_distinct_comm (π1 : A → C) (π2 : B → C) (i1 : ZSet A) (i2 : ZSet B) :
     ZSet.isBag i1 → ZSet.isBag i2 →
@@ -463,19 +478,8 @@ theorem intersect_distinct_comm (i1 i2 : ZSet A) :
     ZSet.distinct i1 ∩ ZSet.distinct i2 = ZSet.distinct (i1 ∩ i2) := by
   intro hpos1 hpos2
   ext a
-  simp only [intersect_apply, distinct_apply, mul_ite, mul_one, mul_zero, ite_ite]
-  have h1 : 0 ≤ i1 a := hpos1 a
-  have h2 : 0 ≤ i2 a := hpos2 a
-  by_cases h1p : 0 < i1 a <;> by_cases h2p : 0 < i2 a
-  · have hmul : 0 < i1 a * i2 a := mul_pos h1p h2p
-    simp [h1p, h2p, hmul] <;> norm_num
-  · have h2z : i2 a = 0 := le_antisymm (le_of_not_gt h2p) h2
-    simp [h1p, h2z]
-  · have h1z : i1 a = 0 := le_antisymm (le_of_not_gt h1p) h1
-    simp [h2p, h1z]
-  · have h1z : i1 a = 0 := le_antisymm (le_of_not_gt h1p) h1
-    have h2z : i2 a = 0 := le_antisymm (le_of_not_gt h2p) h2
-    simp [h1z, h2z]
+  simp only [intersect_apply, distinct_apply, mul_ite, mul_one, mul_zero, ← ite_and]
+  exact distinct_mul (hpos1 a) (hpos2 a)
 
 /-- Distinct commutes with `map` when the function is injective (source
     `map_inj_distinct_comm`). -/
@@ -542,19 +546,8 @@ theorem add_distinct_dedup (i1 i2 : ZSet A) :
     ZSet.distinct (ZSet.distinct i1 + ZSet.distinct i2) = ZSet.distinct (i1 + i2) := by
   intro hpos1 hpos2
   ext a
-  simp [ZSet.distinct_apply]
-  have h1 : 0 ≤ i1 a := hpos1 a
-  have h2 : 0 ≤ i2 a := hpos2 a
-  by_cases h1p : 0 < i1 a <;> by_cases h2p : 0 < i2 a
-  · have hsum : 0 < i1 a + i2 a := add_pos h1p h2p
-    simp [h1p, h2p, hsum] <;> norm_num
-  · have h2z : i2 a = 0 := le_antisymm (le_of_not_gt h2p) h2
-    simp [h1p, h2z]
-  · have h1z : i1 a = 0 := le_antisymm (le_of_not_gt h1p) h1
-    simp [h2p, h1z]
-  · have h1z : i1 a = 0 := le_antisymm (le_of_not_gt h1p) h1
-    have h2z : i2 a = 0 := le_antisymm (le_of_not_gt h2p) h2
-    simp [h1z, h2z]
+  simp only [ZSet.distinct_apply, Finsupp.add_apply]
+  exact distinct_add (hpos1 a) (hpos2 a)
 
 theorem product_distinct_dedup (i1 : ZSet A) (i2 : ZSet B) :
     ZSet.isBag i1 → ZSet.isBag i2 →

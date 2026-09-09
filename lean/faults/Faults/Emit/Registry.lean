@@ -44,7 +44,7 @@ def hostEmitter : Emitter FaultsSpec where
   outputs := ["../../src/host_faults_generated.rs"]
   run items :=
     [ { path := "../../src/host_faults_generated.rs"
-      , contents := Rust.renderModule (Rust.faultModule "HostFault" (allocateHost items) (guest? := false)) } ]
+      , contents := Rust.renderModule (Rust.faultModule "HostFault" (allocateHost Spec.apiFaults items) (guest? := false)) } ]
 
 /-- The emitters (order = write order). -/
 def emitters : List (Emitter FaultsSpec) := [guestEmitter, hostEmitter]
@@ -74,10 +74,10 @@ def jobsCoverEmitters : Bool :=
     packages; brackets + header come from the writer). Paths are
     REPO-ROOT-relative (forge joins from the root). -/
 def forgeJobsLines : List String :=
-  let rootRel := fun (p : String) =>
-    match p.dropPrefix? "../../" with | some rest => rest.toString | none => p
+  -- RAW outputs: `jobJson` roots paths itself (`CodegenCore.Emit.rootRel`) —
+  -- mapping here too would root twice.
   forgeJobs.map fun (exe, outputs) =>
-    SchemaLang.Emit.jobJson "faults" exe (outputs.map rootRel)
+    SchemaLang.Emit.jobJson "faults" exe outputs
 
 def forgeJobsEmitter : Emitter FaultsSpec where
   name := "forge-jobs"

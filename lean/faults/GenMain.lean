@@ -13,7 +13,7 @@ import Faults.Emit.Registry
 open Faults.Emit (jobs)
 open CodegenCore.Emit (header)
 
-unsafe def main : IO Unit := do
+def main : IO Unit := do
   for h in jobs do
     let (e, spec) := h
     for f in e.run spec do

@@ -4,16 +4,16 @@
 fast_observe::error! {
       pub enum HostFault {
       #[error("component not instantiated")]
-      #[code = "E110", category = Invariant, advice = "call instantiate() before call()"]
+      #[code = "E104", category = Invariant, advice = "call instantiate() before call()"]
       NotInstantiated,
       #[error("missing export: {name}")]
-      #[code = "E111", category = Content, advice = "check the component world exports (wasm-tools component wit)"]
+      #[code = "E105", category = Content, advice = "check the component world exports (wasm-tools component wit)"]
       MissingExport { name: String },
       #[error("unsupported result type: {ty}")]
-      #[code = "E112", category = Invariant, advice = "return a scalar or handle it via typed bindings"]
+      #[code = "E106", category = Invariant, advice = "return a scalar or handle it via typed bindings"]
       UnsupportedResult { ty: String },
       #[error("engine: {message}")]
-      #[code = "E113", category = Transient, advice = "inspect the chained wasmtime error text"]
+      #[code = "E107", category = Transient, advice = "inspect the chained wasmtime error text"]
       Engine { message: String },
       }
 }

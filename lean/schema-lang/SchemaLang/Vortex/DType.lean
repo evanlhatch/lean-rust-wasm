@@ -114,6 +114,24 @@ abbrev StructFields := List (FieldName × DType)
 /-- Union variants. -/
 abbrev UnionVariants := List (FieldName × DType)
 
+/-- Set the top-level nullability flag (extension forwards to its
+    storage, matching `nullability`; `null` is already maximally
+    nullable). Used by the lowering to stamp the REQUESTED nullability
+    onto a resolved named reference. -/
+def DType.withNullability (n : Nullability) : DType → DType
+  | .null => .null
+  | .bool _ => .bool n
+  | .primitive p _ => .primitive p n
+  | .decimal d _ => .decimal d n
+  | .utf8 _ => .utf8 n
+  | .binary _ => .binary n
+  | .list e _ => .list e n
+  | .fixedSizeList e s _ => .fixedSizeList e s n
+  | .struct fs _ => .struct fs n
+  | .union vs _ => .union vs n
+  | .variant _ => .variant n
+  | .extension id m s => .extension id m (s.withNullability n)
+
 /-- Nullability accessor. -/
 def DType.nullability : DType → Nullability
   | .null => .nullable

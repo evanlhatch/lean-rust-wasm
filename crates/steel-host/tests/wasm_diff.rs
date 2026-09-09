@@ -99,6 +99,7 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
             Ok(results) => {
                 let gotStr = match &results[0] {
                     Val::U64(v) => v.to_string(),
+                    Val::String(s) => s.clone(),
                     Val::Bool(b) => {
                         if *b {
                             "1".into()

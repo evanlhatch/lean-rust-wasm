@@ -58,10 +58,14 @@ def universeWellFormed (known : List String) (items : List FailureModeItem) : Bo
 def allocate (items : List FailureModeItem) : List (FailureModeItem × String) :=
   CodegenCore.allocateCodes "E" 100 items
 
-/-- Host-fault codes start at E110 — one E-code space with the guest
-(disjoint by construction: apiFaults allocates 100-…, hostFaults 110-…). -/
-def allocateHost (items : List FailureModeItem) : List (FailureModeItem × String) :=
-  CodegenCore.allocateCodes "E" 110 items
+/-- Host-fault codes start AFTER the guest space, driver-computed:
+    `100 + guest.length`. One E-code space, disjoint at ANY guest-registry
+    size — a hardcoded start (the old E110 fiat) silently collided the
+    moment guest faults grew past it. The disjointness obligation is an
+    executable test (`Nodup` over both allocations), not a comment. -/
+def allocateHost (guest : List FailureModeItem) (items : List FailureModeItem) :
+    List (FailureModeItem × String) :=
+  CodegenCore.allocateCodes "E" (100 + guest.length) items
 
 /-- Code allocation preserves count — kernel-checked obligation. -/
 theorem allocate_length (items : List FailureModeItem) :

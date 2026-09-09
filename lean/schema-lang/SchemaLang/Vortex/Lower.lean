@@ -6,14 +6,19 @@ Vortex wire-faithful model. This is where nullability composition,
 extension-dtype lookup, and the "what doesn't map" decisions live.
 
 Lowering decisions (target-neutral → Vortex):
-- `.option t` → lower `t` with nullability flipped to `.nullable`
-  (Vortex nullability is per-dtype, not a wrapper — unlike WIT's
-  `option<T>` which is a constructor)
-- `.result ok err` → no direct Vortex dtype; lower to a struct with
-  `tag: bool` + `ok`/`err` payload columns (the DBSP/substrait shape)
+- `.option t` → lower `t` with the TOP-LEVEL nullability flipped to
+  `.nullable` (Vortex nullability is per-dtype, not a wrapper — unlike
+  WIT's `option<T>` which is a constructor). The flip lands on `t`'s
+  outer dtype ONLY: everything inside keeps its own non-nullable flag
+  (`option<list<u8>>` → a nullable list of NON-nullable u8).
+- `.result ok err` → `none`: the tag+payload union this lowering
+  promises has not landed — a refusal beats a wrong artifact that
+  SUCCEEDS (callers handle `none` already: the return is `Option`).
 - `.future t` / `.stream t` → banned in field position (banAsync);
   in func signatures they map to WASI 0.3 future/stream, not Vortex
-- `.ty n` / `.ext n` → extension dtype lookup from the registry
+- `.ty n` → registry lookup (`sem`), with the REQUESTED nullability
+  stamped on the resolved dtype (`withNullability`) — a nullable ref
+  emits a nullable dtype. `.ext n` → extension dtype lookup.
 
 Nullability composition rule (flatland `Substrait.Typed.Schema`
 convention): the schema universe is nullability-FREE (option handles
@@ -50,16 +55,19 @@ def Ty.lower (sem : VortexSem) (null : Nullability) : Ty → Option DType
   | .string => some (.utf8 null)
   | .bytes => some (.binary null)
   | .option a => Ty.lower sem .nullable a
-  | .result ok _err =>
-      -- Vortex has no result dtype; lower to a nullable union
-      -- (tag: bool, ok: ok-type, err: err-type) — v1: just the ok side
-      Ty.lower sem null ok
+  | .result _ _ =>
+      -- Vortex has no result dtype; the promised tag+payload union has
+      -- not landed. Refuse (none) rather than silently drop the err
+      -- side into a wrong artifact that succeeds.
+      none
   | .list a => do
-      let inner ← Ty.lower sem null a
+      -- the element's nullability is its own (non-nullable); `null`
+      -- stamps the LIST's top-level flag only
+      let inner ← Ty.lower sem .nonNullable a
       some (DType.list inner null)
   | .future _ => none  -- not tabular
   | .stream _ => none  -- not tabular
-  | .ty n => sem n
+  | .ty n => (sem n).map (·.withNullability null)
 
 /-- Lower a list of named fields to a Vortex struct dtype. -/
 def lowerFields (sem : VortexSem) (null : Nullability)

@@ -67,6 +67,33 @@ def Registry.all {α : Type} (ext : SimplePersistentEnvExtension α (List α)) :
     CoreM (List α) :=
   return ext.getState (← getEnv)
 
+/-! ## The driver preamble (runtime registry loading)
+
+Driver exes (GenMain, test harnesses) replay the registry from compiled
+oleans at RUNTIME: `initSearchPath` (+ any package-local build dirs),
+`enableInitializersExecution`, `importModules` with `loadExts := true` —
+without the replay the extension comes back EMPTY. One copy here; every
+driver calls it. -/
+
+/-- Import `modules` with their persistent env extensions replayed,
+    returning the elaborated environment. `extraPaths` are appended to
+    the search path (a direct binary run lacks LEAN_PATH; tests pass
+    their package build dir). Unsafe: executes imported initializers. -/
+unsafe def importModulesReplayed (modules : Array Name)
+    (extraPaths : List System.FilePath := []) : IO Environment := do
+  initSearchPath (← findSysroot)
+  searchPathRef.modify fun sp => sp ++ extraPaths
+  enableInitializersExecution
+  importModules modules (opts := {}) (loadExts := true)
+
+/-- Load the items registered into `ext` by `modules` (the whole
+    importModules+loadExts preamble). -/
+unsafe def loadRegisteredItems {α : Type}
+    (ext : SimplePersistentEnvExtension α (List α)) (modules : Array Name)
+    (extraPaths : List System.FilePath := []) : IO (List α) := do
+  let env ← importModulesReplayed modules extraPaths
+  pure (ext.getState env)
+
 /-! ## Code allocation
 
 Codes are derived from registry position — stable because the registry is

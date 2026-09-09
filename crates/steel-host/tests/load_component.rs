@@ -156,8 +156,9 @@ async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn 
 }
 
 /// Stage C done-criteria: ONE E-code space across the boundary. The host's
-/// generated registry (E110-E113, from Faults/Spec/Host.lean) and the
-/// guest's (E100-E103, from Faults/Spec/Demo.lean) both resolve through
+/// generated registry (E104-E107, from Faults/Spec/Host.lean — host
+/// codes start at 100 + the guest registry's length) and the guest's
+/// (E100-E103, from Faults/Spec/Demo.lean) both resolve through
 /// fast-observe's global lookup — the E-code means the same thing
 /// regardless of which side reported it.
 #[test]
@@ -166,10 +167,10 @@ fn fault_registry_resolves_host_and_guest_codes() {
 
     // Host faults (generated host_faults_generated, registered at startup).
     steel_host::valves::register();
-    let host = lookup_error("E110").expect("E110 registered");
+    let host = lookup_error("E104").expect("E104 registered");
     assert!(host.display.contains("not instantiated"), "{host:?}");
-    assert!(lookup_error("E111").is_some(), "E111 registered");
-    assert!(lookup_error("E113").is_some(), "E113 registered");
+    assert!(lookup_error("E105").is_some(), "E105 registered");
+    assert!(lookup_error("E107").is_some(), "E107 registered");
 
     // Guest faults (the framework crate registers faults_generated at init).
     lean_rust_wasm::faults_generated::init_guest();

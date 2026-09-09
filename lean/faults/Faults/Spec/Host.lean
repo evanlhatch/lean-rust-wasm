@@ -3,13 +3,17 @@
 
 The steel-host's capability/engine faults flow from the same registry
 discipline as the guest's: names, displays, categories, advice, and
-payloads live HERE; codes are allocated at emission (E110, E111, … via
-`allocateHost`) and mean the same thing across the boundary. The
+payloads live HERE; codes are allocated at emission (`allocateHost` —
+starting at 100 + the guest registry's length) and mean the same thing
+across the boundary. The
 generated module is `src/host_faults_generated.rs`; steel-host includes
 it — the hand-written `valves` enum was deleted.
 
 Namespace note: guest faults start at E100 (apiFaults), host faults at
-E110 (allocateHost) — one E-code space, disjoint by construction.
+E100 + apiFaults.length (allocateHost, driver-computed) — one E-code
+space, disjoint at any registry size (the disjointness test in
+Tests/Main pins this; a hardcoded host start collided once guests grew
+past it).
 -/
 
 import Faults.Registry

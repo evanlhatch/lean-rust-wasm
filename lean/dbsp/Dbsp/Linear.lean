@@ -38,21 +38,32 @@ def Linear (S : Operator a b) : Prop := ∀ x y, S (x + y) = S x + S y
 theorem linear_add {S : Operator a b} (h : Linear S) :
     ∀ s1 s2, S (s1 + s2) = S s1 + S s2 := h
 
-theorem linear_zero {S : Operator a b} (h : Linear S) : S 0 = 0 := by
-  have h0 : S 0 = S 0 + S 0 := by
-    have := h 0 0
-    rwa [add_zero] at this
-  exact (add_left_cancel (a := S 0) (b := 0) (c := S 0) (by rwa [add_zero])).symm
+/-- An additive function preserves zero. -/
+theorem lifting_zero (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) : f 0 = 0 := by
+  have h0 : f 0 = f 0 + f 0 := by
+    rw [← hlin 0 0, add_zero]
+  exact (add_left_cancel (a := f 0) (b := 0) (c := f 0) (by rwa [add_zero])).symm
 
-theorem linear_neg {S : Operator a b} (h : Linear S) : ∀ s, S (-s) = -S s := by
-  intro s
+/-- An additive function preserves negation. -/
+theorem lifting_neg (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) (x : a) :
+    f (-x) = -f x := by
   apply eq_neg_of_add_eq_zero_left
-  rw [← h, neg_add_cancel, linear_zero h]
+  rw [← hlin, neg_add_cancel, lifting_zero f hlin]
+
+/-- An additive function preserves subtraction. -/
+theorem lifting_sub (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) (x y : a) :
+    f (x - y) = f x - f y := by
+  rw [sub_eq_add_neg, hlin, lifting_neg f hlin, sub_eq_add_neg]
+
+theorem linear_zero {S : Operator a b} (h : Linear S) : S 0 = 0 :=
+  lifting_zero S h
+
+theorem linear_neg {S : Operator a b} (h : Linear S) : ∀ s, S (-s) = -S s :=
+  lifting_neg S h
 
 theorem linear_sub {S : Operator a b} (h : Linear S) :
-    ∀ s1 s2, S (s1 - s2) = S s1 - S s2 := by
-  intro s1 s2
-  rw [sub_eq_add_neg, h, linear_neg h, sub_eq_add_neg]
+    ∀ s1 s2, S (s1 - s2) = S s1 - S s2 :=
+  lifting_sub S h
 
 /-- A function of two arguments is bilinear if it is linear in each argument
     separately (holding the other constant). A classic example is
@@ -77,36 +88,18 @@ theorem lifting_linear (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) :
 
 /-- A lifted additive function is LTI. -/
 theorem lifting_lti (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) :
-    Lti (lifting f) := by
-  refine ⟨lifting_linear f hlin, lifting_time_invariant f ?_⟩
-  have h0 : f 0 = f 0 + f 0 := by rw [← hlin 0 0, add_zero]
-  exact (add_left_cancel (a := f 0) (b := 0) (c := f 0) (by rwa [add_zero])).symm
+    Lti (lifting f) :=
+  ⟨lifting_linear f hlin, lifting_time_invariant f (lifting_zero f hlin)⟩
 
 theorem bilinear_sub_1 {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [AddCommGroup γ]
     {f : α → β → γ} (hblin : Bilinear f) :
-    ∀ x1 x2 y, f (x1 - x2) y = f x1 y - f x2 y := by
-  intro x1 x2 y
-  have h0 : f 0 y = 0 := by
-    have h := hblin.1 0 0 y
-    rw [add_zero] at h
-    exact (add_left_cancel (a := f 0 y) (b := 0) (c := f 0 y) (by rwa [add_zero])).symm
-  have hneg : f (-x2) y = -(f x2 y) := by
-    apply eq_neg_of_add_eq_zero_left
-    rw [← hblin.1 (-x2) x2 y, neg_add_cancel, h0]
-  rw [sub_eq_add_neg, hblin.1, hneg, sub_eq_add_neg]
+    ∀ x1 x2 y, f (x1 - x2) y = f x1 y - f x2 y :=
+  fun x1 x2 y => lifting_sub (fun x => f x y) (fun x1' x2' => hblin.1 x1' x2' y) x1 x2
 
 theorem bilinear_sub_2 {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [AddCommGroup γ]
     {f : α → β → γ} (hblin : Bilinear f) :
-    ∀ x y1 y2, f x (y1 - y2) = f x y1 - f x y2 := by
-  intro x y1 y2
-  have h0 : f x 0 = 0 := by
-    have h := hblin.2 x 0 0
-    rw [add_zero] at h
-    exact (add_left_cancel (a := f x 0) (b := 0) (c := f x 0) (by rwa [add_zero])).symm
-  have hneg : f x (-y2) = -(f x y2) := by
-    apply eq_neg_of_add_eq_zero_left
-    rw [← hblin.2 x (-y2) y2, neg_add_cancel, h0]
-  rw [sub_eq_add_neg, hblin.2, hneg, sub_eq_add_neg]
+    ∀ x y1 y2, f x (y1 - y2) = f x y1 - f x y2 :=
+  fun x y1 y2 => lifting_sub (f x) (fun y1' y2' => hblin.2 x y1' y2') y1 y2
 
 /-- A pointwise-bilinear function lifts to a stream-bilinear operator. -/
 theorem lifting_bilinear {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [AddCommGroup γ]
@@ -118,9 +111,7 @@ theorem lifting_bilinear {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [
 theorem delay_linear : Linear (@delay a _) := by
   intro x y
   funext t
-  cases t with
-  | zero => simp
-  | succ n => rfl
+  cases t <;> simp
 
 /-! ## Feedback -/
 
@@ -194,9 +185,7 @@ theorem feedback_time_invariant (S : Operator a a) (hcausal : Causal S)
     have hds : (delay s + delay (0 : Stream a)) = delay s := by
       funext i
       show delay s i + delay (0 : Stream a) i = delay s i
-      cases i with
-      | zero => simp
-      | succ j => simp
+      cases i <;> simp
     rw [hds, time_invariant_t hti]
     simp only [delay_zero]
   | succ n ih =>
@@ -252,9 +241,7 @@ theorem derivative_time_invariant : TimeInvariant (@D a _) := by
   intro s
   show delay s - delay (delay s) = delay (s - delay s)
   funext t
-  cases t with
-  | zero => simp
-  | succ n => rfl
+  cases t <;> simp
 
 theorem derivative_lti : Lti (@D a _) := ⟨derivative_linear, derivative_time_invariant⟩
 
@@ -393,12 +380,6 @@ The streams of pairs plays well with D, I, and pointwise lifting —
 projection corollaries `integral_fst_comm` / `integral_snd_comm`. The
 circuit incrementalize theorem pushes D and I through the `par`
 constructor on exactly these grounds. -/
-
-/-- An additive function preserves zero. -/
-theorem lifting_zero (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) : f 0 = 0 := by
-  have h0 : f 0 = f 0 + f 0 := by
-    rw [← hlin 0 0, add_zero]
-  exact (add_left_cancel (a := f 0) (b := 0) (c := f 0) (by rwa [add_zero])).symm
 
 /-- `sumVals` commutes with the stream pairing operator. -/
 theorem sumVals_sprod (s1 : Stream a) (s2 : Stream b) (n : Nat) :

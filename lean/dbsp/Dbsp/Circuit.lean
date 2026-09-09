@@ -33,6 +33,15 @@ namespace Dbsp
 
 variable {Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Type}
 
+/-- The `denoteF` signature: the meaning of the external function
+    templates (the 10 use sites below). -/
+abbrev CktDenote (Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Type) : Type 1 :=
+  (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b
+
+/-- The linearity-oracle signature for `incrementalize`. -/
+abbrev IsLinearOracle (Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Type) : Type 1 :=
+  (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool
+
 /-- A circuit is a structural description of a stream operator over a
     parameterized set `Func` of external (compiled) function templates. -/
 inductive Ckt (Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Type) :
@@ -50,7 +59,7 @@ inductive Ckt (Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] →
       Ckt Func (a × b) b → Ckt Func a b
 
 /-- The denotation of a circuit: how it reads and writes streams. -/
-def Ckt.denote (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b) :
+def Ckt.denote (denoteF : CktDenote Func) :
     {a b : Type} → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Stream a → Stream b
   | a, b, _, _, c =>
       match c with
@@ -67,35 +76,31 @@ def Ckt.denote (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b]
     `⟦F⟧ (s ⊗ α)`. Named so the causality/incrementalization arguments
     stay first-order (no higher-order unification against anonymous
     lambdas). -/
-def Ckt.feedbackBody (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
+def Ckt.feedbackBody (denoteF : CktDenote Func)
     {a b : Type} [AddCommGroup a] [AddCommGroup b] (F : Ckt Func (a × b) b) :
     Operator2 a b b :=
   fun s α => Ckt.denote denoteF F (sprod (s, α))
 
 variable {a b c d : Type} [AddCommGroup a] [AddCommGroup b] [AddCommGroup c] [AddCommGroup d]
-variable {denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b}
+variable {denoteF : CktDenote Func}
 
 /-- Circuit equivalence: equal denotations. -/
-def equiv (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
+def equiv (denoteF : CktDenote Func)
     (f1 f2 : Ckt Func a b) : Prop := Ckt.denote denoteF f1 = Ckt.denote denoteF f2
 
 @[refl]
-theorem equiv_refl (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
-    (f : Ckt Func a b) : equiv denoteF f f := by
-  unfold equiv
-  rfl
+theorem equiv_refl (denoteF : CktDenote Func)
+    (f : Ckt Func a b) : equiv denoteF f f := rfl
 
 @[symm]
-theorem equiv_symm (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
-    (f1 f2 : Ckt Func a b) : equiv denoteF f1 f2 → equiv denoteF f2 f1 := by
-  intro h
-  exact h.symm
+theorem equiv_symm (denoteF : CktDenote Func)
+    (f1 f2 : Ckt Func a b) : equiv denoteF f1 f2 → equiv denoteF f2 f1 :=
+  fun h => h.symm
 
 @[trans]
-theorem equiv_trans (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
-    (f1 f2 f3 : Ckt Func a b) : equiv denoteF f1 f2 → equiv denoteF f2 f3 → equiv denoteF f1 f3 := by
-  intro h12 h23
-  exact h12.trans h23
+theorem equiv_trans (denoteF : CktDenote Func)
+    (f1 f2 f3 : Ckt Func a b) : equiv denoteF f1 f2 → equiv denoteF f2 f3 → equiv denoteF f1 f3 :=
+  fun h12 h23 => h12.trans h23
 
 @[simp]
 theorem denote_seq (f1 : Ckt Func a b) (f2 : Ckt Func b c) :
@@ -130,7 +135,7 @@ theorem denote_feedback (F : Ckt Func (a × b) b) :
       fun s => Dbsp.fix (fun α => Ckt.denote denoteF F (sprod (s, Dbsp.delay α))) := rfl
 
 /-- Sequential composition is associative up to equivalence. -/
-theorem seq_assoc (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
+theorem seq_assoc (denoteF : CktDenote Func)
     (f1 : Ckt Func a b) (f2 : Ckt Func b c) (f3 : Ckt Func c d) :
     equiv denoteF (Ckt.seq (Ckt.seq f1 f2) f3) (Ckt.seq f1 (Ckt.seq f2 f3)) := by
   simp [equiv]
@@ -268,7 +273,7 @@ theorem recursive_opt_incremental (opt : (a b : Type) → [AddCommGroup a] → [
 
 /-- If the optimizer only returns equivalent circuits when it returns, then
     `opt` at a node preserves equivalence whether it fires or not. -/
-theorem opt_or_else_ok (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
+theorem opt_or_else_ok (denoteF : CktDenote Func)
     (opt : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Option (Ckt Func a b))
     (h_opt : ∀ {a b : Type} [AddCommGroup a] [AddCommGroup b] (f1 f2 : Ckt Func a b),
       opt _ _ f1 = some f2 → equiv denoteF f1 f2)
@@ -285,7 +290,7 @@ theorem opt_or_else_ok (denoteF : (a b : Type) → [AddCommGroup a] → [AddComm
 
 /-- The rewrite pass is sound: `recursiveOpt opt` is equivalent to the
     identity on every circuit (induction on the circuit shape). -/
-theorem recursive_opt_ok (denoteF : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → a → b)
+theorem recursive_opt_ok (denoteF : CktDenote Func)
     (opt : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Option (Ckt Func a b))
     (h_opt : ∀ {a b : Type} [AddCommGroup a] [AddCommGroup b] (f1 f2 : Ckt Func a b),
       opt _ _ f1 = some f2 → equiv denoteF f1 f2) :
@@ -326,7 +331,7 @@ theorem recursive_opt_ok (denoteF : (a b : Type) → [AddCommGroup a] → [AddCo
 /-- Incrementalize a circuit: linear `lifting` leafs are their own
     incremental form; everything else wraps in `incremental`. The
     `isLinear`/`isLinearOk` pair is the compiler's linearity oracle. -/
-def incrementalize (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool) :
+def incrementalize (isLinear : IsLinearOracle Func) :
     {a b : Type} → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Ckt Func a b
   | a, b, _, _, c =>
       match c with
@@ -340,30 +345,30 @@ def incrementalize (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGro
       | Ckt.feedback F => Ckt.feedback (incrementalize isLinear F)
 
 @[simp]
-theorem incrementalize_incremental (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool)
+theorem incrementalize_incremental (isLinear : IsLinearOracle Func)
     (g : Ckt Func a b) :
     incrementalize isLinear (Ckt.incremental g) = Ckt.incremental (incrementalize isLinear g) := rfl
 
 @[simp]
-theorem incrementalize_lifting (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool)
+theorem incrementalize_lifting (isLinear : IsLinearOracle Func)
     (cf : Func a b) :
     incrementalize isLinear (Ckt.lifting cf) =
       if isLinear _ _ cf = true then Ckt.lifting cf else Ckt.incremental (Ckt.lifting cf) := rfl
 
 @[simp]
-theorem incrementalize_seq (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool)
+theorem incrementalize_seq (isLinear : IsLinearOracle Func)
     (f1 : Ckt Func a b) (f2 : Ckt Func b c) :
     incrementalize isLinear (Ckt.seq f1 f2) =
       Ckt.seq (incrementalize isLinear f1) (incrementalize isLinear f2) := rfl
 
 @[simp]
-theorem incrementalize_par (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool)
+theorem incrementalize_par (isLinear : IsLinearOracle Func)
     (f1 : Ckt Func a b) (f2 : Ckt Func c d) :
     incrementalize isLinear (Ckt.par f1 f2) =
       Ckt.par (incrementalize isLinear f1) (incrementalize isLinear f2) := rfl
 
 @[simp]
-theorem incrementalize_feedback (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool)
+theorem incrementalize_feedback (isLinear : IsLinearOracle Func)
     (F : Ckt Func (a × b) b) :
     incrementalize isLinear (Ckt.feedback F) = Ckt.feedback (incrementalize isLinear F) := rfl
 
@@ -371,7 +376,7 @@ theorem incrementalize_feedback (isLinear : (a b : Type) → [AddCommGroup a] �
     linearity oracle) then denoting it is EXACTLY the incremental form of
     the original denotation: `⟦incrementalize isLinear c⟧ = ⟦c⟧^Δ`. A
     template-certified compiler, per circuit. -/
-@[cert] theorem incrementalize_ok (isLinear : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Func a b → Bool)
+@[cert] theorem incrementalize_ok (isLinear : IsLinearOracle Func)
     (isLinearOk : ∀ {a b : Type} [AddCommGroup a] [AddCommGroup b] (f : Func a b),
       isLinear _ _ f = true → ∀ x y : a, denoteF _ _ f (x + y) = denoteF _ _ f x + denoteF _ _ f y)
     (f : Ckt Func a b) :

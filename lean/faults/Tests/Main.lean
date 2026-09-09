@@ -2,12 +2,16 @@
 # Faults Tests
 
 wellFormed (resolution + Nodup), allocation count preservation (the
-kernel-checked obligation), retry policy, emit determinism + pins.
+kernel-checked obligation), guest/host code-space disjointness (0.4),
+retry policy, emit determinism + pins, the emitter audit (1.6: run ⊆
+declared outputs), and the knownTypes tie to the schema universe (1.8).
 
 Run: `lake build FaultsTests && .lake/build/bin/FaultsTests`
 -/
 import Faults
 import Faults.Emit.Registry
+import CodegenCore
+import SchemaLang.Meta.Reflect
 import TestKit
 
 open Faults TestKit
@@ -19,10 +23,37 @@ def registryChecks : CheckResult := do
     [ { name := "bad", display := "d", category := .content, advice := "a"
       , payload := [("x", .ty "nonexistent")] } ]
   _ ← assertEq "unknown ref rejected" (universeWellFormed Spec.knownTypes broken) false
+  -- a REAL schema ref resolves (knownTypes names are the registry's)
+  let referencing : List FailureModeItem :=
+    [ { name := "orderFailed", display := "order failed: {err}"
+      , category := .content, advice := "inspect the order error"
+      , payload := [("err", .ty "OrderError")] } ]
+  _ ← assertEq "schema ref resolves" (universeWellFormed Spec.knownTypes referencing) true
   -- dup names rejected
   _ ← assertEq "dup rejected" (namesUnique (Spec.apiFaults ++ Spec.apiFaults)) false
   -- allocation preserves count (the kernel-checked obligation, executed)
   _ ← assertEq "alloc count" (allocate Spec.apiFaults).length Spec.apiFaults.length
+  .ok ()
+
+/-- 0.4: the guest/host code spaces are disjoint BY CONSTRUCTION — the
+    host start is computed from the guest registry's size, so growth can
+    never collide. Plus the negative control: a hardcoded host start (the
+    old E110 fiat) DOES collide once guests grow past it — if the control
+    ever passes, the disjointness checks are vacuous. -/
+def allocationChecks : CheckResult := do
+  _ ← assertEq "guest/host codes disjoint"
+      (decide ((allocate Spec.apiFaults ++ allocateHost Spec.apiFaults Spec.hostFaults).map (·.2)).Nodup)
+      true
+  -- 15 guests push codes past the old hardcoded E110 start; the computed
+  -- start still clears them
+  let oversized := List.replicate 15 Spec.apiFaults.head!
+  _ ← assertEq "disjoint past old E110 start"
+      (decide ((allocate oversized ++ allocateHost oversized Spec.hostFaults).map (·.2)).Nodup)
+      true
+  -- negative control: the OLD allocation scheme collides here
+  _ ← assertEq "colliding start caught (control)"
+      (decide ((allocate oversized ++ CodegenCore.allocateCodes "E" 110 Spec.hostFaults).map (·.2)).Nodup)
+      false
   .ok ()
 
 def policyChecks : CheckResult := do
@@ -56,19 +87,66 @@ def emitChecks : CheckResult := do
   .ok ()
 
 /-- The one-writer audit: no two faults emitters claim the same output
-    path (mirrors `SchemaLang.Emit.pathsUnique`), AND the forge job row
+    path (mirrors `SchemaLang.Emit.pathsUnique`), the forge job row
     covers exactly the registry's outputs (same pattern as schema-lang's
     `jobsCoverEmitters` — an emitter whose artifact forge never byte-ties
-    fails here, not silently). -/
+    fails here, not silently), AND every file `run` produces is a
+    DECLARED output (1.6: run ⊆ outputs — `run` may not re-state paths
+    `outputs` doesn't declare). Negative control: a rogue emitter whose
+    `run` writes outside its declared `outputs` must FAIL the audit. -/
 def emitterAuditChecks : CheckResult := do
   _ ← assertEq "emitter paths unique" Faults.Emit.pathsUnique true
   _ ← assertEq "jobs cover emitters" Faults.Emit.jobsCoverEmitters true
+  _ ← assertEq "run ⊆ declared outputs"
+      (Faults.Emit.jobs.all fun (e, spec) =>
+        (e.run spec).all fun f => e.outputs.contains f.path) true
+  let rogueEmitter : CodegenCore.Emit.Emitter Faults.Emit.FaultsSpec :=
+    { Faults.Emit.guestEmitter with outputs := ["../../src/elsewhere.rs"] }
+  _ ← assertEq "undeclared output caught (control)"
+      ((rogueEmitter.run Spec.apiFaults).all fun f =>
+        rogueEmitter.outputs.contains f.path) false
   .ok ()
 
-def main : IO UInt32 :=
+open Lean SchemaLang.Meta in
+/-- The schema demo universe's type names, loaded at runtime (schema-lang
+    Tests' `loadDemoItems` pattern): `importModules` resolves oleans at
+    RUNTIME — initialize the search path, adding this package's build dir
+    AND the dependency packages' (Demo's import closure runs through
+    schema-lang → substrait). A direct binary run lacks LEAN_PATH; the
+    tests run from the package root. -/
+unsafe def loadDemoTypeNames : IO (List String) := do
+  Lean.initSearchPath (← Lean.findSysroot)
+  Lean.searchPathRef.modify fun sp =>
+    sp ++ [ (".lake/build/lib" : System.FilePath), (".lake/build/lib/lean" : System.FilePath)
+          , ("../schema-lang/.lake/build/lib/lean" : System.FilePath)
+          , ("../schema-lang/.lake/build/lib" : System.FilePath)
+          , ("../substrait/.lake/build/lib/lean" : System.FilePath)
+          , ("../codegen-core/.lake/build/lib/lean" : System.FilePath)
+          , ("../Machines/.lake/build/lib/lean" : System.FilePath)
+          , ("../TestKit/.lake/build/lib/lean" : System.FilePath) ]
+  Lean.enableInitializersExecution
+  let env ← Lean.importModules #[`Demo] (opts := {}) (loadExts := true)
+  pure (SchemaLang.Item.typeNames ((registeredItems env).map (·.2)))
+
+/-- 1.8: `Spec.knownTypes` hand-mirrors the schema demo universe's type
+    names (the registry lives in an env extension, so a pure def cannot
+    read it). This is the tie: load the ACTUAL registry and assert
+    equality — edit Demo.lean without updating `knownTypes` and the
+    suite goes red. Negative control: a stale knownTypes (the old kebab
+    list) must FAIL the same comparison. -/
+def knownTypesChecks (typeNames : List String) : CheckResult := do
+  _ ← assertEq "knownTypes = schema universe" Spec.knownTypes typeNames
+  _ ← assertEq "stale knownTypes caught (control)"
+      (["user", "role", "order-error"] == typeNames) false
+  .ok ()
+
+unsafe def main : IO UInt32 := do
+  let typeNames ← loadDemoTypeNames
   mainOfChecks "Faults"
     [ ("registry", registryChecks)
+    , ("allocation", allocationChecks)
     , ("policy", policyChecks)
     , ("emit", emitChecks)
     , ("emitterAudit", emitterAuditChecks)
+    , ("knownTypesTie", knownTypesChecks typeNames)
     ]

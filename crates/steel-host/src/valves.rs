@@ -3,7 +3,8 @@
 //!
 //! Stage C: the enum is GENERATED from the Lean faults registry
 //! (`Faults/Spec/Host.lean` → `src/host_faults_generated.rs`, codes
-//! allocated at E110) — the hand-written `error!` block was deleted.
+//! allocated from E100 + the guest registry's length — currently E104+)
+//! — the hand-written `error!` block was deleted.
 //! One E-code space with the guest (E100… apiFaults): `lookup_error`
 //! resolves either side's codes from the same fast-observe registry.
 

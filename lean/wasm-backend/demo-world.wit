@@ -13,4 +13,5 @@ world demo {
     export total: func(a: u64, b: u64, c: u64) -> u64;
     export pick: func(b: bool, a: u64, x: u64) -> u64;
     export str-len-demo: func(n: u64) -> u64;
+    export greet: func(n: u64) -> string;
 }

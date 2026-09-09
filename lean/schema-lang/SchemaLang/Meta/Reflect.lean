@@ -31,20 +31,19 @@ environment, and the emitters see exactly what was registered.
 -/
 
 import Lean
+import CodegenCore
 import SchemaLang.Item
 
 namespace SchemaLang.Meta
 
 open Lean
 
-/-- The registry: Lean declaration name ↦ schema item, append-only. -/
+/-- The registry: Lean declaration name ↦ schema item, append-only
+    (the `CodegenCore.mkRegistryExt` semantics: append on add,
+    concatenate on import — not a hand copy of them). -/
 initialize schemaItemExt :
     SimplePersistentEnvExtension (Name × Item) (List (Name × Item)) ←
-  registerSimplePersistentEnvExtension {
-    name := `schemaItemExt
-    addEntryFn := fun xs x => xs ++ [x]
-    addImportedFn := fun ess => ess.foldl (fun acc arr => acc ++ arr.toList) []
-  }
+  CodegenCore.mkRegistryExt `schemaItemExt
 
 /-- Registered items from an environment (the emitter entry point). -/
 def registeredItems (env : Environment) : List (Name × Item) :=
@@ -123,12 +122,6 @@ partial def tyOfExpr? (env : Environment) (e : Expr) : Option Ty :=
     | _, _ => none
   | _ => none
 
-/-- The boundary fragment, enumerated (the error IS the documentation). -/
-def boundaryFragment : String :=
-  "boundary types are: Bool, UInt8..UInt64, Int8..Int64, Float32, Float, "
-    ++ "String, ByteArray, List, Option, Sum (as result),"
-    ++ " Async.Future, Async.Stream, or another `@[schema]` declaration"
-
 /-- The constructor's field types, in declaration order, EXCLUDING
     implicit binders (params of parameterized inductives). Flat
     structures: no subobject parents, no typeclass binders. -/
@@ -164,8 +157,7 @@ def checkStruct (env : Environment) (declName : Name) :
           | .inr fields =>
             match tyOfExpr? env tE with
             | some t => .inr (fields ++ [{ name := f.toString, ty := t }])
-            | none => .inl [SchemaDiag.unknownRef f.toString
-                               (didYouMean f.toString known) known]
+            | none => .inl [SchemaDiag.nonBoundaryType f.toString (toString tE)]
         let acc := (fieldNames.toList.zip tys).foldl step (.inr [])
         match acc with
         | .inl ds => .inl ds
@@ -210,8 +202,7 @@ def checkInductive (env : Environment) (declName : Name) :
                 | [t] =>
                     match tyOfExpr? env t with
                     | some ty => .inr (cases ++ [(caseName, some ty)])
-                    | none => .inl [SchemaDiag.unknownRef caseName
-                                     (didYouMean caseName known) known]
+                    | none => .inl [SchemaDiag.nonBoundaryType caseName (toString t)]
                 | _ => .inl [SchemaDiag.multiPayload caseName]
             | _ => .inl [SchemaDiag.noCtor caseName]
         let acc := ii.ctors.foldl step (.inr [])

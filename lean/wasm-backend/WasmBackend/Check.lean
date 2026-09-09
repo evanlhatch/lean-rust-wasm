@@ -62,32 +62,37 @@ def bannedAt? (level : Ban) (n : Name) : Option String :=
 /-- STRICT ban (the `@[guest]` surface). -/
 def banned? (n : Name) : Option String := bannedAt? .strict n
 
+/-- STD ban (the `@[guest_std]` surface). -/
+def bannedStd? (n : Name) : Option String := bannedAt? .std n
+
 /-- PURE predicate: every banned constant root in the Expr, in scan
 order, deduped. The testable core of the `@[guest]`/`@[guest_std]`
-gates. -/
-partial def checkExprAt (level : Ban) (e : Expr) (acc : List String := []) : List String :=
-  match e with
-  | .const n _ =>
-      let hit := (bannedAt? level n).map fun _ => n.getRoot.toString
-      match hit with
-      | some h => if acc.contains h then acc else acc ++ [h]
-      | none => acc
-  | .app f a => checkExprAt level f (checkExprAt level a acc)
-  | .lam _ t b _ => checkExprAt level t (checkExprAt level b acc)
-  | .letE _ t v b _ => checkExprAt level t (checkExprAt level v (checkExprAt level b acc))
-  | .forallE _ t b _ => checkExprAt level t (checkExprAt level b acc)
-  | .mdata _ e => checkExprAt level e acc
-  | .proj _ _ e => checkExprAt level e acc
-  | _ => acc
+gates. Scan = core's memoized `Expr.getUsedConstants` REVERSED: the
+original hand-fold visited argument-before-function / body-before-type
+(reverse pre-order — e.g. `f Nat.x` lists `"Nat"` before `"IO"` for
+`IO.println (Nat.add ..)`), and the #guard tests pin that order. -/
+def checkExprAt (level : Ban) (e : Expr) (acc : List String := []) : List String :=
+  e.getUsedConstants.toList.reverse.foldl (init := acc) fun a n =>
+    match (bannedAt? level n).map fun _ => n.getRoot.toString with
+    | some h => if a.contains h then a else a ++ [h]
+    | none => a
 
 /-- The strict predicate (the `@[guest]` surface). -/
 def checkExpr (e : Expr) (acc : List String := []) : List String :=
   checkExprAt .strict e acc
 
-/-- Rendered reason for each violation (for the elab error). -/
-def reasons (violations : List String) : String :=
+/-- Rendered reason for each violation (for the elab error), at the
+    attribute's OWN ban level — the `@[guest_std]` error used to render
+    STRICT reasons (bug 0.5). Violations are ROOTS: at `.std` a `Nat`
+    root can only have come from ARITHMETIC (match-only Nat is legal),
+    so the reason is the arithmetic one, not the strict bignum one. -/
+def reasons (level : Ban) (violations : List String) : String :=
   String.intercalate "\n" (violations.map fun v =>
-    match banned? v.toName with
+    let why? := match level, v with
+      | .std, "Nat" =>
+        some "Nat arithmetic is GMP — std code may only MATCH on Nat (zero/succ patterns)"
+      | _, _ => bannedAt? level v.toName
+    match why? with
     | some why => s!"- `{v}` — {why}"
     | none => s!"- `{v}`")
 
@@ -98,7 +103,7 @@ def checkGuest (decl : Name) : CoreM Unit := do
   | some (.defnInfo di) =>
       let violations := checkExprAt .strict di.type (checkExprAt .strict di.value [])
       if !violations.isEmpty then
-        throwError s!"`@[guest]` function `{decl}` is not guest-compilable:\n{reasons violations}"
+        throwError s!"`@[guest]` function `{decl}` is not guest-compilable:\n{reasons .strict violations}"
   | some _ =>
       throwError "`@[guest]` applies to defs only: `{decl.toString}`"
   | none => pure ()
@@ -112,7 +117,7 @@ def checkGuestStd (decl : Name) : CoreM Unit := do
   | some (.defnInfo di) =>
       let violations := checkExprAt .std di.type (checkExprAt .std di.value [])
       if !violations.isEmpty then
-        throwError s!"`@[guest_std]` function `{decl}` is not guest-compilable:\n{reasons violations}"
+        throwError s!"`@[guest_std]` function `{decl}` is not guest-compilable:\n{reasons .std violations}"
   | some _ =>
       throwError "`@[guest_std]` applies to defs only: `{decl.toString}`"
   | none => pure ()

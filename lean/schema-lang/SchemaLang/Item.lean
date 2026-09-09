@@ -11,9 +11,9 @@ universe, names are unique, and functions reference resolvable types.
 This is the (c)-address reading (executable Bool; the Prop/proved readings
 land with schema-indexed).
 
-The items are a plain `def : List Item` in v1 (deterministic order,
-flatland's staging discipline); attribute-first registration over
-`mkRegistryExt` moves in when the authoring surface lands.
+Registration is attribute-first (`@[schema]`/`@[schema_fn]`/
+`@[schema_resource]` in `SchemaLang.Meta.Reflect`) over
+`CodegenCore.mkRegistryExt`; the emitters read the replayed registry.
 -/
 
 import SchemaLang.DidYouMean
@@ -93,11 +93,19 @@ inductive SchemaDiag where
   | unknownRef (got : String) (candidates valid : List String)
   | dupName (name : String)
   | asyncField (item field : String)
+  | nonBoundaryType (name tyText : String)
   | notAStructure (name : String)
   | noCtor (name : String)
   | binderMismatch (name : String)
   | multiPayload (name : String)
 deriving Repr, BEq, Inhabited
+
+/-- The boundary fragment, enumerated (the error IS the documentation).
+    The reifier's `nonBoundaryType` render appends this. -/
+def boundaryFragment : String :=
+  "boundary types are: Bool, UInt8..UInt64, Int8..Int64, Float32, Float, "
+    ++ "String, ByteArray, List, Option, Sum (as result),"
+    ++ " Async.Future, Async.Stream, or another `@[schema]` declaration"
 
 namespace SchemaDiag
 
@@ -112,6 +120,8 @@ def render : SchemaDiag → String
   | .asyncField item field =>
       s!"field `{field}` on `{item}`: future/stream cannot appear in field "
         ++ "position (WIT grammar) — move it to a function signature"
+  | .nonBoundaryType name tyText =>
+      s!"`{name}`: `{tyText}` is not a boundary type — " ++ boundaryFragment
   | .notAStructure n => s!"`{n}` is not a structure — v1 reflects structures only"
   | .noCtor n => s!"`{n}`: no constructor found"
   | .binderMismatch n =>
@@ -152,10 +162,11 @@ def Item.check (known : List String) : Item → List SchemaDiag
       fields.flatMap fun f =>
         (if f.ty.banAsync then [] else [.asyncField n f.name])
           ++ f.ty.check known
-  | .variant _ cases =>
-      cases.flatMap fun (_, payload) =>
+  | .variant n cases =>
+      cases.flatMap fun (c, payload) =>
         match payload with
-        | some t => t.check known
+        | some t =>
+            (if t.banAsync then [] else [.asyncField n c]) ++ t.check known
         | none => []
   | .func s =>
       s.params.flatMap fun (_, t) => t.check known
@@ -167,8 +178,7 @@ def universeCheck (items : List Item) : List SchemaDiag :=
   let known := Item.typeNames items
   let ns := items.map Item.name
   let dupNames := ns.filter (fun n => ns.countP (· == n) > 1)
-  let dedupNames := SchemaLang.dedupStr dupNames
-  let dupDiags := dedupNames.map SchemaDiag.dupName
+  let dupDiags := dupNames.eraseDups.map SchemaDiag.dupName
   items.flatMap (Item.check known) ++ dupDiags
 
 /-! ## The Bool projection (derived from the diagnostic authority) -/
@@ -192,7 +202,10 @@ def Item.tyRefs : Item → List String
 instance : ToString SchemaDiag where
   toString := SchemaDiag.render
 
-instance : ToString (List SchemaDiag) where
-  toString ds := String.intercalate ";; " (ds.map toString)
+/-- Render a diagnostic list — a FUNCTION, not an instance (core's
+    generic `ToString (List α)` would make an instance here resolution
+    roulette). -/
+def SchemaDiag.renderList (ds : List SchemaDiag) : String :=
+  String.intercalate ";; " (ds.map SchemaDiag.render)
 
 end SchemaLang

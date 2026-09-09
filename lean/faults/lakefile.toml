@@ -20,13 +20,27 @@ path = "../schema-lang"
 name = "TestKit"
 path = "../TestKit"
 
+# The core lib: registry machinery + emitters, NO demo specs (mirrors
+# schema-lang's SchemaLang/Demo split — `import Faults` must not pull
+# the order-shop demo). Explicit globs keep `Faults.Spec.*` and
+# `Faults.Emit.Registry` (which consumes the specs) out of this lib.
 [[lean_lib]]
 name = "Faults"
-roots = ["Faults"]
+globs = ["Faults", "Faults.Category", "Faults.Registry", "Faults.Emit.Rust"]
+
+# The demo spec surface: the guest/host fault registries + the emitter
+# registry that pairs emitters with the spec each consumes (`jobs`).
+[[lean_lib]]
+name = "FaultsSpec"
+roots = ["Faults.Spec.Demo", "Faults.Spec.Host", "Faults.Emit.Registry"]
 
 [[lean_exe]]
 name = "FaultsTests"
 root = "Tests.Main"
+# The knownTypes tie-check replays schema-lang Demo's `@[schema]`
+# registrations via importModules + enableInitializersExecution
+# (schema-lang Tests' golden pattern).
+supportInterpreter = true
 
 [[lean_exe]]
 name = "faults-gen"
