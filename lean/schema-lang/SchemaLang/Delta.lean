@@ -40,7 +40,7 @@ import SchemaLang.Emit.Rust
 
 namespace SchemaLang
 
-open CodegenCore.Emit (pascal kebab)
+open CodegenCore.Emit (pascal kebab rustIdent snake)
 
 /-! ## The change shape, target-neutral -/
 
@@ -108,14 +108,71 @@ def Item.changeRustItems : Item → List CodegenCore.Emit.Rust.Item
               ]
           , .comment
               s!"ChangeSpec: the Dbsp.Change shape (patch + valid) for {change}."
-          , .implTrait "dbsp::Change" change []
+          , .implTrait s!"dbsp::Change<{full}>" change []
               [ ("patch(&self, base: &" ++ full ++ ") -> " ++ full
                 , "match self { Self::Insert(u) | Self::Update(u) => "
                   ++ "u.clone(), Self::Remove(_) => base.clone() }")
-              , ("valid(&self) -> bool", "true")
+              , ("valid(&self, base: &" ++ full ++ ") -> bool", "true")
               ]
           ]
   | _ => []
+
+/-! ## Test emission (Stage E: certified delta impls) -/
+
+/-- A literal Rust expression for a fresh value of a `Ty` in test
+    position; `none` when no self-contained literal exists (a nested
+    record payload — such records get no round-trip test). -/
+def litTy? : Ty → Option String
+  | .bool => some "true"
+  | .u8 | .u16 | .u32 | .u64 | .i8 | .i16 | .i32 | .i64 => some "1"
+  | .f32 | .f64 => some "1.0"
+  | .string => some "\"a\".into()"
+  | .bytes => some "vec![]"
+  | .option _ => some "None"
+  | .result ok _ => ("Ok(" ++ · ++ ")") <$> litTy? ok
+  | .list _ => some "vec![]"
+  | .future a | .stream a => litTy? a
+  | .ty _ => none
+
+/-- A record → the items of ONE patch-roundtrip test (the executable
+    sibling of the ChangeSpec patch law: `Update`'s patch replaces the
+    base, `Remove`'s keeps it — `valid` always). The value is built
+    from per-field literals; UFCS (`dbsp::Change::patch`) keeps the
+    body free of trait imports. Empty when the record has no key or a
+    field has no self-contained literal.
+
+    The attribute lines are the `raw` escape hatch — the Item grammar
+    has no attribute node, and `#[test]`/`#[cfg(test)]` are the only
+    two this emitter needs. -/
+def Item.changeTestItems : Item → List CodegenCore.Emit.Rust.Item
+  | .record n fields =>
+      let lits? := fields.mapM fun f =>
+        (litTy? f.ty).map fun lit => s!"{rustIdent f.name} : {lit}"
+      match fields.head?, lits? with
+      | some _, some lits =>
+          let change := Item.changeTypeName (.record n fields)
+          let full := SchemaLang.Emit.Rust.tyRust (.ty n)
+          let body := String.intercalate "\n"
+            [ s!"let base = {full} \{{String.intercalate ", " lits}};"
+            , s!"let delta = {change}::Update(base.clone());"
+            , s!"assert_eq!(dbsp::Change::patch(&delta, &base), base);"
+            , s!"assert!(dbsp::Change::valid(&delta, &base));"
+            ]
+          [ .raw "#[test]"
+          , .fn s!"fn {snake n}_change_roundtrip()" body
+          ]
+      | _, _ => []
+  | _ => []
+
+/-- The whole `#[cfg(test)] mod tests` — one patch-roundtrip test per
+    keyed record. Empty when no record qualifies (keeps the module out
+    of files with nothing to certify). -/
+def Item.changeTestModule (items : List Item) :
+    List CodegenCore.Emit.Rust.Item :=
+  let tests := items.flatMap Item.changeTestItems
+  if tests.isEmpty then []
+  else [ .raw "#[cfg(test)]"
+       , .mod_ "tests" (.use_ "super::*" :: tests) ]
 
 end SchemaLang
 
@@ -132,7 +189,12 @@ def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
   run items :=
     [{ path := "../../src/delta_generated.rs"
        contents :=
-         CodegenCore.Emit.Rust.renderModule (items.flatMap Item.changeRustItems) }]
+         CodegenCore.Emit.Rust.renderModule
+           ([ .use_ "crate::dbsp"
+            , .use_ "crate::schema_generated::*"
+            ]
+            ++ items.flatMap Item.changeRustItems
+            ++ Item.changeTestModule items) }]
 
 /-- The WIT delta emitter: all change variants, one file (see the module
     header for why this is separate from `witEmitter`). Repo-root-relative

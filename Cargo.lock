@@ -1976,6 +1976,7 @@ dependencies = [
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
+ "wit-parser 0.258.0",
 ]
 
 [[package]]

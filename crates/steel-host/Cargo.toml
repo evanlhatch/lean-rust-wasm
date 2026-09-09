@@ -31,3 +31,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 # The framework crate: guest fault registry (faults_generated) for the
 # cross-boundary E-code lookup test.
 lean-rust-wasm = { path = "../.." }
+# Stage F round-trip gate: parse the GENERATED wit/gateway.wit back and
+# assert the schema the Rust side reads matches the Lean SSOT.
+wit-parser = "0.258"
