@@ -1,21 +1,29 @@
+import WasmBackend.Check
+
 /- DemoFn — the functions the WASM backend compiles (compiler-line demo
-   stage). Plain Lean defs: the LCNF pipeline handles the lowering.
-   UInt64 shapes only: the guest has no GMP (no Nat arithmetic). -/
+   stage). `@[guest]` checks each def at ELABORATION: banned runtimes
+   (Nat/GMP, String, IO, Task, Thunk) fail `lake build` at the decl —
+   the earliest possible error, zero proofs. -/
 
 /-- The backend's hello-world: pure integer arithmetic. -/
+@[guest]
 def double (x : UInt64) : UInt64 := x + x
 
 /-- Branching: lowers to LCNF branches. -/
+@[guest]
 def isBig (x : UInt64) : Bool := x > 100
 
 /-- Closure: LCNF `fun` + captured env (`pap`) — mono eta-reduces it. -/
+@[guest]
 def adder (a : UInt64) : UInt64 → UInt64 := fun b => a + b
 
-/-- Constructor dispatch: LCNF `cases` + `sproj` (byte offsets). -/
+/-- Constructor dispatch: LCNF `cases` + `sproj` (byte offsets).
+Guest-compat is enforced on the FUNCTIONS using the type. -/
 inductive Shape where
   | circle (r : UInt64)
   | rect (w h : UInt64)
 
+@[guest]
 def area (s : Shape) : UInt64 :=
   match s with
   | .circle r => r * r
@@ -24,4 +32,5 @@ def area (s : Shape) : UInt64 :=
 /-- The full OBJECT LIFECYCLE: ctor alloc ($alloc, rc=1) → call →
     Perceus dec ($rc_dec → pooled free) → scalar out. The differential
     smoke asserts the pooled allocator doesn't corrupt values. -/
+@[guest]
 def doubleArea (r : UInt64) : UInt64 := area (.circle (r + r))
