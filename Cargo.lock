@@ -1972,6 +1972,7 @@ name = "steel-host"
 version = "0.1.0"
 dependencies = [
  "fast-observe",
+ "lean-rust-wasm",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",

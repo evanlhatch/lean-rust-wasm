@@ -51,14 +51,20 @@ def errorBlock (enumName : String) (modes : List (FailureModeItem × String)) : 
   let open_ := "    pub enum " ++ pascal enumName ++ " {"
   String.intercalate "\n" ([open_] ++ variants) ++ "\n    }"
 
-/-- The module: error! block + the wasm init hook. -/
-def faultModule (enumName : String) (modes : List (FailureModeItem × String)) :
+/-- The module: error! block + the init hook. `guest? = true` emits the
+guest flavor (wasm comments + `init_guest` — linkme's link-time registry
+doesn't exist on wasm); `false` emits the host flavor (`init_host`, no
+wasm comments). -/
+def faultModule (enumName : String) (modes : List (FailureModeItem × String))
+    (guest? : Bool := true) :
     List CodegenCore.Emit.Rust.Item :=
-  [ .comment "wasm: linkme's link-time registry is unavailable — call once"
-  , .comment "at guest startup; native builds resolve codes at link time."
-  , .macroCall "fast_observe::error" [errorBlock enumName modes]
-  , .fn "fn init_guest()"
-        s!"fast_observe::register_statics({pascal enumName}::ENTRIES);"
-  ]
+  let initFn := if guest? then "init_guest" else "init_host"
+  (if guest?
+    then [.comment "wasm: linkme's link-time registry is unavailable — call once",
+           .comment "at guest startup; native builds resolve codes at link time."]
+    else [])
+  ++ [ .macroCall "fast_observe::error" [errorBlock enumName modes]
+     , .fn s!"fn {initFn}()"
+          s!"fast_observe::register_statics({pascal enumName}::ENTRIES);" ]
 
 end Faults.Emit.Rust

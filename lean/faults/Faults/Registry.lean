@@ -57,6 +57,11 @@ def universeWellFormed (known : List String) (items : List FailureModeItem) : Bo
 def allocate (items : List FailureModeItem) : List (FailureModeItem × String) :=
   CodegenCore.allocateCodes "E" 100 items
 
+/-- Host-fault codes start at E110 — one E-code space with the guest
+(disjoint by construction: apiFaults allocates 100-…, hostFaults 110-…). -/
+def allocateHost (items : List FailureModeItem) : List (FailureModeItem × String) :=
+  CodegenCore.allocateCodes "E" 110 items
+
 /-- Code allocation preserves count — kernel-checked obligation. -/
 theorem allocate_length (items : List FailureModeItem) :
     (allocate items).length = items.length :=

@@ -6,3 +6,4 @@ import Faults.Category
 import Faults.Registry
 import Faults.Emit.Rust
 import Faults.Spec.Demo
+import Faults.Spec.Host

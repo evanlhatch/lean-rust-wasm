@@ -189,9 +189,15 @@ doc-build:
 
 # ── Gates: every lean↔rust drift check in one shot ───────────────────
 # wit-check: the canonical parser (wasm-tools) must accept our emitted
-# WIT — it, not our printer, is the correctness authority.
+# WIT — it, not our printer, is the correctness authority. Prefers the
+# cargo-installed 1.258 (matches wit-bindgen 0.61's wit-component for
+# async-lift encodings); nixpkgs' wasm-tools works for plain WIT parsing.
 wit-check:
-	wasm-tools component wit wit/gateway.wit > /dev/null
+	#!/usr/bin/env bash
+	set -euo pipefail
+	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
+	[ -x "$WT" ] || WT=wasm-tools
+	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
 gates: lean-build gen-check wit-check lean-axioms

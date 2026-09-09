@@ -159,7 +159,10 @@ impl ComponentRuntime {
 /// deliberately does not implement `core::error::Error` (so it can't sit
 /// in a `#[source]` slot), and its Display prints the full cause chain.
 fn fault(e: wasmtime::Error) -> fast_observe::exn::Fault<HostFault> {
-    HostFault::Engine(format!("{e:?}")).into()
+    HostFault::Engine(crate::valves::Engine {
+        message: format!("{e:?}"),
+    })
+    .into()
 }
 
 /// Pre-fill a result slot from its component type — `call_async` wants

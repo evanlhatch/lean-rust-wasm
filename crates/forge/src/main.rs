@@ -34,7 +34,7 @@ const JOBS: &[Job] = &[
     Job {
         package: "faults",
         exe: "faults-gen",
-        outputs: &["src/faults_generated.rs"],
+        outputs: &["src/faults_generated.rs", "src/host_faults_generated.rs"],
     },
 ];
 

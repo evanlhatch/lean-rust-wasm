@@ -28,3 +28,6 @@ fast-observe = "0.1"
 [dev-dependencies]
 wasmtime = { version = "47", default-features = false, features = ["wat"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+# The framework crate: guest fault registry (faults_generated) for the
+# cross-boundary E-code lookup test.
+lean-rust-wasm = { path = "../.." }
