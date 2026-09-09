@@ -8,5 +8,9 @@ license = "MIT OR Apache-2.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-# No deps — the guest is minimal. fast-observe + generated types come later
-# once the component ABI is proven.
+# Guest-side typed bindings for the GENERATED gateway world (wit/gateway.wit,
+# emitted by schema-lang). wit-bindgen embeds the component-type custom
+# section, so `wasm-tools component new` works directly on the core module —
+# no separate `component embed` step for this world.
+# fast-observe + generated types come later once the component ABI is proven.
+wit-bindgen = { version = "0.61", features = ["async-spawn"] }

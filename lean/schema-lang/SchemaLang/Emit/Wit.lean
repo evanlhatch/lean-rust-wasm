@@ -57,12 +57,22 @@ def typeDecl : Item → List String
   | .resource n => ["resource " ++ kebab n ++ ";"]
   | _ => []
 
-/-- One function as a WIT func declaration line. -/
+/-- One function as a WIT func declaration line. A `future a` return
+becomes an `async func` returning `a` — the wasi 0.3 async ABI: the
+async-ness lives in the FUNCTION TYPE, not in a sync-func-returning-`future`
+(the component validator rejects the latter: the `async` canonical lift
+option requires an async function type). `stream a` stays in the result
+position — `async func(...) -> stream<a>` lifts as an async stream export. -/
 def funcDecl : FuncSig → String :=
   fun s =>
     let params := s.params.map fun (p, t) => kebab p ++ ": " ++ tyWit t
-    "  " ++ kebab s.name ++ ": func(" ++ String.intercalate ", " params
-      ++ ") -> " ++ tyWit s.ret ++ ";"
+    match s.ret with
+    | .future a =>
+      "  " ++ kebab s.name ++ ": async func(" ++ String.intercalate ", " params
+        ++ ") -> " ++ tyWit a ++ ";"
+    | ret =>
+      "  " ++ kebab s.name ++ ": func(" ++ String.intercalate ", " params
+        ++ ") -> " ++ tyWit ret ++ ";"
 
 /-- The world, in the wasmtron small-interfaces shape:
 

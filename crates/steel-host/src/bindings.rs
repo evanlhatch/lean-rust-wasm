@@ -17,10 +17,9 @@
 wasmtime::component::bindgen!({
     path: "../../wit/gateway.wit",
     world: "gateway",
-    async: true,
 });
 
 /// Canonical alias: the bindgen-generated `User` (from `record user`).
-pub type GatewayUser = User;
+pub type GatewayUser = demo::gateway::gateway_types::User;
 /// Canonical alias: the bindgen-generated `OrderError` variant type.
-pub type GatewayOrderError = OrderError;
+pub type GatewayOrderError = demo::gateway::gateway_types::OrderError;

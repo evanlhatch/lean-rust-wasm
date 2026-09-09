@@ -116,3 +116,38 @@ async fn missing_export_faults_cleanly() -> Result<(), Box<dyn std::error::Error
     assert!(err.to_string().contains("missing export: nope"), "{err}");
     Ok(())
 }
+
+/// The gateway component (world `demo:gateway/gateway`, GENERATED
+/// wit/gateway.wit), instantiated through the TYPED bindgen path —
+/// `get-user` returns a structured `User`, not raw `Val`s. This is the
+/// "Lean defines the ABI" proof: the host's API is generated from the
+/// Lean-defined world.
+#[tokio::test]
+async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn std::error::Error>> {
+    use steel_host::bindings::{GatewayPre, GatewayUser};
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/wasm32-unknown-unknown/debug/guest_demo.gateway.component.wasm");
+    let Ok(path) = std::fs::canonicalize(&path) else {
+        eprintln!("skipping: build with `just wasm-guest-gateway` for {path:?}");
+        return Ok(());
+    };
+    let engine = SteelEngine::new()?;
+    let component = engine.load_component(&path)?;
+
+    let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
+    let pre = rt.instantiate_pre(&component)?;
+    let gw = GatewayPre::new(pre)?.instantiate_async(rt.store_mut()).await?;
+    let iface = gw.demo_gateway_gateway_exports();
+
+    // Miss: unknown id → none.
+    let missing = iface.call_get_user(rt.store_mut(), 1)?;
+    assert!(missing.is_none());
+
+    // Hit: id 42 → the structured user from the guest, via the Lean schema.
+    let user: GatewayUser = iface.call_get_user(rt.store_mut(), 42)?.expect("user 42");
+    assert_eq!(user.id, 42);
+    assert_eq!(user.name, "Ada");
+    assert_eq!(user.tags, vec!["admin".to_string()]);
+    Ok(())
+}

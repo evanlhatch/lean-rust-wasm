@@ -138,6 +138,21 @@ impl ComponentRuntime {
     pub fn fuel_left(&self) -> SteelResult<u64> {
         self.store.get_fuel().map_err(fault)
     }
+
+    /// Pre-instantiate for typed (bindgen-generated) callers: the generated
+    /// `XxxPre::new(store, &pre)` + `Xxx::new` path. The untyped [`call`]
+    /// stays the default; this is the typed escape hatch.
+    pub fn instantiate_pre(
+        &mut self,
+        component: &wasmtime::component::Component,
+    ) -> SteelResult<wasmtime::component::InstancePre<HostState>> {
+        self.linker.instantiate_pre(component).map_err(fault)
+    }
+
+    /// The store — typed callers pass it alongside the instance.
+    pub fn store_mut(&mut self) -> &mut Store<HostState> {
+        &mut self.store
+    }
 }
 
 /// wasmtime::Error → fault. String, not `wasmtime::Error`: that type
