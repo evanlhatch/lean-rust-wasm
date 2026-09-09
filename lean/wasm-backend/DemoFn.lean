@@ -34,3 +34,20 @@ def area (s : Shape) : UInt64 :=
     smoke asserts the pooled allocator doesn't corrupt values. -/
 @[guest]
 def doubleArea (r : UInt64) : UInt64 := area (.circle (r + r))
+
+/-- An ESCAPING closure: returned from a conditional — mono cannot
+    eta-reduce it (the body branches). Exercises pap + closure apply. -/
+@[guest]
+def pick (b : Bool) (a : UInt64) : UInt64 → UInt64 :=
+  fun x => if b then a + x else a * x
+
+/-- Closures stored in objects SURVIVE mono (boxed into the erased
+    world): applyAll [adder 1, adder 2] 5 runs two real paps. -/
+@[guest]
+def applyAll (fs : List (UInt64 → UInt64)) (x : UInt64) : UInt64 :=
+  match fs with
+  | [] => x
+  | f :: rest => f (applyAll rest x)
+
+@[guest]
+def runPaps (x : UInt64) : UInt64 := applyAll [adder 1, adder 2] x

@@ -13,19 +13,57 @@ Pipeline: this exe writes `target/demo.wat`; the justfile drives
 `wasm-tools parse -g` → binary, `validate`, and the wasmtime smoke run.
 -/
 
-open Lean WasmBackend
+open Lean Compiler.LCNF WasmBackend
 
 /-- The functions to compile — DemoFn (the compiler-line demo stage). -/
-def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea]
+def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps]
+
+-- Collect `.const` names referenced by a code block (one level:
+-- finds `_closed` closure constants).
+mutual
+
+partial def constRefsOfAlt (alt : Alt .impure) (acc : Array Name) : Array Name :=
+  match alt with
+  | .ctorAlt _ code => constRefsOf code acc
+  | .default code => constRefsOf code acc
+  | .alt _ _ _ h => absurd h (by simp)
+
+partial def constRefsOf (code : Code .impure) (acc : Array Name) : Array Name :=
+  match code with
+  | .let decl k =>
+      let acc := match decl.value with
+        | .const fn _ args _ => if args.isEmpty then acc.push fn else acc
+        | .fap fn args _ => if args.isEmpty then acc.push fn else acc
+        | _ => acc
+      constRefsOf k acc
+  | .cases c => c.alts.foldr constRefsOfAlt acc
+  | .sset _ _ _ _ _ k => constRefsOf k acc
+  | .inc _ _ _ _ k => constRefsOf k acc
+  | .dec _ _ _ _ _ k => constRefsOf k acc
+  | .del _ k => constRefsOf k acc
+  | .jp _ k => constRefsOf k acc
+  | _ => acc
+
+end
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm : CoreM String := do
   Lean.Compiler.LCNF.main targetDecls {}
+  -- Closure constants + lambdas: `_closed`/`_lam` decls (holding the
+  -- paps) are generated IN-PROCESS by the re-run — never in the imported
+  -- env. Include every impure decl UNDER a target's namespace.
+  let mut names := targetDecls
+  let all ← Lean.Compiler.LCNF.getLocalImpureDecls
+  let internal := all.filter fun n =>
+    let s := n.toString
+    s.contains "." && targetDecls.any fun t => s.startsWith (t.toString ++ ".")
+  names := names ++ internal
   let mut decls : List (Lean.Compiler.LCNF.Decl .impure) := []
-  for n in targetDecls do
+  for n in names do
     if let some d ← Lean.Compiler.LCNF.getLocalImpureDecl? n then
       decls := d :: decls
   decls := decls.reverse
+  IO.eprintln s!"NAMES: {names}"
   -- Debug dump: the final LCNF per decl (the compiler line's x-ray).
   for d in decls do
     let fmt ← Lean.Compiler.LCNF.ppDecl' d .impure

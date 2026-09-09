@@ -256,5 +256,8 @@ wasm-compile:
 	  && [ "$(wasmtime run --invoke isBig target/demo.wasm 42)" = "0" ] \
 	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 5)" = "100" ] \
 	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 9)" = "324" ] \
-	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 1)" = "4" ]'
+	  && [ "$(wasmtime run --invoke doubleArea target/demo.wasm 1)" = "4" ] \
+	  && [ "$(wasmtime run --invoke runPaps target/demo.wasm 5)" = "8" ] \
+	  && [ "$(wasmtime run --invoke runPaps target/demo.wasm 9)" = "12" ] \
+	  && [ "$(wasmtime run --invoke runPaps target/demo.wasm 0)" = "3" ]'
 	echo "wasm-compile: lean/wasm-backend/target/demo.wasm VALID + differential smoke green"
