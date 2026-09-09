@@ -97,6 +97,26 @@ def binop? : Name → Option String
   | ``UInt64.decEq => some "i64.eq"
   | _ => none
 
+/-! ## guestlang-std string intrinsics
+
+The std functions' NAMES map to runtime primitives; their Lean bodies
+are never compiled (they are the differential ORACLE — see DemoFn).
+Guest string layout: `{rc@0, tag=250@4, len u32@8, bytes@16}` — a
+variable-size object (16 + len); the bytes live INLINE so RC frees the
+whole string (no separate byte allocation to leak). Byte-length ≠
+char-length off ASCII (documented, v1). -/
+
+/-- The guest string tag byte. -/
+def stringTag : Nat := 250
+
+/-- `GuestlangStd.*` std ops → the runtime primitive to call. The
+    result is the IMPL convention: UInt64 = raw i64; String = object
+    pointer (i32). -/
+def stdOp? : Name → Option String
+  | `GuestlangStd.strlen => some "call $string_len"
+  | `GuestlangStd.strcat => some "call $string_cat"
+  | _ => none
+
 def storeOp (ty : Option String) : String :=
   match ty with | some "i32" => "i32.store" | _ => "i64.store"
 
@@ -114,7 +134,10 @@ partial def emitCode (code : Code .impure) : M Unit := do
       -- The WASM stack stays flat for tail-recursive Lean functions.
       match k, decl.value with
       | .return rv, .fap fn args _ =>
-          if rv == decl.fvarId && (binop? fn).isNone then
+          -- intrinsics are NOT fusion targets (the primitive is not a
+          -- Lean decl; its mapped call has its own convention) — std ops
+          -- fall through to the normal let path
+          if rv == decl.fvarId && (binop? fn).isNone && (stdOp? fn).isNone then
             for a in args do emitArg a
             emit s!"return_call ${fn.toString}"
           else
@@ -202,7 +225,27 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       let l ← bindLocal decl.fvarId "i32"
       emit s!"i32.const {v}"; emit s!"local.set ${l}"
   | .lit (.nat _) => unsupported "Nat literal (GMP — banned in the guest)"
-  | .lit _ => unsupported "literal kind (str/uint16/usize)"
+  | .lit (.str v) =>
+      -- guestlang-std string literal: variable-size object {rc, tag=250,
+      -- len@8, bytes@16} — the UTF-8 bytes stored inline (i32.store8 per
+      -- byte; v1 literals are short — no data segments, no heap patch)
+      let bytes := v.toByteArray
+      let n := bytes.size
+      let l ← bindLocal decl.fvarId "i32"
+      emit s!"i32.const {16 + n}"; emit "call $alloc"; emit s!"local.set ${l}"
+      emit (← load decl.fvarId)
+      emit s!"i32.const {stringTag}"
+      emit "i32.store8 offset=4"
+      emit (← load decl.fvarId)
+      emit s!"i32.const {n}"
+      emit "i32.store offset=8"
+      let mut off := 16
+      for b in bytes do
+        emit (← load decl.fvarId)
+        emit s!"i32.const {b.toNat}"
+        emit s!"i32.store8 offset={off}"
+        off := off + 1
+  | .lit _ => unsupported "literal kind (uint16/usize)"
   | .erased => pure ()
   | .fvar fvarId args =>
       if args.isEmpty then
@@ -220,13 +263,22 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emit s!"call_indirect (type $sig_{args.size}box)"
         emit s!"local.set ${l}"
   | .fap fn args =>
-      match binop? fn with
-      | some op =>
+      match binop? fn, stdOp? fn with
+      | some op, _ =>
           let l ← bindLocal decl.fvarId (ty.getD "i64")
           for a in args do emitArg a
           emit op
           emit s!"local.set ${l}"
-      | none =>
+      | _, some call =>
+          -- std intrinsic: strlen (obj) → raw i64; strcat (obj obj) → obj
+          let resTy : String := match fn with
+            | `GuestlangStd.strlen => "i64"
+            | _ => "i32"
+          let l ← bindLocal decl.fvarId resTy
+          for a in args do emitArg a
+          emit call
+          emit s!"local.set ${l}"
+      | none, _ =>
           let l ← bindLocal decl.fvarId
             (if args.isEmpty then "i32" else ty.getD "i64")
           -- 0-ary fap = top-level closure const (obj); else a scalar call

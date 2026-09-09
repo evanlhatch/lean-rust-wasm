@@ -52,8 +52,8 @@ theorem applyDeltas_sum (s : ZSet A) (δs : List (ZSet A)) :
   | cons δ rest ih =>
       -- the reassociation δ + (s + Σ) = s + (δ + Σ) is abelian-group
       -- arithmetic — `abel` closes it (the group laws ARE the proof)
-      simp only [applyDeltas, List.foldr_cons]
-      rw [ih]
+      have h1 : applyDeltas s (δ :: rest) = δ + applyDeltas s rest := rfl
+      rw [h1, ih, List.sum_cons]
       abel
 
 /-- THE 2-replica convergence core: same start, same deltas, opposite
@@ -62,6 +62,7 @@ theorem applyDeltas_sum (s : ZSet A) (δs : List (ZSet A)) :
 theorem two_replica_converge (s δ₁ δ₂ : ZSet A) :
     applyDeltas s [δ₁, δ₂] = applyDeltas s [δ₂, δ₁] := by
   rw [applyDeltas_sum, applyDeltas_sum]
+  simp only [List.sum_cons, List.sum_nil]
   abel
 
 /-- Batches arriving in either order converge: the N-replica claim at
@@ -78,8 +79,8 @@ theorem batch_order_irrelevant (s : ZSet A) (δs δs' : List (ZSet A)) :
     collections). -/
 theorem retract_is_inverse (s : ZSet A) (δ : ZSet A) :
     applyDeltas (applyDeltas s [δ]) [-δ] = s := by
-  rw [applyDeltas_sum, applyDeltas_sum] at *
-  simp only [List.sum_cons, List.sum_nil, neg_add] at *
+  rw [applyDeltas_sum, applyDeltas_sum]
+  simp only [List.sum_cons, List.sum_nil]
   abel
 
 end Dbsp.Replicas

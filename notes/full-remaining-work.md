@@ -2,11 +2,22 @@
 
 ## Where we are
 
-Seven Lean packages green (TestKit, Machines, dbsp, codegen-core,
-substrait, schema-lang, faults), three Rust crates (forge, steel-host,
-guest-demo), six byte-tied artifacts (WIT world, schema types, Vortex
-dtypes, ext-dtype vtables, delta contracts, fault registry), eighteen
-test groups passing, all axiom-clean, all gates green.
+Eight Lean packages green (TestKit, Machines, dbsp, codegen-core,
+substrait, schema-lang, faults, wasm-backend), the guestlang-rt wasmi
+runtime crate, three further Rust crates (forge, steel-host,
+guest-demo), THIRTEEN byte-tied artifacts (WIT world, schema types,
+Vortex dtypes, ext-dtype vtables, delta contracts, fault registry,
+guest+host faults, the generated ChangeSpec trait, the pipeline stage
+machine, the forge job manifests, the WIT inversion fixtures), the
+120-row wasm differential gate, all axiom-clean, all gates green.
+
+NOTE (this doc's own status): the compiler-line sections below predate
+the differential gate / multi-arity closures / return_call /
+guestlang-rt landings — cross-check the commit log before trusting a
+'STILL OPEN' claim here. `Pipeline.lean` is no longer a model forge
+ignores: forge drives its phases through the GENERATED stage machine
+and reads GENERATED job manifests (drift there fails CI via
+`jobsCoverEmitters` in both registries).
 
 The pipeline works: `@[schema]` on a Lean structure reflects at
 elaboration into registry items; the emitter plugins fold those items
@@ -371,12 +382,16 @@ errors.
 This generates VALIDATORS: functions that check data against the
 schema, compiled to WASM, called by the host before processing.
 
-### Session types for WIT conversations
+### Session types for WIT conversations — STARTED (Machines.Session)
 
-The protocol between two components as a state machine (Machines).
-The WIT interface defines the TYPES; the session type defines the
-CHOREOGRAPHY (who sends when, what they expect back). Lean proves the
-protocol is deadlock-free.
+`Machines.Machines.Session`: the choreography as a session machine —
+mid-protocol deadlock-freedom, termination (the variant), and DUALITY
+(`dual_payload_mirror`: dual peers exchange the same payload type in
+opposite directions at the same position) all PROVED; the gateway
+world's real conversation (`gatewayProto`) is the instance. STILL OPEN:
+payload-TYPED steps (tie the wire type to the schema universe so a
+type mismatch is an elaboration error), and per-WIT-interface
+generation (emit the choreography skeleton from the interface's funcs).
 
 ### Saga / workflow
 
@@ -385,12 +400,17 @@ compensation. The rewind laws (rewind-K = undo-K) prove that
 compensation is correct. The order lifecycle as a machine: placed →
 paid → shipped → delivered, with compensation on failure.
 
-### Delta-CRDT replicas
+### Delta-CRDT replicas — CORE PROVED (Dbsp.Replicas)
 
-`Dbsp.ChangeSpec` across replicas. Each replica applies deltas;
-convergence is the theorem (all replicas that receive the same deltas
-reach the same state). The WASM determinism + the change group
-commutativity = convergence for free.
+`Dbsp.Dbsp.Replicas`: `applyDeltas_sum` (application IS the group sum),
+`two_replica_converge` (opposite arrival orders converge — the 2-replica
+core), `batch_order_irrelevant` (batches commute — the transport may
+reorder), `retract_is_inverse` (undo is the group inverse — the
+rollback law). STILL OPEN: causal broadcast (the transport's ordering
+guarantee — out of scope by design), replica COUNT genericity beyond
+batches (a multiset-sum formulation), and the WASM-determinism
+composition (same-input-same-output across engines — guestlang-rt's
+conformance suite is the executable half).
 
 ### Talos
 

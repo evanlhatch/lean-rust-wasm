@@ -245,6 +245,12 @@ wasm-compile:
 	[ -x "$WT" ] || WT=wasm-tools
 	"$WT" parse -g lean/wasm-backend/target/demo.wat -o lean/wasm-backend/target/demo.wasm
 	"$WT" validate lean/wasm-backend/target/demo.wasm
+	# The DIFFERENTIAL MANIFEST: run the oracle (real Lean evals over the
+	# generated inputs) — Lean's semantics is the authority the wasm_diff
+	# test replays against. Regenerated WITH the WAT so the manifest can
+	# never go stale against the module it audits.
+	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" env lean --run target/oracle.lean \
+	  > target/diff.json)
 	# Differential smoke: the wasm results must equal Lean's own evaluation
 	# (double 21 = 42 = adder 40 2; is-big 250 = 1; doubleArea = the FULL
 	# object lifecycle; runPaps = closures + pool reuse). wasmtime lives

@@ -153,3 +153,61 @@
     i32.store
   end
 )
+
+;; ── guestlang-std strings ──────────────────────────────────────────
+;; Layout: {rc@0, tag=250@4, len u32@8, bytes@16} — variable-size
+;; object, bytes INLINE (RC frees the whole string; no byte leak).
+;; Byte-length semantics (== Lean's char length on ASCII only).
+
+(func $string_len (param $s i32) (result i64)
+  local.get $s
+  i32.load offset=8
+  i64.extend_i32_u)
+
+(func $string_cat (param $a i32) (param $b i32) (result i32)
+  (local $na i32) (local $nb i32) (local $p i32)
+  local.get $a
+  i32.load offset=8
+  local.set $na
+  local.get $b
+  i32.load offset=8
+  local.set $nb
+  ;; alloc 16 + na + nb
+  i32.const 16
+  local.get $na
+  i32.add
+  local.get $nb
+  i32.add
+  call $alloc
+  local.set $p
+  ;; tag = 250
+  local.get $p
+  i32.const 250
+  i32.store8 offset=4
+  ;; len = na + nb
+  local.get $p
+  local.get $na
+  local.get $nb
+  i32.add
+  i32.store offset=8
+  ;; copy a's bytes: dst = p+16
+  local.get $p
+  i32.const 16
+  i32.add
+  local.get $a
+  i32.const 16
+  i32.add
+  local.get $na
+  memory.copy
+  ;; copy b's bytes: dst = p+16+na
+  local.get $p
+  i32.const 16
+  i32.add
+  local.get $na
+  i32.add
+  local.get $b
+  i32.const 16
+  i32.add
+  local.get $nb
+  memory.copy
+  local.get $p)

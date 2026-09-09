@@ -116,6 +116,18 @@ example (m : ZSet Nat) : m - m = 0 := sub_self m
     (the aggregate phase of the two-phase tick, SPEC-core §7.2). -/
 example (a b : ZSet Nat) : a + b = b + a := add_comm a b
 
+/-- The replica-convergence core, at the theory level: opposite arrival
+    orders of the same deltas converge (`Dbsp.Replicas`). -/
+example (s δ₁ δ₂ : ZSet Nat) :
+    Dbsp.Replicas.applyDeltas s [δ₁, δ₂] = Dbsp.Replicas.applyDeltas s [δ₂, δ₁] :=
+  Dbsp.Replicas.two_replica_converge s δ₁ δ₂
+
+/-- The retraction law the engine's rewind executes, at the replica level:
+    delta-then-inverse restores the state. -/
+example (s δ : ZSet Nat) :
+    Dbsp.Replicas.applyDeltas (Dbsp.Replicas.applyDeltas s [δ]) [-δ] = s :=
+  Dbsp.Replicas.retract_is_inverse s δ
+
 /-- The suite: every check becomes an LSpec test with the same name and the
     same Boolean outcome the hand-rolled driver gave it. -/
 def suite : TestSeq :=

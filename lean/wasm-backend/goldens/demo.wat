@@ -158,6 +158,64 @@
   end
 )
 
+;; ── guestlang-std strings ──────────────────────────────────────────
+;; Layout: {rc@0, tag=250@4, len u32@8, bytes@16} — variable-size
+;; object, bytes INLINE (RC frees the whole string; no byte leak).
+;; Byte-length semantics (== Lean's char length on ASCII only).
+
+(func $string_len (param $s i32) (result i64)
+  local.get $s
+  i32.load offset=8
+  i64.extend_i32_u)
+
+(func $string_cat (param $a i32) (param $b i32) (result i32)
+  (local $na i32) (local $nb i32) (local $p i32)
+  local.get $a
+  i32.load offset=8
+  local.set $na
+  local.get $b
+  i32.load offset=8
+  local.set $nb
+  ;; alloc 16 + na + nb
+  i32.const 16
+  local.get $na
+  i32.add
+  local.get $nb
+  i32.add
+  call $alloc
+  local.set $p
+  ;; tag = 250
+  local.get $p
+  i32.const 250
+  i32.store8 offset=4
+  ;; len = na + nb
+  local.get $p
+  local.get $na
+  local.get $nb
+  i32.add
+  i32.store offset=8
+  ;; copy a's bytes: dst = p+16
+  local.get $p
+  i32.const 16
+  i32.add
+  local.get $a
+  i32.const 16
+  i32.add
+  local.get $na
+  memory.copy
+  ;; copy b's bytes: dst = p+16+na
+  local.get $p
+  i32.const 16
+  i32.add
+  local.get $na
+  i32.add
+  local.get $b
+  i32.const 16
+  i32.add
+  local.get $nb
+  memory.copy
+  local.get $p)
+
   (memory 1)
 (func $double (param $x i64) (result i64)
     (local $l0 i64)
@@ -620,94 +678,105 @@
   local.get $l52
   return
 )
-(func $runPaps._closed_0._boxed_const_1  (result i32)
+(func $strLenDemo (param $n i64) (result i64)
     (local $l53 i64)
     (local $l54 i32)
-  i64.const 1
+  i64.const 0
   local.set $l53
-  i32.const 16
-  call $alloc
+  local.get $l53
+  local.get $n
+  i64.lt_u
   local.set $l54
   local.get $l54
-  local.get $l53
-  i64.store offset=8
+  i32.const 0
+  i32.eq
+  if (result i64)
+  return_call $strLenDemo._closed_1
+  else
   local.get $l54
+  i32.const 1
+  i32.eq
+  if (result i64)
+  return_call $strLenDemo._closed_3
+  else
+  unreachable ;; no matching scalar case
+  end
+  end
+)
+(func $runPaps._closed_0._boxed_const_1  (result i32)
+    (local $l55 i64)
+    (local $l56 i32)
+  i64.const 1
+  local.set $l55
+  i32.const 16
+  call $alloc
+  local.set $l56
+  local.get $l56
+  local.get $l55
+  i64.store offset=8
+  local.get $l56
   return
 )
 (func $useCurried._boxed (param $a i32) (result i32)
-    (local $l55 i64)
-    (local $l56 i64)
-    (local $l57 i32)
+    (local $l57 i64)
+    (local $l58 i64)
+    (local $l59 i32)
   local.get $a
   i64.load offset=8
-  local.set $l55
+  local.set $l57
   local.get $a
   call $rc_dec
-  local.get $l55
+  local.get $l57
   call $useCurried
-  local.set $l56
+  local.set $l58
   i32.const 16
   call $alloc
-  local.set $l57
-  local.get $l57
-  local.get $l56
+  local.set $l59
+  local.get $l59
+  local.get $l58
   i64.store offset=8
-  local.get $l57
+  local.get $l59
   return
 )
 (func $isBig._boxed (param $x i32) (result i32)
-    (local $l58 i64)
-    (local $l59 i32)
-    (local $l60 i32)
+    (local $l60 i64)
+    (local $l61 i32)
+    (local $l62 i32)
   local.get $x
   i64.load offset=8
-  local.set $l58
+  local.set $l60
   local.get $x
   call $rc_dec
-  local.get $l58
+  local.get $l60
   call $isBig
-  local.set $l59
+  local.set $l61
   i32.const 16
   call $alloc
-  local.set $l60
-  local.get $l60
-  local.get $l59
+  local.set $l62
+  local.get $l62
+  local.get $l61
   i32.store offset=8
-  local.get $l60
+  local.get $l62
   return
 )
 (func $runPaps._lam_1._boxed (param $_x.1 i32) (param $_y.2 i32) (result i32)
-    (local $l61 i64)
-    (local $l62 i64)
     (local $l63 i64)
-    (local $l64 i32)
-  local.get $_x.1
-  i64.load offset=8
-  local.set $l61
-  local.get $_x.1
-  call $rc_dec
-  local.get $_y.2
-  i64.load offset=8
-  local.set $l62
-  local.get $_y.2
-  call $rc_dec
-  local.get $l61
-  local.get $l62
-  call $runPaps._lam_1
-  local.set $l63
-  i32.const 16
-  call $alloc
-  local.set $l64
-  local.get $l64
-  local.get $l63
-  i64.store offset=8
-  local.get $l64
-  return
-)
-(func $runPaps._closed_1._boxed_const_1  (result i32)
+    (local $l64 i64)
     (local $l65 i64)
     (local $l66 i32)
-  i64.const 2
+  local.get $_x.1
+  i64.load offset=8
+  local.set $l63
+  local.get $_x.1
+  call $rc_dec
+  local.get $_y.2
+  i64.load offset=8
+  local.set $l64
+  local.get $_y.2
+  call $rc_dec
+  local.get $l63
+  local.get $l64
+  call $runPaps._lam_1
   local.set $l65
   i32.const 16
   call $alloc
@@ -718,120 +787,127 @@
   local.get $l66
   return
 )
-(func $runPaps._closed_3  (result i32)
+(func $strLenDemo._closed_3  (result i64)
     (local $l67 i32)
-    (local $l68 i32)
-    (local $l69 i32)
-  call $runPaps._closed_2
+    (local $l68 i64)
+  call $strLenDemo._closed_2
   local.set $l67
-  call $runPaps._closed_0
-  local.set $l68
   local.get $l67
-  call $rc_inc
+  call $string_len
+  local.set $l68
   local.get $l68
-  call $rc_inc
-  i32.const 24
+  return
+)
+(func $strLenDemo._closed_0  (result i32)
+    (local $l69 i32)
+  i32.const 17
   call $alloc
   local.set $l69
   local.get $l69
-  i32.const 1
+  i32.const 250
   i32.store8 offset=4
   local.get $l69
-  local.get $l68
+  i32.const 1
   i32.store offset=8
   local.get $l69
-  local.get $l67
-  i32.store offset=16
+  i32.const 33
+  i32.store8 offset=16
   local.get $l69
   return
 )
-(func $pick._boxed (param $b i32) (param $a i32) (param $x i32) (result i32)
-    (local $l70 i32)
-    (local $l71 i64)
-    (local $l72 i64)
-    (local $l73 i64)
-    (local $l74 i32)
-  local.get $b
-  i32.load offset=8
+(func $runPaps._closed_1._boxed_const_1  (result i32)
+    (local $l70 i64)
+    (local $l71 i32)
+  i64.const 2
   local.set $l70
-  local.get $a
-  i64.load offset=8
-  local.set $l71
-  local.get $a
-  call $rc_dec
-  local.get $x
-  i64.load offset=8
-  local.set $l72
-  local.get $x
-  call $rc_dec
-  local.get $l70
-  local.get $l71
-  local.get $l72
-  call $pick
-  local.set $l73
   i32.const 16
+  call $alloc
+  local.set $l71
+  local.get $l71
+  local.get $l70
+  i64.store offset=8
+  local.get $l71
+  return
+)
+(func $runPaps._closed_3  (result i32)
+    (local $l72 i32)
+    (local $l73 i32)
+    (local $l74 i32)
+  call $runPaps._closed_2
+  local.set $l72
+  call $runPaps._closed_0
+  local.set $l73
+  local.get $l72
+  call $rc_inc
+  local.get $l73
+  call $rc_inc
+  i32.const 24
   call $alloc
   local.set $l74
   local.get $l74
+  i32.const 1
+  i32.store8 offset=4
+  local.get $l74
   local.get $l73
-  i64.store offset=8
+  i32.store offset=8
+  local.get $l74
+  local.get $l72
+  i32.store offset=16
   local.get $l74
   return
 )
-(func $apply2All._boxed (param $fs i32) (param $x i32) (param $y i32) (result i32)
-    (local $l75 i64)
+(func $pick._boxed (param $b i32) (param $a i32) (param $x i32) (result i32)
+    (local $l75 i32)
     (local $l76 i64)
     (local $l77 i64)
-    (local $l78 i32)
-  local.get $x
-  i64.load offset=8
+    (local $l78 i64)
+    (local $l79 i32)
+  local.get $b
+  i32.load offset=8
   local.set $l75
-  local.get $x
-  call $rc_dec
-  local.get $y
+  local.get $a
   i64.load offset=8
   local.set $l76
-  local.get $y
+  local.get $a
   call $rc_dec
-  local.get $fs
+  local.get $x
+  i64.load offset=8
+  local.set $l77
+  local.get $x
+  call $rc_dec
   local.get $l75
   local.get $l76
-  call $apply2All
-  local.set $l77
+  local.get $l77
+  call $pick
+  local.set $l78
   i32.const 16
   call $alloc
-  local.set $l78
+  local.set $l79
+  local.get $l79
   local.get $l78
-  local.get $l77
   i64.store offset=8
-  local.get $l78
+  local.get $l79
   return
 )
-(func $total._boxed (param $a i32) (param $b i32) (param $c i32) (result i32)
-    (local $l79 i64)
+(func $apply2All._boxed (param $fs i32) (param $x i32) (param $y i32) (result i32)
     (local $l80 i64)
     (local $l81 i64)
     (local $l82 i64)
     (local $l83 i32)
-  local.get $a
-  i64.load offset=8
-  local.set $l79
-  local.get $a
-  call $rc_dec
-  local.get $b
+  local.get $x
   i64.load offset=8
   local.set $l80
-  local.get $b
+  local.get $x
   call $rc_dec
-  local.get $c
+  local.get $y
   i64.load offset=8
   local.set $l81
-  local.get $c
+  local.get $y
   call $rc_dec
-  local.get $l79
+  local.get $fs
   local.get $l80
   local.get $l81
-  call $total
+  call $apply2All
   local.set $l82
   i32.const 16
   call $alloc
@@ -842,39 +918,31 @@
   local.get $l83
   return
 )
-(func $runPaps._closed_0  (result i32)
-    (local $l84 i32)
-    (local $l85 i32)
-  call $runPaps._closed_0._boxed_const_1
-  local.set $l84
-  local.get $l84
-  call $rc_inc
-  i32.const 24
-  call $alloc
-  local.set $l85
-  local.get $l85
-  i32.const 254
-  i32.store8 offset=4
-  local.get $l85
-  i32.const 1
-  i32.store offset=8
-  local.get $l85
-  local.get $l84
-  i32.store offset=16
-  local.get $l85
-  return
-)
-(func $double._boxed (param $x i32) (result i32)
+(func $total._boxed (param $a i32) (param $b i32) (param $c i32) (result i32)
+    (local $l84 i64)
+    (local $l85 i64)
     (local $l86 i64)
     (local $l87 i64)
     (local $l88 i32)
-  local.get $x
+  local.get $a
+  i64.load offset=8
+  local.set $l84
+  local.get $a
+  call $rc_dec
+  local.get $b
+  i64.load offset=8
+  local.set $l85
+  local.get $b
+  call $rc_dec
+  local.get $c
   i64.load offset=8
   local.set $l86
-  local.get $x
+  local.get $c
   call $rc_dec
+  local.get $l84
+  local.get $l85
   local.get $l86
-  call $double
+  call $total
   local.set $l87
   i32.const 16
   call $alloc
@@ -885,31 +953,39 @@
   local.get $l88
   return
 )
-(func $curried._boxed (param $a i32) (param $x i32) (param $y i32) (result i32)
-    (local $l89 i64)
-    (local $l90 i64)
+(func $runPaps._closed_0  (result i32)
+    (local $l89 i32)
+    (local $l90 i32)
+  call $runPaps._closed_0._boxed_const_1
+  local.set $l89
+  local.get $l89
+  call $rc_inc
+  i32.const 24
+  call $alloc
+  local.set $l90
+  local.get $l90
+  i32.const 254
+  i32.store8 offset=4
+  local.get $l90
+  i32.const 1
+  i32.store offset=8
+  local.get $l90
+  local.get $l89
+  i32.store offset=16
+  local.get $l90
+  return
+)
+(func $double._boxed (param $x i32) (result i32)
     (local $l91 i64)
     (local $l92 i64)
     (local $l93 i32)
-  local.get $a
-  i64.load offset=8
-  local.set $l89
-  local.get $a
-  call $rc_dec
   local.get $x
-  i64.load offset=8
-  local.set $l90
-  local.get $x
-  call $rc_dec
-  local.get $y
   i64.load offset=8
   local.set $l91
-  local.get $y
+  local.get $x
   call $rc_dec
-  local.get $l89
-  local.get $l90
   local.get $l91
-  call $curried
+  call $double
   local.set $l92
   i32.const 16
   call $alloc
@@ -920,70 +996,67 @@
   local.get $l93
   return
 )
-(func $sumList._boxed (param $xs i32) (param $acc i32) (result i32)
+(func $curried._boxed (param $a i32) (param $x i32) (param $y i32) (result i32)
     (local $l94 i64)
     (local $l95 i64)
-    (local $l96 i32)
-  local.get $acc
+    (local $l96 i64)
+    (local $l97 i64)
+    (local $l98 i32)
+  local.get $a
   i64.load offset=8
   local.set $l94
-  local.get $acc
+  local.get $a
   call $rc_dec
-  local.get $xs
-  local.get $l94
-  call $sumList
+  local.get $x
+  i64.load offset=8
   local.set $l95
-  local.get $xs
+  local.get $x
   call $rc_dec
+  local.get $y
+  i64.load offset=8
+  local.set $l96
+  local.get $y
+  call $rc_dec
+  local.get $l94
+  local.get $l95
+  local.get $l96
+  call $curried
+  local.set $l97
   i32.const 16
   call $alloc
-  local.set $l96
-  local.get $l96
-  local.get $l95
+  local.set $l98
+  local.get $l98
+  local.get $l97
   i64.store offset=8
-  local.get $l96
+  local.get $l98
   return
 )
-(func $adder._boxed (param $a i32) (param $b i32) (result i32)
-    (local $l97 i64)
-    (local $l98 i64)
-    (local $l99 i64)
-    (local $l100 i32)
-  local.get $a
-  i64.load offset=8
-  local.set $l97
-  local.get $a
-  call $rc_dec
-  local.get $b
-  i64.load offset=8
-  local.set $l98
-  local.get $b
-  call $rc_dec
-  local.get $l97
-  local.get $l98
-  call $adder
+(func $strLenDemo._closed_1  (result i64)
+    (local $l99 i32)
+    (local $l100 i64)
+  call $strLenDemo._closed_0
   local.set $l99
-  i32.const 16
-  call $alloc
+  local.get $l99
+  call $string_len
   local.set $l100
   local.get $l100
-  local.get $l99
-  i64.store offset=8
-  local.get $l100
   return
 )
-(func $doubleArea._boxed (param $r i32) (result i32)
+(func $sumList._boxed (param $xs i32) (param $acc i32) (result i32)
     (local $l101 i64)
     (local $l102 i64)
     (local $l103 i32)
-  local.get $r
+  local.get $acc
   i64.load offset=8
   local.set $l101
-  local.get $r
+  local.get $acc
   call $rc_dec
+  local.get $xs
   local.get $l101
-  call $doubleArea
+  call $sumList
   local.set $l102
+  local.get $xs
+  call $rc_dec
   i32.const 16
   call $alloc
   local.set $l103
@@ -993,124 +1066,241 @@
   local.get $l103
   return
 )
-(func $runPaps._closed_1  (result i32)
-    (local $l104 i32)
-    (local $l105 i32)
-  call $runPaps._closed_1._boxed_const_1
-  local.set $l104
-  local.get $l104
-  call $rc_inc
-  i32.const 24
-  call $alloc
-  local.set $l105
-  local.get $l105
-  i32.const 254
-  i32.store8 offset=4
-  local.get $l105
-  i32.const 1
-  i32.store offset=8
-  local.get $l105
-  local.get $l104
-  i32.store offset=16
-  local.get $l105
-  return
-)
-(func $applyAll._boxed (param $fs i32) (param $x i32) (result i32)
+(func $adder._boxed (param $a i32) (param $b i32) (result i32)
+    (local $l104 i64)
+    (local $l105 i64)
     (local $l106 i64)
-    (local $l107 i64)
-    (local $l108 i32)
-  local.get $x
+    (local $l107 i32)
+  local.get $a
   i64.load offset=8
-  local.set $l106
-  local.get $x
+  local.set $l104
+  local.get $a
   call $rc_dec
-  local.get $fs
-  local.get $l106
-  call $applyAll
-  local.set $l107
+  local.get $b
+  i64.load offset=8
+  local.set $l105
+  local.get $b
+  call $rc_dec
+  local.get $l104
+  local.get $l105
+  call $adder
+  local.set $l106
   i32.const 16
   call $alloc
-  local.set $l108
-  local.get $l108
+  local.set $l107
   local.get $l107
+  local.get $l106
   i64.store offset=8
-  local.get $l108
+  local.get $l107
   return
 )
-(func $runPaps._closed_2  (result i32)
-    (local $l109 i32)
+(func $doubleArea._boxed (param $r i32) (result i32)
+    (local $l108 i64)
+    (local $l109 i64)
     (local $l110 i32)
-    (local $l111 i32)
-  i32.const 8
-  call $alloc
+  local.get $r
+  i64.load offset=8
+  local.set $l108
+  local.get $r
+  call $rc_dec
+  local.get $l108
+  call $doubleArea
   local.set $l109
-  local.get $l109
-  i32.const 0
-  i32.store8 offset=4
-  call $runPaps._closed_1
+  i32.const 16
+  call $alloc
   local.set $l110
   local.get $l110
+  local.get $l109
+  i64.store offset=8
+  local.get $l110
+  return
+)
+(func $runPaps._closed_1  (result i32)
+    (local $l111 i32)
+    (local $l112 i32)
+  call $runPaps._closed_1._boxed_const_1
+  local.set $l111
+  local.get $l111
   call $rc_inc
   i32.const 24
   call $alloc
-  local.set $l111
-  local.get $l111
-  i32.const 1
+  local.set $l112
+  local.get $l112
+  i32.const 254
   i32.store8 offset=4
-  local.get $l111
-  local.get $l110
+  local.get $l112
+  i32.const 1
   i32.store offset=8
+  local.get $l112
   local.get $l111
-  local.get $l109
   i32.store offset=16
-  local.get $l111
+  local.get $l112
   return
 )
-(func $runPaps._boxed (param $x i32) (result i32)
-    (local $l112 i64)
+(func $strLenDemo._boxed (param $n i32) (result i32)
     (local $l113 i64)
-    (local $l114 i32)
-  local.get $x
+    (local $l114 i64)
+    (local $l115 i32)
+  local.get $n
   i64.load offset=8
-  local.set $l112
-  local.get $x
-  call $rc_dec
-  local.get $l112
-  call $runPaps
   local.set $l113
+  local.get $n
+  call $rc_dec
+  local.get $l113
+  call $strLenDemo
+  local.set $l114
   i32.const 16
   call $alloc
-  local.set $l114
-  local.get $l114
-  local.get $l113
-  i64.store offset=8
-  local.get $l114
-  return
-)
-(func $runPaps._lam_1 (param $_x.1 i64) (param $_y.2 i64) (result i64)
-    (local $l115 i64)
-  local.get $_x.1
-  local.get $_y.2
-  i64.add
   local.set $l115
+  local.get $l115
+  local.get $l114
+  i64.store offset=8
   local.get $l115
   return
 )
-(func $area._boxed (param $s i32) (result i32)
+(func $applyAll._boxed (param $fs i32) (param $x i32) (result i32)
     (local $l116 i64)
-    (local $l117 i32)
+    (local $l117 i64)
+    (local $l118 i32)
+  local.get $x
+  i64.load offset=8
+  local.set $l116
+  local.get $x
+  call $rc_dec
+  local.get $fs
+  local.get $l116
+  call $applyAll
+  local.set $l117
+  i32.const 16
+  call $alloc
+  local.set $l118
+  local.get $l118
+  local.get $l117
+  i64.store offset=8
+  local.get $l118
+  return
+)
+(func $runPaps._closed_2  (result i32)
+    (local $l119 i32)
+    (local $l120 i32)
+    (local $l121 i32)
+  i32.const 8
+  call $alloc
+  local.set $l119
+  local.get $l119
+  i32.const 0
+  i32.store8 offset=4
+  call $runPaps._closed_1
+  local.set $l120
+  local.get $l120
+  call $rc_inc
+  i32.const 24
+  call $alloc
+  local.set $l121
+  local.get $l121
+  i32.const 1
+  i32.store8 offset=4
+  local.get $l121
+  local.get $l120
+  i32.store offset=8
+  local.get $l121
+  local.get $l119
+  i32.store offset=16
+  local.get $l121
+  return
+)
+(func $runPaps._boxed (param $x i32) (result i32)
+    (local $l122 i64)
+    (local $l123 i64)
+    (local $l124 i32)
+  local.get $x
+  i64.load offset=8
+  local.set $l122
+  local.get $x
+  call $rc_dec
+  local.get $l122
+  call $runPaps
+  local.set $l123
+  i32.const 16
+  call $alloc
+  local.set $l124
+  local.get $l124
+  local.get $l123
+  i64.store offset=8
+  local.get $l124
+  return
+)
+(func $runPaps._lam_1 (param $_x.1 i64) (param $_y.2 i64) (result i64)
+    (local $l125 i64)
+  local.get $_x.1
+  local.get $_y.2
+  i64.add
+  local.set $l125
+  local.get $l125
+  return
+)
+(func $strLenDemo._closed_2  (result i32)
+    (local $l126 i32)
+  i32.const 27
+  call $alloc
+  local.set $l126
+  local.get $l126
+  i32.const 250
+  i32.store8 offset=4
+  local.get $l126
+  i32.const 11
+  i32.store offset=8
+  local.get $l126
+  i32.const 104
+  i32.store8 offset=16
+  local.get $l126
+  i32.const 101
+  i32.store8 offset=17
+  local.get $l126
+  i32.const 108
+  i32.store8 offset=18
+  local.get $l126
+  i32.const 108
+  i32.store8 offset=19
+  local.get $l126
+  i32.const 111
+  i32.store8 offset=20
+  local.get $l126
+  i32.const 32
+  i32.store8 offset=21
+  local.get $l126
+  i32.const 119
+  i32.store8 offset=22
+  local.get $l126
+  i32.const 111
+  i32.store8 offset=23
+  local.get $l126
+  i32.const 114
+  i32.store8 offset=24
+  local.get $l126
+  i32.const 108
+  i32.store8 offset=25
+  local.get $l126
+  i32.const 100
+  i32.store8 offset=26
+  local.get $l126
+  return
+)
+(func $area._boxed (param $s i32) (result i32)
+    (local $l127 i64)
+    (local $l128 i32)
   local.get $s
   call $area
-  local.set $l116
+  local.set $l127
   local.get $s
   call $rc_dec
   i32.const 16
   call $alloc
-  local.set $l117
-  local.get $l117
-  local.get $l116
+  local.set $l128
+  local.get $l128
+  local.get $l127
   i64.store offset=8
-  local.get $l117
+  local.get $l128
   return
 )
 (func $double_abi (param $x i64) (result i64)
@@ -1207,6 +1397,11 @@
   local.get $c
   call $total
 )
+(func $strLenDemo_abi (param $n i64) (result i64)
+
+  local.get $n
+  call $strLenDemo
+)
 (func $pap_curried._boxed_1 (param $c i32) (param $x0 i32) (param $x1 i32) (result i32)
   local.get $c
   i32.load offset=16
@@ -1237,4 +1432,5 @@
   (export "use-curried" (func $useCurried_abi))
   (export "sum-list" (func $sumList_abi))
   (export "total" (func $total_abi))
+  (export "str-len-demo" (func $strLenDemo_abi))
 )
