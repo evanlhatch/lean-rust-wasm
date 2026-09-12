@@ -1,7 +1,52 @@
-# devenv-based CI: toolchain is nix-provisioned by the devenv shell
-# (rust-overlay) — no actions/setup-rust-toolchain. target/ + registry
-# cache via Swatinem/rust-cache; the devenv cachix cache covers the
-# nix side.
+# ── ci-docs: provisioning assumptions ─────────────────────────────────
+# ci.yml: two-lane CI = the `just gates` matrix split into its two halves.
+#
+# Job 1 (lean): the Lean-only gates. Justfile gates that touch no Rust:
+#   lean-pkg-inventory, lean-build, lean-axioms, check-schema, breaking,
+#   lean-lint. Toolchain = elan with leanprover/lean4:v4.33.0 (the
+#   justfile's lean_tc hardcodes the
+#   ~/.elan/toolchains/leanprover--lean4---v4.33.0/bin path — a manual
+#   elan-init install lands exactly there; elan SHIMS are bypassed by the
+#   justfile, so no PATH shims needed). Lean-only steps need NO CC: every
+#   recipe is `lake build`/`lake env` — no cc-rs, no ring, nothing native.
+#   Produces the lean-lake artifact (all lean/*/.lake dirs) consumed by
+#   job 2 so wasm-compile's lake build does not rebuild upstream oleans.
+#
+# Job 2 (rust/wasm): the devenv-profile gates + the test suite.
+#   Toolchain = devenv shell --profile wasm (devenv.nix: rust-overlay
+#   nightly + clang for ring/noq, wasm.nix: nixpkgs wasm-tools/wac/
+#   wit-bindgen/wasmtime). The CC export is REQUIRED for gen-check/test:
+#   `export CC=$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc`
+#   (notes/lean-refactor-guide.md: cc-rs on ring needs the wasm profile's
+#   clang headers). The justfile hardcodes $HOME/lean-rust-wasm paths
+#   (lean_tc, rt-conformance's CC, demo recipe), so job 2 symlinks
+#   $GITHUB_WORKSPACE → $HOME/lean-rust-wasm before running anything.
+#
+#   guestlang-tools: the justfile prefers ~/.local/guestlang-tools/bin
+#   over PATH for wasm-tools/wac (wit-check, splice-smoke, wasm-compile).
+#   Reason (notes/full-remaining-work.md): wit-bindgen 0.61's
+#   wit-component 0.258 async-lift encoding predates nixpkgs' 1.256 CLI —
+#   so CI cargo-installs wasm-tools 1.258.0 + wac-cli 0.11.0 into that
+#   exact root. wit-bindgen 0.61 is a CRATE dependency (Cargo.lock:
+#   wit-bindgen 0.61.1), not a CLI gate — no separate install. nixpkgs'
+#   wasm-tools/wac stay as fallback via the justfile's [ -x ] checks.
+#
+#   wasm32-unknown-unknown: NONE of job 2's gate commands cross-compile
+#   (wasm-compile is Lean→WAT→wasm-tools; the wasm guest builds live in
+#   wasm-guest-*/check-wasm recipes, not in gates). The rustup target add
+#   is best-effort parity with the local profile.
+#
+# Caching: elan toolchains + lean .lake per job, cargo registry + target,
+# the cachix devenv cache, and the cargo-installed guestlang-tools root.
+#
+# Maintainer setup:
+#   - CACHIX_AUTH_TOKEN repo secret — pushes nix/devenv builds to
+#     cachix.org/devenv. Unset = pull-only (still works, slower).
+#   - Nothing else: Lean is elan-pinned (v4.33.0 = lean-toolchain),
+#     nix/devenv are the cachix-installed pins, guest tools are pinned
+#     below. deploy.yml handles secrets via secretspec; CI runs no
+#     secretspec commands.
+# ──────────────────────────────────────────────────────────────────────
 
 name: CI
 
@@ -11,23 +56,149 @@ on:
     pull_request:
         branches: [main]
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
 jobs:
-    test:
+    lean:
+        name: lean matrix (build + axioms + schema + lint)
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
-            - uses: cachix/install-nix-action@v31
-            - uses: cachix/cachix-action@v16
+
+            - name: install just
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: just
+
+            - name: cache elan (v4.33.0 — the lean-toolchain pin)
+              uses: actions/cache@v4
+              with:
+                  path: ~/.elan
+                  key: lean-elan-v1-${{ runner.os }}-leanprover-lean4-v4.33.0
+
+            - name: install elan + pinned toolchain (leanprover/lean4:v4.33.0)
+              run: |
+                  set -euo pipefail
+                  [ -x "$HOME/.elan/bin/elan" ] || \
+                    curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y \
+                      --default-toolchain leanprover/lean4:v4.33.0
+                  "$HOME/.elan/bin/elan" show
+                  test -d "$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+
+            - name: cache lake builds (lean/*/.lake)
+              uses: actions/cache@v4
+              with:
+                  path: lean/*/.lake
+                  key: lean-lake-v1-${{ runner.os }}-v4.33.0-${{ hashFiles('lean/*/lakefile.toml', 'lean/*/lake-manifest.json') }}
+                  restore-keys: |
+                      lean-lake-v1-${{ runner.os }}-v4.33.0-
+
+            # Lean-only gates — no CC needed: lake builds/env only, no cc-rs.
+            - name: lean gates
+              run: just lean-pkg-inventory lean-build lean-axioms check-schema breaking lean-lint
+
+            - name: upload lean .lake artifacts (oleans for job 2)
+              uses: actions/upload-artifact@v4
+              with:
+                  name: lean-lake
+                  path: lean/*/.lake
+                  retention-days: 1
+
+    rust-wasm:
+        name: rust/wasm lane (gates + tests)
+        needs: lean
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            # The justfile hardcodes $HOME/lean-rust-wasm (lean_tc,
+            # rt-conformance's CC). Symlink the checkout into place.
+            - name: symlink workspace → $HOME/lean-rust-wasm
+              run: |
+                  set -euo pipefail
+                  [ "$HOME/lean-rust-wasm" = "$GITHUB_WORKSPACE" ] && exit 0
+                  ln -s "$GITHUB_WORKSPACE" "$HOME/lean-rust-wasm"
+
+            - name: install nix
+              uses: cachix/install-nix-action@v31
+
+            - name: devenv cachix cache
+              uses: cachix/cachix-action@v16
               with:
                   name: devenv
-            - name: Install devenv
+                  authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+            - name: install devenv
               run: nix profile add nixpkgs#devenv
-            - uses: Swatinem/rust-cache@v2
-            - name: tests (nextest + doctests)
-              run: devenv shell -- bash -c 'just test'
-            - name: clippy
-              run: devenv shell -- bash -c 'just clippy'
-            - name: fmt
-              run: devenv shell -- bash -c 'just fmt'
-            - name: typos
-              run: devenv shell -- bash -c 'just typos'
+
+            - name: cache elan (v4.33.0 — wasm-compile builds the Lean wasm-backend)
+              uses: actions/cache@v4
+              with:
+                  path: ~/.elan
+                  key: lean-elan-v1-${{ runner.os }}-leanprover-lean4-v4.33.0
+
+            - name: install elan + pinned toolchain (leanprover/lean4:v4.33.0)
+              run: |
+                  set -euo pipefail
+                  [ -x "$HOME/.elan/bin/elan" ] || \
+                    curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y \
+                      --default-toolchain leanprover/lean4:v4.33.0
+                  test -d "$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+
+            - name: cache cargo (registry + target)
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      target
+                  key: rust-wasm-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+                  restore-keys: |
+                      rust-wasm-v1-${{ runner.os }}-
+
+            - name: cache cargo-installed guestlang-tools
+              uses: actions/cache@v4
+              with:
+                  path: ~/.local/guestlang-tools
+                  key: guestlang-tools-v1-${{ runner.os }}-wasm-tools-1.258.0-wac-0.11.0
+
+            # The justfile prefers ~/.local/guestlang-tools/bin over PATH;
+            # nixpkgs' wasm-tools 1.256 is too old for wit-bindgen 0.61's
+            # (wit-component 0.258) async-lift encodings. Pin the cargo
+            # builds to the exact root the justfile checks.
+            - name: cargo-install wasm-tools 1.258.0 + wac-cli 0.11.0 → ~/.local/guestlang-tools
+              run: |
+                  devenv shell --profile wasm -- bash -c '
+                    set -euo pipefail
+                    command -v "$HOME/.local/guestlang-tools/bin/wasm-tools" >/dev/null 2>&1 || \
+                      cargo install --locked --root "$HOME/.local/guestlang-tools" wasm-tools --version 1.258.0
+                    [ -x "$HOME/.local/guestlang-tools/bin/wac" ] || \
+                      cargo install --locked --root "$HOME/.local/guestlang-tools" wac-cli --version 0.11.0
+                  '
+
+            # None of the gate commands below cross-compile; best-effort
+            # parity with the local wasm profile (devenv may ship no
+            # rustup — overlay toolchain — in which case this is a no-op).
+            - name: add wasm32-unknown-unknown target (if rustup)
+              run: |
+                  devenv shell --profile wasm -- bash -c \
+                    'command -v rustup >/dev/null && rustup target add wasm32-unknown-unknown || echo "no rustup (overlay toolchain) — not needed by these gates"'
+
+            - name: download lean .lake artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: lean-lake
+                  path: .
+
+            # The CC export is REQUIRED (notes/lean-refactor-guide.md):
+            # cc-rs on ring needs the wasm profile's clang headers; the
+            # profile is provisioned by the devenv shell invocation itself.
+            - name: rust/wasm gates + tests
+              run: |
+                  devenv shell --profile wasm -- bash -c '
+                    set -euo pipefail
+                    export CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc"
+                    just wasm-compile gen-check wit-check splice-smoke rt-conformance test
+                  '
