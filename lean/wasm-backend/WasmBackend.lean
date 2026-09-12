@@ -152,11 +152,14 @@ char-length off ASCII (documented, v1). -/
 /-- The guest string tag byte. -/
 def stringTag : Nat := 250
 
-/-- `GuestlangStd.*` std ops → the runtime primitive to call. The
+/-- `GuestlangStd.*` std ops (and the schema-root `SchemaLang.string_len`
+    the raw evaluator rides — the root-namespace-name contract, the
+    `Validate.string_len` doc) → the runtime primitive to call. The
     result is the IMPL convention: UInt64 = raw i64; String = object
     pointer (i32). -/
 def stdOp? : Name → Option String
   | `GuestlangStd.strlen => some "string_len"
+  | `SchemaLang.string_len => some "string_len"
   | `GuestlangStd.strcat => some "string_cat"
   | _ => none
 
@@ -349,7 +352,7 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       | _, some callee =>
           -- std intrinsic: strlen (obj) → raw i64; strcat (obj obj) → obj
           let resTy : String := match fn with
-            | `GuestlangStd.strlen => "i64"
+            | `GuestlangStd.strlen | `SchemaLang.string_len => "i64"
             | _ => "i32"
           let l ← bindLocal decl.fvarId resTy
           for a in args do emitArg a
@@ -623,13 +626,16 @@ def strElemLower (suffix : String) : List Wat.Instr :=
 
 /-- The PROVED canonical-ABI flat layout of the demo's user record
     (id@0, name@8, email@16, tags@24 — size 32): the adapters' field
-    offsets are THIS function's outputs, structurally. -/
-def userLayout : List Nat :=
-  WasmBackend.Layout.offsets [.u64, .string, .string, .list .string]
+    offsets are THIS function's outputs, structurally. CERTIFIED: the
+    caller must discharge `Layout.user_offsets` — a layout change
+    without re-proving the ABI table fails to elaborate. -/
+def userLayout (_cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List Nat :=
+  WasmBackend.Layout.offsets WasmBackend.Layout.userTys
 
-/-- The PROVED record size (= the stream/element-array stride). -/
-def userSize : Nat :=
-  WasmBackend.Layout.size [.u64, .string, .string, .list .string]
+/-- The PROVED record size (= the stream/element-array stride),
+    CERTIFIED against `Layout.user_size` (same re-proof discipline). -/
+def userSize (_cert : WasmBackend.Layout.size WasmBackend.Layout.userTys = 32) : Nat :=
+  WasmBackend.Layout.size WasmBackend.Layout.userTys
 
 /-- (ptr, len) pair of the string object `src` → ABSOLUTE memory at
     `off`/`off+4` (bytes inline at src+16, len at src+8). -/
@@ -644,6 +650,17 @@ def pairRel (base : String) (off : Nat) (src : String) : List Wat.Instr :=
   , .mem .i32store off none
   , .localget base, .localget src, .mem .i32load 8 none
   , .mem .i32store (off + 4) none ]
+
+/-- The canonical-ABI variant RE-BOX: the flat (discr i32, joined-payload
+    i64) arrives as core params; alloc(16) {rc, tag=discr @4, payload i64
+    @8} reconstructs the guest's variant object. Shared by `variantParam`
+    (order-error-valid) and `listUser` (watch-orders) — the same five
+    instructions, the only difference being what follows the box. -/
+def variantBox (disc payload : String) : List Wat.Instr :=
+  [ .i32const 16, .call "alloc", .localset "v"
+  , .localget "v", .localget disc, .mem .i32store8 4 none
+  , .localget "v", .localget payload, .mem .i64store 8 none
+  , .localget "v" ]
 
 /-! ## The record-PARAM adapter (the canonical ABI's input direction)
 
@@ -662,8 +679,8 @@ The flat param list for the user record — DERIVED from the field types
 flattens to one i64; a string/list flattens to the (ptr, len) i32
 pair. -/
 
-def userFieldTys : List SchemaLang.Ty :=
-  [.u64, .string, .string, .list .string]
+def userFieldTys (_cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List SchemaLang.Ty :=
+  WasmBackend.Layout.userTys
 
 /-- One flat core type per canonical-ABI field flattening. -/
 def flatTyOf : SchemaLang.Ty → List String
@@ -674,7 +691,8 @@ def flatTyOf : SchemaLang.Ty → List String
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
   | .stream _ | .ty _ => ["i32", "i32"]
 
-def userFlatTys : List String := userFieldTys.flatMap flatTyOf
+def userFlatTys (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List String :=
+  (userFieldTys cert).flatMap flatTyOf
 
 /-- The flat params' NAMES: the id, then (ptr, len) per ref field
     (name, email, tags) — same order as `userFlatTys`. -/
@@ -697,7 +715,12 @@ def stringCtor (src len dst : String) : List Wat.Instr :=
     Walks the flat array BACKWARD (i = n-1 … 0), consing each element
     onto the accumulator — the chain comes out in order. The cons
     object: {rc=1 (alloc), tag=1 @4, head@8 = the string object,
-    tail@16}. -/
+    tail@16}. The EMPTY list = an ALLOCATED `{rc, tag=0 @4}` block
+    (the runtime's own `[]` ctor representation), NOT the null
+    pointer: the compiled list readers (listLenU64, toVList) DEREFERENCE
+    the nil tail (their tag read at offset=4) — a null acc landed that
+    read on the allocator's freelist bytes at 0..4 (the user-complete
+    trap: the row gate's list walk read memory[4] as a tag). -/
 def consChain (arr n : String) : List Wat.Instr :=
   let i := "ti"; let p := "tq"; let src := "tsp"; let len := "tln"
   let s := "ts"; let c := "tc"; let acc := "acc"
@@ -716,7 +739,8 @@ def consChain (arr n : String) : List Wat.Instr :=
        , .localget c, .localget acc, .mem .i32store 16 none
        , .localget c, .localset acc
        , .br "tags-loop" ]
-  [ .i32const 0, .localset acc
+  [ .i32const 8, .call "alloc", .localset acc
+  , .localget acc, .i32const 0, .mem .i32store8 4 none
   , .localget n, .localset i
   , .block "tags-done" [.loop "tags-loop" body] ]
 
@@ -727,8 +751,8 @@ def consChain (arr n : String) : List Wat.Instr :=
     a NESTED string-list walk (the inner walk's own (ptr,len) dst = its
     scratch cursor at areaOff=0 — the ELEMENT slot is dynamic, so copy
     the (arrT,nT) into the tags field after). -/
-def userElemLower : List Wat.Instr :=
-  let fld (i : Nat) : Nat := userLayout.getD i 0
+def userElemLower (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List Wat.Instr :=
+  let fld (i : Nat) : Nat := (userLayout cert).getD i 0
   [ .localget "curU", .mem .i32load 8 none, .localset "e"
   , .localget "wU", .localget "e", .mem .i64load 32 none
   , .mem .i64store (fld 0) none
@@ -748,7 +772,9 @@ callers keep calling it directly).
 
 TYPED: every shape builds a `Wat.Func` — ZERO `Instr.raw` (the offsets
 are structured fields fed from the PROVED `userLayout`). -/
-def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func := Id.run do
+def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24])
+    (certSize : WasmBackend.Layout.size WasmBackend.Layout.userTys = 32)
+    (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func := Id.run do
   -- pass-through of the flat params (every shape's prologue)
   let pass : List Wat.Instr :=
     d.params.toList.map fun p => .localget p.binderName.toString
@@ -795,7 +821,7 @@ def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func 
     let area := 56
     -- the record sits @64 (area+8); the FIELD offsets = the PROVED
     -- canonical-ABI flat layout (Layout.user_offsets = [0,8,16,24])
-    let fld (i : Nat) : Nat := area + 8 + userLayout.getD i 0
+    let fld (i : Nat) : Nat := area + 8 + (userLayout certLayout).getD i 0
     let thenI : List Wat.Instr :=
       [ .localget "opt", .mem .i32load 8 none, .localset "u"
       -- the id (the u64 @32 in the guest object — the ref-first order)
@@ -836,7 +862,7 @@ def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func 
     -- rides the sproj [3, 0] slot = 8 + 3*8). The impl reads only the
     -- id — the validator's guest-legal shape.
     let params : List Wat.Param :=
-      userFlatTys.zipIdx.map fun (ty, i) =>
+      (userFlatTys certLayout).zipIdx.map fun (ty, i) =>
         { name := some (userParamNames.getD i "flat"), ty }
     let body : List Wat.Instr :=
       consChain "tp" "tl"
@@ -866,11 +892,8 @@ def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func 
     -- guest's variant object. The SYNC bool result: the impl's Bool =
     -- raw i32 (the userParam convention) — no return area.
     let body : List Wat.Instr :=
-      [ .i32const 16, .call "alloc", .localset "v"
-      , .localget "v", .localget "into_disc", .mem .i32store8 4 none
-      , .localget "v", .localget "into_payload", .mem .i64store 8 none
-      , .localget "v"
-      , .call d.name.toString ]
+      variantBox "into_disc" "into_payload"
+      ++ [ .call d.name.toString ]
     { name := s!"{d.name.toString}_abi"
       params := [ { name := some "into_disc", ty := "i32" }
                 , { name := some "into_payload", ty := "i64" } ]
@@ -891,11 +914,7 @@ def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func 
     -- encoder VALIDATES the async export's core sig against the FLAT
     -- form. The adapter RE-BOXES: alloc(16) {rc, tag=discr, payload
     -- i64@8} -> the guest's variant object.
-    let variantBox : List Wat.Instr :=
-      [ .i32const 16, .call "alloc", .localset "v"
-      , .localget "v", .localget "into_disc", .mem .i32store8 4 none
-      , .localget "v", .localget "into_payload", .mem .i64store 8 none
-      , .localget "v" ]
+    let boxed : List Wat.Instr := variantBox "into_disc" "into_payload"
     -- the ASYNC delivery (the listUser shape = watch-orders-specific,
     -- and watch-orders = the async fn): call task-return(ptr, len) —
     -- the flat results — then return 0 (the task = complete at the
@@ -907,9 +926,9 @@ def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func 
       , .i32const 56, .i32const 60, .mem .i32load 0 none, .call s!"tr_{kebab}"
       , .i32const 0 ]
     let body : List Wat.Instr :=
-      variantBox
+      boxed
       ++ [ .call d.name.toString, .localset "lst" ]
-      ++ listWalk [.localget "lst"] 0 userSize "U" userElemLower
+      ++ listWalk [.localget "lst"] 0 (userSize certSize) "U" (userElemLower certLayout)
       ++ areaTail
     { name := s!"{d.name.toString}_abi"
       params := [ { name := some "into_disc", ty := "i32" }
@@ -944,8 +963,8 @@ def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func 
          "", [])
       else
         -- the SAME proved layout as watch-orders' listUser (the element
-        -- encoding = the canonical record — userLayout)
-        (32, userElemLower, "U",
+        -- encoding = the canonical record — userLayout + userSize)
+        (userSize certSize, userElemLower certLayout, "U",
          [ ("curU", "i32"), ("nU", "i32"), ("arrU", "i32"), ("wU", "i32")
          , ("e", "i32"), ("p2", "i32"), ("curT", "i32"), ("nT", "i32")
          , ("arrT", "i32"), ("wT", "i32") ])
@@ -1023,12 +1042,9 @@ def emitModule (decls : List (Decl .impure))
     let (f, s2) ← emitDecl d |>.run st
     st := { s2 with out := #[], locals := #[] }
     funcs := funcs ++ [f]
-  -- Trampoline signatures: name → (param wasm tys, result wasm ty).
-  let sigs : Std.HashMap Name (Array String × String) :=
-    decls.foldl (fun m d =>
-      let rt := match d.value with | .code c => resultTyOf c | .extern .. => none
-      m.insert d.name (d.params.map (fun p => paramWasmTy p), rt.getD "i32")) {}
   -- Trampolines: (closure i32, boxed fresh args…) → boxed result.
+  -- (The `sigs` fold ran once above — decl signatures are immutable
+  -- across the module — the trampoline loop reads that same table.)
   -- The FRESH count = the target's arity − nA; every arg (captured or
   -- fresh) is a boxed object; the target's param types decide unbox-vs-
   -- forward; a raw i64 result gets boxed.
@@ -1083,7 +1099,7 @@ def emitModule (decls : List (Decl .impure))
     for d in decls do
       if d.name.toString == n.toString then
         let shape := if stringResult? n then "string" else adapterShape? kebab |>.getD "default"
-        abiFuncs := abiFuncs ++ [emitAdapter d shape kebab]
+        abiFuncs := abiFuncs ++ [emitAdapter WasmBackend.Layout.user_offsets WasmBackend.Layout.user_size d shape kebab]
   -- DECISION (the post-return functions): wit-bindgen's modules carry
   -- `cabi_post_<name>` (the dealloc hook the canon lift calls after
   -- copying the results). OURS don't — the adapters use the STATIC

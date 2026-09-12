@@ -23,13 +23,9 @@ engine's rewrite licenses:
   feedback loop. Recursion is incrementalizable: the cascade's fixpoint
   over deltas computes the same fixpoint as the batch loop over states.
 
-Deferred from the source: the nested-stream machinery (`strict2`,
-`causal_nested`, `cycle2_incremental`, sprod product forms) — the
-two-input nested cycle story lands with the multi-input cascade work.
-
-UPDATE: this is no longer deferred — `Dbsp.NestedCycle` ports it
-(`fix2_eq`, `fix2_unique`, `cycle2_incremental`, `strict2`,
-`causal_nested`). This header predates that module.
+The source's nested-stream machinery (`strict2`, `causal_nested`,
+`cycle2_incremental`, the two-input nested cycle story) lives in
+`Dbsp.NestedCycle`.
 -/
 
 import Dbsp.Linear
@@ -73,19 +69,6 @@ theorem incremental_bijection : Function.Bijective (@incremental a b _ _) :=
 
 /-! ## Invariances and the push rules -/
 
-theorem delay_invariance : incremental (@delay a _) = delay := by
-  funext s
-  show D (delay (I s)) = delay s
-  rw [derivative_time_invariant, integral_derivative]
-
-theorem integral_invariance : incremental (@I a _) = I := by
-  funext s
-  simp [incremental]
-
-theorem derivative_invariance : incremental (@D a _) = D := by
-  funext s
-  simp [incremental]
-
 /-- `Q ∘ I = I ∘ incremental Q` — running the batch operator on the
     integrated stream is integrating the incremental operator's output.
     The checkpoint/tick commutation license. -/
@@ -111,13 +94,6 @@ theorem D_push (Q : Operator a b) (s : Stream a) :
 theorem D_push2 (Q : Operator2 a b c) (s1 : Stream a) (s2 : Stream b) :
     D (Q s1 s2) = incremental2 Q (D s1) (D s2) := by
   simp [incremental2]
-
-/-- **Composition incrementalizes compositionally** — plans compile
-    kernel-by-kernel, no global reasoning needed. -/
-theorem chain_incremental (Q1 : Operator b c) (Q2 : Operator a b) :
-    incremental (Q1 ∘ Q2) = incremental Q1 ∘ incremental Q2 := by
-  funext s
-  simp [incremental, Function.comp_apply]
 
 theorem incremental_comp (Q1 : Operator b c) (Q2 : Operator a b) (s : Stream a) :
     incremental (fun s => Q1 (Q2 s)) s = incremental Q1 (incremental Q2 s) := by
@@ -207,11 +183,11 @@ theorem causal_incremental2 (Q : Operator2 a b c) (h : Causal (uncurryOp Q)) :
     _ D derivative_causal
   intro s1 s2 n heq
   apply h
-  · apply causal_respects_agreeUpto _ integral_causal
-    apply causal_respects_agreeUpto _ (lifting_causal _)
+  · apply causal_respects_agree_upto _ integral_causal
+    apply causal_respects_agree_upto _ (lifting_causal _)
     exact heq
-  · apply causal_respects_agreeUpto _ integral_causal
-    apply causal_respects_agreeUpto _ (lifting_causal _)
+  · apply causal_respects_agree_upto _ integral_causal
+    apply causal_respects_agree_upto _ (lifting_causal _)
     exact heq
 
 @[simp] theorem incremental_id' : incremental (@id (Stream a)) = id := by

@@ -198,36 +198,28 @@ mutual
   | .userDefined urn name params =>
       .userDefined (ctx.typeAnchor urn name) (params.map (toProtoParam ctx)) .required
 
-  /-- Apply the column/expression nullability to a lowered type (always explicit). -/
+  /-- Set the nullability of a lowered type (always explicit). Every
+      `PType` ctor's LAST field is the nullability — the 28-arm
+      bool-dispatch `withNullable` was 14 rebuild-pairs of this. -/
+  def setNull (n : Proto.Nullability) : Proto.PType → Proto.PType
+    | .bool _ => .bool n
+    | .i8 _ => .i8 n
+    | .i16 _ => .i16 n
+    | .i32 _ => .i32 n
+    | .i64 _ => .i64 n
+    | .fp32 _ => .fp32 n
+    | .fp64 _ => .fp64 n
+    | .string _ => .string n
+    | .binary _ => .binary n
+    | .decimal p s _ => .decimal p s n
+    | .list e _ => .list e n
+    | .map k v _ => .map k v n
+    | .struct fs _ => .struct fs n
+    | .userDefined a p _ => .userDefined a p n
+
+  /-- Apply the column/expression nullability to a lowered type. -/
   def withNullable : Proto.PType → Bool → Proto.PType
-  | .bool _      , true  => .bool .nullable
-  | .bool _      , false => .bool .required
-  | .i8 _        , true  => .i8 .nullable
-  | .i8 _        , false => .i8 .required
-  | .i16 _       , true  => .i16 .nullable
-  | .i16 _       , false => .i16 .required
-  | .i32 _       , true  => .i32 .nullable
-  | .i32 _       , false => .i32 .required
-  | .i64 _       , true  => .i64 .nullable
-  | .i64 _       , false => .i64 .required
-  | .fp32 _      , true  => .fp32 .nullable
-  | .fp32 _      , false => .fp32 .required
-  | .fp64 _      , true  => .fp64 .nullable
-  | .fp64 _      , false => .fp64 .required
-  | .string _    , true  => .string .nullable
-  | .string _    , false => .string .required
-  | .binary _    , true  => .binary .nullable
-  | .binary _    , false => .binary .required
-  | .decimal p s _, true  => .decimal p s .nullable
-  | .decimal p s _, false => .decimal p s .required
-  | .list e _    , true  => .list e .nullable
-  | .list e _    , false => .list e .required
-  | .map k v _   , true  => .map k v .nullable
-  | .map k v _   , false => .map k v .required
-  | .struct fs _ , true  => .struct fs .nullable
-  | .struct fs _ , false => .struct fs .required
-  | .userDefined a p _, true  => .userDefined a p .nullable
-  | .userDefined a p _, false => .userDefined a p .required
+    | pt, b => setNull (if b then .nullable else .required) pt
 end
 
 /-- Lower a schema column `(name, t, n)` to a wire type with its nullability. -/

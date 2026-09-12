@@ -124,14 +124,19 @@ theorem offsets_sorted (ts : List Ty) : (offsets ts).Pairwise (· < ·) := go_pa
 
 The WIT field order: `id: u64, name: string, email: string, tags:
 list<string>`. These ARE the numbers in the emitted adapters (the
-element stores' `offset=` operands) and the host's item size. -/
+element stores' `offset=` operands) and the host's item size. The type
+list lives HERE once — WasmBackend.lean (userLayout/userSize/
+userFieldTys) and Audit.lean (stride) consume the same abbrev, so the
+five hand-written copies of the literal fold to one source. -/
+
+/-- The user record's schema types, in WIT field order. -/
+abbrev userTys : List Ty := [.u64, .string, .string, .list .string]
 
 /-- The user record's field offsets: id@0, name@8, email@16, tags@24. -/
-theorem user_offsets :
-    offsets [.u64, .string, .string, .list .string] = [0, 8, 16, 24] := rfl
+theorem user_offsets : offsets userTys = [0, 8, 16, 24] := rfl
 
 /-- The user record's size = 32 bytes = the stream item stride. -/
-theorem user_size : size [.u64, .string, .string, .list .string] = 32 := rfl
+theorem user_size : size userTys = 32 := rfl
 
 /-- A scalar-only record packs from 0 with no padding. -/
 theorem u64_offsets : offsets [.u64] = [0] := rfl

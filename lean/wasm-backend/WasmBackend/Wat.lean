@@ -10,7 +10,8 @@ the two hand-number clobber bugs this month lived in string literals.
 INCREMENTAL MIGRATION: the escape hatch `Instr.raw (s : String)` renders
 `s` as one verbatim WAT line. Each migrated emission site is typed; the
 un-migrated sites cross the bridge as `.raw` lines. The raw-count = the
-migration's progress metric (`Module.rawCount`), printed by GenMain. The
+migration's progress metric (`S.rawCount` — the emitter state's tally,
+printed by GenMain). The
 ledger of what remains raw is owned by WasmBackend.lean's header.
 
 Rendering: `Std.Format` (the doctrine — never string interpolation for
@@ -144,21 +145,6 @@ def lineOf : Instr → String
 -- `nest 2` = the 2-space-per-level indentation style.
 mutual
 def instrW : Instr → Format
-  | .i32const n => text s!"i32.const {n}"
-  | .i64const n => text s!"i64.const {n}"
-  | .localget n => text s!"local.get {refW n}"
-  | .localset n => text s!"local.set {refW n}"
-  | .localtee n => text s!"local.tee {refW n}"
-  | .globalget n => text s!"global.get {idW n}"
-  | .globalset n => text s!"global.set {idW n}"
-  | .call fn => text s!"call {idW fn}"
-  | .returncall fn => text s!"return_call {idW fn}"
-  | .callindirect ty => text s!"call_indirect (type {idW ty})"
-  | .mem op offset al => text s!"{memOpW op}{memArgsW offset al}"
-  | .memcopy => text "memory.copy"
-  | .op o => text (opW o)
-  | .br l => text s!"br {idW l}"
-  | .brif l => text s!"br_if {idW l}"
   | .block l body =>
       text s!"block {idW l}" ++ Format.nest 2 (Format.line ++ instrsW body)
         ++ Format.line ++ text "end"
@@ -173,11 +159,10 @@ def instrW : Instr → Format
             | [] => Format.nil
             | _ => Format.line ++ text "else" ++ Format.nest 2 (Format.line ++ instrsW elseI))
         ++ Format.line ++ text "end"
-  | .ret => text "return"
-  | .drop => text "drop"
-  | .select => text "select"
-  | .unreach => text "unreachable"
-  | .raw s => text s
+  -- every FLAT form = `lineOf`'s text (the two renderings were
+  -- byte-identical arms; the structural forms are matched above and
+  -- `lineOf`'s «structured» placeholder never renders)
+  | i => text (lineOf i)
 
 def instrsW : List Instr → Format
   | [] => .nil
@@ -332,26 +317,5 @@ def Module.render (m : Module) : String :=
     if a.isEmpty then b else a ++ Format.line ++ b) Format.nil
   Format.pretty (text "(module" ++ Format.line ++ joined ++ startF
     ++ Format.line ++ text ")") (width := 1 <<< 30)
-
-/-! ## The raw-count metric -/
-
-/-- The number of `Instr.raw` instructions in a body — the migration's
-    progress metric. -/
-def rawCountOf : List Instr → Nat
-  | [] => 0
-  | .raw _ :: is => rawCountOf is + 1
-  | .block _ b :: is => rawCountOf b + rawCountOf is
-  | .loop _ b :: is => rawCountOf b + rawCountOf is
-  | .if_ _ t e :: is => rawCountOf t + rawCountOf e + rawCountOf is
-  | _ :: is => rawCountOf is
-
-/-- The module's total raw count (funcs' bodies + verbatim module lines,
-    which are ALWAYS raw by construction). -/
-def Module.rawCount (m : Module) : Nat :=
-  m.items.foldl (fun n it => n +
-    match it with
-    | .func f => rawCountOf f.body
-    | .raw _ => 1
-    | _ => 0) 0
 
 end WasmBackend.Wat

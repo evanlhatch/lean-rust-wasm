@@ -102,7 +102,7 @@ theorem strict_causal_strict (F : Operator a b) (hcausal : Causal F)
 /-- Strictness extends agreement by one step through the operator. -/
 theorem agree_upto_strict_extend (S : Operator a b) (hstrict : Strict S)
     (s s' : Stream a) (n : Nat) :
-    agreeUpto n s s' → agreeUpto (n + 1) (S s) (S s') := by
+    agree_upto n s s' → agree_upto (n + 1) (S s) (S s') := by
   intro h t ht
   apply hstrict
   intro i hi
@@ -128,7 +128,7 @@ theorem fix_zero [Zero a] (F : Operator a a) : fix F 0 = F 0 0 := rfl
 /-- The heart of the fixpoint theorems: at time n, the n-th iterate, the
     fixpoint, and one more application of F all agree. -/
 private theorem nth_fix_agree_aux [Zero a] (F : Operator a a) (hstrict : Strict F)
-    (n : Nat) : agreeUpto n (nthIter F n) (fix F) ∧ agreeUpto n (fix F) (F (fix F)) := by
+    (n : Nat) : agree_upto n (nthIter F n) (fix F) ∧ agree_upto n (fix F) (F (fix F)) := by
   induction n with
   | zero =>
     rw [agree_upto_0, agree_upto_0]
@@ -140,16 +140,16 @@ private theorem nth_fix_agree_aux [Zero a] (F : Operator a a) (hstrict : Strict 
       exact h0
   | succ n ih =>
     obtain ⟨h_fix, h_unfold⟩ := ih
-    have h : agreeUpto (n + 1) (F (nthIter F n)) (F (fix F)) :=
+    have h : agree_upto (n + 1) (F (nthIter F n)) (F (fix F)) :=
       agree_upto_strict_extend F hstrict _ _ n h_fix
-    have h2 : agreeUpto (n + 1) (fix F) (F (fix F)) := by
+    have h2 : agree_upto (n + 1) (fix F) (F (fix F)) := by
       apply agree_upto_extend n _ _ h_unfold
       show fix F (n + 1) = F (fix F) (n + 1)
       show nthIter F (n + 1) (n + 1) = F (fix F) (n + 1)
       rw [nthIter_succ]
       exact h (n + 1) (Nat.le_refl _)
     constructor
-    · show agreeUpto (n + 1) (nthIter F (n + 1)) (fix F)
+    · show agree_upto (n + 1) (nthIter F (n + 1)) (fix F)
       rw [nthIter_succ]
       exact agree_trans _ _ _ h (agree_symm _ _ _ h2)
     · exact h2
@@ -192,22 +192,22 @@ theorem time_invariant_t [Zero a] [Zero b] {S : Operator a b} (h : TimeInvariant
     (s : Stream a) (t : Nat) : S (delay s) t = delay (S s) t :=
   congr_fun (h s) t
 
-/-- Causality lifts to agreement: causal operators respect `agreeUpto`. -/
-theorem causal_respects_agreeUpto (S : Operator a b) (h : Causal S)
+/-- Causality lifts to agreement: causal operators respect `agree_upto`. -/
+theorem causal_respects_agree_upto (S : Operator a b) (h : Causal S)
     (s1 s2 : Stream a) (n : Nat) :
-    agreeUpto n s1 s2 → agreeUpto n (S s1) (S s2) := by
+    agree_upto n s1 s2 → agree_upto n (S s1) (S s2) := by
   intro heq t ht
   exact h s1 s2 t (fun i hi => heq i (Nat.le_trans hi ht))
 
-/-- `Causal` restated in `agreeUpto` form (the induction-friendly shape). -/
+/-- `Causal` restated in `agree_upto` form (the induction-friendly shape). -/
 theorem causal_to_agree (S : Operator a b) :
-    Causal S ↔ (∀ s1 s2 n, agreeUpto n s1 s2 → agreeUpto n (S s1) (S s2)) :=
-  ⟨fun h => causal_respects_agreeUpto S h,
+    Causal S ↔ (∀ s1 s2 n, agree_upto n s1 s2 → agree_upto n (S s1) (S s2)) :=
+  ⟨fun h => causal_respects_agree_upto S h,
    fun h s s' t hpre => h s s' t hpre t (Nat.le_refl t)⟩
 
 /-- Agreement extends one step through a delay. -/
 theorem delay_succ_upto [Zero a] (s1 s2 : Stream a) (n : Nat) :
-    agreeUpto n s1 s2 → agreeUpto (n + 1) (delay s1) (delay s2) := by
+    agree_upto n s1 s2 → agree_upto (n + 1) (delay s1) (delay s2) := by
   intro h t ht
   cases t with
   | zero => rfl
@@ -226,7 +226,7 @@ def uncurryOp (T : Operator2 a b c) : Operator (a × b) c :=
 /-- Causality of a curried two-input operator, componentwise. -/
 theorem causal2 (T : Operator2 a b c) :
     Causal (uncurryOp T) ↔
-      (∀ s1 s1' s2 s2' n, agreeUpto n s1 s1' → agreeUpto n s2 s2' →
+      (∀ s1 s1' s2 s2' n, agree_upto n s1 s1' → agree_upto n s2 s2' →
         T s1 s2 n = T s1' s2' n) := by
   constructor
   · intro h s1 s1' s2 s2' n h1 h2
@@ -368,11 +368,11 @@ circuit DSL (`feedback_ckt_body_strict`, `feedback_ckt_unfold`,
 loop as `s ↦ fix (α ↦ T s (z⁻¹ α))`; the theorems here are what make
 that well-founded and causal. -/
 
-/-- Causal `uncurryOp T` in pointwise two-sided `agreeUpto` form. -/
+/-- Causal `uncurryOp T` in pointwise two-sided `agree_upto` form. -/
 theorem causal2_agree (T : Operator2 a b c) :
     Causal (uncurryOp T) →
-    (∀ s1 s1' s2 s2' n, agreeUpto n s1 s1' → agreeUpto n s2 s2' →
-      agreeUpto n (T s1 s2) (T s1' s2')) := by
+    (∀ s1 s1' s2 s2' n, agree_upto n s1 s1' → agree_upto n s2 s2' →
+      agree_upto n (T s1 s2) (T s1' s2')) := by
   intro hcausal s1 s1' s2 s2' n heq1 heq2 m hle
   apply (causal2 T).mp hcausal
   · exact agree_upto_weaken s1 s1' n m heq1 hle
@@ -392,7 +392,7 @@ theorem feedback_ckt_unfold [Zero b] (F : Operator b b) (hstrict : Strict F)
   fix_eq _ (feedback_ckt_body_strict F hstrict T hcausal s)
 
 /-- Feedback through a strict body is causal: the loop shape
-    `s ↦ fix (α ↦ T s (F α))` respects `agreeUpto`. -/
+    `s ↦ fix (α ↦ T s (F α))` respects `agree_upto`. -/
 theorem feedback_ckt_causal [Zero b] (F : Operator b b) (hstrict : Strict F)
     (T : Operator2 a b b) (hcausal : Causal (uncurryOp T)) :
     Causal (fun s => fix (fun α => T s (F α))) := by

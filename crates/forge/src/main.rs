@@ -236,11 +236,15 @@ fn cli_push(store: &mut oci::OciStore, args: &[String]) -> Result<(), String> {
 /// store every blob into target/oci/, and materialize the artifact at
 /// its annotated label (repo-root-relative).
 fn cli_pull(store: &mut oci::OciStore, root: &Path, args: &[String]) -> Result<(), String> {
-    let usage = "usage: forge pull <registry>/<repo>:<tag>";
-    let target = args.get(2).ok_or(usage)?;
+    let usage = "usage: forge pull <registry>/<repo>:<tag> [--allow-unchecked]";
+    let allow_unchecked = args.iter().any(|a| a == "--allow-unchecked");
+    let target = args
+        .get(2)
+        .filter(|a| !a.starts_with("--"))
+        .ok_or(usage)?;
     let (reg, tag) = registry::Registry::parse(target)?;
 
-    let pulled = reg.pull(&tag, store, root)?;
+    let pulled = reg.pull(&tag, store, root, allow_unchecked)?;
     println!(
         "forge: pull {target}: image `{}` ({} annotation[s])",
         pulled.manifest.label,
@@ -401,7 +405,12 @@ fn main() {
         }
         for (out, old) in job.outputs.iter().zip(before) {
             let new = read_if_exists(&root.join(out));
-            if old != new {
+            // THE CONTENT-ONLY COMPARE: the header = the metadata (the
+            // timestamp/git state change per regen) — the strip on both
+            // sides; the byte-tie = the content's authority.
+            let old_c = old.as_deref().map(forge::oci::OciStore::strip_header);
+            let new_c = new.as_deref().map(forge::oci::OciStore::strip_header);
+            if old_c != new_c {
                 drifted.push(out.clone());
             }
             // OCI-level byte-tie: if the store has a digest for this

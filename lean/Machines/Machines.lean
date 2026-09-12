@@ -12,3 +12,4 @@ import Machines.Trace
 import Machines.Dsl
 import Machines.Testing
 import Machines.Sync
+import Machines.Sim

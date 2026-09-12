@@ -42,4 +42,4 @@ import Substrait.Typed
 import Substrait.Eval
 import Substrait.Emit
 import Substrait.Decode
-import Substrait.Substrait.Grammar
+import Substrait.Grammar

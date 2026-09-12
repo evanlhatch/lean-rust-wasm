@@ -23,7 +23,6 @@ import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Pipeline
 import SchemaLang.Emit.Wit
-import SchemaLang.Observe
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
 import SchemaLang.Emit.WitFixture

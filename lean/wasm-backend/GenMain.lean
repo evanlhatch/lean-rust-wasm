@@ -91,11 +91,6 @@ def targetDeclsOf (env : Environment) : Array Name :=
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm (targetDecls : Array Name) (gm : CodegenCore.Emit.GenMeta) : CoreM String := do
   Lean.Compiler.LCNF.main targetDecls {}
-  let mut decls : List (Lean.Compiler.LCNF.Decl .impure) := []
-  for n in targetDecls do
-    if let some d ← Lean.Compiler.LCNF.getLocalImpureDecl? n then
-      decls := d :: decls
-  decls := decls.reverse
   -- Closure constants + lambdas: `_closed`/`_lam` decls (holding the
   -- paps) are generated IN-PROCESS by the re-run — never in the imported
   -- env. Include every impure decl UNDER a target's namespace.

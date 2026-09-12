@@ -143,22 +143,13 @@ theorem run_length_le (c : Convergent m) :
     simp
   | cons l rest ih =>
     intro tr fin h
-    simp only [Machine.run] at h
-    split at h
-    · next => contradiction
-    · next s' hs =>
-      split at h
-      · next => contradiction
-      · next tr' fin' hr =>
-        obtain ⟨rfl, rfl⟩ := by simpa using h
-        rw [Machine.step?_eq] at hs
-        split at hs
-        · next hg =>
-          have hdec : c.variant s' < c.variant s := (Option.some.inj hs) ▸ c.decreases s l hg
-          have hih := ih s' tr' fin' hr
-          simp only [List.length_cons]
-          omega
-        · next => simp at hs
+    obtain ⟨s', tr', fin', hs, hr, htr, hfin⟩ := Machine.run_cons_some m h
+    subst htr hfin
+    obtain ⟨hg, hact⟩ := Machine.step?_eq_some m hs
+    have hdec : c.variant s' < c.variant s := hact ▸ c.decreases s l hg
+    have hih := ih s' tr' fin hr
+    simp only [List.length_cons]
+    omega
 
 /-- THE bound: a convergent machine's successful runs are length-bounded by
     the starting variant. No diverging run exists — every step strictly

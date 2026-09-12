@@ -32,7 +32,7 @@ row in `scalarGrammar`, and both directions follow.
 
 import Substrait.Proto.Type
 
-namespace Substrait.Substrait
+namespace Substrait.Grammar
 
 open Substrait.Proto
 
@@ -212,4 +212,4 @@ theorem TCtor.prefix_unique (t₁ t₂ : TCtor) (cs : List Char)
       | (rename_i b; cases b <;> exact clash h1 h2 (by decide) (by decide))
 
 
-end Substrait.Substrait
+end Substrait.Grammar

@@ -18,6 +18,14 @@ rev = "v4.33.0"
 name = "TestKit"
 path = "../TestKit"
 
+# The change-structure classes (Change/Difference/ChangeInversion/Noc +
+# the groupSelf instances) live in Dbsp.ChangeSpec — LinearMachine used
+# to re-declare them (no dbsp dependency); the direction now allows the
+# import, and copies delete.
+[[require]]
+name = "Dbsp"
+path = "../dbsp"
+
 [[lean_lib]]
 name = "Machines"
 roots = ["Machines"]
@@ -31,7 +39,7 @@ root = "Tests.Main"
 # D12: gonzalgo — the axiom-provenance/dependency dump behind `just lean-trust`.
 [[require]]
 name = "gonzalgo"
-git = "https://github.com/vince-gonzalez/gonzalgo"
+git = "../../vendor/gonzalgo.bundle"
 rev = "7e67f77292685c0e295027b530349e3c664a2758"
 
 # The conformance battery (Machines.Testing) uses the shared harness.

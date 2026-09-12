@@ -1,0 +1,4 @@
+{
+  "spec-modules": ["Thing"],
+  "impl-modules": ["Thing", "ThingFn"]
+}

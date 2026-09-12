@@ -30,7 +30,8 @@ containing them is rejected with an `Except` error — this emitter is
 intentionally strict, matching the parser's hard-failure style.
 -/
 import Substrait.Proto.Plan
-import Substrait.Substrait.Grammar
+import Substrait.Grammar
+open Substrait.Grammar
 
 namespace Substrait.Emit.Text
 
@@ -95,26 +96,26 @@ mutual
   /-- The *outer* shape of a `Proto.PType` — `bool i8 … binary`, `decimal<P,S>`,
   `list<T>`, `map<K,V>`, `struct<T,…>`.  User-defined types cannot be rendered
   without a registry (extensions-only); they hard-error here.  The scalar
-  prefixes come from `Substrait.ScalarCtor.prefix` — the SAME table the
+  prefixes come from `ScalarCtor.prefix` — the SAME table the
   decoder's `parseScalarType` folds, so emitter and parser cannot drift. -/
   def typeTextBase : Proto.PType → Except String String
-    | .bool _         => pure (Substrait.ScalarCtor.prefix .bool)
-    | .i8 _           => pure (Substrait.ScalarCtor.prefix .i8)
-    | .i16 _          => pure (Substrait.ScalarCtor.prefix .i16)
-    | .i32 _          => pure (Substrait.ScalarCtor.prefix .i32)
-    | .i64 _          => pure (Substrait.ScalarCtor.prefix .i64)
-    | .fp32 _         => pure (Substrait.ScalarCtor.prefix .fp32)
-    | .fp64 _         => pure (Substrait.ScalarCtor.prefix .fp64)
-    | .string _       => pure (Substrait.ScalarCtor.prefix .string)
-    | .binary _       => pure (Substrait.ScalarCtor.prefix .binary)
-    | .decimal p s _  => pure (Substrait.TCtor.prefix .decimal ++ toString p ++ "," ++ toString s ++ ">")
-    | .list e _       => do let es ← typeText e; pure (Substrait.TCtor.prefix .list ++ es ++ ">")
+    | .bool _         => pure (ScalarCtor.prefix .bool)
+    | .i8 _           => pure (ScalarCtor.prefix .i8)
+    | .i16 _          => pure (ScalarCtor.prefix .i16)
+    | .i32 _          => pure (ScalarCtor.prefix .i32)
+    | .i64 _          => pure (ScalarCtor.prefix .i64)
+    | .fp32 _         => pure (ScalarCtor.prefix .fp32)
+    | .fp64 _         => pure (ScalarCtor.prefix .fp64)
+    | .string _       => pure (ScalarCtor.prefix .string)
+    | .binary _       => pure (ScalarCtor.prefix .binary)
+    | .decimal p s _  => pure (TCtor.prefix .decimal ++ toString p ++ "," ++ toString s ++ ">")
+    | .list e _       => do let es ← typeText e; pure (TCtor.prefix .list ++ es ++ ">")
     | .map k v _      => do
         let ks ← typeText k; let vs ← typeText v
-        pure (Substrait.TCtor.prefix .map ++ ks ++ ", " ++ vs ++ ">")
+        pure (TCtor.prefix .map ++ ks ++ ", " ++ vs ++ ">")
     | .struct fs _    => do
         let f' ← fs.mapM (fun t => typeText t)
-        pure (Substrait.TCtor.prefix .struct ++ sep ", " f' ++ ">")
+        pure (TCtor.prefix .struct ++ sep ", " f' ++ ">")
     | .userDefined anchor _ _ =>
         throw s!"cannot emit user-defined type with anchor {anchor} (no extension registry in Emit.Text)"
 
@@ -134,10 +135,10 @@ end
     prefix — the same table `Decode.parseScalarType` folds. The decode∘emit
     round-trip now goes through ONE shared definition on both sides; a table
     edit moves emitter and parser together, and this theorem tracks it. -/
-theorem typeTextBase_scalar (c : Substrait.ScalarCtor) (n : Proto.Nullability) :
-    typeTextBase (Substrait.ScalarCtor.toPType c n) = .ok (Substrait.ScalarCtor.prefix c) := by
-  cases c <;> simp [typeTextBase, Substrait.ScalarCtor.toPType,
-    Substrait.ScalarCtor.prefix]
+theorem typeTextBase_scalar (c : ScalarCtor) (n : Proto.Nullability) :
+    typeTextBase (ScalarCtor.toPType c n) = .ok (ScalarCtor.prefix c) := by
+  cases c <;> simp [typeTextBase, ScalarCtor.toPType,
+    ScalarCtor.prefix]
   all_goals rfl
 
 /-- A single `Proto.PParam`. -/
@@ -241,16 +242,24 @@ def typeSuffix (t : Proto.PType) : Except String String := do
   let ts ← typeText t
   pure (":" ++ ts)
 
+/-- A scalar-function call renders as `name(args...)suffix` — shared by
+    `expr`'s `.scalarFunction` arm and `measure`. `rec` = the caller's
+    expression recursion (broken out so the helper can live next to
+    `measure`, below `expr`, without a mutual block). -/
+def callText (ctx : Ctx) (rec : Proto.Expression → Except String String)
+    (anchor : Nat) (args : List Proto.Expression)
+    (out : Proto.PType) : Except String String := do
+  let na ← Ctx.functionName ctx anchor
+  let as' ← args.mapM rec
+  let fs ← typeSuffix out
+  pure (na ++ "(" ++ sep ", " as' ++ ")" ++ fs)
+
 /-- Render any expression. -/
 -- v0: emitter; totality not required
 partial def expr (ctx : Ctx) : Proto.Expression → Except String String
   | .literal lit   => literal lit
   | .field ref     => pure (fieldRef ref.ordinal)
-  | .scalarFunction fr args out => do
-      let na ← Ctx.functionName ctx fr
-      let as' ← args.mapM (fun e => expr ctx e)
-      let fs ← typeSuffix out
-      pure (na ++ "(" ++ sep ", " as' ++ ")" ++ fs)
+  | .scalarFunction fr args out => callText ctx (expr ctx) fr args out
   | .ifThen ifs elseE => do
       let cs ← ifs.mapM (fun (ifc, thenc) => do
         let i ← expr ctx ifc; let t ← expr ctx thenc
@@ -265,11 +274,8 @@ partial def expr (ctx : Ctx) : Proto.Expression → Except String String
   | .subquery _ _  => throw "cannot emit subqueries in the text format"
 
 /-- An aggregate measure renders like a scalar function. -/
-def measure (ctx : Ctx) (m : Proto.AggregateFunction) : Except String String := do
-  let na ← Ctx.functionName ctx m.functionReference
-  let as' ← m.args.mapM (expr ctx)
-  let fs ← typeSuffix m.outputType
-  pure (na ++ "(" ++ sep ", " as' ++ ")" ++ fs)
+def measure (ctx : Ctx) (m : Proto.AggregateFunction) : Except String String :=
+  callText ctx (expr ctx) m.functionReference m.args m.outputType
 
 
 /-! ## Relation rendering -/
@@ -320,9 +326,6 @@ def outputClause (implicit : Bool) (cols : List Col) (emit : Option Proto.EmitKi
     | some .direct    => pure ("+> " ++ direct)
     | some (.emit m)  => pure ("+> " ++ direct ++ " |> " ++ sep ", " (m.map fieldRef))
 
-/-- The output width of a join for a join type. -/
-def joinWidth (jt : Proto.JoinType) (l rw : Nat) : Nat := jt.width l rw
-
 /-- The empty group argument display: `_`. -/
 def emptyGroup : String := "_"
 
@@ -341,7 +344,7 @@ partial def relWidth : Proto.Rel → Except String Nat
   | .fetch r     => relWidth r.input
   | .join r      => do
       let l ← relWidth r.left; let rw ← relWidth r.right
-      pure (joinWidth r.joinType l rw)
+      pure (r.joinType.width l rw)
   | .cross r     => do let l ← relWidth r.left; let rw ← relWidth r.right; pure (l + rw)
   | .set r       => do
       if r.inputs.isEmpty then pure 0
@@ -381,6 +384,22 @@ def sortDirName : Proto.SortDirection → String
   | .clustered       => "Clustered"
   | .unspecified     => "Unspecified"  -- the caller rejects Unspecified instead
 
+/-- A rel's output clause over its full width of indirect refs — the
+    Filter/Sort/Fetch arms' shared piece (a ref-clause with no mapping).
+    -/
+def refOutput (w : Nat) (common : Option Proto.RelCommon) : Except String String :=
+  outputClause true ((List.range w).map .ref) (emitOf common)
+
+/-- A rel's header over its indented child's lines — the unary-rel arms'
+    shared `child` recursion (the `rec`-style: the caller passes
+    `relLines` itself, breaking what would otherwise be a helper⇄relLines
+    cycle). -/
+def wrapChild (rec : Ctx → String → Proto.Rel → Except String (List String))
+    (ctx : Ctx) (indent : String) (input : Proto.Rel) (header : String) :
+    Except String (List String) := do
+  let child ← rec ctx (indent ++ "  ") input
+  pure ([header] ++ child)
+
 /-- Render a relation (headers + children) as indented lines. -/
 -- v0: emitter; totality not required
 partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String (List String)
@@ -403,9 +422,8 @@ partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String
   | .filter r => do
       let c ← expr ctx r.condition
       let w ← relWidth r.input
-      let out ← outputClause true ((List.range w).map .ref) (emitOf r.common)
-      let child ← relLines ctx (indent ++ "  ") r.input
-      pure ([indent ++ "Filter[" ++ c ++ " " ++ out ++ "]"] ++ child)
+      let out ← refOutput w r.common
+      wrapChild relLines ctx indent r.input (indent ++ "Filter[" ++ c ++ " " ++ out ++ "]")
   | .project r => do
       let w ← relWidth r.input
       let ex ← r.expressions.mapM (expr ctx)
@@ -438,23 +456,21 @@ partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String
         | .unspecified => throw "cannot emit Unspecified sort direction in the text format"
         | d => pure ("(" ++ rn ++ ", &" ++ sortDirName d ++ ")"))
       let w ← relWidth r.input
-      let out ← outputClause true ((List.range w).map .ref) (emitOf r.common)
-      let child ← relLines ctx (indent ++ "  ") r.input
-      pure ([indent ++ "Sort[" ++ sep ", " sortArgs ++ " " ++ out ++ "]"] ++ child)
+      let out ← refOutput w r.common
+      wrapChild relLines ctx indent r.input (indent ++ "Sort[" ++ sep ", " sortArgs ++ " " ++ out ++ "]")
   | .fetch r => do
       let named : List String :=
         (r.limit.map (fun n => "limit=" ++ toString n)).toList ++
         (r.offset.map (fun n => "offset=" ++ toString n)).toList
       let argsText := if named.isEmpty then emptyGroup else sep ", " named
       let w ← relWidth r.input
-      let out ← outputClause true ((List.range w).map .ref) (emitOf r.common)
-      let child ← relLines ctx (indent ++ "  ") r.input
-      pure ([indent ++ "Fetch[" ++ argsText ++ " " ++ out ++ "]"] ++ child)
+      let out ← refOutput w r.common
+      wrapChild relLines ctx indent r.input (indent ++ "Fetch[" ++ argsText ++ " " ++ out ++ "]")
   | .join r => do
       let jt ← joinTypeName r.joinType
       let c ← expr ctx r.condition
       let l ← relWidth r.left; let rw ← relWidth r.right
-      let total := joinWidth r.joinType l rw
+      let total := r.joinType.width l rw
       let out ← outputClause true ((List.range total).map .ref) (emitOf r.common)
       let childL ← relLines ctx (indent ++ "  ") r.left
       let childR ← relLines ctx (indent ++ "  ") r.right

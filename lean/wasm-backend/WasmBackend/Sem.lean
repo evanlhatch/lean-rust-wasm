@@ -22,8 +22,11 @@ THE FRAGMENT vs REAL WEBASSEMBLY (the honesty ledger):
   unreachable, and a one-byte bounded store (`i32store8`) as the
   memory-ops representative.
 * NOT MODELED (documented exclusions, not oversights): floats, SIMD,
-  threads, tables/call/call_indirect (the call layer is a separate
-  seam), integer div/rem (their `trap` is the only missing trap),
+  threads, tables/call_indirect (the funcref-table dispatch — the
+  follow-up; DIRECT calls are modeled since the calls layer: the
+  `The calls layer` section, v1 = CALLS as FUNCTION-COMPOSITION, no
+  call-frames), integer div/rem (their `trap` is the only missing
+  trap),
   multi-value blocks (frames are no-result: a frame body must END at
   the frame's entry type — `checkFrame`), memory beyond one byte per
   store, data segments, globals, static branch-DEPTH validation (a
@@ -1055,20 +1058,502 @@ def progOOB : List Instr := [.i32const 100, .i32const 1, .i32store8]
 
 end Tests
 
-/-! ## The calls layer — the scope decision (the translation-
-     correctness lane's calls/closures slice)
+/-! ## The calls layer (v1) — CALLS as FUNCTION-COMPOSITION
 
-`Instr` has NO `call`/`call_indirect` and `State` has NO call-frames —
-the machine is FLAT (v1, deliberate): adding the call-stack is the big
-model change (the next seam). The calls/closures correctness slice
-takes the honest v1 path and does NOT extend this machine; it proves
-the CALLING CONVENTION as a contract theorem in `WasmBackend.Correct`:
-the caller's call-prep (the pushes) composed with the callee's entry
-prologue (the binding pops, modeled as `local.set`s from the stack)
-passes each value through — the stack agreement = the prologue. The
-missing frame separation appears there as the param-locals'
-pairwise-distinctness hypotheses (the flat model's honest stand-in).
-This section is documentation only — no defs, no statements change.
+THE SCOPE DECISION (the CALL-SEMANTICS lane's): the previous slice
+proved the CALLING CONVENTION as a CONTRACT theorem in
+`WasmBackend.Correct` (the caller's prep + the callee's prologue = the
+values-through) over the FLAT machine — `Instr` had NO call and
+`State` NO frames. This section puts CALLS in the model, v1, WITHOUT
+touching the flat machine: NO `Instr.call` constructor (it would break
+`checkStack`/`exec_typed`'s exhaustive cases — the proven core is
+statement-frozen), NO `State` frames. Instead the call is a BIG-STEP
+OPERATOR at the program level: `callExecFuel f args s` runs the callee
+`f : Fn` (arity + body — the callee IS the code; no module table) as a
+SUB-EXEC of the caller's state with the args BOUND to the callee's
+param locals (`bindArgs`) and the args POPPED off the operand stack
+(wasm's `call` operand order: the args are pushed in order, param 0
+DEEPEST; the call pops them — top-first — into the params).
+
+`call_split` is the SEMANTIC version of Correct.lean's contract
+theorems: the caller's flat program — the arg pushes (`pushArgs`), the
+binding pops as `local.set`s (`popParams`), then the callee's body —
+EXECUTES EXACTLY AS the big-step `callExecFuel`. The convention is no
+longer a contract about two lists; it is a program EQUALITY with the
+callee appended, and the end-to-end theorems (`call_exec_correct`, the
+trampoline demo) compose it.
+
+THE HONEST LIMITS (v1, documented):
+
+* NO CALL-FRAMES: the callee's param locals are a locals-OVERRIDE of
+  the caller's state (params = locals 0..arity-1). The frame
+  separation is exactly Correct.lean's pairwise-distinctness
+  hypotheses, now BUILT INTO `bindArgs`. A callee that clobbers its
+  params sees only its own args — but a caller that keeps live values
+  in locals 0..arity-1 across a call is OUTSIDE the v1 fragment
+  (the emitter's calls never do: the caller's live values sit above
+  the args on the stack / in higher locals).
+* NON-RECURSIVE ONLY: the sub-exec budget is THIS call's fuel — a
+  self-recursive callee re-enters with the SAME remaining fuel inside
+  one `execList` and exhausts it (surfacing as `outOfFuel`, never a
+  wrong answer). Real call-frames are the follow-up.
+* DIRECT CALLS ONLY: `Fn` is the callee's code — there is no funcref
+  table, so `call_indirect` (the golden's real dispatch) is the
+  follow-up. The trampoline demo below models the DIRECT hop
+  (`call $curried._boxed` in the golden's `pap_curried._boxed_1`).
+* WRONG ARITY = TRAP: `callExecFuel` guards `args.length = f.params`
+  (the v1 stand-in for the validator's static arity check — the flat
+  checker is shape-only and cannot see arity; the flat COMPOSED
+  program with a short prep surfaces it as `underflow` instead — both
+  pinned in the tests).
 -/
+
+namespace Calls
+
+/-! ### The callee: a function record (arity + body) -/
+
+/-- A function: the arity (the param count = the callee's locals
+    0..arity-1) and the body (the flat instruction list). v1's callee —
+    the Fn value IS the code; the module-level function table (the
+    `FnRef` → record map that `call_indirect` dispatches through) is
+    the follow-up. -/
+structure Fn where
+  /-- The number of params the callee binds (locals 0..params-1). -/
+  params : Nat
+  /-- The callee's body. -/
+  body : List Instr
+
+/-! ### The call's two faces -/
+
+/-- Drop the bottom `n` entries of a stack (head = TOP): the args sit
+    DEEPEST, so the call's pop removes them from the bottom. -/
+def dropBottom (n : Nat) (l : List Val) : List Val :=
+  (l.reverse.drop n).reverse
+
+/-- The callee's entry state: the args bound to the param locals
+    (param i = the i-th PUSHED value = `args[i]` — wasm's `call`
+    binds param i to the i-th operand) and the args popped off the
+    stack (bottom removal). Out-of-range locals pass through — the
+    arity guard in `callExecFuel` is what makes `params` the truth. -/
+def bindArgs (args : List Val) (s : State) : State :=
+  { s with locals := fun n => args.getD n (s.locals n)
+         , stack := dropBottom args.length s.stack }
+
+/-- THE CALL (fuel-explicit big step): arity-guarded, then the
+callee's body runs as a SUB-EXEC from the bound state. Wrong arity =
+the trap (the v1 stand-in for the validator's static check). -/
+def callExecFuel (fuel : Nat) (f : Fn) (args : List Val) (s : State) :
+    Except Err State :=
+  if args.length = f.params
+  then execList fuel (bindArgs args s) f.body
+  else .error .trap
+
+/-- THE CALL at the top-level budget (`exec`'s fuel). -/
+def callExec (f : Fn) (args : List Val) (s : State) : Except Err State :=
+  callExecFuel defaultFuel f args s
+
+/-- THE ARITY GUARD: a wrong-arity call is the trap — never a silent
+    mis-bind (the checker is shape-only and cannot see arity; this
+    guard is the machine's own). -/
+theorem callExecFuel_arity_trap (fuel : Nat) (f : Fn) (args : List Val)
+    (s : State) (h : args.length ≠ f.params) :
+    callExecFuel fuel f args s = .error .trap := by
+  simp [callExecFuel, h]
+
+/-! ### The caller's side: the prep and the binding as FLAT programs -/
+
+/-- The value → const push. -/
+def constOf : Val → Instr
+  | .i32 n => .i32const n
+  | .i64 n => .i64const n
+
+/-- The caller's CALL-PREP: push the args IN ORDER — param 0 deepest
+    (the golden trampolines' order: the closure ptr first, then the
+    fresh args; Correct.lean's `tplCallPrep1/2`). -/
+def pushArgs : List Val → List Instr
+  | [] => []
+  | a :: as => constOf a :: pushArgs as
+
+/-- The call's BINDING as flat instructions: pop the args TOP-first
+    into the param locals — the LAST pushed = the HIGHEST param
+    (param i = the i-th pushed). For k params:
+    `[local.set k-1, …, local.set 0]`. -/
+def popParams : Nat → List Instr
+  | 0 => []
+  | k + 1 => .localset k :: popParams k
+
+/-! ### The split theorems -/
+
+/-- `getD` on a one-element append: the appended element is the
+    length-indexed lookup (the calls layer's helper — core has no
+    `getD_append`). -/
+theorem getD_append_single {r d : Val} :
+    ∀ (l : List Val) (m : Nat), (l ++ [r]).getD m d
+      = if m < l.length then l.getD m d
+        else if m = l.length then r else d := by
+  intro l
+  induction l with
+  | nil => intro m; cases m <;> simp
+  | cons x xs ih =>
+    intro m
+    cases m with
+    | zero => simp
+    | succ m =>
+      have h := ih m
+      by_cases hm : m < xs.length
+      · simp [List.getD, List.getElem?_cons_succ, List.getElem?_append,
+          List.length_cons, h, hm]
+      · by_cases he : m = xs.length
+        · simp [List.getD, List.getElem?_cons_succ, List.getElem?_append,
+            List.length_cons, h, he]
+        · have h1 : ¬ m < xs.length := by omega
+          simp [List.getD, List.getElem?_cons_succ, List.getElem?_append,
+            List.length_cons, h, he, h1]
+          rw [List.getElem?_eq_none (by simp; omega), Option.getD_none]
+
+/-- The push phase: `pushArgs ++ rest` executes as `rest` from the
+    stack `args.reverse ++ s.stack` (the args pushed in order, param 0
+    deepest), one fuel unit per arg. -/
+theorem pushArgs_exec (args : List Val) :
+    ∀ (fuel : Nat) (rest : List Instr) (s : State), args.length < fuel →
+      execList fuel s (pushArgs args ++ rest)
+        = execList (fuel - args.length)
+            { s with stack := args.reverse ++ s.stack } rest := by
+  induction args with
+  | nil =>
+    intro fuel rest s hf
+    cases fuel with
+    | zero => simp at hf
+    | succ n => simp [pushArgs, execList]
+  | cons a as ih =>
+    intro fuel rest s hf
+    cases fuel with
+    | zero => simp at hf
+    | succ n =>
+      simp only [List.length_cons] at hf
+      simp only [pushArgs, List.cons_append, execList, List.length_cons]
+      cases a with
+      | i32 c =>
+        simp only [step, constOf, List.reverse_cons, List.append_assoc]
+        rw [show n + 1 - (as.length + 1) = n - as.length from by omega]
+        exact ih n rest { s with stack := .i32 c :: s.stack } (by omega)
+      | i64 c =>
+        simp only [step, constOf, List.reverse_cons, List.append_assoc]
+        rw [show n + 1 - (as.length + 1) = n - as.length from by omega]
+        exact ih n rest { s with stack := .i64 c :: s.stack } (by omega)
+
+/-- The pop phase (stated over the args' STACK IMAGE `rs` — head =
+    top): `popParams rs.length ++ rest` executes as `rest` from the
+    state with the args bound to the param locals (`rs.reverse` = the
+    args in push order) and the stack drained to `bot`, one fuel unit
+    per pop. This is Correct.lean's convention contract as a program
+    EQUALITY. -/
+theorem popParams_exec (rs : List Val) :
+    ∀ (fuel : Nat) (rest : List Instr) (bot : List Val) (s : State),
+      s.stack = rs ++ bot → rs.length < fuel →
+      execList fuel s (popParams rs.length ++ rest)
+        = execList (fuel - rs.length)
+            { s with locals := fun n => rs.reverse.getD n (s.locals n)
+                   , stack := bot } rest := by
+  induction rs with
+  | nil =>
+    intro fuel rest bot s hs hf
+    cases fuel with
+    | zero => simp at hf
+    | succ n =>
+      rw [List.nil_append] at hs
+      subst hs
+      have hloc : (fun m => ([] : List Val).reverse.getD m (s.locals m))
+          = s.locals := by funext m; simp
+      simp [popParams, execList, hloc]
+  | cons r rs ih =>
+    intro fuel rest bot s hs hf
+    cases fuel with
+    | zero => simp at hf
+    | succ n =>
+      simp only [List.length_cons] at hf
+      -- the head of the `rs ++ bot`-shaped stack is `r` (the top arg
+      -- = the HIGHEST param); `localset rs.length` binds it, then the
+      -- IH binds the rest into locals rs.length-1 … 0.
+      have hstep : execList (n + 1) s
+            (.localset rs.length :: (popParams rs.length ++ rest))
+          = execList n
+              { s with locals := fun m => if m = rs.length then r else s.locals m
+                     , stack := rs ++ bot }
+              (popParams rs.length ++ rest) := by
+        simp only [execList, step, hs, List.cons_append]
+      simp only [List.length_cons, popParams, List.cons_append, hstep]
+      have hI := ih n rest bot
+        { s with locals := fun m => if m = rs.length then r else s.locals m
+                , stack := rs ++ bot } rfl (by omega)
+      simp only [hI]
+      -- the composed locals: param binding = `rs.reverse ++ [r]`'s getD
+      have hfun : ∀ m, rs.reverse.getD m
+                      ((fun k => if k = rs.length then r else s.locals k) m)
+          = (rs.reverse ++ [r]).getD m (s.locals m) := by
+        intro m
+        rw [getD_append_single]
+        simp only [List.getD]
+        by_cases hm : m < rs.length
+        · have h2 : m ≠ rs.length := by omega
+          simp [hm, h2, List.length_reverse]
+        · by_cases hme : m = rs.length
+          · have hrn : rs.reverse.length = rs.length := by simp
+            have hnone : rs.reverse[m]? = none :=
+              List.getElem?_eq_none (by rw [hrn]; exact Nat.le_of_eq hme.symm)
+            simp [hme, hrn, hnone]
+          · have h1 : ¬ m < rs.length := by omega
+            have h3 : m ≠ rs.reverse.length := by
+              rw [List.length_reverse]; exact hme
+            have hrn : rs.reverse.length = rs.length := by simp
+            have hnone : rs.reverse[m]? = none :=
+              List.getElem?_eq_none (by rw [hrn]; exact Nat.le_of_not_lt h1)
+            simp [h1, hme, h3, hrn, hnone]
+      rw [show n + 1 - (rs.length + 1) = n - rs.length from by omega]
+      simp only [hfun, List.reverse_cons]
+
+/-- THE SPLIT THEOREM — the calls layer's central equality, the
+    SEMANTIC version of Correct.lean's `call_convention*` contract
+    theorems: the caller's FLAT program (the arg pushes, the binding
+    pops, then the callee's body) executes EXACTLY AS the big-step
+    call (bind the args, run the body as a sub-exec). The convention
+    is now a program equality with the callee appended, not a contract
+    about two lists. -/
+theorem call_split (fuel : Nat) (f : Fn) (args : List Val) (s : State)
+    (harity : args.length = f.params) (hs : s.stack = [])
+    (hf : 2 * args.length < fuel) :
+    execList fuel s (pushArgs args ++ (popParams args.length ++ f.body))
+      = callExecFuel (fuel - 2 * args.length) f args s := by
+  have h1 := pushArgs_exec args fuel (popParams args.length ++ f.body) s (by omega)
+  rw [h1]
+  simp only [hs, List.append_nil]
+  have h2 := popParams_exec args.reverse (fuel - args.length) f.body []
+    { s with stack := args.reverse }
+    (by simp [List.append_nil]) (by simp; omega)
+  simp only [List.length_reverse] at h2
+  rw [h2]
+  -- both sides: the bound state, the callee's body
+  have hfin : fuel - args.length - args.length = fuel - 2 * args.length := by omega
+  rw [hfin]
+  have hstack : ((s.stack.reverse.drop args.length).reverse) = [] := by
+    rw [hs]; simp
+  have hloc : ∀ n, args.reverse.reverse.getD n (s.locals n)
+      = args.getD n (s.locals n) := by
+    intro n; simp
+  simp only [callExecFuel]
+  rw [if_pos harity]
+  simp only [bindArgs, dropBottom, hstack, hloc]
+
+/-! ### The end-to-end theorems -/
+
+/-- The adder callee — the golden's `curried._boxed` shape (the
+    trampoline's target): the two params summed; the result = the
+    final stack's top (the return convention). -/
+def adderFn : Fn := { params := 2, body := [.localget 0, .localget 1, .i64add] }
+
+/-- THE CALL-EXECUTION THEOREM: the caller's prep (the args' pushes),
+    the call's binding (the pops), and the callee's body compose to
+    compute the CALLEE's result on the caller's stack — the args go
+    IN, the callee-computed sum comes OUT. Symbolic args, arbitrary
+    initial state, kernel-checked. -/
+theorem call_exec_correct (fuel : Nat) (a b : UInt64) (s : State)
+    (hs : s.stack = []) (hf : 2 * 2 + 4 ≤ fuel) :
+    ∃ s', execList fuel s
+        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ adderFn.body))
+      = .ok s' ∧ s'.stack = [.i64 (a + b)] := by
+  have h := call_split fuel adderFn [.i64 a, .i64 b] s rfl hs
+    (by have hl : ([.i64 a, .i64 b] : List Val).length = 2 := rfl; omega)
+  simp only [List.length_cons, List.length_nil] at h
+  simp only [h]
+  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 8 := ⟨fuel - 8, by omega⟩
+  simp only [callExecFuel, adderFn, List.length_cons, List.length_nil]
+  rw [show m + 8 - 2 * 2 = m + 4 from by omega]
+  simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil,
+    List.reverse_reverse]
+  simp only [execList, step, List.getD, List.getElem?_cons_zero,
+    List.getElem?_cons_succ, Option.getD_some]
+  refine ⟨_, rfl, ?_⟩
+  rw [UInt64.add_comm]
+
+/-- The first-param callee (returns param 0 — exposes the binding;
+    the negative control's target). -/
+def head0Fn : Fn := { params := 2, body := [.localget 0] }
+
+/-- The convention's POSITIVE pin at the machine level (the head0
+    callee): the correctly-ordered prep delivers param 0 = the FIRST
+    arg — the mirror of `call_prep_swapped`. -/
+theorem call_prep_ok (fuel : Nat) (a b : UInt64) (s : State)
+    (hs : s.stack = []) (hf : 2 * 2 + 2 ≤ fuel) :
+    ∃ s', execList fuel s
+        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ head0Fn.body))
+      = .ok s' ∧ s'.stack = [.i64 a] := by
+  have h := call_split fuel head0Fn [.i64 a, .i64 b] s rfl hs
+    (by have hl : ([.i64 a, .i64 b] : List Val).length = 2 := rfl; omega)
+  simp only [List.length_cons, List.length_nil] at h
+  simp only [h]
+  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 6 := ⟨fuel - 6, by omega⟩
+  simp only [callExecFuel, head0Fn, List.length_cons, List.length_nil]
+  rw [show m + 6 - 2 * 2 = m + 2 from by omega]
+  simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil,
+    List.reverse_reverse]
+  simp only [execList, step, List.getD, List.getElem?_cons_zero,
+    Option.getD_some]
+  exact ⟨_, rfl, rfl⟩
+
+/-- THE NEGATIVE CONTROL (the arg-order swap — the calling-convention
+    bug class, now at the MACHINE level): pushing the args in REVERSE
+    order binds param 0 = the LAST arg, and the callee computes on the
+    swapped binding. Same input state, different result — the
+    checker cannot see it (shape-only); the disagreement is a theorem
+    (`call_prep_swapped_disagrees`). -/
+theorem call_prep_swapped (fuel : Nat) (a b : UInt64) (s : State)
+    (hs : s.stack = []) (hf : 2 * 2 + 2 ≤ fuel) :
+    ∃ s', execList fuel s
+        (pushArgs [.i64 b, .i64 a] ++ (popParams 2 ++ head0Fn.body))
+      = .ok s' ∧ s'.stack = [.i64 b] := by
+  have h := call_split fuel head0Fn [.i64 b, .i64 a] s rfl hs
+    (by have hl : ([.i64 b, .i64 a] : List Val).length = 2 := rfl; omega)
+  simp only [List.length_cons, List.length_nil] at h
+  simp only [h]
+  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 6 := ⟨fuel - 6, by omega⟩
+  simp only [callExecFuel, head0Fn, List.length_cons, List.length_nil]
+  rw [show m + 6 - 2 * 2 = m + 2 from by omega]
+  simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil,
+    List.reverse_reverse]
+  simp only [execList, step, List.getD, List.getElem?_cons_zero,
+    Option.getD_some]
+  exact ⟨_, rfl, rfl⟩
+
+/-- THE NEGATIVE INSTANCE: the swapped prep DISAGREES with the
+    convention — same input state, different result stack. If a
+    regression re-swapped the arg pushes, this theorem's shape is what
+    the differential duel's sabotage control checks empirically. -/
+theorem call_prep_swapped_disagrees (fuel : Nat) (a b : UInt64) (s : State)
+    (hs : s.stack = []) (hAB : a ≠ b) (hf : 2 * 2 + 3 ≤ fuel) :
+    (match execList fuel s
+        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ head0Fn.body)) with
+     | .ok s' => s'.stack | .error _ => [])
+      ≠ (match execList fuel s
+        (pushArgs [.i64 b, .i64 a] ++ (popParams 2 ++ head0Fn.body)) with
+     | .ok s' => s'.stack | .error _ => []) := by
+  obtain ⟨s1, h1, h1s⟩ := call_prep_ok fuel a b s hs (by omega)
+  obtain ⟨s2, h2, h2s⟩ := call_prep_swapped fuel a b s hs (by omega)
+  intro hEq
+  rw [h1, h2] at hEq
+  simp only at hEq
+  rw [h1s, h2s] at hEq
+  injection hEq with hA hE1
+  injection hA with hABeq
+  exact hAB hABeq
+
+/-! ### The trampoline demo (the golden's DIRECT hop) -/
+
+/-- The trampoline's target — the golden's `curried._boxed` shape:
+    the 3 params (the closure's partial + the 2 fresh) summed. -/
+def curriedBoxedFn : Fn :=
+  { params := 3
+    body := [.localget 1, .localget 2, .i64add, .localget 0, .i64add] }
+
+/-- THE TRAMPOLINE DEMO (the golden's `pap_curried._boxed_1` hop): the
+    trampoline's forward = the caller's prep with the partial arg
+    DEEPEST (the value `local.get $c; i32.load offset=16` delivers —
+    the LOAD is the excluded memory layer, pinned as an explicit
+    value) + the fresh args IN ORDER, then the DIRECT call (v1 models
+    `call`, not `call_indirect` — the funcref table is the follow-up).
+    The hop computes the target's sum of the three delivered args.
+    Kernel-checked. -/
+theorem trampoline_call_ok (fuel : Nat) (p a b : UInt64) (s : State)
+    (hs : s.stack = []) (hf : 2 * 3 + 6 ≤ fuel) :
+    ∃ s', execList fuel s
+        (pushArgs [.i64 p, .i64 a, .i64 b] ++ (popParams 3 ++ curriedBoxedFn.body))
+      = .ok s' ∧ s'.stack = [.i64 (p + (a + b))] := by
+  have h := call_split fuel curriedBoxedFn [.i64 p, .i64 a, .i64 b] s rfl hs
+    (by have hl : ([.i64 p, .i64 a, .i64 b] : List Val).length = 3 := rfl; omega)
+  simp only [List.length_cons, List.length_nil] at h
+  simp only [h]
+  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 12 := ⟨fuel - 12, by omega⟩
+  simp only [callExecFuel, curriedBoxedFn, List.length_cons, List.length_nil]
+  rw [show m + 12 - 2 * 3 = m + 6 from by omega]
+  simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil]
+  simp only [execList, step, List.getD, List.getElem?_cons_zero,
+    List.getElem?_cons_succ, Option.getD_some]
+  refine ⟨_, rfl, ?_⟩
+  rw [UInt64.add_comm b a]
+
+/-! ### The type-safety cross-ref -/
+
+/-- THE TYPE-SAFETY CROSS-REF: the composed call program is WELL-TYPED
+    (hypothesis — the checker is well-founded-compiled, kernel-opaque;
+    the #guards below pin the check), so `typeSafety` applies: the
+    call path can NEVER stack-underflow. Correct.lean's convention
+    slice, now with the machine on the other end of the theorem. -/
+theorem call_exec_safe (a b : UInt64) (s : State)
+    (hloc : ∀ n, tyOf (s.locals n) = Ty.i64) (hs : s.stack = [])
+    (hcheck : checkStack (fun _ => Ty.i64) []
+      (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ adderFn.body))
+      = .ok [Ty.i64]) :
+    exec s (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ adderFn.body))
+      ≠ .error .underflow := by
+  exact (typeSafety (fun _ => Ty.i64) _ [] [Ty.i64] s hcheck
+    (by rw [hs]; simp) hloc).1
+
+end Calls
+
+/-! ### The calls layer's tests — build-failing #guards
+
+The wrong-arity TRAP (the big-step API's guard), the short-prep
+UNDERFLOW (the flat composed program's surfacing — and the checker's
+static rejection of it), and the composed call program's TYPING (the
+cross-ref's hypothesis, pinned by the interpreter — see the note at
+the type-safety cross-ref).
+-/
+
+section CallTests
+
+open Calls
+
+-- 1. THE NEGATIVE CONTROL (arity, big-step API): a 1-arg call to the
+--    2-param adder TRAPS — never a silent mis-bind.
+#guard (match callExecFuel 100 adderFn [.i64 1] initState with
+        | .error .trap => true | _ => false) = true
+
+-- 2. THE NEGATIVE CONTROL (arity, flat program): the short prep
+--    UNDERFLOWS in exec — the pop runs off the 1-pushed stack.
+#guard (match exec initState
+          (pushArgs [.i64 1] ++ (popParams 2 ++ adderFn.body)) with
+        | .error .underflow => true | _ => false) = true
+
+-- 3. THE CHECKER CATCHES THE SHORT PREP statically (2 pops, 1 push):
+--    the rejection is not vacuous.
+#guard (match checkStack (fun _ => Ty.i64) []
+          (pushArgs [.i64 1] ++ (popParams 2 ++ adderFn.body)) with
+        | .ok _ => false | .error _ => true) = true
+
+-- 4. THE COMPOSED CALL PROGRAM IS WELL-TYPED (the cross-ref's
+--    hypothesis): pushes, pops, body — all i64. Interpreter-checked.
+#guard (match checkStack (fun _ => Ty.i64) []
+          (pushArgs [.i64 1, .i64 2] ++ (popParams 2 ++ adderFn.body)) with
+        | .ok [Ty.i64] => true | _ => false) = true
+
+-- 5. THE TRAMPOLINE'S FORWARD IS WELL-TYPED (3 args, i64).
+#guard (match checkStack (fun _ => Ty.i64) []
+          (pushArgs [.i64 1, .i64 2, .i64 3] ++ (popParams 3
+            ++ curriedBoxedFn.body)) with
+        | .ok [Ty.i64] => true | _ => false) = true
+
+-- 6. THE BIG-STEP CALL AT THE TOP-LEVEL BUDGET: callExec (the
+--    `exec`-fuel API) computes the adder's sum.
+#guard (match callExec adderFn [.i64 21, .i64 21]
+          ⟨fun _ => .i64 0, [], fun _ => (0 : UInt8), 64⟩ with
+        | .ok s' => s'.stack == [.i64 42] | .error _ => false) = true
+
+-- 7. THE TRAMPOLINE HOP, end-to-end at the top-level budget: the
+--    partial 2 + the fresh args 20, 20 = 42 (the golden's
+--    `pap_curried._boxed_1` → `curried._boxed` values).
+#guard (match callExec curriedBoxedFn [.i64 2, .i64 20, .i64 20]
+          ⟨fun _ => .i64 0, [], fun _ => (0 : UInt8), 64⟩ with
+        | .ok s' => s'.stack == [.i64 42] | .error _ => false) = true
+
+end CallTests
 
 end WasmBackend.Sem

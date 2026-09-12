@@ -21,7 +21,6 @@ import TestKit
 namespace DbspTests
 
 open Dbsp
-open LSpec
 open TestKit
 open Plausible
 

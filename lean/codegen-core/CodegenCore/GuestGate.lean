@@ -1,4 +1,5 @@
 import Lean
+import CodegenCore.Registry
 
 /- PROVENANCE: moved verbatim from wasm-backend/WasmBackend/Check.lean
    (the guest gate + the @[guest]/@[guest_std] attributes) — the STD
@@ -66,12 +67,6 @@ def bannedAt? (level : Ban) (n : Name) : Option String :=
     | .std => none
   else none
 
-/-- STRICT ban (the `@[guest]` surface). -/
-def banned? (n : Name) : Option String := bannedAt? .strict n
-
-/-- STD ban (the `@[guest_std]` surface). -/
-def bannedStd? (n : Name) : Option String := bannedAt? .std n
-
 /-- PURE predicate: every banned constant root in the Expr, in scan
 order, deduped. The testable core of the `@[guest]`/`@[guest_std]`
 gates. Scan = core's memoized `Expr.getUsedConstants` REVERSED: the
@@ -103,31 +98,48 @@ def reasons (level : Ban) (violations : List String) : String :=
     | some why => s!"- `{v}` — {why}"
     | none => s!"- `{v}`")
 
-/-- The `@[guest]` attribute: check a def's type + value at elab time. -/
-def checkGuest (decl : Name) : CoreM Unit := do
+/-- The guest-mark registry: every decl that PASSED a `@[guest]`/`@[guest_std]`
+    check, append-only, replayed from oleans at import (the mkRegistryExt
+    semantics). The wasm backend's manifest fold reads it: the marked decls
+    ARE the compile roots (the manifest = the modules, the marks = the
+    decls, the fold = the rest — GenMain.lean). -/
+initialize guestMarkExt :
+    SimplePersistentEnvExtension Name (List Name) ←
+  CodegenCore.mkRegistryExt `guestMarkExt
+
+/-- Guest-marked decls from an environment (the backend fold's entry). -/
+def guestMarkedDecls (env : Environment) : List Name :=
+  guestMarkExt.getState env
+
+/-- Record the mark after the check passes (the compile-root seam). -/
+def recordGuestMark (decl : Name) : CoreM Unit :=
+  modifyEnv fun env => guestMarkExt.addEntry env decl
+
+/-- The shared attribute check: scan the def's type + value at the
+    attribute's ban level; mark on pass. The two attributes (`@[guest]`
+    / `@[guest_std]`) are one code path with the level as the parameter
+    (the `@[guest_std]` error used to render STRICT reasons — bug 0.5 —
+    the level-pinned `reasons` is the fix, and it lives in the shared
+    body). -/
+def checkGuestAt (attrName : String) (level : Ban) (decl : Name) : CoreM Unit := do
   let env ← getEnv
   match env.find? decl with
   | some (.defnInfo di) =>
-      let violations := checkExprAt .strict di.type (checkExprAt .strict di.value [])
+      let violations := checkExprAt level di.type (checkExprAt level di.value [])
       if !violations.isEmpty then
-        throwError s!"`@[guest]` function `{decl}` is not guest-compilable:\n{reasons .strict violations}"
+        throwError s!"`@{attrName}` function `{decl}` is not guest-compilable:\n{reasons level violations}"
+      recordGuestMark decl
   | some _ =>
-      throwError "`@[guest]` applies to defs only: `{decl.toString}`"
+      throwError s!"`@{attrName}` applies to defs only: `{decl.toString}`"
   | none => pure ()
+
+/-- The `@[guest]` attribute: check a def's type + value at elab time. -/
+def checkGuest (decl : Name) : CoreM Unit := checkGuestAt "guest" .strict decl
 
 /-- The `@[guest_std]` attribute: the guestlang-std authoring surface —
 match-only Nat + String allowed; IO/Task/Thunk + Nat arithmetic stay
 banned. The std runtime ITSELF is compiled with this. -/
-def checkGuestStd (decl : Name) : CoreM Unit := do
-  let env ← getEnv
-  match env.find? decl with
-  | some (.defnInfo di) =>
-      let violations := checkExprAt .std di.type (checkExprAt .std di.value [])
-      if !violations.isEmpty then
-        throwError s!"`@[guest_std]` function `{decl}` is not guest-compilable:\n{reasons .std violations}"
-  | some _ =>
-      throwError "`@[guest_std]` applies to defs only: `{decl.toString}`"
-  | none => pure ()
+def checkGuestStd (decl : Name) : CoreM Unit := checkGuestAt "guest_std" .std decl
 
 initialize registerBuiltinAttribute {
   name := `guest

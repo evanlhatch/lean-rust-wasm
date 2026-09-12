@@ -12,10 +12,13 @@ The §4.3 claim, made into types and theorems:
 - **Hot-reload-by-replay = the same input stream through a new circuit** —
   `incrementalize_ok` (Dbsp.Incremental) is the license: the reloaded
   incremental circuit computes the same function of the same journal.
-- **Replica consistency = group subtraction.** Two replicas fed the same
-  total input agree (`replica_consistent`); a divergence is a zset, and
+- **Replica consistency = group subtraction.** A divergence is a zset, and
   re-integrating it cancels (`replica_divergence_cancels`) — the netcode
-  reconvergence algebra.
+  reconvergence algebra. (An earlier `replica_consistent` here was a
+  syntactic-reflexivity theorem — `I (Journal s) t = I (Journal s) t` —
+  deleted as vacuous, 2026-12 quality pass; the genuine convergence
+  content — same deltas in any order — lives in `Dbsp.Replicas`,
+  `two_replica_converge`/`batch_order_irrelevant`.)
 
 These are READINGS: the proofs are one-liners because the work was done in
 Linear/Incremental. The value is the named surface the engine cites.
@@ -58,17 +61,11 @@ abbrev Checkpoint (s : Stream a) (n : Nat) : a := sumVals s n
     Dbsp.Incremental; re-exported here so the §4.3 surface is one import.) -/
 abbrev hotreload_incrementalize_ok := @incrementalize_ok
 
-/-- Replica consistency: two replicas integrating the same journal are
-    identical at every tick. (The trivial-but-load-bearing reading: total
-    input order ⇒ total state agreement; the journal IS the replication
-    stream.) -/
-theorem replica_consistent (s : Stream a) (t : Nat) :
-    I (Journal s) t = I (Journal s) t := rfl
-
 /-- Replica divergence cancels: if replicas A and B see histories that differ
     by the zset `δ` at tick t, then re-integrating the journal difference
     makes them agree — the reconvergence algebra is group subtraction.
-    Stated pointwise: (A + δ) - δ = A. -/
+    Stated pointwise: (A + δ) - δ = A. This is the convergence story at the
+    stream level; the ordered-delta-arrival version is `Dbsp.Replicas`. -/
 @[cert] theorem replica_divergence_cancels (s δ : Stream a) (t : Nat) :
     (I (Journal s) + I (Journal δ) - I (Journal δ)) t = I (Journal s) t := by
   simp [Pi.add_apply, Pi.sub_apply]

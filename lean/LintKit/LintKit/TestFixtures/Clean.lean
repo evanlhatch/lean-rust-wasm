@@ -25,8 +25,11 @@ structure Pair where
   fst : Nat
   snd : Nat
 
-/-- Clean: distinct bodies, no dup cluster. -/
-def addFortyOne (n : Nat) : Nat := n + 41
+/-- Clean: distinct bodies, no dup cluster. (`n + 40` — the `+ 41` body is
+occupied by the planted `dupOne`/`dupTwo` pair in Violations.lean; under
+package-root scoping a copy here would join THEIR cluster, which is the
+point: the pair must fire with exactly two members.) -/
+def addFortyOne (n : Nat) : Nat := n + 40
 def addFortyTwo (n : Nat) : Nat := n + 42
 
 end LintKit.TestFixtures.Clean

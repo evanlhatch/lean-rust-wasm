@@ -30,6 +30,15 @@ The choreography as a `Machine`:
 
 The instance is the gateway world's real conversation: `gatewayProto`
 (the `get-user` call + the `watch-orders` async stream).
+
+The TYPED layer (`TProtocol P`) is GENERIC over the payload universe:
+`Machines` knows nothing about the schema's `Ty` (that would be a
+package cycle — schema-lang depends on Machines) — it fixes the
+DUALITY MECHANISM once, and the schema-lang layer instantiates
+`P := SchemaLang.Ty` (SchemaLang.Session). Peer agreement is a TYPE
+(`IsDualOf`): a hand-written peer whose direction doesn't flip, or
+whose payload differs at any position, fails DEFINITIONAL equality at
+ELABORATION time — a type error, not a runtime check.
 -/
 
 import Machines.Core
@@ -62,10 +71,127 @@ def Dir.flip : Dir → Dir
 
 /-- Directions flip twice back to the same one. -/
 theorem Dir.flip_flip (d : Dir) : d.flip.flip = d := by cases d <;> rfl
+/-- A direction differs from its flip (ctor distinctness). -/
+theorem Dir.flip_ne (d : Dir) : d ≠ d.flip := by
+  cases d <;> intro h <;> cases h
 
-/-- The DUAL protocol: flip every direction, keep the message sequence. -/
+
+/-! ## Payload-TYPED steps — generic over the payload universe (the CORE)
+
+The string layer certifies the choreography SHAPE with payloads as wire
+names; the TYPED core abstracts the payload: a `TProtocol P` is a
+conversation whose payloads range over ANY universe `P`. Machines owns
+the MECHANISM (the typed dual and its mirror/liveness certificates)
+ONCE — the string layer below is the INSTANTIATION `P := String` (not a
+second implementation), and the schema-lang layer supplies
+`P := SchemaLang.Ty` (SchemaLang.Session). The two cannot drift.
+-/
+
+/-- A typed step: direction × payload from universe `P`. -/
+abbrev TStep (P : Type) := Dir × P
+
+/-- A typed protocol: the agreed message order over payload universe
+    `P`. Empty = no conversation. -/
+abbrev TProtocol (P : Type) := List (TStep P)
+
+/-- The typed dual: flip every direction, keep every payload. -/
+def tdual {P : Type} (p : TProtocol P) : TProtocol P :=
+  p.map fun (d, t) => (d.flip, t)
+
+/-- A double-flipped typed step is the original (pointwise; generic in
+    the payload). -/
+theorem flip_tstep {P : Type} (s : TStep P) :
+    ((s.1.flip, s.2).1.flip, (s.1.flip, s.2).2) = s := by
+  cases s with
+  | mk d t => simp [Dir.flip_flip]
+
+/-- Dualizing keeps the typed protocol's length (the lockstep
+    precondition). -/
+@[simp] theorem tdual_length {P : Type} (p : TProtocol P) :
+    (tdual p).length = p.length := by
+  induction p with
+  | nil => rfl
+  | cons s rest ih => simp [tdual]
+
+/-- The typed dual is an involution: a peer dualized twice is the same
+    script (generic form of `dual_dual`). -/
+theorem tdual_dual {P : Type} (p : TProtocol P) : tdual (tdual p) = p := by
+  induction p with
+  | nil => rfl
+  | cons s rest ih =>
+      show ((s.1.flip, s.2).1.flip, (s.1.flip, s.2).2) :: tdual (tdual rest)
+        = s :: rest
+      rw [flip_tstep, ih]
+
+/-- The typed dual keeps the PAYLOAD SEQUENCE: the payloads the peers
+    exchange are unchanged — only the directions flip (generic form of
+    `dual_map_payload`). -/
+theorem tdual_types {P : Type} (p : TProtocol P) :
+    (tdual p).map (·.2) = p.map (·.2) := by
+  induction p with
+  | nil => rfl
+  | cons s rest ih => simp [tdual]
+
+/-- Directions oppose pairwise: every send on one side is a receive on
+    the other (the typed lockstep condition, executed form). -/
+theorem tdual_directions_oppose {P : Type} (p : TProtocol P) :
+    List.all (List.zip (p.map (·.1)) ((tdual p).map (·.1)))
+      (fun x => x.1 != x.2) := by
+  induction p with
+  | nil => rfl
+  | cons s rest ih =>
+      cases s with
+      | mk d t =>
+          show ((d != d.flip) && List.all
+            (List.zip (rest.map (·.1)) ((tdual rest).map (·.1)))
+            (fun x => x.1 != x.2)) = true
+          have h1 : (d != d.flip) = true := by cases d <;> rfl
+          rw [h1]
+          simp [ih]
+
+/-- TYPED MIRROR — the generic `dual_payload_mirror`: at the same
+    position, dual peers see the SAME payload (any universe) in
+    OPPOSITE directions. Client's sends are server's receives, of the
+    same payload, at the same time. -/
+theorem tdual_payload_mirror {P : Type} (p : TProtocol P) :
+    ∀ (i : Nat) (hi : i < p.length),
+      ∃ (d₁ d₂ : Dir) (t : P),
+        List.get p ⟨i, hi⟩ = (d₁, t) ∧
+        (∀ h₂ : i < (tdual p).length, List.get (tdual p) ⟨i, h₂⟩ = (d₂, t)) ∧
+        d₁ ≠ d₂ := by
+  induction p with
+  | nil => intro i hi; simp at hi
+  | cons s rest ih =>
+      intro i hi
+      have hdual : tdual (s :: rest) = (s.1.flip, s.2) :: tdual rest := rfl
+      rw [hdual]
+      cases i with
+      | zero =>
+          exact ⟨s.1, s.1.flip, s.2, rfl, fun _ => rfl, Dir.flip_ne s.1⟩
+      | succ i' =>
+          have hlt : i' < rest.length := by simpa using hi
+          obtain ⟨d₁, d₂, t, h₁, h₂, hne⟩ := ih i' hlt
+          refine ⟨d₁, d₂, t, ?_, fun h₃ => ?_, hne⟩
+          · simpa [List.get] using h₁
+          · have hlen : i' < (tdual rest).length := by
+              rw [tdual_length]
+              simpa using h₃
+            simpa [List.get] using h₂ hlen
+
+
+
+/-! ## The string layer — the typed core at `P := String`
+
+`Step = Dir × String = TStep String` and `Protocol = TProtocol String`
+definitionally, so the string theorems ARE the typed ones:
+`dual := tdual`, and every string theorem below delegates to its typed
+twin. The `@[simp]` surface (`dual_nil`/`dual_cons`/`dual_length`) stays
+for the session machine's reasoning. -/
+
+/-- The DUAL protocol: flip every direction, keep the message sequence
+    (the typed core at `P := String`). -/
 def dual : Protocol → Protocol :=
-  List.map (fun (d, t) => (d.flip, t))
+  tdual (P := String)
 
 @[simp] theorem dual_nil : dual [] = [] := rfl
 @[simp] theorem dual_cons (s : Step) (rest : Protocol) :
@@ -73,27 +199,18 @@ def dual : Protocol → Protocol :=
 
 /-- A double-flipped step is the original step (pointwise). -/
 theorem flip_step (s : Step) :
-    ((s.1.flip, s.2).1.flip, (s.1.flip, s.2).2) = s := by
-  cases s with
-  | mk d t => simp [Dir.flip_flip]
+    ((s.1.flip, s.2).1.flip, (s.1.flip, s.2).2) = s :=
+  flip_tstep (P := String) s
 
-theorem dual_dual (p : Protocol) : dual (dual p) = p := by
-  induction p with
-  | nil => rfl
-  | cons s rest ih =>
-      -- `dual (dual (s :: rest))` unfolds definitionally to the
-      -- double-flipped head over the dual's dual tail
-      show ((s.1.flip, s.2).1.flip, (s.1.flip, s.2).2) :: dual (dual rest) = s :: rest
-      rw [flip_step, ih]
+theorem dual_dual (p : Protocol) : dual (dual p) = p :=
+  tdual_dual (P := String) p
 
 /-- Dualizing keeps the payload SEQUENCE: the message TYPES the peers
     exchange are unchanged — only the directions flip. The payload-type
     agreement the typed layer consumes (no index gymnastics: a map
     equation). -/
-theorem dual_map_payload (q : Protocol) : (dual q).map (·.2) = q.map (·.2) := by
-  induction q with
-  | nil => rfl
-  | cons s rest ih => simp [dual]
+theorem dual_map_payload (q : Protocol) : (dual q).map (·.2) = q.map (·.2) :=
+  tdual_types (P := String) q
 
 /-! ## The session machine (Label = the script's indices) -/
 
@@ -126,26 +243,28 @@ theorem session_mid_deadlockFree (p : Protocol) (pos : Nat) (hpos : pos < p.leng
     ∃ l : (session p).Label, ((session p).event l).guard pos = true := by
   exact ⟨Fin.mk pos hpos, by simp [session]⟩
 
+/-- THE variant: a fired `Fin n` step with `pos = l.val` strictly
+    decreases the distance to the end. One proof — both the string and
+    the typed choreographies delegate (their statements are identical
+    mod the script's length). -/
+theorem pos_variant_decreases (n pos : Nat) (l : Fin n) (h : pos = l.val) :
+    n - (pos + 1) < n - pos := by
+  have := l.isLt
+  omega
+
 /-- Termination: every fired step strictly decreases the distance to the
     end — the Convergent certificate (n firings from 0 reach n; no
     infinite run inside a finite script). -/
 theorem session_variant_decreases (p : Protocol) (pos : Nat) (l : Fin p.length)
     (h : pos = l.val) :
-    p.length - (pos + 1) < p.length - pos := by
-  have := l.isLt
-  omega
+    p.length - (pos + 1) < p.length - pos :=
+  pos_variant_decreases p.length pos l h
 
 /-! ## Duality — dual peers mirror payloads -/
 
-/-- A direction differs from its flip (ctor distinctness). -/
-theorem Dir.flip_ne (d : Dir) : d ≠ d.flip := by
-  cases d <;> intro h <;> cases h
-
 /-- Dualizing preserves the script's length (lockstep precondition). -/
-@[simp] theorem dual_length (p : Protocol) : (dual p).length = p.length := by
-  induction p with
-  | nil => rfl
-  | cons s rest ih => simp [dual]
+@[simp] theorem dual_length (p : Protocol) : (dual p).length = p.length :=
+  tdual_length (P := String) p
 
 /-- At the same position, dual peers see the same payload TYPE in
     OPPOSITE directions: `p[i] = (d₁, t)` and `(dual p)[i] = (d₂, t)`
@@ -156,25 +275,8 @@ theorem dual_payload_mirror (p : Protocol) :
       ∃ d₁ d₂ t : _,
         List.get p ⟨i, hi⟩ = (d₁, t) ∧
         (∀ h₂ : i < (dual p).length, List.get (dual p) ⟨i, h₂⟩ = (d₂, t)) ∧
-        d₁ ≠ d₂ := by
-  induction p with
-  | nil => intro i hi; simp at hi
-  | cons s rest ih =>
-      intro i hi
-      have hdual : (dual (s :: rest)) = (s.1.flip, s.2) :: dual rest := rfl
-      rw [hdual]
-      cases i with
-      | zero =>
-          exact ⟨s.1, s.1.flip, s.2, rfl, fun _ => rfl, Dir.flip_ne s.1⟩
-      | succ i' =>
-          have hlt : i' < rest.length := by simpa using hi
-          obtain ⟨d₁, d₂, t, h₁, h₂, hne⟩ := ih i' hlt
-          refine ⟨d₁, d₂, t, ?_, fun h₃ => ?_, hne⟩
-          · simpa [List.get] using h₁
-          · have hlen : i' < (dual rest).length := by
-              rw [dual_length]
-              simpa using h₃
-            simpa [List.get] using h₂ hlen
+        d₁ ≠ d₂ :=
+  tdual_payload_mirror (P := String) p
 
 /-! ## The gateway instance — the real WIT world's conversation -/
 
@@ -191,5 +293,46 @@ def gatewayProto : Protocol :=
     original (a peer dualized twice is the same script). -/
 theorem gateway_self_dual : dual (dual gatewayProto) = gatewayProto :=
   dual_dual gatewayProto
+
+/-- The typed choreography AS a session machine: the position dynamics
+    are payload-INDEPENDENT (the only enabled event at position `i` is
+    step `i`; firing advances) — project the directions, keep the
+    length. All string-layer certificates carry over through this. -/
+def tsession {P : Type} (p : TProtocol P) : Machine :=
+  session (p.map fun (d, _) => (d, ""))
+
+/-- Mid-protocol deadlock-freedom for the TYPED choreography: the
+    direction projection has the same length, so the string-layer
+    theorem applies verbatim. -/
+theorem tsession_mid_deadlockFree {P : Type} (p : TProtocol P) (pos : Nat)
+    (hpos : pos < p.length) :
+    ∃ l : (tsession p).Label, ((tsession p).event l).guard pos = true :=
+  session_mid_deadlockFree _ pos (by simpa using hpos)
+
+/-- Termination for the TYPED choreography: the same variant — every
+    fired step strictly decreases the distance to the end. -/
+theorem tsession_variant_decreases {P : Type} (p : TProtocol P) (pos : Nat)
+    (l : Fin p.length) (h : pos = l.val) :
+    p.length - (pos + 1) < p.length - pos :=
+  pos_variant_decreases p.length pos l h
+
+/-! ### Peer agreement as a TYPE — the elaboration-error property
+
+`IsDualOf theirs mine` is inhabited EXACTLY when `theirs` is the typed
+dual of `mine`. The generic instance is the only witness, so the peer's
+script is COMPUTED by the unifier (deriving, not stating): a
+hand-written script that disagrees — a direction that doesn't flip, or
+a payload that differs at any position — fails definitional equality
+at ELABORATION time. This is the type-level check the runtime cannot
+skip: the mismatched conversation does not compile. -/
+
+/-- The peer-agreement type. `agrees` is the (unique) witness. -/
+class IsDualOf {P : Type} (theirs mine : TProtocol P) : Prop where
+  /-- The agreeing peer's script IS the dual's, definitionally. -/
+  agrees : theirs = tdual mine
+
+/-- The one witness: the dual always agrees with its original. -/
+instance instIsDualOf {P : Type} (p : TProtocol P) : IsDualOf (tdual p) p :=
+  ⟨rfl⟩
 
 end Machines.Session

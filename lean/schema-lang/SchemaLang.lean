@@ -6,7 +6,6 @@ import SchemaLang.Ty
 import SchemaLang.Item
 import SchemaLang.Diff
 import SchemaLang.Migration
-import SchemaLang.Observe
 import SchemaLang.Snapshot
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust

@@ -104,20 +104,28 @@ abbrev userSchema : List SchemaLang.Field :=
 def userCheck : SchemaLang.VExpr userSchema .bool :=
   SchemaLang.VExpr.gt (SchemaLang.VExpr.colOf "id") (SchemaLang.VExpr.lit 0)
 
-/-- The name-length condition, SPEC form: the VExpr `strlen` node over
-    the name column (SchemaLang.Validate's Phase 2). NOT `@[guest_std]`
-    — the compiled path does NOT evaluate `VExpr.strlen` (the raw
-    evaluators have no string level; `evalU`'s arm is the loud 0), so
-    this rides `evalV` only. The hand-strlen `userComplete` below is
-    the COMPILED authority; both encode `name length > 3` — the
-    compiled migration waits for the backend's string-level raw
-    evaluator (the `len@+8` load). ASCII note: `evalV`'s length is
-    Lean's `String.length` (chars) = the std `$string_len` (bytes) on
-    ASCII — the StrOps v1 byte/char stance. -/
+/-- The name-length condition, VExpr form: the `strlen` node over the
+    name column, `> 3`. `@[guest_std]` (the WIRED compiled lane —
+    SchemaLang.Validate's `evalU` strlen arm reads the boxed string's
+    raw length via the runtime `$string_len`): this is a compile
+    target, consumed by `userComplete`'s check. The evalV/raw readings
+    AGREE on it (the schema-lang tests pin the tie + the len=3/4
+    boundary flip). ASCII note: the boxed eval's length is Lean's
+    `String.length` (chars) = the std `$string_len` (bytes) on ASCII —
+    the StrOps v1 byte/char stance. -/
+@[guest_std]
 def userNameLenCheck : SchemaLang.VExpr userSchema .bool :=
   SchemaLang.VExpr.gt
     (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "name"))
     (SchemaLang.VExpr.lit 3)
+
+/-- The complete-record check: the id gate AND the name-length gate in
+    ONE VExpr (the conjunction compiles as the raw 0/1 MULTIPLICATION —
+    `evalB`'s `.and` arm). The tags gate rides OUTSIDE the VExpr (below):
+    the family has no list-length node yet. -/
+@[guest_std]
+def userCompleteCheck : SchemaLang.VExpr userSchema .bool :=
+  SchemaLang.VExpr.and userCheck userNameLenCheck
 
 /-- List → VList: the tags field's Value payload (the row is fully
     schema-typed — the strings ride along unopened, guest-legal).
@@ -157,26 +165,20 @@ def listLenU64 : List String → UInt64
   | [] => 0
   | _ :: t => listLenU64 t + 1
 
--- The SECOND record validator (the pattern's RANGE: every field class
--- in ONE invariant — the id scalar, the name STRING via the `strlen`
--- INTRINSIC (the guest-legal byte length: the backend maps the name to
--- `$string_len`, never compiling Lean's Nat-returning String.length),
--- the tags LIST via listLenU64). The body = the HAND lane: a nested-if
--- gate over the three conditions.
--- Deliberately `if`-shaped (no `&&`): the conjunction compiles as the
--- Bool cases the backend already emits.
--- MIGRATION NOTE: the VExpr `strlen` node landed SPEC-LEVEL only
--- (SchemaLang.Validate's Phase 2 — no compiled string evaluator), so
--- the VExpr form (`userNameLenCheck` above) cannot replace the hand
--- body without a silent-0 compiled reading; this stays the compiled
--- authority until the backend emits the `len@+8` load.
+-- The SECOND record validator (the pattern's RANGE: the id scalar +
+-- the name STRING via the VExpr `strlen` NODE — the compiled lane is
+-- wired: the raw evaluator reads the string's length through the
+-- runtime `$string_len` primitive). The body = the REGISTERED form:
+-- `validates` over the schema-indexed check + the tags LIST gate as
+-- the hand `listLenU64` walk (the VExpr family has no list-length
+-- node yet — that gate joins when the node lands; the duel cannot
+-- express the empty list anyway, see GenMain's user-complete rows).
+-- The `&&` shape: the conjunction compiles as the Bool cases the
+-- backend already emits.
 @[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
 def userComplete (u : User) : Bool :=
-  if u.id > 0 then
-    if strlen u.name > 3 then
-      if listLenU64 u.tags > 0 then true else false
-    else false
-  else false
+  SchemaLang.validates userCompleteCheck (userRow u)
+    && listLenU64 u.tags > 0
 
 -- The VARIANT-PARAM validator (the first variant CROSSING the boundary
 -- as a validator's subject): the canonical ABI flattens the variant to

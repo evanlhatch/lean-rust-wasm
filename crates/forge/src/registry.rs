@@ -116,10 +116,34 @@ impl Registry {
         tag: &str,
         dst: &mut OciStore,
         artifacts_root: &Path,
+        allow_unchecked: bool,
     ) -> Result<Pulled, String> {
         let agent = agent();
         let raw = self.fetch_manifest(&agent, tag)?;
         let manifest = Manifest::from_bytes(&raw)?;
+
+        // THE PROVENANCE GATE (the plan's 3d): the puller verifies the
+        // axiom-gate annotation BEFORE the artifact materializes — a
+        // component whose report is `unchecked`/absent is refused
+        // (the trust boundary = the sha256 chain + the gate report;
+        // `--allow-unchecked` is the explicit escape hatch for local
+        // dev). A warning the puller can ignore is not a warning.
+        {
+            let axioms = manifest
+                .annotations
+                .get(crate::manifest::AXIOMS_ANNOTATION)
+                .map(String::as_str)
+                .unwrap_or("absent");
+            if axioms == "unchecked" || axioms == "absent" {
+                if !allow_unchecked {
+                    return Err(format!(
+                        "pull {}/{}: PROVENANCE GATE — the artifact's axiom-gate report is `{axioms}`; \
+                         a component without a clean gate report is refused (use --allow-unchecked for local dev)",
+                        self.repo, tag
+                    ));
+                }
+            }
+        }
 
         let mut fetched: Vec<(Digest, Vec<u8>)> = Vec::new();
         for desc in manifest.blobs() {
@@ -163,6 +187,30 @@ impl Registry {
         }
         fs::write(&artifact_path, &bytes)
             .map_err(|e| format!("write {}: {e}", artifact_path.display()))?;
+        // The PROVENANCE SIDECAR: the annotations travel WITH the
+        // artifact (the host's load path can check them without the
+        // registry).
+        {
+            let sidecar = artifact_path.with_extension(format!(
+                "{}.provenance.json",
+                artifact_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+            ));
+            let annos: serde_json::Map<String, serde_json::Value> = manifest
+                .annotations
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            let doc = serde_json::json!({
+                "label": manifest.label,
+                "layer": layer.digest,
+                "annotations": annos,
+            });
+            fs::write(&sidecar, doc.to_string())
+                .map_err(|e| format!("write {}: {e}", sidecar.display()))?;
+        }
         // Relabel in the local store so `verify`/index.json see it.
         dst.put(&manifest.label, &bytes)
             .map_err(|e| format!("relabel {}: {e}", manifest.label))?;

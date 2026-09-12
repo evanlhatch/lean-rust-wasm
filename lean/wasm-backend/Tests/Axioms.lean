@@ -44,3 +44,19 @@ import WasmBackend.Audit
 #print axioms WasmBackend.Correct.call_convention2_buggy_disagrees
 #print axioms WasmBackend.Wat.Audit.audit
 #print axioms WasmBackend.Wat.Audit.audit_nil
+
+-- The CALL-SEMANTICS lane: the calls layer in Sem.lean (v1 = CALLS as
+-- FUNCTION-COMPOSITION — the big-step callExecFuel + the split theorem
+-- that identifies it with the flat prep/pops/body program), the
+-- end-to-end call-execution theorems, the trampoline's DIRECT hop, the
+-- type-safety cross-ref, and the arity/arg-order negative controls.
+#print axioms WasmBackend.Sem.Calls.callExecFuel_arity_trap
+#print axioms WasmBackend.Sem.Calls.pushArgs_exec
+#print axioms WasmBackend.Sem.Calls.popParams_exec
+#print axioms WasmBackend.Sem.Calls.call_split
+#print axioms WasmBackend.Sem.Calls.call_exec_correct
+#print axioms WasmBackend.Sem.Calls.call_prep_ok
+#print axioms WasmBackend.Sem.Calls.call_prep_swapped
+#print axioms WasmBackend.Sem.Calls.call_prep_swapped_disagrees
+#print axioms WasmBackend.Sem.Calls.trampoline_call_ok
+#print axioms WasmBackend.Sem.Calls.call_exec_safe

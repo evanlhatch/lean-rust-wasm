@@ -1,7 +1,26 @@
 ---
-title: Start
-description: lean-rust-wasm — Lean schema language, WASM component boundary, Rust host.
+title: guestlang
+description: Lean schema language, WASM component boundary, Rust host — the Lean-spec'd wasm template.
+template: splash
+hero:
+  title: guestlang
+  tagline: Write the spec in Lean. Get a proved, byte-tied WASM component.
+  actions:
+    - text: Get Started
+      link: /guides/getting-started/
+      icon: right-arrow
+      variant: primary
 ---
 
 Lean defines the types and policies. WASM components are the boundary.
-Rust hosts them. This site documents the framework.
+Rust hosts them.
+
+- **Proved schemas** — the spec of record is kernel-checked Lean; zero `sorry`.
+- **Byte-tied codegen** — pure emitters fold the registry into WIT worlds,
+  Rust types, Vortex dtypes; drift fails CI (`just gen-check`).
+- **The dual-engine differential duel** — Lean's own evals are the oracle;
+  the shipped wasm replays the manifest under wasmtime *and* wasmi.
+- **WASIp3 components** — async functions, streams, resources at the WIT boundary.
+
+Browse the generated [API reference](/api/) — emitted by
+`SchemaLang.Docs.docsOf` from the schema universe, never hand-edited.

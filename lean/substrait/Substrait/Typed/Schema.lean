@@ -60,21 +60,11 @@ abbrev SchemaCol := String × SType × Bool
 /-- A schema is a list of columns, in ordinal order. -/
 abbrev Schema := List SchemaCol
 
-/-- Column count. -/
-def Schema.width : Schema → Nat
-  | [] => 0
-  | _ :: tl => 1 + Schema.width tl
-
 /-- The nth column of a schema, or `none` when out of range. -/
 def Schema.get? : Schema → Nat → Option SchemaCol
   | [], _ => none
   | c :: _, 0 => some c
   | _ :: tl, n + 1 => Schema.get? tl n
-
-/-- Column *types* only (used by `toProto` for `NamedStruct`). -/
-def Schema.types : Schema → List SType
-  | [] => []
-  | (_, t, _) :: tl => t :: Schema.types tl
 
 /-- Column names only. -/
 def Schema.names : Schema → List String

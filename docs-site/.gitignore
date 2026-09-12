@@ -1,1 +1,6 @@
-node_modules/\ndist/\n.astro/
+node_modules/
+dist/
+.astro/
+# Generated at build time by the justfile `docs` recipe (the copy of
+# docs/api.md; Starlight's docsLoader globs the content dir).
+src/content/docs/api.md

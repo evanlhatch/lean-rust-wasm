@@ -102,12 +102,6 @@ end
 /-- Smart constructor: an i32 literal `0`. -/
 def litI32 (v : Int) : Expr s .i32 false := Expr.literal .i32 false (LiteralValue.i32 v)
 
-/-- Smart constructor: an i64 literal. -/
-def litI64 (v : Int) : Expr s .i64 false := Expr.literal .i64 false (LiteralValue.i64 v)
-
-/-- Smart constructor: a boolean literal. -/
-def litBool (b : Bool) : Expr s .bool false := Expr.literal .bool false (LiteralValue.bool b)
-
 /-- Package an expression with its indices. -/
 def pack {s : Schema} {t : SType} {n : Bool} (e : Expr s t n) : AnyExpr s :=
   AnyExpr.mk t n e
@@ -121,17 +115,6 @@ needs `s`/`t`/`n` pinned.
 -/
 def col (name : String) (t : SType) (n : Bool) [h : HasCol s name t n] : Expr s t n :=
   Expr.field { name := name, ordinal := h.index } t n
-
-/-- The one-argument spine. -/
-def oneArg {s : Schema} {t : SType} {n : Bool} (e : Expr s t n) : Args s [(t, n)] :=
-  Args.cons t n e Args.nil
-
-/-- Prepend an argument to a spine. -/
-def pushArg {s : Schema} {t : SType} {n : Bool} (e : Expr s t n) (rest : Args s ts) : Args s ((t, n) :: ts) :=
-  Args.cons t n e rest
-
-/-- The empty spine. -/
-def noArgs {s : Schema} : Args s [] := Args.nil
 
 /--
 `call` — invoke a scalar function signature on a matching argument spine.

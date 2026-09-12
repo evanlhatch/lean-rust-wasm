@@ -25,3 +25,18 @@ import Machines
 #print axioms Machines.Sync.mpsc_blocked_send_unblocks
 #print axioms Machines.Sync.sem_blocked_acquire_unblocks
 #print axioms Machines.Sync.latch_blocked_wait_unblocks
+
+-- Machines.Sim (the DST core)
+#print axioms Machines.Sim.stepSim_det
+#print axioms Machines.Sim.simTrace_congr
+#print axioms Machines.Sim.runSim_congr
+#print axioms Machines.Sim.simTrace_length
+#print axioms Machines.Sim.stepSim_conserves
+#print axioms Machines.Sim.no_loss
+#print axioms Machines.Sim.stepSim_inflight_sublist
+#print axioms Machines.Sim.schedulable_fires
+#print axioms Machines.Sim.Fires_clock
+#print axioms Machines.Sim.deliver_swap
+#print axioms Machines.Sim.deliver_order_irrelevant
+#print axioms Machines.Sim.zset_sim_two_replica
+#print axioms Machines.Sim.zset_deliver_order_irrelevant

@@ -56,19 +56,17 @@ The STRLEN node LANDED — the fix-(ii) shape (the spec-level
 primitive): the boxed `Value .string` carries the Lean `String`
 itself, so `evalV` computes the length IN the evaluator with NO std
 import (the acyclic edge: schema-lang cannot import
-`GuestlangStd.strlen` one package up). The COMPILED path is
-deliberately NOT wired: a raw reading needs a string-level raw
-evaluator over the flat-record string operand (the (ptr,len) pair)
-and the `len@+8` load — backend-lane work. So `evalU`'s `.strlen`
-arm is the LOUD 0 marker (not a hidden wildcard), and
-`userComplete` (GuestImpl) STAYS the hand-strlen form — the compiled
-authority. A registered validator over `strlen` evaluates 0 in the
-raw reading (`validates` = false); the tests pin that divergence so
-a silent wire-up cannot pass unnoticed — flip the pin when the
-backend emits the load. The spec form of the name-length condition
-lives as `GuestImpl.userNameLenCheck` (unmarked, eval-tested).
-Length semantics: Lean's `String.length` (chars) = the std
-`$string_len` (bytes) on ASCII — the StrOps v1 byte/char stance.
+`GuestlangStd.strlen` one package up). The COMPILED path is WIRED:
+`evalU`'s `.strlen` arm reads the row's boxed string and returns the
+RAW length via `string_len` (below) — the (ptr,len) pair's SECOND
+half (the guest string object's len slot @+8, the runtime primitive
+`$string_len`'s exact read). The old LOUD-0 marker is gone; a
+registered validator over `strlen` now evaluates the REAL length in
+the raw reading, and `userComplete` (GuestImpl) rides the
+VExpr-strlen check (`userNameLenCheck`, now marked) — the duel's
+user-complete rows are the end-to-end regression. Length semantics:
+Lean's `String.length` (chars) = the std `$string_len` (bytes) on
+ASCII — the StrOps v1 byte/char stance.
 
 The VARIANT family LANDED (Phase 3, below) at the SPEC level: the
 variant-row (`VRow` — the fired tag's position + the payload at it),
@@ -94,6 +92,7 @@ story, the strlen precedent).
 
 import SchemaLang.Field
 import CodegenCore.GuestGate
+import LintKit
 
 namespace SchemaLang
 
@@ -172,12 +171,11 @@ inductive VExpr (s : List Field) : Ty → Type where
   /-- Conjunction on the booleans (the evaluator matches — no core
       `Bool.and` call in the compiled path). -/
   | and (a b : VExpr s .bool) : VExpr s .bool
-  /-- `strlen e` — the operand string's length as a u64. SPEC-LEVEL
-      ONLY (the header's Phase 2): the boxed `Value .string` carries
-      the Lean `String`, so `evalV` reads the length in place — no
-      std import, the acyclic edge stays clean. NOT COMPILED: the raw
-      evaluators have no string level; `evalU`'s arm is the loud 0
-      marker. -/
+  /-- `strlen e` — the operand string's length as a u64. The boxed
+      `Value .string` carries the Lean `String`, so `evalV` reads the
+      length in place — no std import, the acyclic edge stays clean.
+      COMPILED too: `evalU`'s arm reads the same box's length via the
+      raw `string_len` (the header's Phase 2 — the wire-up). -/
   | strlen (e : VExpr s .string) : VExpr s .u64
 
 /-- The field-ref BUILDER — where the `HasCol` instance search happens.
@@ -218,10 +216,25 @@ def evalV : VExpr s t → RowVals s → Value t
       | .string s => .u64 s.length.toUInt64
       | _ => .u64 0
 
+/-- The RAW string length: the (ptr,len) pair's SECOND half. The Lean
+    body (`String.length` → chars) is the oracle ONLY — the decl is
+    never a compile target (unmarked, and the root name falls outside
+    every target's namespace fold), so the compiled callers' `call
+    $string_len` resolves to the SPLICED RUNTIME's primitive (the
+    `i32.load offset=8` on the string object) — the same name
+    resolution the `GuestlangStd.strlen`/`strcat` intrinsics ride
+    (`WasmBackend.stdOp?`). The root NAME IS THE CONTRACT (`string_len`
+    below, outside the namespace). Byte-length ≠ char-length off
+    ASCII (the StrOps v1 stance). -/
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror of root `string_len` (below): the namespaced copy is the oracle compiled into evalU's strlen arm (`$SchemaLang.string_len`); the ROOT copy is the spliced-runtime wire-up contract — identical bodies keep oracle == contract"]
+def string_len (s : String) : UInt64 := s.length.toUInt64
+
 /-- The RAW u64 evaluator (the compiled reading): operands surface as
     bare `UInt64` — the `Value .u64` box is unboxed and dropped, and
     NOTHING is constructed (the guest's reset/reuse pass finds no
-    firing site). -/
+    firing site). The strlen arm reads the row's boxed string via the
+    root-namespace `string_len` (above — the namespace reopens for the
+    evaluators; a root name is visible inside). -/
 @[guest_std]
 def evalU : VExpr s .u64 → RowVals s → UInt64
   | .lit v, _ => v
@@ -229,10 +242,17 @@ def evalU : VExpr s .u64 → RowVals s → UInt64
       match p.get row with
       | .u64 x => x
       | _ => 0
-  -- the SPEC-only node: NOT COMPILED — the raw evaluators have no
-  -- string level (the header's Phase 2); the explicit arm is the loud
-  -- marker (never hide it in the wildcard below).
-  | .strlen _, _ => 0
+  -- the strlen node's RAW reading (WIRED — the header's Phase 2): the
+  -- operand is a field ref (the only `.string`-typed VExpr shape), the
+  -- row's string box → the raw length via `string_len` — the
+  -- (ptr,len) pair's second half (the runtime `$string_len` read).
+  | .strlen e, row =>
+      match e with
+      | .col _ p =>
+          match p.get row with
+          | .string s => string_len s
+          | _ => 0
+      | _ => 0
   | _, _ => 0
 
 /-- Bool → the 0/1 u64 the raw evaluator computes in (constant arms —
@@ -489,5 +509,25 @@ theorem evalCase_here_sound (n : String) (cs : List VariantCase)
   · show Value.bool (n == n) = Value.bool true
     rw [beq_self_eq_true]
   · rfl
+
+-- The namespace CLOSES here: the raw-length decl below must be a ROOT
+-- name (the compiled `call $string_len` contract — see its doc).
+end SchemaLang
+
+/-- The RAW string length: the (ptr,len) pair's SECOND half. The Lean
+    body (`String.length` → chars) is the oracle ONLY — the decl is
+    never a compile target (unmarked, and the root name falls outside
+    every target's namespace fold), so the compiled callers' `call
+    $string_len` resolves to the SPLICED RUNTIME's primitive (the
+    `i32.load offset=8` on the string object) — the same name
+    resolution the `GuestlangStd.strlen`/`strcat` intrinsics ride
+    (`WasmBackend.stdOp?`). ROOT NAME IS THE CONTRACT: a namespaced
+    name emits prefixed in the LCNF (`$SchemaLang.string_len`) and
+    would NOT resolve (the `unknown func` lesson). Byte-length ≠
+    char-length off ASCII (the StrOps v1 stance). -/
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror of `SchemaLang.string_len` (above): the ROOT name is the `call $string_len` runtime splice contract (a namespaced name emits prefixed and fails to resolve — the `unknown func` lesson); identical bodies by design"]
+def string_len (s : String) : UInt64 := s.length.toUInt64
+
+namespace SchemaLang
 
 end SchemaLang

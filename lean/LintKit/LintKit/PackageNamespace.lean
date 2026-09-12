@@ -72,7 +72,9 @@ def packagePrefixes : List (Name × List Name) := [
   (`DemoFn,       [`DemoFn]),
   (`Oracle,       [`Oracle]),
   (`GuestlangStd, [`GuestlangStd]),
-  (`LintKit,      [`LintKit])
+  (`LintKit,      [`LintKit]),
+  (`Ledger,       [`Ledger]),
+  (`LedgerFn,     [`LedgerFn])
 ]
 
 /-- Parse the comma-separated `extraPrefixes` option. -/

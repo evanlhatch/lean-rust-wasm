@@ -20,7 +20,7 @@
 import TestKit
 import Plausible
 
-open TestKit LSpec Plausible
+open TestKit Plausible
 
 /-- The harness checks. -/
 def harnessChecks : List (String × CheckResult) :=

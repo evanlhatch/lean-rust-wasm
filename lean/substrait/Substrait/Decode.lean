@@ -29,9 +29,67 @@ are not invertible and rejected.
 Substrait stays core-only: nothing here imports the engine model.
 -/
 import Substrait.Emit.Text
-import Substrait.Substrait.Grammar
+import Substrait.Grammar
 
-namespace Substrait.Decode.Text
+namespace Substrait.Decode
+
+/-! ## the parser monad -/
+
+/-- The rest-threading parser monad: over `List Char`, returning the value
+    and the unconsumed rest. `Parser` is an `abbrev` (reducible), so every
+    public entry keeps its plain `List Char → Option (α × List Char)`
+    signature; the `do`-blocks live in `where`-clause helpers typed
+    `… → Parser α` (the notation's monad inference needs the `Parser` head). -/
+abbrev Parser (α : Type) : Type := List Char → Option (α × List Char)
+
+namespace Parser
+
+@[simp] def result (a : α) : Parser α := fun cs => some (a, cs)
+
+@[simp] def bind {α β} (p : Parser α) (f : α → Parser β) : Parser β :=
+  fun cs => match p cs with | none => none | some (a, rest) => f a rest
+
+instance : Monad Parser where
+  pure := Parser.result
+  bind := Parser.bind
+
+@[simp] def fail : Parser α := fun _ => none
+
+/-- Look at (but do not consume) the next character. -/
+@[simp] def peek : Parser Char :=
+  fun cs => match cs with | c :: _ => some (c, cs) | [] => none
+
+/-- The input as it stands (position capture — do-block branches that need
+    the unconsumed text, e.g. fuel lengths and rest-shape tests). -/
+@[simp] def rest : Parser (List Char) := fun cs => some (cs, cs)
+
+/-- Rewind to an earlier captured position (position-reset jumps). -/
+@[simp] def jump (tgt : List Char) : Parser Unit := fun _ => some ((), tgt)
+
+/-- Consume one specific character (the leaf scanners' quote consumption). -/
+@[simp] def consumeChar (c : Char) : Parser Unit :=
+  fun cs => match cs with | c' :: rest => if c' == c then some ((), rest) else none | [] => none
+
+/-- Consume the maximal prefix matching `p` — the leaf scanners' core. -/
+@[simp] def takeWhile (p : Char → Bool) : Parser String :=
+  fun cs => some (String.ofList (cs.takeWhile p), cs.dropWhile p)
+
+/-- `do`-notation's `>>=` at an applied position reduces to the bind's
+    `match` (the class-instance glue is otherwise opaque to `simp`). -/
+@[simp] theorem bind_apply (p : Parser α) (f : α → Parser β) (cs : List Char) :
+    (p >>= f) cs = (Parser.bind p f) cs := by rfl
+
+/-- `consumeChar` at a matching literal head. -/
+@[simp] theorem consumeChar_self (c : Char) (rest : List Char) :
+    consumeChar c (c :: rest) = some ((), rest) := by
+  unfold consumeChar
+  simp
+
+/-- `pure` at an applied position (the instance glue unfolds here). -/
+@[simp] theorem pure_apply (a : α) (cs : List Char) :
+    (pure a : Parser α) cs = some (a, cs) := rfl
+
+end Parser
 
 /-- `(toString c).toList = [c]` — core never proves it; the chain is
     `Char.toString = String.singleton` + `singleton_eq_ofList`. -/
@@ -150,13 +208,12 @@ theorem unescape_escape (s : String) : unescape (Emit.Text.escape s) = some s :=
 
 /-- Scan a bare identifier: ASCII alpha, then ident-chars. Returns the name
     and the unconsumed rest. -/
-def scanIdent : List Char → Option (String × List Char)
-  | [] => none
-  | c :: rest =>
-    if c.isAlpha then
-      some (String.ofList (c :: rest.takeWhile Emit.Text.isIdentChar),
-        rest.dropWhile Emit.Text.isIdentChar)
-    else none
+def scanIdent : List Char → Option (String × List Char) := scanIdentGo
+where
+  scanIdentGo : Parser String := do
+    let h ← Parser.peek
+    if h.isAlpha then Parser.takeWhile Emit.Text.isIdentChar
+    else Parser.fail
 
 /-- Scan raw quoted content (escape pairs kept raw, in order) up to the
     closing `q`. -/
@@ -240,11 +297,18 @@ theorem scanQuotedRaw_escape (q : Char) (l acc : List Char) (rest : List Char)
       rw [List.reverse_append, List.reverse_reverse, ← List.append_assoc]
 
 /-- Scan a name: quoted (content unescaped) or bare. -/
-def scanName : List Char → Option (String × List Char)
-  | '"' :: rest =>
-      (scanQuotedRaw '"' [] rest).bind fun (raw, rest') =>
-        (unescape (String.ofList raw)).map fun n => (n, rest')
-  | cs => scanIdent cs
+def scanName : List Char → Option (String × List Char) := scanNameGo
+where
+  scanNameGo : Parser String := do
+    let cs ← Parser.rest
+    match cs with
+    | '"' :: _ => do
+        let _ ← Parser.consumeChar '"'
+        let raw ← scanQuotedRaw '"' []
+        match unescape (String.ofList raw) with
+        | some n => pure n
+        | none => Parser.fail
+    | _ => scanIdent
 
 /-- Bare-name inversion: an identifier scans back to itself, provided the
     following text starts with a non-identifier character (the emitter
@@ -263,9 +327,20 @@ theorem scanIdent_of_identifier (n : String) (h : Emit.Text.isIdentifier n = tru
     have hall : ∀ a ∈ tail, Emit.Text.isIdentChar a := List.all_eq_true.mp htail
     show scanIdent (c :: (tail ++ rest)) = _
     unfold scanIdent
-    simp only [hc]
-    rw [if_pos (by decide)]
-    rw [List.takeWhile_append_of_pos hall, List.dropWhile_append_of_pos hall]
+    rw [show scanIdent.scanIdentGo (c :: (tail ++ rest)) =
+        Parser.takeWhile Emit.Text.isIdentChar (c :: (tail ++ rest)) by
+      unfold scanIdent.scanIdentGo
+      simp only [Parser.bind_apply, Parser.bind, Parser.peek, Parser.result]
+      simp [hc]]
+    rw [Parser.takeWhile]
+    have hic : Emit.Text.isIdentChar c = true := by
+      unfold Emit.Text.isIdentChar
+      rw [hc]
+      rfl
+    rw [List.takeWhile_cons_of_pos hic]
+    rw [List.takeWhile_append_of_pos hall]
+    rw [List.dropWhile_cons_of_pos hic]
+    rw [List.dropWhile_append_of_pos hall]
     cases hsep with
     | inl hr =>
       subst hr
@@ -280,10 +355,12 @@ theorem scanIdent_of_identifier (n : String) (h : Emit.Text.isIdentifier n = tru
 /-- Quoted-name inversion. -/
 theorem scanName_quoted (n : String) (rest : List Char) :
     scanName ('"' :: (Emit.Text.escape n).toList ++ '"' :: rest) = some (n, rest) := by
-  show ((scanQuotedRaw '"' [] ((Emit.Text.escape n).toList ++ '"' :: rest)).bind _) = _
+  unfold scanName scanName.scanNameGo
+  let X : List Char := (Emit.Text.escape n).toList ++ '"' :: rest
+  simp [Parser.bind_apply, Parser.bind, Parser.rest, Parser.result, Parser.consumeChar]
   rw [escape_toList, scanQuotedRaw_escape (q := '"') (acc := []) (rest := rest) (hq := Or.inl rfl)]
   rw [List.reverse_nil, List.nil_append]
-  show (unescape (String.ofList (n.toList.flatMap escChars))).map (fun m => (m, rest)) = _
+  simp [Parser.bind_apply, Parser.bind, Parser.result]
   rw [← escape_toList, String.ofList_toList, unescape_escape]
   rfl
 
@@ -309,9 +386,10 @@ theorem scanName_name (n : String) (rest : List Char)
         rw [hcontra] at hi
         simp [Char.isAlpha] at hi
       show scanName (c :: (tail ++ rest)) = _
-      rw [scanName.eq_2 (c :: (tail ++ rest)) (fun x hx => by
-        have := List.cons.inj hx
-        exact hcq this.1)]
+      rw [show scanName (c :: (tail ++ rest)) = scanIdent (c :: (tail ++ rest)) by
+        unfold scanName scanName.scanNameGo
+        simp only [Parser.bind_apply, Parser.bind, Parser.rest, Parser.result]
+        simp [hcq]]
       have hsc := scanIdent_of_identifier n hi rest hsep
       rw [hn] at hsc
       exact hsc
@@ -334,19 +412,19 @@ def expect (p : String) (cs : List Char) : Option (List Char) :=
   if startsWith cs p then some (cs.drop p.length) else none
 
 /-- Scan a decimal natural. -/
-def scanNat : List Char → Option (Nat × List Char)
-  | c :: rest =>
-    if c.isDigit then
-      let ds := (c :: rest).takeWhile Char.isDigit
-      let after := (c :: rest).dropWhile Char.isDigit
-      some (ds.foldl (fun a d => a * 10 + (d.toNat - '0'.toNat)) 0, after)
-    else none
-  | [] => none
+def scanNat : List Char → Option (Nat × List Char) := scanNatGo
+where
+  scanNatGo : Parser Nat := do
+    let ds ← Parser.takeWhile Char.isDigit
+    if ds == "" then Parser.fail
+    else
+      let n := ds.toList.foldl (fun a d => a * 10 + (d.toNat - '0'.toNat)) 0
+      pure n
 
 /-- Scan a decimal integer (optional leading `-`). -/
 def scanInt : List Char → Option (Int × List Char)
-  | '-' :: rest => (scanNat rest).map (fun p => (-(p.1 : Int), p.2))
-  | cs => (scanNat cs).map (fun p => ((p.1 : Int), p.2))
+  | '-' :: rest => (do let n ← scanNat; pure (-(n : Int)) : Parser Int) rest
+  | cs => (do let n ← scanNat; pure (n : Int) : Parser Int) cs
 
 /-- The prefix kit: a literal prefix is recognized (inversion proofs). -/
 theorem startsWith_self (p : String) (rest : List Char) :
@@ -392,17 +470,17 @@ theorem withNull_nullable (mk : Proto.Nullability → Proto.PType) (rest : List 
     `go` (not `findSome?`) for the same whnf reason as `parseScalarType`.
     Fuel-free: lexing never recurses, which is what makes the new
     `parseType_mono` a per-ctor case split with no `by_cases` chains. -/
-def lexCtorGo : List Substrait.TCtor → List Char → Option Substrait.TCtor
+def lexCtorGo : List Substrait.Grammar.TCtor → List Char → Option Substrait.Grammar.TCtor
   | [], _ => none
   | t :: ts, cs => if startsWith cs t.prefix then some t else lexCtorGo ts cs
 
-def lexCtor (cs : List Char) : Option Substrait.TCtor :=
-  lexCtorGo Substrait.TCtor.all cs
+def lexCtor (cs : List Char) : Option Substrait.Grammar.TCtor :=
+  lexCtorGo Substrait.Grammar.TCtor.all cs
 
 /-- The fold finds the matching row; uniqueness (`prefix_unique`) forces
     the found row to BE `t` whenever `t`'s prefix matches. -/
-theorem lexCtorGo_eq_of_startsWith (ts : List Substrait.TCtor) (cs : List Char)
-    (t : Substrait.TCtor) (hmem : t ∈ ts) (hsw : startsWith cs t.prefix = true) :
+theorem lexCtorGo_eq_of_startsWith (ts : List Substrait.Grammar.TCtor) (cs : List Char)
+    (t : Substrait.Grammar.TCtor) (hmem : t ∈ ts) (hsw : startsWith cs t.prefix = true) :
     lexCtorGo ts cs = some t := by
   induction ts with
   | nil => simp at hmem
@@ -410,7 +488,7 @@ theorem lexCtorGo_eq_of_startsWith (ts : List Substrait.TCtor) (cs : List Char)
     simp only [lexCtorGo]
     by_cases hx : startsWith cs x.prefix = true
     · rw [if_pos hx]
-      have hxeq : x = t := Substrait.TCtor.prefix_unique x t cs
+      have hxeq : x = t := Substrait.Grammar.TCtor.prefix_unique x t cs
         (List.isPrefixOf_iff_prefix.mp hx) (List.isPrefixOf_iff_prefix.mp hsw)
       rw [hxeq]
     · rw [if_neg hx]
@@ -419,13 +497,13 @@ theorem lexCtorGo_eq_of_startsWith (ts : List Substrait.TCtor) (cs : List Char)
       · exact ih hin
 
 /-- Lexing succeeds on exactly the ctors whose prefix matches. -/
-theorem lexCtor_eq_some (t : Substrait.TCtor) (cs : List Char)
+theorem lexCtor_eq_some (t : Substrait.Grammar.TCtor) (cs : List Char)
     (hsw : startsWith cs t.prefix = true) : lexCtor cs = some t :=
-  lexCtorGo_eq_of_startsWith _ _ _ (Substrait.TCtor.all_complete t) hsw
+  lexCtorGo_eq_of_startsWith _ _ _ (Substrait.Grammar.TCtor.all_complete t) hsw
 
 /-- Self-lexing: a ctor's own text lexes to it. ONE lemma for all 13 ctors —
     the round-trip proofs' per-branch prefix skips collapse into this. -/
-theorem lexCtor_self (t : Substrait.TCtor) (rest : List Char) :
+theorem lexCtor_self (t : Substrait.Grammar.TCtor) (rest : List Char) :
     lexCtor (t.prefix.toList ++ rest) = some t :=
   lexCtor_eq_some _ _ (startsWith_self _ _)
 
@@ -453,8 +531,8 @@ def parseType : Nat → List Char → Option (Proto.PType × List Char)
     match lexCtor cs with
     | none => none
     | some (.scalar c) =>
-      withNull (Substrait.ScalarCtor.toPType c)
-        (cs.drop (Substrait.ScalarCtor.prefix c).length)
+      withNull (Substrait.Grammar.ScalarCtor.toPType c)
+        (cs.drop (Substrait.Grammar.ScalarCtor.prefix c).length)
     | some .decimal =>
       match scanNat (cs.drop 8) with
       | some (p, r1) =>
@@ -605,22 +683,22 @@ theorem parseType_at_depth (t : Proto.PType) (cs : List Char) (r : Proto.PType �
 -- ── types: the inversion theorems ─────────────────────────────────────────
 
 /-- The parseType form: a scalar's text parses at fuel 1. -/
-theorem parseType_scalar (c : Substrait.ScalarCtor) (rest : List Char)
+theorem parseType_scalar (c : Substrait.Grammar.ScalarCtor) (rest : List Char)
     (hrest : rest.head? ≠ some '?') :
-    parseType 1 ((Substrait.ScalarCtor.prefix c).toList ++ rest) =
-      some (Substrait.ScalarCtor.toPType c .required, rest) := by
-  rw [show (Substrait.ScalarCtor.prefix c) =
-      Substrait.TCtor.prefix (.scalar c) from rfl]
+    parseType 1 ((Substrait.Grammar.ScalarCtor.prefix c).toList ++ rest) =
+      some (Substrait.Grammar.ScalarCtor.toPType c .required, rest) := by
+  rw [show (Substrait.Grammar.ScalarCtor.prefix c) =
+      Substrait.Grammar.TCtor.prefix (.scalar c) from rfl]
   unfold parseType
   rw [lexCtor_self]
   -- the match on `some (.scalar c)` is constructor-headed: reduce it, then
   -- the drop peels the prefix
-  show withNull (Substrait.ScalarCtor.toPType c)
-      (((Substrait.TCtor.prefix (.scalar c)).toList ++ rest).drop
-        (Substrait.ScalarCtor.prefix c).length) =
-    some (Substrait.ScalarCtor.toPType c .required, rest)
-  rw [show (Substrait.ScalarCtor.prefix c).length =
-      (Substrait.TCtor.prefix (.scalar c)).toList.length from rfl,
+  show withNull (Substrait.Grammar.ScalarCtor.toPType c)
+      (((Substrait.Grammar.TCtor.prefix (.scalar c)).toList ++ rest).drop
+        (Substrait.Grammar.ScalarCtor.prefix c).length) =
+    some (Substrait.Grammar.ScalarCtor.toPType c .required, rest)
+  rw [show (Substrait.Grammar.ScalarCtor.prefix c).length =
+      (Substrait.Grammar.TCtor.prefix (.scalar c)).toList.length from rfl,
     List.drop_left]
   exact withNull_required _ rest hrest
 
@@ -633,19 +711,19 @@ private theorem toList_append_question (p : String) (rest : List Char) :
 /-- The nullable-suffix form of `parseType_scalar`: `<prefix>?` parses at
     `.nullable`. ONE lemma for all nine scalar ctors — the nine nullable
     round-trip sites collapse onto it. -/
-theorem parseType_scalar_nullable (c : Substrait.ScalarCtor) (rest : List Char) :
-    parseType 1 ((Substrait.ScalarCtor.prefix c).toList ++ '?' :: rest) =
-      some (Substrait.ScalarCtor.toPType c .nullable, rest) := by
-  rw [show (Substrait.ScalarCtor.prefix c) =
-      Substrait.TCtor.prefix (.scalar c) from rfl]
+theorem parseType_scalar_nullable (c : Substrait.Grammar.ScalarCtor) (rest : List Char) :
+    parseType 1 ((Substrait.Grammar.ScalarCtor.prefix c).toList ++ '?' :: rest) =
+      some (Substrait.Grammar.ScalarCtor.toPType c .nullable, rest) := by
+  rw [show (Substrait.Grammar.ScalarCtor.prefix c) =
+      Substrait.Grammar.TCtor.prefix (.scalar c) from rfl]
   unfold parseType
   rw [lexCtor_self]
-  show withNull (Substrait.ScalarCtor.toPType c)
-      (((Substrait.TCtor.prefix (.scalar c)).toList ++ '?' :: rest).drop
-        (Substrait.ScalarCtor.prefix c).length) =
-    some (Substrait.ScalarCtor.toPType c .nullable, rest)
-  rw [show (Substrait.ScalarCtor.prefix c).length =
-      (Substrait.TCtor.prefix (.scalar c)).toList.length from rfl,
+  show withNull (Substrait.Grammar.ScalarCtor.toPType c)
+      (((Substrait.Grammar.TCtor.prefix (.scalar c)).toList ++ '?' :: rest).drop
+        (Substrait.Grammar.ScalarCtor.prefix c).length) =
+    some (Substrait.Grammar.ScalarCtor.toPType c .nullable, rest)
+  rw [show (Substrait.Grammar.ScalarCtor.prefix c).length =
+      (Substrait.Grammar.TCtor.prefix (.scalar c)).toList.length from rfl,
     List.drop_left]
   exact withNull_nullable _ rest
 
@@ -765,15 +843,14 @@ private theorem scanNat_of_toString (n : Nat) (rest : List Char) (hstop : notDig
   | nil => exact (hne hd).elim
   | cons c cs =>
     change scanNat (c :: (cs ++ rest)) = some (n, rest)
-    rw [scanNat.eq_1]
     have hc : c.isDigit = true := by
       have hmc : c ∈ Nat.toDigits 10 n := by rw [hd]; simp
       exact Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide) hmc
-    rw [hc]
     have hcs : ∀ a ∈ cs, a.isDigit = true := by
       intro a ha
       exact Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide)
         (by rw [hd]; simp [ha])
+    simp [scanNat, scanNat.scanNatGo, Parser.bind_apply, Parser.bind, Parser.takeWhile]
     rw [List.takeWhile_cons_of_pos hc]
     rw [List.takeWhile_append_of_pos hcs]
     rw [scanNat_takeWhile_nil rest hstop]
@@ -787,9 +864,11 @@ private theorem scanNat_of_toString (n : Nat) (rest : List Char) (hstop : notDig
       rw [← hd]
       simpa [f, Nat.ofDigitChars_eq_foldl, Nat.mul_comm, Nat.mul_left_comm, Nat.mul_assoc] using
         (Nat.ofDigitChars_ten_toDigits : Nat.ofDigitChars 10 (Nat.toDigits 10 n) 0 = n)
-    simp [List.append_nil]
-    change List.foldl f (c.toNat - '0'.toNat) cs = n
-    exact hfold
+    by_cases hz : c :: (cs ++ rest) = []
+    · exact False.elim (by simp at hz)
+    · simp [hz]
+      change List.foldl f (c.toNat - '0'.toNat) cs = n
+      exact hfold
 
 -- ── the per-constructor helpers (full type text: base + `?`) ──────────────
 
@@ -798,34 +877,34 @@ private theorem scanNat_of_toString (n : Nat) (rest : List Char) (hstop : notDig
     the grammar table. The ctor match must come first: `ScalarCtor.toPType`
     is ctor-indexed, so the emitter equation lemmas only reduce at a concrete
     ctor. -/
-theorem scalarT (c : Substrait.ScalarCtor) (n : Proto.Nullability) (rest : List Char)
+theorem scalarT (c : Substrait.Grammar.ScalarCtor) (n : Proto.Nullability) (rest : List Char)
     (hrest : rest.head? ≠ some '?')
-    (hemit : Emit.Text.typeText (Substrait.ScalarCtor.toPType c n) = .ok b) :
-    parseType 1 (b.toList ++ rest) = some (Substrait.ScalarCtor.toPType c n, rest) := by
+    (hemit : Emit.Text.typeText (Substrait.Grammar.ScalarCtor.toPType c n) = .ok b) :
+    parseType 1 (b.toList ++ rest) = some (Substrait.Grammar.ScalarCtor.toPType c n, rest) := by
   cases n with
   | required =>
       cases c <;> (
         rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
+        simp [Emit.Text.nullSuffix, Substrait.Grammar.ScalarCtor.toPType,
           Proto.PType.nullability] at hemit
-        rw [show b = Substrait.ScalarCtor.prefix _ from hemit.symm]
+        rw [show b = Substrait.Grammar.ScalarCtor.prefix _ from hemit.symm]
         exact parseType_scalar _ rest hrest)
   | nullable =>
       -- ctor-generic: the base IS the table's prefix (`typeTextBase_scalar`),
       -- the nullability is `.nullable`, so `b = prefix c ++ "?"`
-      have hn : Proto.PType.nullability (Substrait.ScalarCtor.toPType c .nullable) =
+      have hn : Proto.PType.nullability (Substrait.Grammar.ScalarCtor.toPType c .nullable) =
           .nullable := by
         cases c <;> rfl
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase_scalar, hn] at hemit
-      have hb : b = Substrait.ScalarCtor.prefix c ++ "?" :=
+      have hb : b = Substrait.Grammar.ScalarCtor.prefix c ++ "?" :=
         Except.ok.inj (hemit.symm : Except.ok b =
-          Except.ok (Substrait.ScalarCtor.prefix c ++ "?"))
+          Except.ok (Substrait.Grammar.ScalarCtor.prefix c ++ "?"))
       rw [hb, toList_append_question]
       exact parseType_scalar_nullable c rest
   | unspecified =>
       cases c <;> (
         rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
-        simp [Emit.Text.nullSuffix, Substrait.ScalarCtor.toPType,
+        simp [Emit.Text.nullSuffix, Substrait.Grammar.ScalarCtor.toPType,
           Proto.PType.nullability] at hemit)
 
 /-- The decimal inversion: `decimal<P,S>` scans back (both nullabilities). -/
@@ -917,13 +996,13 @@ private theorem listT (e : Proto.PType) (n : Proto.Nullability) (rest : List Cha
       unfold parseType
       -- the lexer folds the closed ctor table; `list<…` self-lexes
       have hcv : (("list<" ++ es ++ ">").toList ++ rest) =
-          (Substrait.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.TCtor.prefix]
+          (Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ rest) := by
+        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
       rw [hcv, lexCtor_self]
       have hdrop : List.drop 5
-          ((Substrait.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ rest)) =
+          ((Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ rest)) =
           (es ++ ">").toList ++ rest := by
-        simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]
+        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
       rw [hdrop]
       have hcomb : parseType (typeDepth e) ((es ++ ">").toList ++ rest) =
           some (e, '>' :: rest) := by
@@ -950,13 +1029,13 @@ private theorem listT (e : Proto.PType) (n : Proto.Nullability) (rest : List Cha
       -- form + the param-prefix complement lemma), then the only preceding
       -- parameterized check (`decimal<`) is skipped by prefix mismatch
       have hcv : (("list<" ++ es ++ ">" ++ "?").toList ++ rest) =
-          (Substrait.TCtor.prefix .list).toList ++ ((es ++ ">" ++ "?").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.TCtor.prefix]
+          (Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">" ++ "?").toList ++ rest) := by
+        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
       rw [hcv, lexCtor_self]
       have hdrop : List.drop 5
-          ((Substrait.TCtor.prefix .list).toList ++ ((es ++ ">" ++ "?").toList ++ rest)) =
+          ((Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">" ++ "?").toList ++ rest)) =
           (es ++ ">" ++ "?").toList ++ rest := by
-        simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]
+        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
       rw [hdrop]
       have hcomb : parseType (typeDepth e) ((es ++ ">" ++ "?").toList ++ rest) =
           some (e, '>' :: '?' :: rest) := by
@@ -1001,13 +1080,13 @@ private theorem mapT (k v : Proto.PType) (n : Proto.Nullability) (rest : List Ch
         rw [hb]
         unfold parseType
         have hcv : (("map<" ++ ks ++ ", " ++ vs ++ ">").toList ++ rest) =
-            (Substrait.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ rest) := by
-          simp [String.toList_append, List.append_assoc, Substrait.TCtor.prefix]
+            (Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ rest) := by
+          simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
         rw [hcv, lexCtor_self]
         have hdrop : List.drop 4
-            ((Substrait.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ rest)) =
+            ((Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ rest)) =
             (ks ++ ", " ++ vs ++ ">").toList ++ rest := by
-          simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]
+          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
         rw [hdrop]
         have hkey : parseType (typeDepth k) ((ks ++ ", " ++ vs ++ ">").toList ++ rest) =
             some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: rest))) := by
@@ -1047,13 +1126,13 @@ private theorem mapT (k v : Proto.PType) (n : Proto.Nullability) (rest : List Ch
         rw [hb]
         unfold parseType
         have hcv : (("map<" ++ ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) =
-            (Substrait.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) := by
-          simp [String.toList_append, List.append_assoc, Substrait.TCtor.prefix]
+            (Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) := by
+          simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
         rw [hcv, lexCtor_self]
         have hdrop : List.drop 4
-            ((Substrait.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest)) =
+            ((Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest)) =
             (ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest := by
-          simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]
+          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
         rw [hdrop]
         have hkey : parseType (typeDepth k) ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) =
             some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: '?' :: rest))) := by
@@ -1170,17 +1249,17 @@ private theorem typeTextBase_nonempty (t : Proto.PType) (b0 : String)
     rw [Emit.Text.typeTextBase.eq_def] at h
     simp at h
   | bool n =>
-    simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h
+    simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h
     intro hz
     exact (by decide : "boolean".toList ≠ []) (by simpa [h] using hz)
-  | i8 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i16 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i32 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i64 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp32 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp64 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | string n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | binary n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i8 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i16 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | fp32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | fp64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | string n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | binary n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
   | decimal p s n =>
     simp [Emit.Text.typeTextBase] at h
     rw [h.symm]
@@ -1500,15 +1579,15 @@ private theorem typeText_base_head (t : Proto.PType) (b0 : String)
   | userDefined a ps n =>
     rw [Emit.Text.typeTextBase.eq_def] at h
     simp at h
-  | bool n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i8 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i16 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i32 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i64 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp32 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp64 n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | string n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | binary n => simp [Emit.Text.typeTextBase, Substrait.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | bool n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i8 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i16 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | fp32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | fp64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | string n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | binary n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
   | decimal p s n =>
     simp [Emit.Text.typeTextBase] at h
     rw [h.symm]
@@ -1594,20 +1673,20 @@ private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : 
       rw [hb]
       unfold parseType
       have hcv : (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ rest) =
-          (Substrait.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.TCtor.prefix]
+          (Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ rest) := by
+        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
       rw [hcv, lexCtor_self]
       have hdrop : List.drop 7
-          ((Substrait.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ rest)) =
+          ((Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ rest)) =
           (Emit.Text.sep ", " ts ++ ">").toList ++ rest := by
-        simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]
+        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
       rw [hdrop]
       -- the parseTypeList lfuel counts the input length; restore the
       -- string-append form the downstream lemmas are stated against
-      rw [show ((Substrait.TCtor.prefix .struct).toList ++
+      rw [show ((Substrait.Grammar.TCtor.prefix .struct).toList ++
               ((Emit.Text.sep ", " ts ++ ">").toList ++ rest)).length =
             (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ rest).length from by
-          simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]]
+          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]]
       cases ts with
       | nil =>
         have hfs : fs = [] := by
@@ -1713,18 +1792,18 @@ private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : 
       rw [hb]
       unfold parseType
       have hcv : (("struct<" ++ Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest) =
-          (Substrait.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.TCtor.prefix]
+          (Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest) := by
+        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
       rw [hcv, lexCtor_self]
       have hdrop : List.drop 7
-          ((Substrait.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest)) =
+          ((Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest)) =
           (Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest := by
-        simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]
+        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
       rw [hdrop]
-      rw [show ((Substrait.TCtor.prefix .struct).toList ++
+      rw [show ((Substrait.Grammar.TCtor.prefix .struct).toList ++
               ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest)).length =
             (("struct<" ++ Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest).length from by
-          simp [Substrait.TCtor.prefix, String.toList_append, List.append_assoc]]
+          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]]
       cases ts with
       | nil =>
         have hfs : fs = [] := by
@@ -1883,11 +1962,11 @@ theorem parseType_typeText (t : Proto.PType) (b : String) (rest : List Char)
   let motive : Proto.PType → Prop :=
     fun t => ∀ (b : String) (rest : List Char), rest.head? ≠ some '?' →
       Emit.Text.typeText t = .ok b → parseType (typeDepth t) (b.toList ++ rest) = some (t, rest)
-  have hscalar : ∀ (c : Substrait.ScalarCtor) n,
-      motive (Substrait.ScalarCtor.toPType c n) := by
+  have hscalar : ∀ (c : Substrait.Grammar.ScalarCtor) n,
+      motive (Substrait.Grammar.ScalarCtor.toPType c n) := by
     intro c n b rest hrest hemit
-    rw [show typeDepth (Substrait.ScalarCtor.toPType c n) = 1 from by
-      cases c <;> simp [typeDepth, Substrait.ScalarCtor.toPType]]
+    rw [show typeDepth (Substrait.Grammar.ScalarCtor.toPType c n) = 1 from by
+      cases c <;> simp [typeDepth, Substrait.Grammar.ScalarCtor.toPType]]
     exact scalarT c n rest hrest hemit
   have hbool   : ∀ n, motive (.bool n)   := hscalar .bool
   have hi8     : ∀ n, motive (.i8 n)     := hscalar .i8
@@ -1946,32 +2025,38 @@ def intLitOf (v : Int) : Option Proto.PType → Option Proto.LiteralType
     | .i32 _ => some (.i32 v) | .i64 _ => some (.i64 v)
     | _ => none
 
+/-- Attach a scanned literal SUFFIX (`?`/`!`) to a literal, deriving the
+    nullability — the repeated tail of `parseLiteral`'s arms. `abbrev`
+    (reducible): the proof-rewrites in this module must see through it
+    to the underlying `scanLitSuffix` shape. -/
+abbrev litWithSuffix (lt : Proto.LiteralType) (rest : List Char) :
+    Option (Proto.Literal × List Char) :=
+  (scanLitSuffix rest).map fun (sfx, r) =>
+    ({ literalType := lt, nullable := suffixNullable sfx }, r)
+
+/-- The int arm's tail: the suffix scan after a scanned integer — the
+    only parseLiteral arm that does not COMPUTE the literal type up
+    front (`intLitOf` decides the integer kind from the suffix). -/
+def intLitTail (v : Int) (r1 : List Char) : Option (Proto.Literal × List Char) :=
+  match scanLitSuffix r1 with
+  | some (sfx, r) => (intLitOf v sfx).map (fun lt =>
+      ({ literalType := lt, nullable := suffixNullable sfx }, r))
+  | none => none
+
 /-- Parse a literal (the emitter's `literal` forms). -/
 def parseLiteral : List Char → Option (Proto.Literal × List Char)
   | 'n' :: 'u' :: 'l' :: 'l' :: ':' :: rest =>
     (parseType (rest.length + 1) rest).map (fun (t, r) =>
       ({ literalType := .null t, nullable := true }, r))
-  | 't' :: 'r' :: 'u' :: 'e' :: rest =>
-    (scanLitSuffix rest).map (fun (sfx, r) =>
-      ({ literalType := .bool true, nullable := suffixNullable sfx }, r))
-  | 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest =>
-    (scanLitSuffix rest).map (fun (sfx, r) =>
-      ({ literalType := .bool false, nullable := suffixNullable sfx }, r))
+  | 't' :: 'r' :: 'u' :: 'e' :: rest => litWithSuffix (.bool true) rest
+  | 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest => litWithSuffix (.bool false) rest
   | '\'' :: rest =>
     (scanQuotedRaw '\'' [] rest).bind fun (raw, r1) =>
-      (unescape (String.ofList raw)).bind fun s =>
-        (scanLitSuffix r1).map (fun (sfx, r) =>
-          ({ literalType := .string s, nullable := suffixNullable sfx }, r))
+      (unescape (String.ofList raw)).bind fun s => litWithSuffix (.string s) r1
   | cs =>
-    if startsWith cs "{{binary}}" then
-      (scanLitSuffix (cs.drop 10)).map (fun (sfx, r) =>
-        ({ literalType := .binary [], nullable := suffixNullable sfx }, r))
+    if startsWith cs "{{binary}}" then litWithSuffix (.binary []) (cs.drop 10)
     else match scanInt cs with
-      | some (v, r1) =>
-        match scanLitSuffix r1 with
-        | some (sfx, r) => (intLitOf v sfx).map (fun lt =>
-            ({ literalType := lt, nullable := suffixNullable sfx }, r))
-        | none => none
+      | some (v, r1) => intLitTail v r1
       | none => none
 
 mutual
@@ -2125,8 +2210,9 @@ private theorem scanInt_of_nat (n : Nat) (rest : List Char) (hstop : notDigitHea
       rw [hnd] at hdigc
       simp at hdigc
   rw [scanInt.eq_2 ((toString n).toList ++ rest) hdash]
+  rw [Parser.bind_apply, Parser.bind]
   rw [scanNat_of_toString n rest hstop]
-  rfl
+  simp
 
 /-- The `scanInt` inversion for negative values: `-` + the Nat text of the
     magnitude scans back to the negative Int. -/
@@ -2134,8 +2220,9 @@ private theorem scanInt_of_neg (n : Nat) (rest : List Char) (hstop : notDigitHea
     scanInt ('-' :: (toString n).toList ++ rest) = some (-(n : Int), rest) := by
   rw [List.cons_append]
   rw [scanInt.eq_1 ((toString n).toList ++ rest)]
+  rw [Parser.bind_apply, Parser.bind]
   rw [scanNat_of_toString n rest hstop]
-  rfl
+  simp [Parser.bind, Parser.result]
 
 /-- The `field` inversion: `$n` scans back to the field reference (the
     emitter writes the ordinal only; the segment is always `none`). -/
@@ -2223,9 +2310,8 @@ private theorem Char_isAlpha_of_digit {c : Char} (hc : c.isDigit = true) : c.isA
 /-- A digit-headed text is not an identifier. -/
 private theorem scanIdent_digit_head (c : Char) (cs : List Char) (hc : c.isDigit = true) :
     scanIdent (c :: cs) = none := by
-  unfold scanIdent
-  have hα := Char_isAlpha_of_digit hc
-  simp [hα]
+  unfold scanIdent scanIdent.scanIdentGo
+  simp [Parser.bind_apply, Parser.bind, Parser.peek, Parser.fail, Char_isAlpha_of_digit hc]
 
 /-- `startsWith p` on a cons-headed text is false when the head char differs
     from the literal `p`'s head (one lemma for every literal prefix the
@@ -2327,7 +2413,7 @@ theorem parseExpr_lit_bool (fuel : Nat) (ctx : FnCtx) (b : Bool) (rest : List Ch
       (by have hshape : (("false" : String).toList ++ rest) = 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest := by
             have ht : "false".toList = ['f', 'a', 'l', 's', 'e'] := by decide
             rw [ht]; rfl
-          rw [hshape, parseLiteral.eq_3, scanLitSuffix_none rest hnotcolon]; simp [suffixNullable])
+          rw [hshape, parseLiteral.eq_3, litWithSuffix, scanLitSuffix_none rest hnotcolon]; simp [suffixNullable])
   · -- `true`
     have hred : (if true = true then ("true" : String) else "false") = "true" := by decide
     rw [hred]
@@ -2339,7 +2425,7 @@ theorem parseExpr_lit_bool (fuel : Nat) (ctx : FnCtx) (b : Bool) (rest : List Ch
       (by have hshape : (("true" : String).toList ++ rest) = 't' :: 'r' :: 'u' :: 'e' :: rest := by
             have ht : "true".toList = ['t', 'r', 'u', 'e'] := by decide
             rw [ht]; rfl
-          rw [hshape, parseLiteral.eq_2, scanLitSuffix_none rest hnotcolon]; simp [suffixNullable])
+          rw [hshape, parseLiteral.eq_2, litWithSuffix, scanLitSuffix_none rest hnotcolon]; simp [suffixNullable])
 
 -- ── expressions: numeric/string/null literals ──────────────────────────────
 
@@ -2395,14 +2481,15 @@ private theorem parseLiteral_i64 (n : Nat) (rest : List Char)
     rw [List.cons_append] at hsc
     have hsc' : scanInt (c :: (cs ++ rest)) = some ((n : Int), rest) := by
       rw [scanInt.eq_2 (c :: (cs ++ rest)) (by intro rest' h'; injection h' with hcc _; exact hneg hcc)]
+      rw [Parser.bind_apply, Parser.bind]
       rw [hsc]
-      rfl
+      simp
     simp [parseLiteral,
       char_ne_digit hdim (by decide : 'n'.isDigit = false),
       char_ne_digit hdim (by decide : 't'.isDigit = false),
       char_ne_digit hdim (by decide : 'f'.isDigit = false),
       char_ne_digit hdim (by decide : ('\'' : Char).isDigit = false),
-      hbin, hsc', scanLitSuffix_none rest hnotcolon, intLitOf, suffixNullable]
+      hbin, hsc', intLitTail, scanLitSuffix_none rest hnotcolon, intLitOf, suffixNullable]
 
 
 
@@ -2723,11 +2810,12 @@ private theorem parseLiteral_i64_nullable (n : Nat) (rest : List Char)
         some ((n : Int), ':' :: 'i' :: '6' :: '4' :: '?' :: rest) := by
       rw [scanInt.eq_2 (c :: (cs ++ ':' :: 'i' :: '6' :: '4' :: '?' :: rest))
         (by intro rest' h'; injection h' with hcc _; exact hneg hcc)]
+      rw [Parser.bind_apply, Parser.bind]
       rw [hscn']
-      rfl
+      simp
     have hlt := scanLitType (Proto.PType.i64 Proto.Nullability.nullable) "i64?" rest hcont (by
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def]
-      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Substrait.ScalarCtor.prefix])
+      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Substrait.Grammar.ScalarCtor.prefix])
     have hlt' : scanLitSuffix (':' :: 'i' :: '6' :: '4' :: '?' :: rest) =
         some (some (Proto.PType.i64 Proto.Nullability.nullable), rest) := by
       have hs : ((":i64?" : String).toList ++ rest) = ':' :: 'i' :: '6' :: '4' :: '?' :: rest := by
@@ -2741,14 +2829,14 @@ private theorem parseLiteral_i64_nullable (n : Nat) (rest : List Char)
       char_ne_digit hdim (by decide : 't'.isDigit = false),
       char_ne_digit hdim (by decide : 'f'.isDigit = false),
       char_ne_digit hdim (by decide : ('\'' : Char).isDigit = false),
-      hbin, hsc', hlt', intLitOf, suffixNullable, nullabilityOf]
+      hbin, hsc', hlt', intLitTail, intLitOf, suffixNullable, nullabilityOf]
     rfl
 
 /-- A non-alpha head makes `scanIdent` fail. -/
 private theorem scanIdent_not_alpha (c : Char) (cs : List Char) (hc : c.isAlpha = false) :
     scanIdent (c :: cs) = none := by
-  unfold scanIdent
-  simp [hc]
+  unfold scanIdent scanIdent.scanIdentGo
+  simp [Parser.bind_apply, Parser.bind, Parser.peek, Parser.fail, hc]
 
 /-- The prefix conditions for a quoted/named-head expression text (no cast /
     if_then / field / call prefix). -/
@@ -2791,8 +2879,7 @@ private theorem parseLiteral_string (s : String) (rest : List Char)
   dsimp
   rw [show unescape (String.ofList (s.toList.flatMap escChars)) = some s by
     rw [← escape_toList, String.ofList_toList, unescape_escape]]
-  rw [scanLitSuffix_none rest hnotcolon]
-  simp [suffixNullable]
+  simp [litWithSuffix, scanLitSuffix_none rest hnotcolon, suffixNullable]
 
 /-- The nullable `i64` literal at the `parseExpr` level: `42:i64?`. -/
 theorem parseExpr_lit_i64 (fuel n : Nat) (ctx : FnCtx) (rest : List Char)
@@ -3262,31 +3349,33 @@ def parseExtensions : List String → Option (List Proto.SimpleExtensionUrn × L
     let urnVals := urns.map (parseUrnEntry ·.toList)
     if urnVals.any (· == none) then none
     else parseDeclBlocks [] [] (rest.length + 1) (rest.drop urns.length) |>.map fun (ds, rest') =>
-      (urnVals.filterMap id, ds, ds.filterMap (fun d => match d with
-        | .function _ a n => some (n, a) | _ => none), rest')
+      (urnVals.filterMap id, ds, fnCtxOf ds, rest')
   | rest => parseDeclBlocks [] [] (rest.length + 1) rest |>.map fun (ds, rest') =>
-      ([], ds, ds.filterMap (fun d => match d with
-        | .function _ a n => some (n, a) | _ => none), rest')
+      ([], ds, fnCtxOf ds, rest')
 where
+  /-- The function declarations → (name, anchor) pairs — the FnCtx both
+      sections build (one helper, used twice). -/
+  fnCtxOf (ds : List Proto.ExtensionDeclaration) : FnCtx :=
+    ds.filterMap fun d => match d with | .function _ a n => some (n, a) | _ => none
+  /-- The block header → its declaration kind number (0 = functions, 1 =
+      types, 2 = type variations) — one table instead of three arms. -/
+  kindOf (l : String) : Option Nat :=
+    if l == "Functions:" then some 0
+    else if l == "Types:" then some 1
+    else if l == "Type Variations:" then some 2
+    else none
   parseDeclBlocks (acc : List Proto.ExtensionDeclaration) (curKind : List Proto.ExtensionDeclaration) :
       Nat → List String → Option (List Proto.ExtensionDeclaration × List String)
     | 0, _ => none
-    | bfuel + 1, "Functions:" :: rest =>
-      let es := rest.takeWhile (fun l => l.startsWith "  #")
-      let vs := es.map (parseDeclEntry 0 ·.toList)
-      if vs.any (· == none) then none
-      else parseDeclBlocks (acc ++ vs.filterMap id) curKind bfuel (rest.drop es.length)
-    | bfuel + 1, "Types:" :: rest =>
-      let es := rest.takeWhile (fun l => l.startsWith "  #")
-      let vs := es.map (parseDeclEntry 1 ·.toList)
-      if vs.any (· == none) then none
-      else parseDeclBlocks (acc ++ vs.filterMap id) curKind bfuel (rest.drop es.length)
-    | bfuel + 1, "Type Variations:" :: rest =>
-      let es := rest.takeWhile (fun l => l.startsWith "  #")
-      let vs := es.map (parseDeclEntry 2 ·.toList)
-      if vs.any (· == none) then none
-      else parseDeclBlocks (acc ++ vs.filterMap id) curKind bfuel (rest.drop es.length)
-    | _ + 1, rest => some (acc, rest)
+    | bfuel + 1, l :: rest =>
+      match kindOf l with
+      | none => some (acc, l :: rest)
+      | some k =>
+          let es := rest.takeWhile (fun l => l.startsWith "  #")
+          let vs := es.map (parseDeclEntry k ·.toList)
+          if vs.any (· == none) then none
+          else parseDeclBlocks (acc ++ vs.filterMap id) curKind bfuel (rest.drop es.length)
+    | _ + 1, [] => some (acc, [])
 
 /-- The `=== Version X.Y.Z` header plus optional producer/git_hash lines. -/
 def parseVersion : List String → Option (Proto.Version × List String)
@@ -3633,4 +3722,4 @@ theorem splitAppend_map_parseNamedCol
     rw [parseNamedCol_emitted (cols[i]'hi).1 t (cols[i]'hi).2 [] hemit (by simp)]
     rw [if_neg hlast]
 
-end Substrait.Decode.Text
+end Substrait.Decode

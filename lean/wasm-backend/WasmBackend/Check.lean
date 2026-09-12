@@ -10,5 +10,5 @@ existing `import WasmBackend.Check` sites keep working. The attributes
 register ONCE (in codegen-core).
 -/
 
-export CodegenCore.GuestGate (Ban bannedAt? banned? bannedStd?
+export CodegenCore.GuestGate (Ban bannedAt?
   checkExprAt checkExpr reasons checkGuest checkGuestStd)

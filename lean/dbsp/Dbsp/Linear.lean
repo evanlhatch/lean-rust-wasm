@@ -19,6 +19,11 @@ The `Bilinear` predicate is ported (needed by Dbsp.Relational for the
 product/join/intersect bilinearity theorems); the source's `lifting2`
 bilinearity and the two alternative `derivative_integral` proofs stay
 deferred.
+
+Deleted as dead (2026-12 quality pass, zero consumers): `linear_add`
+(the `Linear` definition itself, aliased), and the subtraction forms
+`bilinear_sub_1`/`bilinear_sub_2` — both one-liners over `lifting_sub`,
+recoverable from the op log if a future proof needs them.
 -/
 
 import Dbsp.Certs
@@ -34,9 +39,6 @@ variable {a b : Type} [AddCommGroup a] [AddCommGroup b]
 
 /-- An operator is linear when it is a group homomorphism on streams. -/
 def Linear (S : Operator a b) : Prop := ∀ x y, S (x + y) = S x + S y
-
-theorem linear_add {S : Operator a b} (h : Linear S) :
-    ∀ s1 s2, S (s1 + s2) = S s1 + S s2 := h
 
 /-- An additive function preserves zero. -/
 theorem lifting_zero (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) : f 0 = 0 := by
@@ -91,16 +93,6 @@ theorem lifting_lti (f : a → b) (hlin : ∀ x y, f (x + y) = f x + f y) :
     Lti (lifting f) :=
   ⟨lifting_linear f hlin, lifting_time_invariant f (lifting_zero f hlin)⟩
 
-theorem bilinear_sub_1 {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [AddCommGroup γ]
-    {f : α → β → γ} (hblin : Bilinear f) :
-    ∀ x1 x2 y, f (x1 - x2) y = f x1 y - f x2 y :=
-  fun x1 x2 y => lifting_sub (fun x => f x y) (fun x1' x2' => hblin.1 x1' x2' y) x1 x2
-
-theorem bilinear_sub_2 {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [AddCommGroup γ]
-    {f : α → β → γ} (hblin : Bilinear f) :
-    ∀ x y1 y2, f x (y1 - y2) = f x y1 - f x y2 :=
-  fun x y1 y2 => lifting_sub (f x) (fun y1' y2' => hblin.2 x y1' y2') y1 y2
-
 /-- A pointwise-bilinear function lifts to a stream-bilinear operator. -/
 theorem lifting_bilinear {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [AddCommGroup γ]
     (f : α → β → γ) (h : Bilinear f) : Bilinear (lifting2 f) := by
@@ -137,13 +129,13 @@ theorem feedback_unfold (S : Operator a a) (hcausal : Causal S) (s : Stream a) :
   fix_eq _ (feedback_strict hcausal s)
 
 theorem agree_upto_respects_add (s1 s2 s1' s2' : Stream a) (n : Nat) :
-    agreeUpto n s1 s1' → agreeUpto n s2 s2' → agreeUpto n (s1 + s2) (s1' + s2') := by
+    agree_upto n s1 s1' → agree_upto n s2 s2' → agree_upto n (s1 + s2) (s1' + s2') := by
   intro h1 h2 t ht
   show s1 t + s2 t = s1' t + s2' t
   rw [h1 t ht, h2 t ht]
 
 theorem agree_upto_respects_sub (s1 s2 s1' s2' : Stream a) (n : Nat) :
-    agreeUpto n s1 s1' → agreeUpto n s2 s2' → agreeUpto n (s1 - s2) (s1' - s2') := by
+    agree_upto n s1 s1' → agree_upto n s2 s2' → agree_upto n (s1 - s2) (s1' - s2') := by
   intro h1 h2 t ht
   show s1 t - s2 t = s1' t - s2' t
   rw [h1 t ht, h2 t ht]
@@ -151,7 +143,7 @@ theorem agree_upto_respects_sub (s1 s2 s1' s2' : Stream a) (n : Nat) :
 /-- Feedback of a causal operator is causal. -/
 theorem feedback_causal (S : Operator a a) (hcausal : Causal S) :
     Causal (feedback S) := by
-  have hag : ∀ s1 s2 n, agreeUpto n s1 s2 → agreeUpto n (S s1) (S s2) :=
+  have hag : ∀ s1 s2 n, agree_upto n s1 s2 → agree_upto n (S s1) (S s2) :=
     (causal_to_agree S).mp hcausal
   rw [causal_to_agree]
   intro s1 s2 n heq
@@ -194,9 +186,9 @@ theorem feedback_time_invariant (S : Operator a a) (hcausal : Causal S)
       (delay_linear s (feedback S (delay s))).symm
     rw [hdl, hti]
     apply delay_succ_upto
-    have h : agreeUpto n (s + feedback S (delay s)) (s + delay (feedback S s)) :=
+    have h : agree_upto n (s + feedback S (delay s)) (s + delay (feedback S s)) :=
       agree_upto_respects_add _ _ _ _ _ (agree_refl _ _) ih
-    apply agree_trans _ _ _ (causal_respects_agreeUpto S hcausal _ _ n h)
+    apply agree_trans _ _ _ (causal_respects_agree_upto S hcausal _ _ n h)
     rw [← feedback_unfold S hcausal s]
 
 /-- Feedback of an LTI operator is linear. -/

@@ -17,6 +17,9 @@ Port adjustments vs flatland:
 - flatland's hand-rolled `pairwise_perm` induction is REPLACED by core's
   `List.Perm.pairwise` (verified present in toolchain v4.33.0,
   `Init/Data/List/Perm.lean`).
+- `LocDisjoint` is mathlib's `List.Disjoint` (an abbrev — the standard
+  name for the same ∀x, x∈l₁→x∈l₂→False notion; the local alias stays
+  because the interface speaks `List Loc` write sets directly).
 - The demo instance is generic (flatland's `changeAtomSystem` was
   game-shaped): point deltas on `Nat →₀ Int` finsupport maps, write set =
   support of the delta.
@@ -35,14 +38,14 @@ namespace Dbsp
 
 /-! ### Location disjointness -/
 
-/-- Two lists share no element. (Local notion — the interface speaks
-    `List Loc` write sets, so disjointness is stated directly.) -/
-def LocDisjoint {α : Type} (l₁ l₂ : List α) : Prop :=
-  ∀ a, a ∈ l₁ → a ∈ l₂ → False
+/-- Two lists share no element. (Mathlib's `List.Disjoint`, under the
+    interface's local name — the deltas' write sets are `List Loc`, so
+    disjointness is stated directly on lists.) -/
+abbrev LocDisjoint {α : Type} (l₁ l₂ : List α) : Prop := List.Disjoint l₁ l₂
 
 theorem LocDisjoint.symm {α : Type} {l₁ l₂ : List α}
     (h : LocDisjoint l₁ l₂) : LocDisjoint l₂ l₁ :=
-  fun a ha₁ ha₂ => h a ha₂ ha₁
+  fun _ ha₁ ha₂ => h ha₂ ha₁
 
 /-! ### The interface -/
 
@@ -150,6 +153,8 @@ state is a `Nat →₀ Int` value map, a delta is itself a finitely supported
 map applied by addition, and its write set is its support. Disjoint
 supports commute pointwise on `Int`. -/
 
+-- the `warn.classDefReducibility` warning is silenced to say so.
+set_option warn.classDefReducibility false in
 /-- Point-update deltas on `Nat →₀ Int`. The ONE `disjoint_commutes`
     proof reduces to case-splitting on support membership and `ring`.
     Semireducible on purpose: the system is passed explicitly
@@ -162,7 +167,7 @@ noncomputable def pointDeltaSystem : DeltaSystem (Nat →₀ Int) Nat where
     ext n
     simp only [Finsupp.add_apply]
     by_cases h₁ : n ∈ d₁.support <;> by_cases h₂ : n ∈ d₂.support
-    · exact (hd n (Finset.mem_toList.mpr h₁) (Finset.mem_toList.mpr h₂)).elim
+    · exact (hd (Finset.mem_toList.mpr h₁) (Finset.mem_toList.mpr h₂)).elim
     · rw [Finsupp.notMem_support_iff.mp h₂]; ring
     · rw [Finsupp.notMem_support_iff.mp h₁]; ring
     · rw [Finsupp.notMem_support_iff.mp h₁, Finsupp.notMem_support_iff.mp h₂]

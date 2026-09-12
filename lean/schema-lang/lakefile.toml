@@ -24,6 +24,10 @@ path = "../TestKit"
 name = "Substrait"
 path = "../substrait"
 
+[[require]]
+name = "LintKit"
+path = "../LintKit"
+
 [[lean_lib]]
 name = "SchemaLang"
 roots = ["SchemaLang"]

@@ -58,14 +58,16 @@ mutual
 /-- A comma-joined `("name".into(), dtype-expr)` item list for struct
     fields / union variants (brackets come from the caller's `vec![...]`).
     Names are the WIRE names (registry order — the dtype is
-    wire-faithful; only `self.` accessors are mangled). -/
+    wire-faithful; only `self.` accessors are mangled). INSIDE the
+    `mutual` block by necessity: `dtypeRust`'s termination is proven
+    THROUGH this member's structural recursion over the field list, so
+    the fold must stay a list-recursion (a `map`+`intercalate` one-liner
+    would rob the block's termination witness). -/
 private def fieldsItemsRust : List (FieldName × DType) → String
   | [] => ""
   | (n, dt) :: rest =>
-      let item := s!"(\"{n}\".into(), {dtypeRust dt})"
-      match rest with
-      | [] => item
-      | _ => item ++ ", " ++ fieldsItemsRust rest
+      s!"(\"{n}\".into(), {dtypeRust dt})"
+        ++ (match rest with | [] => "" | _ => ", " ++ fieldsItemsRust rest)
 
 /-- Lower the DType model to a Rust expression constructing
     `vortex::dtype::DType`. Names are the short paths — the module

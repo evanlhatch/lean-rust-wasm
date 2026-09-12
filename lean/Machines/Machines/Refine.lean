@@ -72,20 +72,13 @@ theorem Machine.Refines.run_sim (r : c.Refines a) :
     exact ⟨[], as, rfl, hR⟩
   | cons l rest ih =>
     intro cs as tr fin hrun hR
-    simp only [Machine.run] at hrun
-    split at hrun
-    · contradiction
-    · next s' hstep =>
-      split at hrun
-      · contradiction
-      · next tr' fin' hrest =>
-        obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj hrun)
-        subst h1 h2
-        have htr : c.tr cs l s' := (c.tr_iff_step? cs l s').mpr hstep
-        obtain ⟨as', hatr, hR'⟩ := r.step cs as l s' hR htr
-        have hastep : a.step? as (r.ρ l) = some as' := (a.tr_iff_step? as (r.ρ l) as').mp hatr
-        obtain ⟨atr, afin, harun, hRfin⟩ := ih s' as' tr' fin' hrest hR'
-        refine ⟨(r.ρ l, as') :: atr, afin, ?_, hRfin⟩
-        simp only [List.map_cons, Machine.run, hastep, harun]
+    obtain ⟨s', tr', fin', hstep, hrest, htr, hfin⟩ := Machine.run_cons_some c hrun
+    subst htr hfin
+    have htr : c.tr cs l s' := (c.tr_iff_step? cs l s').mpr hstep
+    obtain ⟨as', hatr, hR'⟩ := r.step cs as l s' hR htr
+    have hastep : a.step? as (r.ρ l) = some as' := (a.tr_iff_step? as (r.ρ l) as').mp hatr
+    obtain ⟨atr, afin, harun, hRfin⟩ := ih s' as' tr' fin hrest hR'
+    refine ⟨(r.ρ l, as') :: atr, afin, ?_, hRfin⟩
+    simp only [List.map_cons, Machine.run, hastep, harun]
 
 end Machines

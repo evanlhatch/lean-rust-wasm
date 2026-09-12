@@ -125,6 +125,35 @@ theorem step?_preserves (s : m.State) (l : m.Label) (s' : m.State)
         | none => none
         | some (tr, fin) => some ((l, s') :: tr, fin) := rfl
 
+/-- Inversion at `cons`: a successful `run` step passes the guard, steps,
+    and recurses; trace and final state are the cons of the step's record.
+    (Kills the `Prod.mk.inj (Option.some.inj h)` ladder at the call sites.) -/
+theorem run_cons_some {s : m.State} {l : m.Label} {ls : List m.Label}
+    {tr : Trace m} {fin : m.State}
+    (h : m.run s (l :: ls) = some (tr, fin)) :
+    ∃ (s' : m.State) (tr' : Trace m) (fin' : m.State),
+      m.step? s l = some s' ∧ m.run s' ls = some (tr', fin') ∧
+        tr = (l, s') :: tr' ∧ fin = fin' := by
+  simp only [run] at h
+  split at h
+  · next => contradiction
+  · next s' hs =>
+    split at h
+    · next => contradiction
+    · next tr' fin' hr =>
+      obtain ⟨h1, h2⟩ := Prod.mk.inj (Option.some.inj h)
+      exact ⟨s', tr', fin', hs, hr, h1.symm, h2.symm⟩
+
+/-- Inversion at `cons`, guard side: a successful step is the guard proof
+    plus the action equation. -/
+theorem step?_eq_some {s : m.State} {l : m.Label} {s' : m.State}
+    (h : m.step? s l = some s') :
+    ∃ hg : (m.event l).guard s = true, (m.event l).action s hg = s' := by
+  unfold step? at h
+  split at h
+  · next hg => exact ⟨hg, Option.some.inj h⟩
+  · next => simp at h
+
 theorem run_preserves (init : m.State) (hinit : m.Inv init)
     (ls : List m.Label) (tr : Trace m) (fin : m.State)
     (h : m.run init ls = some (tr, fin)) : m.Inv fin ∧ ∀ p ∈ tr, m.Inv p.2 := by
@@ -134,24 +163,16 @@ theorem run_preserves (init : m.State) (hinit : m.Inv init)
     obtain ⟨rfl, rfl⟩ := h
     exact ⟨hinit, fun _ hp => by simp at hp⟩
   | cons l rest ih =>
-    simp only [run] at h
-    split at h
-    · next => contradiction
-    · next s' hs =>
-      split at h
-      · next => contradiction
-      · next tr' fin' hr =>
-        have h' : (l, s') :: tr' = tr ∧ fin' = fin := by
-          simpa using h
-        obtain ⟨rfl, rfl⟩ := h'
-        have hs' := m.step?_preserves init l s' hs hinit
-        obtain ⟨hfin, htr⟩ := ih s' hs' tr' hr
-        constructor
-        · exact hfin
-        · intro q hq
-          rcases List.mem_cons.mp hq with hqeq | hqtr
-          · rw [hqeq]; exact hs'
-          · exact htr q hqtr
+    obtain ⟨s', tr', fin', hs, hr, htr, hfin⟩ := run_cons_some m h
+    subst htr hfin
+    have hs' := m.step?_preserves init l s' hs hinit
+    obtain ⟨hfin, htr⟩ := ih s' hs' tr' hr
+    constructor
+    · exact hfin
+    · intro q hq
+      rcases List.mem_cons.mp hq with hqeq | hqtr
+      · rw [hqeq]; exact hs'
+      · exact htr q hqtr
 
 end Machine
 

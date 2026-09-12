@@ -2,7 +2,7 @@
 #
 # Base (always on): dev/* helpers + lang/rust + lang/lean.
 # Opt-ins are devenv PROFILES (devenv --profile <name>):
-#   js, python, wasm, docs, cloudflare (extends js for jco).
+#   js, python, wasm, docs, cloudflare (extends js for jco), racket.
 # See the profiles block below and devenv/local.nix.example.
 { pkgs, lib, config, inputs, ... }:
 let
@@ -35,6 +35,7 @@ in
   profiles = {
     js.module = import ./devenv/lang/js.nix;
     python.module = import ./devenv/lang/python.nix;
+    racket.module = import ./devenv/lang/racket.nix;
     wasm.module = import ./devenv/lang/wasm.nix;
 
     cloudflare = {

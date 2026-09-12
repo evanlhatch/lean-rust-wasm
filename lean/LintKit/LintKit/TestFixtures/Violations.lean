@@ -39,6 +39,10 @@ def dupOne (n : Nat) : Nat := n + 41
 /-- Planted: duplicate body. -/
 def dupTwo (m : Nat) : Nat := m + 41
 
+/-- Planted: cross-module duplicate of `LintKit.TestFixtures.Cross.dupCrossB`
+(both root at `LintKit` but live in different modules). -/
+def dupCrossA (y : Nat) : Nat := y + 99
+
 end LintKit.TestFixtures.Violations
 
 /-- Planted (packageNamespace): helper parked in a CORE namespace —

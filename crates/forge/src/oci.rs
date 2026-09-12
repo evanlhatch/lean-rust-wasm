@@ -129,11 +129,41 @@ impl OciStore {
         self.blobs_dir().join(digest).exists()
     }
 
+/// Strip the leading GENERATED-header comment lines: the header = the
+/// metadata (timestamps, git state, hashes) — the byte-tie = the
+/// CONTENT. A regen's header may differ freely (a new timestamp); the
+/// content's sha must not. The strip = the LEADING comment block only
+/// (the `//`, `#`, `--`, `;;` prefixes + the blanks) — the first code
+/// line ends it.
+pub fn strip_header(data: &[u8]) -> Vec<u8> {
+    let s = String::from_utf8_lossy(data);
+    let mut out = String::new();
+    let mut in_header = true;
+    for line in s.lines() {
+        let t = line.trim_start();
+        if in_header
+            && (t.is_empty()
+                || t.starts_with("//")
+                || t.starts_with("#")
+                || t.starts_with("--")
+                || t.starts_with(";;"))
+        {
+            continue;
+        }
+        in_header = false;
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.into_bytes()
+}
+
     /// Byte-tie a label against the store: look up the stored digest,
-    /// read the current file, rehash, and compare. The file is the
-    /// authority; the store is the cache. Also re-reads the stored blob
-    /// and byte-compares with the file, so a corrupted cache blob is
-    /// caught even if the digest entry survived.
+    /// read the current file, CONTENT-hash (the header stripped from
+    /// both sides — the regen's metadata may differ freely), and
+    /// compare. The file's content is the authority; the store is the
+    /// cache. Also re-reads the stored blob and CONTENT-compares with
+    /// the file, so a corrupted cache blob is caught even if the digest
+    /// entry survived.
     pub fn verify(&self, label: &str, path: &Path) -> io::Result<Verify> {
         let Some(stored) = self.tags.get(label) else {
             return Ok(Verify::NotStored);
@@ -141,22 +171,14 @@ impl OciStore {
         let file = fs::read(path).map_err(|e| {
             io::Error::new(e.kind(), format!("verify {label}: {}: {e}", path.display()))
         })?;
-        let actual = sha256_hex(&file);
-        if &actual != stored {
+        let content_actual = sha256_hex(&Self::strip_header(&file));
+        let blob = self.get(stored).unwrap_or_default();
+        let content_stored = sha256_hex(&Self::strip_header(&blob));
+        if &content_actual != &content_stored {
             return Ok(Verify::Mismatch {
-                stored: stored.clone(),
-                actual,
+                stored: content_stored,
+                actual: content_actual,
             });
-        }
-        // Digest matches; confirm the cached blob bytes too. A corrupted
-        // blob self-heals on the next `--store` (put overwrites).
-        if let Ok(blob) = self.get(stored) {
-            if blob != file {
-                return Ok(Verify::Mismatch {
-                    stored: stored.clone(),
-                    actual,
-                });
-            }
         }
         Ok(Verify::Match)
     }

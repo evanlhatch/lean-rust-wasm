@@ -316,9 +316,18 @@ fn push_pull_roundtrip() {
     assert_eq!(served["config"]["mediaType"], "application/vnd.oci.image.config.v1+json");
     assert_eq!(served["layers"][0]["mediaType"], "application/wasm");
 
-    // ── pull into a fresh store; byte-identity ───────────────────────
+    // ── the PROVENANCE GATE (the puller verifies before instantiating) ──
+    // This pack = "unchecked" (no report passed): the pull must REFUSE —
+    // a component without a clean gate report is not instantiable.
+    let refusal = match reg.pull("v1", &mut OciStore::open(&dir.join("dst-ref")).unwrap(), &dir, false) {
+        Err(e) => e,
+        Ok(_) => panic!("the provenance gate must refuse an unchecked artifact"),
+    };
+    assert!(refusal.contains("PROVENANCE GATE"), "{refusal}");
+    // The explicit escape hatch (--allow-unchecked) lets it through —
+    // and the byte-identity chain still holds.
     let mut dst = OciStore::open(&dir.join("dst-oci")).unwrap();
-    let pulled = reg.pull("v1", &mut dst, &dir).unwrap();
+    let pulled = reg.pull("v1", &mut dst, &dir, true).unwrap();
     assert_eq!(pulled.manifest.label, LABEL);
     assert_eq!(pulled.artifacts.len(), 1);
     assert_eq!(pulled.artifacts[0].1, original_digest, "pulled digest matches original");
@@ -329,6 +338,31 @@ fn push_pull_roundtrip() {
     assert_eq!(sha256_hex(&landed), original_digest, "materialized sha256 matches");
     assert_eq!(dst.get(&original_digest).unwrap(), artifact, "store blob byte-identical");
 
+    // The PROVENANCE SIDECAR: the annotations travel with the artifact.
+    let sidecar = dir.join(format!("{LABEL}.provenance.json"));
+    let side: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap())
+        .expect("the provenance sidecar is well-formed JSON");
+    assert_eq!(side["layer"], original_digest.to_string());
+
+    // The CLEAN report: repack + the pull passes WITHOUT the escape hatch.
+    let clean_m = forge::manifest::pack(
+        &mut store,
+        LABEL,
+        &forge::manifest::Provenance {
+            axioms: "TestKit: clean\nMachines: clean".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let blobs_clean = vec![
+        store.blob_path(&clean_m.config.digest),
+        store.blob_path(&clean_m.layers[0].digest),
+    ];
+    reg.push(&tag, &clean_m, &blobs_clean).unwrap();
+    let mut dst2 = OciStore::open(&dir.join("dst2-oci")).unwrap();
+    let pulled2 = reg.pull("v1", &mut dst2, &dir, false).unwrap();
+    assert_eq!(pulled2.artifacts[0].2, artifact, "clean-provenance pull byte-identical");
+
     // Tamper control: flip one byte in the served manifest's layer
     // digest and the pull must fail loudly (digest = security boundary).
     m.layers[0].digest = "0".repeat(64);
@@ -338,7 +372,7 @@ fn push_pull_roundtrip() {
         .lock()
         .unwrap()
         .insert("bad".to_string(), bad_raw);
-    let err = reg.pull("bad", &mut OciStore::open(&dir.join("dst2")).unwrap(), &dir);
+    let err = reg.pull("bad", &mut OciStore::open(&dir.join("dst2")).unwrap(), &dir, true);
     assert!(err.is_err(), "tampered manifest must fail the pull");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -421,7 +455,7 @@ fn push_pull_roundtrip_authed() {
 
     // Auth'd pull: byte-identity through the auth'd path.
     let mut dst = OciStore::open(&dir.join("dst-oci")).unwrap();
-    let pulled = reg.pull("v2", &mut dst, &dir).unwrap();
+    let pulled = reg.pull("v2", &mut dst, &dir, false).unwrap();
     assert_eq!(pulled.manifest.label, LABEL);
     assert_eq!(pulled.artifacts[0].2, artifact, "pulled bytes match original");
     assert_eq!(

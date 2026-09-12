@@ -23,7 +23,11 @@ Contents:
    patches the output to the patched input's output. Proved: every
    `Bilinear` map yields one, with the one-sided deltas reading the OTHER
    side's current state — the spec-level content of the
-   `Linearity.bilinear` classification (lean-v3 Part 4.1).
+   `Linearity.bilinear` classification (lean-v3 Part 4.1). The equi-join
+   instance is NOT named separately: it is exactly
+   `(ZSet.equiJoin_bilinear π1 π2).toPartialDerivSpec` (an earlier
+   `equiJoinDerivSpec` def — zero consumers, one application — was
+   deleted, 2026-12 quality pass).
 
 Deliberately not adopted from autoinc: `ChangeMonad`/`MonadRollback` (we
 are pure; rollback is `ChangeInversion` + the overlay's segment rewind),
@@ -143,14 +147,5 @@ def Bilinear.toPartialDerivSpec {a b c : Type} [AddCommGroup a] [AddCommGroup b]
   correct₂ := fun x y dy _ => by
     show f x y + f x dy = f x (y + dy)
     exact (hb.2 x y dy).symm
-
-/-- The equi-join's one-sided-derivative spec: `equiJoin` is bilinear
-    (`ZSet.equiJoin_bilinear`), so its delta form is certified by the
-    group change structure + this construction. The full three-term
-    stream-level form is `equiJoin_incremental`. -/
-noncomputable def equiJoinDerivSpec {A B C : Type} [DecidableEq A] [DecidableEq B] [DecidableEq C]
-    (π1 : A → C) (π2 : B → C) :
-    PartialDerivSpec (ZSet A) (ZSet B) (ZSet (A × B)) (ZSet A) (ZSet B) (ZSet (A × B)) :=
-  (ZSet.equiJoin_bilinear π1 π2).toPartialDerivSpec
 
 end Dbsp

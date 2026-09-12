@@ -33,7 +33,9 @@ def expected : Array (Name × Array Name) := #[
     `LintKit.TestFixtures.Violations.recNoSimp]),
   (`linter.guestlang.dupDefBodies, #[
     `LintKit.TestFixtures.Violations.dupOne,
-    `LintKit.TestFixtures.Violations.dupTwo]),
+    `LintKit.TestFixtures.Violations.dupTwo,
+    `LintKit.TestFixtures.Violations.dupCrossA,
+    `LintKit.TestFixtures.Cross.dupCrossB]),
   (`linter.guestlang.packageNamespace, #[
     `List.badNs,
     `Substrait.strayFromLintKit])
@@ -44,7 +46,8 @@ unsafe def run : M Unit := do
   Lean.enableInitializersExecution
   let env ← importModules
     #[{ module := `LintKit.TestFixtures.Violations },
-      { module := `LintKit.TestFixtures.Clean }]
+      { module := `LintKit.TestFixtures.Clean },
+      { module := `LintKit.TestFixtures.Cross }]
     {} (trustLevel := 1024) (loadExts := true)
   let roots := #[`LintKit.TestFixtures]
   -- recursiveSimpEqns is default-OFF tree-wide (see its option's comment);

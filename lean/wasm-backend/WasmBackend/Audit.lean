@@ -234,7 +234,7 @@ def regionOf : Nat → Val → Env → Rgn
     v1: ONE stride for every alloc-shaped region (the demo's record
     set); a different record's stride is v2 work with the emitter's
     type info threaded through. -/
-def stride : Nat := Layout.size [.u64, .string, .string, .list .string]
+def stride : Nat := Layout.size Layout.userTys
 
 theorem stride_eq_32 : stride = 32 := rfl
 

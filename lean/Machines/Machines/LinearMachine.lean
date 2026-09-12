@@ -32,87 +32,37 @@ import Machines.Core
 import Mathlib.Algebra.Group.Defs
 import Mathlib.Algebra.Group.Int.Defs
 import Mathlib.Tactic.Abel
+import Dbsp.ChangeSpec
 
 namespace Machines
 
-/-! ## The Dbsp.ChangeSpec shape, re-declared (no dbsp dependency)
+open Dbsp
 
-Same field names and laws as `Dbsp.ChangeSpec`, so the spec-level reading
-carried there transfers verbatim. Machines does not depend on dbsp, so the
-classes are duplicated here; TODO: once the dependency direction allows
-it, import these from `Dbsp.ChangeSpec` and delete the copies. -/
+/-! ## The Dbsp.ChangeSpec shape, IMPORTED (the dependency landed)
 
-/-- A change structure: changes patch values, with a validity predicate. -/
-class Change (α Δα : Type) where
-  patch : α → Δα → α
-  valid : α → Δα → Prop
-
-/-- Computing the change between two values. -/
-class Difference (α Δα : Type) [Change α Δα] where
-  diff : α → α → Δα
-  diff_valid : ∀ old new, Change.valid old (diff new old)
-  diff_correct : ∀ old new, Change.patch old (diff new old) = new
-
-/-- Every change has an inverse: rollback. -/
-class ChangeInversion (α Δα : Type) extends Change α Δα where
-  invert : Δα → Δα
-  valid_invert : ∀ (t : α) (Δt : Δα), Change.valid t Δt →
-    Change.valid (Change.patch t Δt) (invert Δt)
-  correct_invert : ∀ (t : α) (Δt : Δα), Change.valid t Δt →
-    Change.patch (Change.patch t Δt) (invert Δt) = t
-
-/-- The no-op change. -/
-class Noc (Δα : Type) where
-  noc : Δα
-
-class LawfulNoChange (α Δα : Type) [Noc Δα] [Change α Δα] where
-  valid_noc : ∀ t : α, Change.valid t (Noc.noc (Δα := Δα))
-  correct_noc : ∀ t : α, Change.patch t (Noc.noc (Δα := Δα)) = t
-
-/-! ## The canonical group change structure -/
-
-/-- Every `AddCommGroup` is a change structure over itself — the canonical
-    group change structure of `Dbsp.ChangeSpec`. -/
-instance Change.groupSelf (α : Type) [AddCommGroup α] : Change α α where
-  patch := (· + ·)
-  valid := fun _ _ => True
-
-instance Difference.groupSelf (α : Type) [AddCommGroup α] : Difference α α where
-  diff new old := new - old
-  diff_valid := fun _ _ => trivial
-  diff_correct := fun old new => by
-    show old + (new - old) = new
-    abel
-
-instance ChangeInversion.groupSelf (α : Type) [AddCommGroup α] : ChangeInversion α α where
-  invert := Neg.neg
-  valid_invert := fun _ _ _ => trivial
-  correct_invert := fun t Δt _ => by
-    show t + Δt + -Δt = t
-    abel
-
-instance Noc.groupSelf (α : Type) [AddCommGroup α] : Noc α where
-  noc := 0
-
-instance LawfulNoChange.groupSelf (α : Type) [AddCommGroup α] : LawfulNoChange α α where
-  valid_noc := fun _ => trivial
-  correct_noc := fun t => by
-    show t + 0 = t
-    rw [add_zero]
+The change-structure classes were re-declared here while Machines did
+not depend on dbsp; the dependency direction now allows the import, so
+the copies are gone. `Change`/`Difference`/`ChangeInversion`/`Noc`/
+`LawfulNoChange` + the `AddCommGroup` `groupSelf` instances all live in
+`Dbsp.ChangeSpec`; this module keeps the MACHINES-side aliases
+(`patch`/`patch_zero`) and the rest of the linearity story. -/
 
 section
 variable {α : Type} [AddCommGroup α]
 
 /-- Patch a state by a delta: addition in the group. The `Change.patch`
-    of the Dbsp spec shape. -/
-def patch (s δ : α) : α := s + δ
+    of the Dbsp spec shape — the machines-side alias. -/
+def patch (s δ : α) : α := Change.patch s δ
 
-theorem patch_zero (s : α) : patch s 0 = s := add_zero s
+theorem patch_zero (s : α) : patch s 0 = s := by
+  change s + 0 = s
+  exact add_zero s
 
-/-- Rollback of a group delta restores the value (the Dbsp revert law). -/
+/-- Rollback of a group delta restores the value (the Dbsp revert law,
+    restated through the local alias). -/
 theorem group_rollback (t Δt : α) : patch (patch t Δt) (-Δt) = t := by
-  show t + Δt + -Δt = t
-  abel
+  change Change.patch (Change.patch t Δt) (-Δt) = t
+  exact Dbsp.group_rollback (α := α) t Δt
 
 end
 

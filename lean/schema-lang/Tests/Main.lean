@@ -791,7 +791,7 @@ MUST flag it. A control that passes proves `noUnknownRef` vacuous and
 the suite FAILS. -/
 namespace PropSweep
 
-open Plausible LSpec
+open Plausible
 
 /-- The fixed name supply: every generated `.ty` ref resolves against
     the anchors. -/

@@ -18,7 +18,9 @@ def main : IO Unit := do
     let (e, spec) := h
     for f in e.run spec do
       let p := (CodegenCore.Emit.GeneratedFile.path f : String)
-      let dir := String.intercalate "/" (p.splitOn "/").dropLast
-      IO.FS.createDirAll dir
-      IO.FS.writeFile p (header e.style "faults" e.specSource ++ CodegenCore.Emit.GeneratedFile.contents f)
+      -- the meta = per-file (the content hash); the clock/git = the
+      -- driver's IO (the emitters stay pure)
+      let contents := CodegenCore.Emit.GeneratedFile.contents f
+      let gm ← CodegenCore.Emit.genMeta 1 contents.hash
+      CodegenCore.Emit.writeFileCreatingDirs p (header e.style "faults" e.specSource gm ++ contents)
       IO.println s!"wrote {p}"

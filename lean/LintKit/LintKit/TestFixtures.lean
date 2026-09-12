@@ -4,3 +4,4 @@
    must never see these. -/
 import LintKit.TestFixtures.Violations
 import LintKit.TestFixtures.Clean
+import LintKit.TestFixtures.Cross

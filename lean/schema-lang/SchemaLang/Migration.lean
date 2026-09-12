@@ -87,11 +87,17 @@ instance : ToString CompatVerdict where
     | .remedied => "remedied"
     | .unremedied => "unremedied"
 
+/-- The breaking subset of a diff: anything but `.added`. One
+    definition — `verdictOf` and BreakingMain used to each inline this
+    filter; the gate's notion of "breaking" now has a single name. -/
+def breakingOf (changes : List Change) : List Change :=
+  changes.filter fun c => match c with | .added _ => false | _ => true
+
 /-- The verdict over a diff plus the available remedy evidence.
     Breaking = anything but `.added`; remedied requires EVERY breaking
     change covered by some migration. -/
 def verdictOf (changes : List Change) (migrations : List Migration) : CompatVerdict :=
-  let breaking := changes.filter fun c => match c with | .added _ => false | _ => true
+  let breaking := breakingOf changes
   if breaking.isEmpty then .clean
   else if breaking.all fun c => migrations.any (·.remedies c) then .remedied
   else .unremedied

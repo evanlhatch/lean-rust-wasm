@@ -154,7 +154,7 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend"
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend ledger"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -213,6 +213,7 @@ lean-lint: lean-build
 	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
 	run dbsp Dbsp Tests.Main
 	run std GuestlangStd
+	run ledger Ledger LedgerFn
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
 
 # Codegen pipeline shim — all logic lives in the forge crate.
@@ -238,6 +239,31 @@ serve:
 # instead; see .github/workflows/deploy.yml.
 deploy:
 	secretspec run -- wrangler pages deploy "$CLOUDFLARE_DIST_DIR" --project-name="$CLOUDFLARE_PAGES_PROJECT"
+
+# ── Docs site (docs-site/ — Astro Starlight; the flatland mirror) ────
+# Starlight is the renderer (zero hand-roll). Tool = bun (bun.lock in
+# docs-site/, pinned to the flatland dep versions). The schema-gen's
+# docs emitter owns docs/api.md (just gen); this lane COPYs it into
+# docs-site/src/content/docs/ at BUILD time (Starlight's docsLoader
+# globs the content dir) with frontmatter prepended (the generator
+# emits bare markdown). The copy is gitignored — docs/api.md stays
+# the committed generated source. NOT wired into `gates`.
+docs:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# Host-cargo builds under devenv need the profile cc (ring's C bits
+	# fail under the devenv clang — the demo recipe's CC export is the
+	# established fix; fall back to the env's CC when the profile is absent).
+	PCC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc"
+	[ -x "$PCC" ] && export CC="$PCC"
+	just gen
+	dst=docs-site/src/content/docs/api.md
+	{ printf -- '---\ntitle: API\ndescription: The generated schema reference (demo:gateway) — emitted by SchemaLang.Docs.docsOf, do not hand-edit.\n---\n\n'; cat docs/api.md; } > "$dst"
+	(cd docs-site && bun install --frozen-lockfile && bun run build)
+	[ -s docs-site/dist/index.html ] || { echo "FAIL: dist/index.html missing or empty"; exit 1; }
+	grep -q "guestlang" docs-site/dist/index.html || { echo "FAIL: branding missing from index.html"; exit 1; }
+	grep -q "<table" docs-site/dist/api/index.html || { echo "FAIL: no GFM tables rendered in the API page"; exit 1; }
+	echo "docs: Starlight build green — dist/ non-empty, branded, API tables rendered"
 
 # ── Docs (Astro Starlight; docs profile) ─────────────────────────────
 doc-dev:
@@ -272,7 +298,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schema breaking splice-smoke lean-lint
+gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schema breaking splice-smoke rt-conformance lean-lint
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed
@@ -283,7 +309,7 @@ lean-axioms:
 	for p in {{lean_pkgs}}; do
 	  out=$(cd lean/$p && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env lean Tests/Axioms.lean 2>&1)
 	  if echo "$out" | grep -q "sorryAx"; then echo "FAIL: sorryAx in $p"; exit 1; fi
-	  bad=$(echo "$out" | grep -v "does not depend" | sed "s/.*depends on axioms: //" | tr -d "[]" | tr "," "\n" \
+	  bad=$(echo "$out" | grep -vE "does not depend|^warning:|^info:" | sed "s/.*depends on axioms: //" | tr -d "[]" | tr "," "\n" \
 	    | sed "s/^ *//;s/ *$//" \
 	    | grep -vE "^(propext|Classical.choice|Quot.sound|.*native_decide..*|)$" || true)
 	  if [ -n "$bad" ]; then echo "FAIL: $p unexpected axioms:"; echo "$bad"; exit 1; fi
@@ -298,8 +324,24 @@ wasm-compile:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	TC="$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+	# THE OBSERVABILITY BYTE-TIE's snapshot: the regen REWRITES
+	# src/observability_generated.rs in place — keep the committed surface
+	# BEFORE it, so the compare after the regen can prove no drift
+	# (target/ = the scratch dir, untracked).
+	mkdir -p lean/wasm-backend/target
+	cp src/observability_generated.rs lean/wasm-backend/target/observability_generated.rs.committed
 	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" build DemoFn wasm-gen \
 	  && PATH="$TC:$PATH" "$TC/lake" exe wasm-gen)
+	# THE OBSERVABILITY BYTE-TIE (the fast-observe seam — steel-host's
+	# hot-reload span surface): strip the 2-line GENERATED header (the
+	# wall-clock + git state vary per regen — the byte-tie only binds the
+	# CONTENT) and compare the regenerated file against the committed
+	# surface: a drift = a real ABI-surface change.
+	if ! cmp -s <(tail -n +3 src/observability_generated.rs) \
+	             <(tail -n +3 lean/wasm-backend/target/observability_generated.rs.committed); then
+	  echo "FAIL: src/observability_generated.rs drifted from the committed surface — regenerate (just wasm-compile) + commit the observability surface"
+	  exit 1
+	fi
 	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
 	[ -x "$WT" ] || WT=wasm-tools
 	"$WT" parse -g lean/wasm-backend/target/demo.wat -o lean/wasm-backend/target/demo.wasm
@@ -354,3 +396,226 @@ splice-smoke:
 	  -o lean/wasm-backend/target/spliced.component.wasm
 	"$WT" validate lean/wasm-backend/target/spliced.component.wasm
 	echo "splice-smoke: passthrough composed + spliced component VALID"
+
+# The SPLICER-MW gate (Track 2d — notes/async-wrpc-oci-plan.md): the
+# FIRST REAL middleware. The splicer-mw component wraps the demo
+# world's scalar subset (double, is-big): count in an IN-WASM counter
+# (`calls`), delegate to the INNER (the wac composition wires the
+# demo component's exports to the middleware's imports), return
+# unchanged. Zero hand-WAT — wit-bindgen wraps both sides. The test
+# proves the inner ran THROUGH the interposer (42 + the counter + the
+# spec's spans — the tracing seam: the spans = the spec's data, the
+# counter = the middleware's own state).
+# Standalone (NOT in `gates`): needs `just wasm-compile`'s artifacts
+# (demo.component.wasm) + a cross-compile of the mw guest — more
+# moving parts than the splice-smoke passthrough; wire into gates
+# only if the wasm-compile prerequisite is already a gates given.
+splicer-mw:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	RUSTFLAGS="$RUSTFLAGS_WASM32" cargo build -p splicer-mw \
+	  --target wasm32-unknown-unknown \
+	  -Z build-std=std,panic_abort
+	mkdir -p target/spliced-mw
+	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
+	WAC="$HOME/.local/guestlang-tools/bin/wac"
+	[ -x "$WT" ] || WT=wasm-tools
+	[ -x "$WAC" ] || WAC=wac
+	core=target/wasm32-unknown-unknown/debug/splicer_mw.wasm
+	mw=target/spliced-mw/mw.component.wasm
+	composed=target/spliced-mw/spliced-mw.component.wasm
+	"$WT" component new "$core" -o "$mw"
+	"$WT" validate "$mw"
+	[ -f lean/wasm-backend/target/demo.component.wasm ] || { echo "FAIL: no demo.component.wasm — run 'just wasm-compile'"; exit 1; }
+	# the composition: demo's exports feed the middleware's imports;
+	# the middleware's exports = the served surface
+	cat > target/spliced-mw/splice-mw.wac <<'WAC'
+	package guestlang:spliced-mw;
+	let demo = new guestlang:demo { ... };
+	let mw = new guestlang:mw {
+	  double: demo.double,
+	  is-big: demo.is-big,
+	  watch-counts: demo.watch-counts,
+	};
+	export mw.double;
+	export mw.is-big;
+	export mw.watch-counts;
+	export mw.calls;
+	WAC
+	"$WAC" compose target/spliced-mw/splice-mw.wac \
+	  --dep guestlang:demo=lean/wasm-backend/target/demo.component.wasm \
+	  --dep guestlang:mw="$mw" \
+	  -o "$composed"
+	"$WT" validate "$composed"
+	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" \
+	  cargo test -p steel-host --test spliced_middleware
+	echo "splicer-mw: middleware composed + inner routed + counter + spec spans green"
+
+# The WASMI CONFORMANCE gate (the embeddable-runtime half of the dual-
+# engine story): the SAME demo.wasm runs under the standalone rt (wasmi,
+# core-wasm + trap-stubbed task intrinsics) with identical results to
+# the wasmtime differential smoke — the IR seam is engine-agnostic.
+# Needs the wasm-compile artifacts (like splice-smoke).
+rt-conformance:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	[ -f lean/wasm-backend/target/demo.wasm ] || { echo "FAIL: no demo.wasm — run 'just wasm-compile'"; exit 1; }
+	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" cargo test -p guestlang-rt
+	echo "rt-conformance: wasmi runs the compiler line's output"
+
+# ── Template scaffold (notes/reuse-map.md — the instantiation lane) ──
+# new-project: instantiate template/ as lean/<name> (the spec+impl
+# skeleton), apply the renames (Thing→<Camel>, thing→<snake>),
+# AUTO-register the package (the lean_pkgs line + the packagePrefixes
+# rows), and print the manual follow-ups (the world's fold, the lint
+# row). Undo with new-project-clean. NOT in gates — it mutates the tree.
+new-project name:
+	#!/usr/bin/env python3
+	import os, re, shutil, sys
+	name = "{{name}}"
+	root = "{{justfile_directory()}}"
+	if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+	    sys.exit("new-project: name must be lowercase kebab-case (got '%s')" % name)
+	camel = "".join(p.capitalize() for p in name.split("-"))
+	snake = name.replace("-", "_")
+	pkg = os.path.join(root, "lean", name)
+	if os.path.exists(pkg):
+	    sys.exit("new-project: lean/%s already exists" % name)
+	tpl = os.path.join(root, "template")
+	files = [
+	    ("spec.lean", camel + ".lean"),
+	    ("impl.lean", camel + "Fn.lean"),
+	    ("project.json", "project.json"),
+	    ("lakefile.toml", "lakefile.toml"),
+	    ("Tests.lean", os.path.join("Tests", "Main.lean")),
+	    ("Axioms.lean", os.path.join("Tests", "Axioms.lean")),
+	    ("lean-toolchain", "lean-toolchain"),
+	    ("lake-manifest.template.json", "lake-manifest.json"),
+	    ("README.md", "README.md"),
+	]
+	for src, dst in files:
+	    d = os.path.join(pkg, dst)
+	    os.makedirs(os.path.dirname(d), exist_ok=True)
+	    text = open(os.path.join(tpl, src)).read()
+	    # the WORD-BOUNDARY rename: the plain replace ate "anything" ->
+	    # "anyledger" (the dogfood finding #1!) — regex with the boundaries
+	    # the LONGEST-FIRST order (the compound names: ThingFn/ThingImpl
+	    # — the dogfood finding #3; \bThing\b misses them)
+	    text = re.sub(r"\bThingFn\b", camel + "Fn", text)
+	    text = re.sub(r"\bThingImpl\b", camel + "Impl", text)
+	    text = re.sub(r"\bThingTests\b", camel + "Tests", text)
+	    text = re.sub(r"\bThing\b", camel, text)
+	    text = re.sub(r"\bthing_(?=[a-z])", snake + "_", text)
+	    text = re.sub(r"\bthing\b", snake, text)
+	    open(d, "w").write(text)
+	# AUTO-registration 1: the lean_pkgs loop (justfile) — the entries are
+	# lean/ DIRECTORY names (the kebab name), not the Lean package name.
+	jf = os.path.join(root, "justfile")
+	s = open(jf).read()
+	m = re.search(r'lean_pkgs := "([^"]*)"', s)
+	if m is None:
+	    sys.exit("new-project: lean_pkgs line not found in justfile")
+	if name not in m.group(1).split():
+	    s = s[:m.end(1)] + " " + name + s[m.end(1):]
+	    open(jf, "w").write(s)
+	# AUTO-registration 2: the packagePrefixes rows (LintKit's lean_pkgs
+	# mirror — one row per module root: <Camel> and <Camel>Fn).
+	pf = os.path.join(root, "lean", "LintKit", "LintKit", "PackageNamespace.lean")
+	s = open(pf).read()
+	if re.search(r"\n\]\n\n/-- Parse the comma-separated", s) is None:
+	    sys.exit("new-project: packagePrefixes anchor not found in LintKit")
+	if ("(`" + camel + ",") not in s:
+	    rows = (f"  (`{camel},       [`{camel}]),\n"
+	            f"  (`{camel}Fn,     [`{camel}Fn])\n")
+	    s = s.replace("\n]\n\n/-- Parse the comma-separated",
+	                  "\n" + rows + "]\n\n/-- Parse the comma-separated", 1)
+	open(pf, "w").write(s)
+	# AUTO-registration 3: seed the git-dep checkouts. gonzalgo resolves
+	# from the vendored bundle (vendor/gonzalgo.bundle — the pinned rev was
+	# rewritten upstream), so a fresh clone works without this. The seed
+	# is the FALLBACK: it also carries the prebuilt dep oleans (mathlib's
+	# 6.6G) without new disk. Lake skips re-fetch when HEAD already matches
+	# the manifest rev.
+	import json
+	mirror = os.path.join(root, "lean", "faults", ".lake", "packages")
+	man = json.load(open(os.path.join(pkg, "lake-manifest.json")))
+	depdir = os.path.join(pkg, ".lake", "packages")
+	os.makedirs(depdir, exist_ok=True)
+	seeded = []
+	for d in man.get("packages", []):
+	    if d.get("type") != "git":
+	        continue
+	    src = os.path.join(mirror, d["name"])
+	    dst = os.path.join(depdir, d["name"])
+	    if os.path.isdir(src) and not os.path.exists(dst):
+	        shutil.copytree(src, dst, copy_function=os.link)
+	        seeded.append(d["name"])
+	if seeded:
+	    print("seeded git deps (hardlink from lean/faults/.lake/packages): " + ", ".join(seeded))
+	print(f"new-project: lean/{name} scaffolded (Thing → {camel}, thing → {snake})")
+	print("auto-registered: lean_pkgs (justfile, entry = the lean/ dir name) + packagePrefixes (lean/LintKit/LintKit/PackageNamespace.lean)")
+	print("")
+	print("manual follow-ups:")
+	print("  1. the WIT world's fold: lean/schema-lang/SchemaLang/Emit/Wit.lean —")
+	print("     the witEmitter row (worldOf \"demo:gateway\" \"gateway\" items) is the")
+	print("     demo pattern; add YOUR emitter module + one line in the emitters list")
+	print("     (lean/schema-lang/SchemaLang/Emit/Registry.lean — no driver changes).")
+	print(f"  2. the gen driver: lean/schema-lang/GenMain.lean imports Demo and")
+	print(f"     replays #[`Demo] — point it at your spec module (module {camel}).")
+	print("  3. the compiled world: DONE by the manifest — the project.json here")
+	print("     (spec-modules + impl-modules) is the compile-set's single source:")
+	print("     lean/wasm-backend/GenMain.lean loads the manifest's modules and folds")
+	print("     the compile roots from the @[guest]/@[guest_std] marks (targetDeclsOf)")
+	print("     and the exports from the schema registry (worldExportsOf) — no")
+	print("     hand-list. To compile YOUR world, copy the wasm-gen driver into this")
+	print("     package (it reads project.json beside itself — no edits).")
+	print(f"  4. the lint row: a `run {camel} {camel} {camel}Fn` line in the lean-lint recipe (justfile).")
+	print(f"  then: just gen && just gates — details in lean/{name}/README.md")
+
+# new-project-clean: undo new-project (the scaffold-test cleanup): remove
+# lean/<name> and revert BOTH auto-registrations.
+new-project-clean name:
+	#!/usr/bin/env python3
+	import os, re, shutil, sys
+	name = "{{name}}"
+	root = "{{justfile_directory()}}"
+	camel = "".join(p.capitalize() for p in name.split("-"))
+	pkg = os.path.join(root, "lean", name)
+	if os.path.isdir(pkg):
+	    shutil.rmtree(pkg)
+	    print(f"new-project-clean: removed lean/{name}")
+	else:
+	    print(f"new-project-clean: lean/{name} absent (nothing to remove)")
+	jf = os.path.join(root, "justfile")
+	s = open(jf).read()
+	s2 = re.sub(r'(lean_pkgs := "[^"]*?) ' + name + '"', r'\1"', s)
+	if s2 != s:
+	    open(jf, "w").write(s2)
+	    print("new-project-clean: reverted lean_pkgs (justfile)")
+	pf = os.path.join(root, "lean", "LintKit", "LintKit", "PackageNamespace.lean")
+	s = open(pf).read()
+	s2 = re.sub(r"\n  \(`" + camel + r", +\[`" + camel + r"\]\),", "", s)
+	s2 = re.sub(r"\n  \(`" + camel + r"Fn, +\[`" + camel + r"Fn\]\)\n\]", "\n]", s2)
+	if s2 != s:
+	    open(pf, "w").write(s2)
+	    print("new-project-clean: reverted packagePrefixes (LintKit)")
+
+# Self-verifying scaffold demo: scaffold → register → inventory → build
+# → axiom gate → clean. NOT in gates (the tree-mutation round-trip).
+scaffold-test:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	TC="{{lean_tc}}"
+	just new-project demo-scaffold-test
+	[ -f lean/demo-scaffold-test/lakefile.toml ] || { echo "FAIL: package dir missing"; exit 1; }
+	if grep -rn --exclude-dir=.lake "Thing" lean/demo-scaffold-test; then
+	  echo "FAIL: unreplaced Thing placeholder"; exit 1
+	fi
+	just lean-pkg-inventory
+	(cd lean/demo-scaffold-test && PATH="$TC:$PATH" "$TC/lake" build)
+	(cd lean/demo-scaffold-test && PATH="$TC:$PATH" "$TC/lake" env lean Tests/Axioms.lean)
+	just new-project-clean demo-scaffold-test
+	[ ! -d lean/demo-scaffold-test ] || { echo "FAIL: cleanup left the dir"; exit 1; }
+	grep -E '^lean_pkgs := ".*demo-scaffold-test' justfile >/dev/null && { echo "FAIL: lean_pkgs not reverted"; exit 1; } || true
+	grep -q "DemoScaffoldTest" lean/LintKit/LintKit/PackageNamespace.lean && { echo "FAIL: packagePrefixes not reverted"; exit 1; } || true
+	echo "scaffold-test: round-trip green (scaffold → inventory → build → axiom gate → clean)"

@@ -593,21 +593,20 @@ async fn spawn_authed_server<R: RpcTarget + 'static>(
 /// stream and sends the auth-frame FIRST; the server's gate checks it
 /// (constant-time) before any request is read. The wire-level client
 /// API = the follow-up; these tests pin the PROTOCOL.
-#[tokio::test]
-async fn auth_good_token_passes() {
-    let host = IpAddr::from([127, 0, 0, 1]);
+async fn auth_good_token_passes_at(host: IpAddr) -> Result<(), String> {
     let server_addr = spawn_authed_server(host, DemoTarget, "s3cret")
         .await
-        .expect("server");
+        .map_err(|e| format!("server: {e}"))?;
     let client = NoqTransport::client("localhost");
     let conn = tokio::time::timeout(
         Duration::from_secs(5),
         client.connect(&server_addr.to_string()),
     )
     .await
-    .expect("connect")
-    .expect("connect ok");
-    let (mut send, mut recv) = conn.open_bidirectional().await.expect("stream");
+    .map_err(|_| "connect: timeout".to_string())?
+    .map_err(|e| format!("connect: {e}"))?;
+    let (mut send, mut recv) = conn.open_bidirectional().await.map_err(|e| format!("stream: {e}"))?;
+
     // the handshake: the auth-frame FIRST
     send.write_all(&wire::rpc::encode_auth("s3cret").unwrap())
         .await
@@ -628,23 +627,40 @@ async fn auth_good_token_passes() {
     let v: serde_json::Value = serde_json::from_slice(&reply).unwrap();
     assert_eq!(v["id"], 1u64);
     assert_eq!(v["ok"], true);
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn auth_bad_token_refused() {
-    let host = IpAddr::from([127, 0, 0, 1]);
+async fn auth_good_token_passes() {
+    const CANDIDATES: [IpAddr; 2] = [
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        IpAddr::V4(std::net::Ipv4Addr::new(10, 255, 255, 254)),
+    ];
+    let mut findings = Vec::new();
+    for cand in CANDIDATES {
+        if let Err(e) = auth_good_token_passes_at(cand).await {
+            findings.push(format!("{cand}: {e}"));
+        } else {
+            return; // candidate works; done
+        }
+    }
+    panic!("auth_good_token_passes: no candidate worked: {findings:?}");
+}
+async fn auth_bad_token_refused_at(host: IpAddr) -> Result<(), String> {
     let server_addr = spawn_authed_server(host, DemoTarget, "s3cret")
         .await
-        .expect("server");
+        .map_err(|e| format!("server: {e}"))?;
     let client = NoqTransport::client("localhost");
     let conn = tokio::time::timeout(
         Duration::from_secs(5),
         client.connect(&server_addr.to_string()),
     )
     .await
-    .expect("connect")
-    .expect("connect ok");
-    let (mut send, mut recv) = conn.open_bidirectional().await.expect("stream");
+    .map_err(|_| "connect: timeout".to_string())?
+    .map_err(|e| format!("connect: {e}"))?;
+    let (mut send, mut recv) = conn.open_bidirectional().await.map_err(|e| format!("stream: {e}"))?;
+
     // the WRONG token: one error frame, then the stream dies — the
     // request (even a valid one) is never read
     send.write_all(&wire::rpc::encode_auth("wrong").unwrap())
@@ -677,23 +693,40 @@ async fn auth_bad_token_refused() {
         matches!(next, Err(_) | Ok(Err(_))),
         "the stream must die after the refusal (got {next:?})"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn auth_absent_token_refused() {
-    let host = IpAddr::from([127, 0, 0, 1]);
+async fn auth_bad_token_refused() {
+    const CANDIDATES: [IpAddr; 2] = [
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        IpAddr::V4(std::net::Ipv4Addr::new(10, 255, 255, 254)),
+    ];
+    let mut findings = Vec::new();
+    for cand in CANDIDATES {
+        if let Err(e) = auth_bad_token_refused_at(cand).await {
+            findings.push(format!("{cand}: {e}"));
+        } else {
+            return; // candidate works; done
+        }
+    }
+    panic!("auth_bad_token_refused: no candidate worked: {findings:?}");
+}
+async fn auth_absent_token_refused_at(host: IpAddr) -> Result<(), String> {
     let server_addr = spawn_authed_server(host, DemoTarget, "s3cret")
         .await
-        .expect("server");
+        .map_err(|e| format!("server: {e}"))?;
     let client = NoqTransport::client("localhost");
     let conn = tokio::time::timeout(
         Duration::from_secs(5),
         client.connect(&server_addr.to_string()),
     )
     .await
-    .expect("connect")
-    .expect("connect ok");
-    let (mut send, mut recv) = conn.open_bidirectional().await.expect("stream");
+    .map_err(|_| "connect: timeout".to_string())?
+    .map_err(|e| format!("connect: {e}"))?;
+    let (mut send, mut recv) = conn.open_bidirectional().await.map_err(|e| format!("stream: {e}"))?;
+
     // NO auth frame: the request goes straight in — the gate reads the
     // first frame AS the auth (the request's JSON has no "auth" key =
     // not presented = refused)
@@ -712,4 +745,23 @@ async fn auth_absent_token_refused() {
     let v: serde_json::Value = serde_json::from_slice(&reply).unwrap();
     assert_eq!(v["ok"], false);
     assert!(v["err"].as_str().unwrap().contains("auth"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn auth_absent_token_refused() {
+    const CANDIDATES: [IpAddr; 2] = [
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        IpAddr::V4(std::net::Ipv4Addr::new(10, 255, 255, 254)),
+    ];
+    let mut findings = Vec::new();
+    for cand in CANDIDATES {
+        if let Err(e) = auth_absent_token_refused_at(cand).await {
+            findings.push(format!("{cand}: {e}"));
+        } else {
+            return; // candidate works; done
+        }
+    }
+    panic!("auth_absent_token_refused: no candidate worked: {findings:?}");
 }

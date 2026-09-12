@@ -21,6 +21,7 @@ The property suites are `LSpec.TestSeq`s built with `checkPlausibleIO`
 -/
 
 import LSpec
+import TestKit.Harness
 
 namespace TestKit
 
@@ -53,12 +54,7 @@ def PropSpec.runIO (ps : PropSpec) : IO (Bool × String) := do
   return (ok, verdict)
 
 /-- Run a list of specs; exit-code semantics for drivers. -/
-def runSpecs (specs : List PropSpec) : IO UInt32 := do
-  let mut failures := 0
-  for ps in specs do
-    let (ok, verdict) ← ps.runIO
-    IO.println verdict
-    if !ok then failures := failures + 1
-  return if failures == 0 then 0 else 1
+def runSpecs (specs : List PropSpec) : IO UInt32 :=
+  runVerdicts specs fun ps => ps.runIO
 
 end TestKit

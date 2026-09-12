@@ -56,9 +56,7 @@ unsafe def main (args : List String) : IO UInt32 := do
       -- theorem); `just breaking` reports remedied (exit 2) when it covers
       let migrations := registeredMigrations
       let verdict := verdictOf changes migrations
-      let breaking := changes.filter fun
-        | .added _ => false
-        | _ => true
+      let breaking := SchemaLang.breakingOf changes
       for c in changes do
         IO.println s!"  {c}"
       match verdict with

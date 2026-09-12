@@ -7,7 +7,7 @@ Ports the `fix2` section of tchajed/database-stream-processing-theory
 (notes/lean/lean-v3.md Part 3).
 
 The source's notation maps: `↑↑` is our `lifting`, `↑²` is our `lifting2`,
-`z⁻¹` is `delay`, and `==n==` is `agreeUpto`. `fix2` is the fixpoint
+`z⁻¹` is `delay`, and `==n==` is `agree_upto`. `fix2` is the fixpoint
 lifted one level: of an operator on `Stream (Stream a)`, producing a
 `Stream (Stream a)`. The two-dimensional strictness (column-strictness),
 `strict2`, is the license for its fixpoint theorems; `agree_upto2` is the

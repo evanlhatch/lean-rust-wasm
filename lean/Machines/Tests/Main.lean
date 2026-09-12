@@ -530,9 +530,194 @@ def linearSmoke : CheckResult := do
       if fin != 16 then .error s!"doubler incremental final {fin} ≠ 16"
       if base + Δ != fin then .error s!"doubler chain {base}+{Δ} ≠ {fin}"
 
+/-- The doubler's incremental agreement as a CORPUS: for a grid of
+    (start, delta) pairs and four trace shapes, the incremental
+    theorem's equation EXECUTES identically on both sides — the
+    patched batch run vs the base run corrected by the delta chain.
+    (The theorem is proved; this pins the numerals — the concrete
+    Int folding — of both sides over a wide spread.) -/
+def doublerAgreementChecks : CheckResult := do
+  let t0 : List doubler.Label := []
+  let t1 : List doubler.Label := [.double]
+  let t2 : List doubler.Label := [.double, .double]
+  let t3 : List doubler.Label := [.double, .double, .double]
+  let traces := [t0, t1, t2, t3]
+  let mut ok := true
+  let mut msg := ""
+  for s0 in [-3, -1, 0, 2, 5] do
+    for δ in [-2, 0, 1, 3] do
+      for tr in traces do
+        let batch := doubler.runState (patch s0 δ) tr
+        let incr := (doubler.runState s0 tr).map
+          (fun fin => patch fin (doubler.deltaChain δ tr))
+        if batch != incr then
+          ok := false
+          msg := s!"doubler disagreement s₀={s0} δ={δ} trace={tr.length}: {batch} vs {incr}"
+  if ok then .ok () else .error msg
+
+/-- The NEGATIVE control: the same equation with the delta chain
+    SABOTAGED (×3's chain instead of ×2's) must disagree somewhere on
+    the corpus — a var-var identity transform would pass vacuously. -/
+def doublerSabotage : CheckResult := do
+  let s0 := 2; let δ := 1
+  let tr : List doubler.Label := [.double, .double]
+  let batch := doubler.runState (patch s0 δ) tr
+  let wrong := (doubler.runState s0 tr).map
+    (fun fin => patch fin (doubler.deltaChain (δ * 2) tr))
+  if batch == wrong then
+    .ok ()
+  else
+    .error "control: the sabotaged chain did not diverge — this exact row cannot distinguish" 
+
+def doublerAgreement : DetSpec :=
+  ⟨"doubler incremental agreement", doublerAgreementChecks, doublerSabotage,
+   "δ*2 chain substituted for the ×2 transform"⟩
+
 end LinearTest
 
--- ── driver (TestKit) ────────────────────────────────────────────────────
+-- ── driver (TestKit) ──────────────────────────────────────────────
+
+/-! ## Sim — the DST core (Machines.Sim): executable checks -/
+
+namespace SimTest
+
+open Machines
+open Machines.Sync
+open Machines.Sim
+open TestKit
+
+/-- An always-enabled add machine — the additive component (the
+    `Machines.Sim.addMachine` shape, computable at `Int`). -/
+@[reducible]
+def intAdd : Machine where
+  State := Int
+  Label := Int
+  Inv := fun _ => True
+  event := fun δ =>
+    { guard := fun _ => true
+    , action := fun s _ => s + δ
+    , safety := fun _ _ h => h }
+
+/-- A capped-add machine: `add δ` enabled while the result stays within
+    the cap — gives the sim a BLOCKED delivery to exercise. -/
+@[reducible]
+def cappedAdd : Machine where
+  State := Int
+  Label := Int
+  Inv := fun s => s ≤ 10
+  event := fun δ =>
+    { guard := fun s => decide (s + δ ≤ 10)
+    , action := fun s _ => s + δ
+    , safety := by
+        intro s h _
+        have hle : s + δ ≤ 10 := by simpa using h
+        exact hle }
+
+/-- Two replicas of `intAdd` at 0, deltas 3 and 4 in flight to
+    replica 1. -/
+def twoDelta : SimState intAdd Nat :=
+  { comp := fun _ => 0
+  , inflight := [{ src := 0, dst := 1, lbl := 3 }, { src := 0, dst := 1, lbl := 4 }]
+  , clock := 0 }
+
+/-- 1. Delivery applies the delta at the destination; the queue drains
+    (delivered, not lost). -/
+def delivery : CheckResult := do
+  let fin := runSim [.deliver 0, .deliver 0] twoDelta
+  if fin.comp 1 != 7 then .error s!"delivery: comp 1 = {fin.comp 1} ≠ 7"
+  else if !fin.inflight.isEmpty then .error "delivery: queue not drained"
+  else if fin.clock != 2 then .error s!"delivery: clock {fin.clock} ≠ 2"
+  else pure ()
+
+/-- 2. Replay determinism, executed: the same schedule list from the
+    same state gives the same final state and trace length — the
+    schedule is data, re-evaluation is replay. -/
+def replay : CheckResult := do
+  let chs : List (Choice intAdd Nat) :=
+    [.deliver 0, .fire 1 3, .tick, .deliver 0]
+  let a := runSim chs twoDelta
+  let b := runSim chs twoDelta
+  if a.comp 1 != b.comp 1 || a.clock != b.clock
+     || a.inflight.length != b.inflight.length then
+    .error "replay: same schedule, different final states"
+  else if (simTrace chs twoDelta).length != chs.length + 1 then
+    .error "replay: trace length ≠ schedule length + 1"
+  else pure ()
+
+/-- 3. Schedule-independence, executed: opposite delivery orders of the
+    two deltas reach the SAME state — the CRDT point (`Int`'s
+    commutativity standing in for the ZSet group). -/
+def scheduleIndependence : CheckResult := do
+  let a := runSim [.deliver 0, .deliver 0] twoDelta
+  let b := runSim [.deliver 1, .deliver 0] twoDelta
+  if a.comp 1 != b.comp 1 then
+    .error s!"orders diverged: {a.comp 1} vs {b.comp 1}"
+  else if a.comp 1 != 7 then .error s!"converged to {a.comp 1} ≠ 7"
+  else pure ()
+
+/-- 4. Blocked delivery is a NO-OP: at the cap, `add 3` cannot fire —
+    the message STAYS in flight, the state and clock are untouched
+    (conservation's blocked path). -/
+def blockedStays : CheckResult := do
+  let σ : SimState cappedAdd Nat :=
+    { comp := fun _ => 10
+    , inflight := [{ src := 0, dst := 1, lbl := 3 }]
+    , clock := 0 }
+  let fin := stepSim (.deliver 0) σ
+  if fin.comp 1 != 10 then .error "blocked delivery changed the state"
+  else if fin.inflight.isEmpty then .error "blocked delivery DROPPED the message"
+  else if fin.clock != 0 then .error "blocked delivery ticked the clock"
+  else pure ()
+
+/-- 5. Component reuse: the sim's components are ANY Core machines —
+    here a `Machines.Sync.mpsc` channel replica receives a `send 7`
+    through the queue. -/
+def mpscComponent : CheckResult := do
+  let σ : SimState (mpsc Nat) Nat :=
+    { comp := fun _ => ⟨[], 2, false⟩
+    , inflight := [{ src := 0, dst := 1, lbl := .send 7 }]
+    , clock := 0 }
+  let fin := stepSim (.deliver 0) σ
+  if fin.comp 1 == ⟨[7], 2, false⟩ then pure ()
+  else .error s!"mpsc delivery wrong: {repr (fin.comp 1)}"
+
+/-- 6. NEGATIVE CONTROL for the no-loss theorem: a buggy step that
+    DROPS the message on "delivery" (erases without applying) loses it —
+    the message vanishes from the queue while the destination is
+    unchanged. The control passes only when the loss is DETECTED. -/
+def buggyDropControl : CheckResult := do
+  -- the buggy stepSim: erase on delivery, never apply the event
+  let buggyStep (ch : Choice intAdd Nat) (σ : SimState intAdd Nat) :
+      SimState intAdd Nat :=
+    match ch with
+    | .deliver i =>
+        match σ.inflight[i]? with
+        | none => σ
+        | some _ => { σ with inflight := σ.inflight.eraseIdx i, clock := σ.clock + 1 }
+    | _ => stepSim ch σ
+  let σ : SimState intAdd Nat :=
+    { comp := fun _ => 0, inflight := [{ src := 0, dst := 1, lbl := 5 }], clock := 0 }
+  let honest := stepSim (.deliver 0) σ
+  let buggy := buggyStep (.deliver 0) σ
+  -- honest: delivered (applied at dst, queue drained)
+  if honest.comp 1 != 5 || !honest.inflight.isEmpty then
+    .error "control broken: honest step did not deliver"
+  -- buggy: the message is gone from the queue AND the destination never
+  -- changed — vanished without effect = LOST. Detected?
+  else if buggy.inflight.isEmpty && buggy.comp 1 == 0 && buggy.comp 1 != honest.comp 1 then
+    pure ()  -- the drop-bug is caught: message lost, not delivered
+  else
+    .error "drop-bug NOT caught — the no-loss check is vacuous"
+
+def simChecks : List (String × CheckResult) :=
+  [("sim-delivery", delivery)
+  , ("sim-replay-determinism", replay)
+  , ("sim-schedule-independence", scheduleIndependence)
+  , ("sim-blocked-stays", blockedStays)
+  , ("sim-mpsc-component", mpscComponent)
+  , ("sim-no-loss-control", buggyDropControl)]
+
+end SimTest
 
 /-! ## Session types — the WIT conversation choreography (Machines.Session) -/
 
@@ -559,18 +744,89 @@ def sessionChecks : CheckResult := do
       (List.map (fun s => s.1) (dual gatewayProto)))
     (fun p => p.1 != p.2)
   _ ← assert opposed "dual peers oppose every step"
-  -- mid-protocol states are never wedged (the theorem, executed)
-  let midOk := (List.range gatewayProto.length).all (fun i =>
-    match (List.range gatewayProto.length).find? (· == i) with
-    | some _ => true  -- Fin-based guard; the theorem covers it
-    | none => false)
-  _ ← assertEq "mid-protocol positions exist" midOk true
+  -- mid-protocol deadlock-freedom, EXECUTED (the theorem
+  -- `session_mid_deadlockFree` covers all positions; this walks the real
+  -- script): at every position i, the machine's OWN step i is enabled.
+  let midOk := (List.finRange gatewayProto.length).all (fun i =>
+    (session gatewayProto).enabled i.val i)
+  _ ← assert midOk "a mid-protocol position has its own step disabled"
   .ok ()
 
 end SessTest
 
-def main : IO UInt32 :=
-  TestKit.mainOfChecks "Machines" [
+/-! ## Payload-TYPED sessions — the generic layer (Machines.Session) -/
+
+namespace TypedSessTest
+
+open Machines.Session
+
+/-- Any payload universe works: the same facts hold of `Nat` payloads —
+    the layer is GENERIC (the schema-lang tie instantiates
+    `P := SchemaLang.Ty`; Machines owns the mechanism). -/
+def natProto : TProtocol Nat := [(.snd, 64), (.rcv, 7)]
+
+/-- Deriving, not stating: the peer's script is COMPUTED by the
+    unifier — `instIsDualOf` fixes `theirs := tdual mine`, so the two
+    sides of a conversation cannot drift apart by construction. -/
+def peerOf (mine : TProtocol String) : TProtocol String := tdual mine
+
+def typedChecks : CheckResult := do
+  -- the typed dual is an involution for ANY payload universe
+  _ ← assertEq "tdual involution (Nat payloads)" (tdual (tdual natProto)) natProto
+  _ ← assertEq "tdual involution (gateway payloads)"
+      (tdual (tdual gatewayProto)) gatewayProto
+  -- the typed dual keeps the PAYLOAD sequence (generic dual_map_payload)
+  _ ← assertEq "tdual keeps payloads" ((tdual gatewayProto).map (·.2))
+      (gatewayProto.map (·.2))
+  -- directions oppose pairwise (the typed lockstep condition)
+  _ ← assertEq "tdual directions oppose"
+      (List.all (List.zip (gatewayProto.map (·.1)) ((tdual gatewayProto).map (·.1)))
+        (fun x => x.1 != x.2)) true
+  -- the typed machine walks the real script: mid-protocol liveness
+  let midOk := (List.finRange gatewayProto.length).all (fun i =>
+    (tsession gatewayProto).enabled i.val i)
+  _ ← assert midOk "typed mid-protocol liveness"
+  -- the agreeing peer, derived: it IS the dual
+  _ ← assertEq "derived peer is the dual" (peerOf gatewayProto)
+      (tdual gatewayProto)
+  .ok ()
+
+/-- Positive half: the hand-written dual of the gateway conversation
+    ELABORATES — instance search unifies the script against the dual of
+    the original. A gate that rejects everything is as vacuous as one
+    that accepts everything. -/
+theorem peerElaborates : IsDualOf [(.rcv, "u64"), (.snd, "option<user>")]
+                                 [(.snd, "u64"), (.rcv, "option<user>")] :=
+  instIsDualOf [(Dir.snd, "u64"), (Dir.rcv, "option<user>")]
+
+-- THE ELABORATION-ERROR PIN (direction half): a peer whose direction
+-- does not flip is a TYPE error — instance search fails at elaboration
+-- (no runtime check exists to miss). The docstring below pins the exact
+-- failure; a mismatched message fails this module's BUILD.
+/-- error: failed to synthesize instance of type class
+  IsDualOf [(Dir.rcv, "u64"), (Dir.rcv, "option<user>")] [(Dir.snd, "u64"), (Dir.rcv, "option<user>")]
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
+-/
+#guard_msgs in
+#check (inferInstance : IsDualOf [(.rcv, "u64"), (.rcv, "option<user>")]
+                                 [(.snd, "u64"), (.rcv, "option<user>")])
+
+-- THE ELABORATION-ERROR PIN (payload half): a peer whose PAYLOAD
+-- differs at any position is equally a type error.
+/-- error: failed to synthesize instance of type class
+  IsDualOf [(Dir.rcv, "u64"), (Dir.snd, "string")] [(Dir.snd, "u64"), (Dir.rcv, "option<user>")]
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
+-/
+#guard_msgs in
+#check (inferInstance : IsDualOf [(.rcv, "u64"), (.snd, "string")]
+                                 [(.snd, "u64"), (.rcv, "option<user>")])
+
+end TypedSessTest
+
+def main : IO UInt32 := do
+  let code ← TestKit.mainOfChecks "Machines" ([
     ("dag-differential", dagDifferential),
     ("topo-smoke", topoSmoke),
     ("machine-trace", machineTrace),
@@ -587,5 +843,8 @@ def main : IO UInt32 :=
     ("sync-semaphore", SyncTest.semChecks),
     ("linear-machine", LinearTest.linearSmoke)
     , ("session", SessTest.sessionChecks)
-  ]
+    , ("session-typed", TypedSessTest.typedChecks)
+    ] ++ SimTest.simChecks)
+  if code != 0 then return code
+  TestKit.runDets [LinearTest.doublerAgreement]
 

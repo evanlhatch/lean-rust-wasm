@@ -54,12 +54,7 @@ def DetSpec.run (ds : DetSpec) : Bool × String :=
   (ok, verdict)
 
 /-- Run a list of specs; prints verdicts, exit-code semantics for drivers. -/
-def runDets (specs : List DetSpec) : IO UInt32 := do
-  let mut failures := 0
-  for ds in specs do
-    let (ok, verdict) := ds.run
-    IO.println verdict
-    if !ok then failures := failures + 1
-  return if failures == 0 then 0 else 1
+def runDets (specs : List DetSpec) : IO UInt32 :=
+  runVerdicts specs fun ds => pure ds.run
 
 end TestKit

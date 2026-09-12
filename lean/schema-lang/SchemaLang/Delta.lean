@@ -50,14 +50,20 @@ def Item.changeTypeName : Item → String
   | .record n _ => pascal n ++ "Change"
   | _ => ""
 
+/-- The key field of a record: the FIRST field (the same key
+    convention the oracle and codecs use). `none` for non-records and
+    field-less records. The one "does this record have a key?" test —
+    the four delta lowerings used to each re-derive it from the
+    record's field list. -/
+def Item.keyOf : Item → Option Field
+  | .record _ fields => fields.head?
+  | _ => none
+
 /-- The change variant's PAYLOAD type for a record: the record itself
     (`.ty n` — the caller wraps it in its target's variant/enum). `none`
     for non-records AND for field-less records (no key field). -/
 def Item.changeTy : Item → Option Ty
-  | .record n fields =>
-      match fields with
-      | [] => none
-      | _ :: _ => some (.ty n)
+  | .record n fields => (Item.keyOf (.record n fields)).map fun _ => .ty n
   | _ => none
 
 /-! ## WIT lowering -/
@@ -66,8 +72,8 @@ def Item.changeTy : Item → Option Ty
     reference are kebab-mangled; `remove` carries the KEY field's WIT
     type. Empty list for non-records / key-less records. -/
 def Item.changeWitDecl : Item → List String
-  | .record n fields =>
-      match fields.head? with
+  | it@(.record n _) =>
+      match Item.keyOf it with
       | none => []
       | some key =>
           let ref := kebab n
@@ -92,11 +98,11 @@ def Item.changeWitDecl : Item → List String
     too). The full record is the payload, so the checked parts are the
     record's own field types. -/
 def Item.changeRustItems (items : List Item) : Item → List CodegenCore.Emit.Rust.Item
-  | .record n fields =>
-      match fields.head? with
+  | it@(.record n fields) =>
+      match Item.keyOf it with
       | none => []
       | some key =>
-          let change := Item.changeTypeName (.record n fields)
+          let change := Item.changeTypeName it
           let full := SchemaLang.Emit.Rust.tyRust (.ty n)
           let keyTy := SchemaLang.Emit.Rust.tyRust key.ty
           let derives :=
@@ -148,7 +154,7 @@ def Item.changeTestItems : Item → List CodegenCore.Emit.Rust.Item
   | .record n fields =>
       let lits? := fields.mapM fun f =>
         (litTy? f.ty).map fun lit => s!"{rustIdent f.name} : {lit}"
-      match fields.head?, lits? with
+      match Item.keyOf (.record n fields), lits? with
       | some _, some lits =>
           let change := Item.changeTypeName (.record n fields)
           let full := SchemaLang.Emit.Rust.tyRust (.ty n)

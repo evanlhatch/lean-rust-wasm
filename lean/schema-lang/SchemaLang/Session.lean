@@ -79,29 +79,20 @@ theorem typed_wire_payloads_agree (p : TProtocol) :
   exact Machines.Session.dual_map_payload _
 
 /-- The typed dual's payload sequence IS the original's schema types
-    (types survive dualing untouched). -/
+    (types survive dualing untouched). The generic theorem
+    (`Machines.Session.tdual_types`, any payload universe) instantiated
+    at `P := Ty` — the local generics cannot drift from it. -/
 theorem tdual_types (p : TProtocol) : (tdual p).map (·.2) = p.map (·.2) := by
-  induction p with
-  | nil => rfl
-  | cons s rest ih => simp [tdual]
+  simpa [tdual] using (Machines.Session.tdual_types (P := Ty) p)
 
 /-- Directions oppose pairwise: every send on one side is a receive on
-    the other (the typed lockstep condition, executed form). -/
+    the other (the typed lockstep condition, executed form) — the
+    generic theorem at `P := Ty`. -/
 theorem typed_directions_oppose (p : TProtocol) :
     List.all (List.zip (p.map (·.1)) ((tdual p).map (·.1)))
       (fun x => x.1 != x.2) := by
-  induction p with
-  | nil => rfl
-  | cons s rest ih =>
-      cases s with
-      | mk d t =>
-          -- zip + all over a cons are definitional
-          show ((d != d.flip) && List.all
-            (List.zip (rest.map (·.1)) ((tdual rest).map (·.1)))
-            (fun x => x.1 != x.2)) = true
-          have h1 : (d != d.flip) = true := by cases d <;> rfl
-          rw [h1]
-          simp [ih]
+  unfold tdual
+  exact Machines.Session.tdual_directions_oppose (P := Ty) p
 
 /-! ## The gateway instance, typed -/
 
