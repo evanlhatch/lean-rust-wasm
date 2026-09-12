@@ -30,3 +30,24 @@ def addFortyOne (n : Nat) : Nat := n + 41
 def addFortyTwo (n : Nat) : Nat := n + 42
 
 end LintKit.TestFixtures.Clean
+
+/-- Clean (packageNamespace, foreign rule): an unprefixed module-local name
+is ordinary organization, not drift. -/
+def unprefixedLocal : Nat := 7
+
+/- Clean (packageNamespace, foreign rule): a module-LOCAL namespace —
+neither a core root nor another workspace package. -/
+namespace LocalMarker
+
+def marker : Nat := 8
+
+end LocalMarker
+
+/- Clean (packageNamespace, foreign rule): a root owned by a constant of
+the SAME module — projections of a locally declared structure live under
+the structure's name without being foreign parking (core's `Order`
+namespace is not the owner here; the local `structure Order` is). -/
+structure Order where
+  id : Nat
+
+def Order.doubleId (o : Order) : Nat := o.id * 2

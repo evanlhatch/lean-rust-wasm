@@ -124,10 +124,33 @@ combinators + Envelope, payoff `composite_decode_encode` closed by simp
 alone). Decode.lean dead pair `splitTopLevel_join_rbracket`/
 `sep_toList_joinCSep` was transformed (not deleted) — deletion candidate.
 
-REMAINING: 4.4 (`declare_binop` elab), 6.x (linters). Optional/hygiene:
-pre-existing linter warnings (unusedSimpArgs/unnecessarySimpa in
-Decode.lean; unusedVariables in Session.lean/Reflect.lean) — worth a sweep
-once 6.7 flips core linters on package-wide.
+REMAINING (the full queue, 2026-09-09 late):
+- **6.x LintKit landed but the gate is RED pending 3 triage fixes** (see
+  Phase 6 note below).
+- 6.5.3 emitter-output self-audit recipe (GateKit; unassigned).
+- 6.5.5 deferred-tooling notes append (notes/full-remaining-work.md;
+  notes-only).
+- `body : Name` mandatory-executable-semantics field on fn items
+  (6.5.1 follow-up; deferred by the implementing agent).
+- Migration authoring surface (registry of Migrations for
+  `schema-breaking` to consume; lands with the first real breaking
+  change).
+- When a pure-context role exists in the item algebra, fire
+  `SchemaDiag.volatileInPureContext` from `universeCheck` (ctor armed).
+
+LANDED since the ledger above: 4.4 (`declare_binop` — `@[command_elab]`
+handler in Substrait/Typed/Binop.lean; 8 op pairs → table entries;
+hygiene lessons in the module header), warning hygiene sweep (75 core-
+linter warnings fixed, 0 false positives; substrait/Machines/schema-lang
+warning-clean), 6.5.1 (FuncSem/NullSem/Determinism on fn items +
+`@[schema_fn strict.volatile]` attr syntax + Snapshot round-trip),
+6.5.2 (SchemaLang/Migration.lean — FieldMigration/Migration/
+CompatVerdict clean|remedied|unremedied, exit codes 0/2/1,
+widenU32U64_sound axiom-free), 6.x LintKit package (axiomAllowlist,
+dupDefBodies, packageNamespace, noLinterDisable, testImportDiscipline
+default-ON; recursiveSimpEqns default-OFF — 83-hit census dominated by
+doctrine-§8 raw-equation parsers; census command in the justfile
+comment). `just gates` now includes lean-pkg-inventory + lean-lint.
 
 Wave-5 additions LANDED + gate-verified: 3.1 (substrait axiom gate 1→23),
 3.5 (wellFormed asserted over every emitted dtype + negative controls;
@@ -167,6 +190,48 @@ Lean-zh/protobuf wire (Codec.lean covers binary in-house), cslib, PHOAS/
 graded monads, all game/engine semantics.
 
 ## Phase 6 — enforcement (linters), wired into `just gates`
+
+### Phase 6 handoff note (2026-09-09): LintKit gate is RED — 3 triage fixes
+
+The linters work (they caught real findings on first run) but need
+false-positive fixes before `just gates` goes green. Diagnosed precisely:
+
+1. **`dupDefBodies` must skip reducible decls (abbrevs).** Fires on
+   deliberate transparent aliases: `Vortex/DType.lean:94-121`
+   (`FieldName`/`ExtId` = String; `StructFields`/`UnionVariants` = same
+   List type) and `Demo.lean:60-62` (`Async.Future`/`Async.Stream` —
+   marker types whose body-equality is the POINT; the reifier matches the
+   qualified names). Fix in `LintKit/DupDefBodies.lean` `computeModuleDups`:
+   skip decls where `getReducibilityStatus env decl == .reducible`.
+   Consider also skipping theorems (proof irrelevance makes dup-proof
+   clusters noise). Add a fixture: two abbrevs with identical bodies must
+   NOT fire; two `def`s with identical bodies must.
+2. **`packageNamespace` must become the foreign-namespace rule.** Current
+   rule (module root → expected prefix) fires on every unprefixed local
+   decl: Demo.lean's domain types (`User`, `Order`, …) and SchemaLang's
+   top-level `witEmitter`/`changeSpecEmitter`. The doctrine's actual
+   hazard (flatland's `Fin.ofList?` — a helper parked in CORE's `Fin`
+   namespace) is FOREIGN namespaces. Revised rule: flag a decl only when
+   its first name component belongs to another workspace package's prefix
+   OR to core/Lean (`Lean`, `Init`, `Std`, `Fin`, `List`, `String`,
+   `Option`, `Array`, `IO`, …) while the declaring module's root differs.
+   Unprefixed and own-package decls pass. Keep the strict prefix rule
+   behind the existing option (default off). Result: current tree clean,
+   real leaks still caught. Update `LintKit/TestFixtures/Violations.lean`
+   to plant a foreign-namespace decl (e.g. `def List.myHelper` in a
+   LintKit test module) and assert it fires; assert unprefixed local decls
+   don't.
+3. **`testImportDiscipline` fired on schema-lang/Tests/Main.lean:11**
+   (`import LSpec` directly). Try deleting the import — if the build
+   fails, the file uses LSpec identifiers TestKit doesn't re-export;
+   extend TestKit.lean's re-export surface (`export LSpec (…)`) rather
+   than nolinting.
+
+After fixes: rebuild LintKit, re-run `just lean-lint` (must be clean
+package-by-package), then full `devenv shell --profile wasm -- bash -c
+'export CC=$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc; just
+gates'` (the CC export is REQUIRED — the new noq/ring dep needs the wasm
+profile's clang headers; without it gen-check fails in cc-rs on ring).
 
 | # | Rule | Mechanism |
 |---|---|---|

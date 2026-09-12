@@ -4,10 +4,20 @@ declarations defined in a package's modules carry the package's namespace
 prefix. Cross-namespace leakage is how "temporary" extensions to someone
 else's namespace become load-bearing.
 
-Scope: the linted module's root is mapped to the expected prefix(es) by
-`packagePrefixes` (one row per workspace package lib root — mirror of
-`lean_pkgs` in the justfile). Unknown roots (test exes, drivers: `Tests`,
-`GenMain`, `CheckMain`, `BreakingMain`) are skipped, not flagged.
+Scope, DEFAULT mode — the FOREIGN-NAMESPACE rule (the `Fin.ofList?`
+lesson, flatland lineage): a decl is flagged only when its name is parked
+in a namespace that is not this module's own business — a core/framework
+root (`Lean`, `Fin`, `List`, …; `foreignRoots`) or ANOTHER workspace
+package's root. Unprefixed local names (`Demo.User`) and module-local
+namespaces (`Async.Future` in Demo) are ordinary organization and pass.
+STRICT mode — the original module-root→prefix rule — is opt-in via
+`linter.guestlang.packageNamespace.strict` (whole-tree ratchet if ever
+wanted; default off: the strict rule fires on every unprefixed local
+decl, which is noise, not hazard).
+
+Unknown module roots (test exes, drivers: `Tests`, `GenMain`,
+`CheckMain`, `BreakingMain`) are skipped in strict mode; the foreign rule
+needs no root table.
 
 Allowlist mechanisms:
 * `@[nolint linter.guestlang.packageNamespace "reason"]` per site — required
@@ -32,6 +42,14 @@ register_option linter.guestlang.packageNamespace.extraPrefixes : String := {
   defValue := ""
   descr := "comma-separated extra allowed namespace prefixes for \
     linter.guestlang.packageNamespace (set by the lint driver)"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.packageNamespace.strict : Bool := {
+  defValue := false
+  descr := "strict mode: require EVERY declaration in a table-root module to \
+    carry the package prefix (the original rule; default is the \
+    foreign-namespace rule)"
 }
 
 initialize Linter.addEnvLinterOption linter.guestlang.packageNamespace
@@ -63,6 +81,15 @@ def extraPrefixesOf (s : String) : List Name :=
     let p := p.trimAscii.toString
     if p.isEmpty then none else some p.toName
 
+/-- Core/framework namespaces a module must NOT park helpers in — the
+`Fin.ofList?` hazard: a helper here reads as stock API and can collide or
+become load-bearing on an upstream rename. Extending this list is a
+deliberate doctrine decision, not a convenience. -/
+def foreignRoots : List Name :=
+  [`Lean, `Init, `Std, `Lake,
+   `Fin, `List, `String, `Option, `Array, `IO, `Nat, `Int, `Float, `Bool,
+   `Char, `UInt8, `UInt16, `UInt32, `UInt64, `USize, `Order, `System]
+
 meta def packageNamespaceTest (decl : Name) : MetaM (Option MessageData) := do
   if ← skipDecl decl then return none
   let env ← getEnv
@@ -71,19 +98,47 @@ meta def packageNamespaceTest (decl : Name) : MetaM (Option MessageData) := do
   -- design, not by drift.
   if Parser.isValidSyntaxNodeKind env decl then return none
   let some mod ← findModuleOf? decl | return none
-  let some expected := packagePrefixes.lookup mod.getRoot | return none
-  let allowed := expected ++ extraPrefixesOf
-    (linter.guestlang.packageNamespace.extraPrefixes.get (← getOptions))
-  if allowed.any (·.isPrefixOf decl) then return none
-  return some m!"declaration is outside its package's namespace: module root \
-    `{mod.getRoot}` expects prefix {expected} — move it under the prefix, or \
-    for a deliberate cross-namespace extension opt out with \
-    `@[nolint linter.guestlang.packageNamespace \"reason\"]`"
+  if linter.guestlang.packageNamespace.strict.get (← getOptions) then
+    let some expected := packagePrefixes.lookup mod.getRoot | return none
+    let allowed := expected ++ extraPrefixesOf
+      (linter.guestlang.packageNamespace.extraPrefixes.get (← getOptions))
+    if allowed.any (·.isPrefixOf decl) then return none
+    return some m!"declaration is outside its package's namespace: module root \
+      `{mod.getRoot}` expects prefix {expected} — move it under the prefix, or \
+      for a deliberate cross-namespace extension opt out with \
+      `@[nolint linter.guestlang.packageNamespace \"reason\"]"
+  -- Default: the foreign-namespace rule.
+  match decl with
+  | .str p _ =>
+    -- unprefixed module-local names are ordinary, not drift
+    if p.isAnonymous then return none
+    let root := p.getRoot
+    -- the declaring module's own package prefix is never foreign
+    if (packagePrefixes.lookup mod.getRoot).getD []
+        |>.any (fun pref : Name => pref.isPrefixOf decl) then
+      return none
+    -- a root owned by a constant of the SAME module (e.g. `Order.items`
+    -- where `structure Order` is declared in this module) is the module's
+    -- own type namespace — projections necessarily live under it
+    if (env.find? root).isSome
+        && env.getModuleIdxFor? root == env.getModuleIdxFor? decl then
+      return none
+    let foreignCore := foreignRoots.contains root
+    let foreignPkg :=
+      packagePrefixes.any fun (r, _) => r == root && r != mod.getRoot
+    if foreignCore || foreignPkg then
+      return some m!"declaration parked in a foreign namespace `{root}`: \
+        helpers must not extend core's or another package's namespace (the \
+        `Fin.ofList?` lesson) — move it under this module's own namespace, \
+        or opt out with `@[nolint linter.guestlang.packageNamespace \
+        \"reason\"]"
+    return none
+  | _ => return none
 
 meta def packageNamespaceLinter : EnvLinter where
   test := packageNamespaceTest
-  noErrorsFound := "every declaration carries its package's namespace prefix"
-  errorsFound := "declarations outside their package's namespace"
+  noErrorsFound := "no declaration parked in a foreign namespace"
+  errorsFound := "declarations parked in foreign namespaces"
 
 end LintKit
 

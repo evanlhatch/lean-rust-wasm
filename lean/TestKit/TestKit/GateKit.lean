@@ -53,4 +53,43 @@ def byteTie (name : String) (path : System.FilePath) (regenerate : IO String) (u
       IO.eprintln s!"× {name}: committed artifact missing: {path}; run with --update to generate"
       return 1
 
+/-- One self-audit rule over EMITTED text: a named substring pattern that
+must be absent (banned — the default) or present (required), with the WHY
+for the audit report. -/
+structure AuditRule where
+  name : String
+  pattern : String
+  required : Bool := false
+  why : String := ""
+
+/-- Pure audit: the violation descriptions for `emitted` (empty = clean).
+The recipe (guide 6.5.3): emitters audit their OWN generated text —
+GuestGate bans constructs in guest SOURCE; this audits the EMITTED
+artifact, so a generator regression that starts emitting a banned
+construct fails CI even though the generator itself compiles. Purity lets
+check-style test suites assert on `auditFindings … |>.isEmpty` while the
+IO wrapper below drives gate-exe exit codes. -/
+def auditFindings (rules : List AuditRule) (emitted : String) : List String :=
+  rules.filterMap fun r =>
+    if r.required then
+      if emitted.contains r.pattern then none
+      else some s!"required \"{r.pattern}\" absent — {r.why}"
+    else
+      if emitted.contains r.pattern then
+        some s!"banned \"{r.pattern}\" present — {r.why}"
+      else none
+
+/-- IO audit gate: print findings for `emitted`; exit 0 clean, 1 violated.
+Chain after `byteTie` in a gate exe (auditing the REGENERATED text — the
+byte-tie already proved committed == regenerated). -/
+def audit (what : String) (rules : List AuditRule) (emitted : String) : IO UInt32 := do
+  match auditFindings rules emitted with
+  | [] =>
+    IO.println s!"✓ {what}: self-audit clean ({rules.length} rules)"
+    return 0
+  | vs =>
+    for v in vs do
+      IO.eprintln s!"× {what}: self-audit violation: {v}"
+    return 1
+
 end TestKit.GateKit

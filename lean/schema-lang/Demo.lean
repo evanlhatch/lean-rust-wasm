@@ -59,7 +59,10 @@ namespace Async
 
 def Future (a : Type) : Type := a
 
-def Stream (a : Type) : Type := a
+/-- Defined as `Future` itself: both are boundary markers whose bodies are
+the identity BY DESIGN, so the bodies share one definition rather than two
+copies (the dupDefBodies lesson — one anchor, aliases of it). -/
+def Stream (a : Type) : Type := Future a
 
 end Async
 

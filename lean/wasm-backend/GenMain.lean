@@ -79,11 +79,13 @@ def emitModuleWasm : CoreM String := do
   match res with
   | .ok (wat, _) =>
     -- splice the hand-written runtime (pooled allocator + Perceus RC)
-    -- into the module body: single module, no imports.
+    -- into the module body: single module, no imports. The splice
+    -- marker sits AFTER the async task-intrinsic imports (the core-wasm
+    -- section order: imports first) and before the memory.
     let rt ← IO.FS.readFile "runtime.wat"
     -- WAT line comments are `;;` — CommentStyle.wat (2.10).
     let hdr := CodegenCore.Emit.header .wat "wasm-backend" "DemoFn.lean"
-    pure (hdr ++ (wat.replace "(module\n" ("(module\n" ++ rt ++ "\n")))
+    pure (hdr ++ (wat.replace "  ;;RUNTIME-SPLICE\n" (rt ++ "\n")))
   | .error e => throwError e
 
 /-! ## The component world (the SSOT for demo-world.wit)
@@ -98,16 +100,11 @@ flattens them (strings/objects), and the KEPT list is the honest
 surface of what the component actually exports.
 -/
 
-/-- The SCHEMA fns (the demo-exports INTERFACE's members; the core
-    exports = the interface-qualified paths). -/
-def interfaceFns : List String := ["get-user", "watch-orders"]
-
 /-- One world export: (wit name, NAMED wit params — WIT requires
     parameter names, `wit-parser` rejects bare types — wit result —
-    the async marking: GATED OFF (the async-lift's fused-adapter
-    generation mismatches inside wit-component 0.244's own code-gen;
-    the protocol's shapes = verified against the wit-bindgen 0.61
-    reference + the minimal-module probes — the plan doc's Track 1b)). -/
+    the async marking: the WIT's `async func` keyword; the recipe (the
+    task-return/waitable imports + the task-return delivery) = in
+    WasmBackend's asyncFns note)). -/
 
 def worldExports : List (String × List String × String × Bool) :=
   [ ("double", ["x: u64"], "u64", false)
@@ -120,7 +117,7 @@ def worldExports : List (String × List String × String × Bool) :=
   , ("str-len-demo", ["n: u64"], "u64", false)
   , ("greet", ["n: u64"], "string", false)
   , ("get-user", ["id: u64"], "option<user>", false)
-  , ("watch-orders", ["into: order-error"], "list<user>", false) ]
+  , ("watch-orders", ["into: order-error"], "list<user>", true) ]
 
 /-- The oracle's fn names — mirrors `oracleSrc`'s `rows`/`resultOf`
     (kebab, as the JSON spells them). The drift surface 3.4 pins: an
@@ -143,9 +140,9 @@ def worldWit : String :=
     ++ "}\n\nworld demo {\n"
     ++ "  use demo-types.{user, order-error};\n"
     ++ String.intercalate "\n"
-      ((worldExports.filter fun (name, _params, _ret, _isAsync) =>
-          !(interfaceFns.contains name)).map fun (name, params, ret, _) =>
-        s!"    export {name}: func({String.intercalate ", " params}) -> {ret};")
+      (worldExports.map fun (name, params, ret, isAsync) =>
+        let kw := if isAsync then "async " else ""
+        s!"    export {name}: {kw}func({String.intercalate ", " params}) -> {ret};")
     ++ "\n}\n"
 
 /-! ## The COMPILED world — the gateway's compilable subset

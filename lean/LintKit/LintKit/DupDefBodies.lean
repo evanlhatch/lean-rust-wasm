@@ -13,6 +13,9 @@ cluster of ≥2. Opt out per site:
 Deliberate scope: exact structural equality modulo binder names. No
 defeq/unification (a kernel check per pair — too slow for a lint), no
 cross-module clustering (per-module is where accidental copies land).
+Reducible decls (`abbrev`s) are excluded: a transparent alias is
+body-equal BY DESIGN — role-named types (`FieldName`/`ExtId`) and
+boundary markers (`Async.Future`) would otherwise false-fire.
 
 The option is declared at top level (see LintKit.Basic's header note).
 -/
@@ -64,6 +67,8 @@ def computeModuleDups (env : Environment) (mod : Name) : CoreM DupCache := do
   for (decl, info) in env.constants.map₁.toList do
     if env.const2ModIdx[decl]? != some idx then continue
     if ← skipDecl decl then continue
+    -- abbrevs: transparent aliases, body-equality is the design (see header)
+    if ← isReducible decl then continue
     let some v := info.value? | continue
     let key : ExprStructEq := ⟨stripBinderNames v⟩
     let existing := (bodies.get? key).getD #[]

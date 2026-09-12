@@ -35,7 +35,8 @@ def expected : Array (Name × Array Name) := #[
     `LintKit.TestFixtures.Violations.dupOne,
     `LintKit.TestFixtures.Violations.dupTwo]),
   (`linter.guestlang.packageNamespace, #[
-    `Other.badNs])
+    `List.badNs,
+    `Substrait.strayFromLintKit])
 ]
 
 unsafe def run : M Unit := do

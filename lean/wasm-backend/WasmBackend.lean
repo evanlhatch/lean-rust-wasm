@@ -53,6 +53,11 @@ structure S where
   n : Nat := 0
   /-- trampolines emitted so far (pap closures): (fnName, nPartial). -/
   tramps : Array (Name × Nat) := #[]
+  /-- every decl's wasm (param types, result type) — populated by
+  emitModule BEFORE the decls emit (the fap result-type lookup needs
+  the CALLEE's wasm result: object-returning calls with args = i32,
+  scalar = i64 — the type default alone miscasts the local). -/
+  sigs : Std.HashMap Name (Array String × String) := {}
   deriving Inhabited
 
 abbrev M := StateT S (Except String)
@@ -312,8 +317,15 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
           emit call
           emit s!"local.set ${l}"
       | none, _ =>
+          -- the local's type = the CALLEE's actual wasm result type
+          -- (scalar i64 vs object i32) — the LCNF type default alone
+          -- miscasts (the watchOrdersImpl._boxed lesson: the object-
+          -- returning call stored into an i64 local = the core module
+          -- INVALID — the `fused-adapter` mismatch was THIS, not a
+          -- wit-component bug).
+          let calleeTy := (← get).sigs[fn]?.map (·.2)
           let l ← bindLocal decl.fvarId
-            (if args.isEmpty then "i32" else ty.getD "i64")
+            (if args.isEmpty then "i32" else calleeTy.getD (ty.getD "i64"))
           -- 0-ary fap = top-level closure const (obj); else a scalar call
           for a in args do emitArg a
           emit s!"call ${fn.toString}"
@@ -321,7 +333,7 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
   | .pap fn args =>
       -- closure: alloc {rc, tag=254, class, fnIdx, partial args…}
       let nA := args.size
-      let tramp := s!"pap_{fn.toString}_{nA}"
+      let _tramp := s!"pap_{fn.toString}_{nA}"
       -- table slot: position in the deduped tramp list (push-order)
       let idx : Int ← do
         let ts := (← get).tramps
@@ -466,18 +478,33 @@ wrong shape = a differential failure (the host misreads).
 
 /-- The ASYNC-marked exports (the wire names; the world marks them
     `async func` — the canon lift's async option + the [callback]). -/
-def asyncFns : List String := []
+  -- the ASYNC-lifted exports (the async gate). THE RECIPE (cracked via
+  -- the minimal-module bisection against wasmparser 0.257's
+  -- check_asyncness): (a) the WIT function must be declared `async func`
+  -- (the component func type's async flag — the SYNC-marked fn = the
+  -- `async canonical option requires an async function type` error);
+  -- (b) the core module IMPORTS the task intrinsics: the per-fn
+  -- `[export]$root`/`[export]<iface-key>` `[task-return]<fn>` (the flat
+  -- results — the list = (ptr, len)) + `$root`'s [waitable-set-poll/new/
+  -- drop], [waitable-join], [context-get-0/set-0] + `[export]$root`
+  -- [task-cancel] (NO params); (c) the core exports: memory,
+  -- __indirect_function_table, cabi_realloc, `[async-lift]<key>#<fn>`
+  -- (the params = the flat form; the result = i32 = the task handle-ish
+  -- 0) + `[callback][async-lift]<key>#<fn>` ((i32,i32,i32)->i32); (d)
+  -- the callee DELIVERS results by CALLING task-return(flat-results)
+  -- then returning 0 (the sync-computable body = done at the first
+  -- poll; the callback = the constant Exit=0). The fused-adapter
+  -- `type mismatch` seen earlier = the missing task-return import+call.
+def asyncFns : List String := ["watch-orders"]
   -- GATED OFF: the [async-lift] protocol's shapes are emitted correctly
   -- (the callback + the interface-qualified exports — verified against
   -- the wit-bindgen 0.61 reference + the minimal-module probes), but
-  -- wit-component 0.244's fused-adapter code-gen mismatches
-  -- ('expected i64 found i32') INSIDE its own generated lift. The
   -- sync-computable watch-orders = the landed form; the async = the
-  -- plan doc's Track 1b.
-
-/-- The SCHEMA fns in the demo-exports INTERFACE (the qualified
-    export-name convention). -/
-def interfaceFns : List String := ["get-user", "watch-orders"]
+  -- plan doc's Track 1b. RESOLUTION (this session): the async = LANDED
+  -- — the recipe (the WIT's async func + the task-return/waitable
+  -- imports + the task-return delivery) = in the asyncFns' note; the
+  -- earlier `fused-adapter mismatch` = the MISSING task-return
+  -- import+call, not a wit-component bug.
 
 /-- The adapter result shape per export (kebab name). -/
 def adapterShape? : String → Option String
@@ -660,9 +687,16 @@ def emitAdapter (d : Decl .impure) (shape : String) : M String := do
       -- EMBEDDED mode: areaOff = 0)
       ]
       ++ listWalkWat ["local.get $e", "i32.load offset=24"] 0 8 "T" (strElemLower "T")
-    let areaTail := [ "i32.const 56", "local.get $arrU", "i32.store"
-                    , "i32.const 60", "local.get $nU", "i32.store"
-                    , "i32.const 56" ]
+    let areaTail :=
+      -- the ASYNC delivery (the listUser shape = watch-orders-specific,
+      -- and watch-orders = the async fn): call task-return(ptr, len) —
+      -- the flat results — then return 0 (the task = complete at the
+      -- first poll; the callback = Exit). The area (56..64) = still
+      -- filled (the lift's copy-out = the task-return's arg-based).
+      [ "i32.const 56", "local.get $arrU", "i32.store"
+      , "i32.const 60", "local.get $nU", "i32.store"
+      , "i32.const 56", "i32.const 60", "i32.load", "call $tr_watch-orders"
+      , "i32.const 0" ]
     let body := String.intercalate "\n  " (variantBox
       ++ [s!"call ${d.name.toString}", "local.set $lst"]
       ++ listWalkWat ["local.get $lst"] 0 32 "U" userLower
@@ -715,7 +749,13 @@ exports. The state THREADS across decls (tramps accumulate). -/
 def emitModule (decls : List (Decl .impure))
     (exportTargets : List (String × Name))
     (stringResult? : Name → Bool := fun _ => false) : M String := do
-  let mut st : S := {}
+  -- decl signatures FIRST (the fap emitter needs the callee's wasm
+  -- result type during the decls' emit)
+  let sigs : Std.HashMap Name (Array String × String) :=
+    decls.foldl (fun m d =>
+      let rt := match d.value with | .code c => resultTyOf c | .extern .. => none
+      m.insert d.name (d.params.map (fun p => paramWasmTy p), rt.getD "i32")) {}
+  let mut st : S := { sigs := sigs }
   let mut funcs : List String := []
   for d in decls do
     let (f, s2) ← emitDecl d |>.run st
@@ -749,7 +789,7 @@ def emitModule (decls : List (Decl .impure))
       body := body ++ [s!"call ${fn.toString}"]
     else
       -- raw scalar target: unbox captured + fresh args, call, box result
-      for i in [0:nA] do
+      for _i in [0:nA] do
         body := body ++ [s!"local.get $c", s!"i32.load offset={off}", "i64.load offset=8"]
         off := off + 8
       for i in [0:nFresh] do
@@ -814,9 +854,24 @@ def emitModule (decls : List (Decl .impure))
   -- (i32 ordinal, i32 handle, i32 result) -> i32 (the CallbackCode:
   -- Exit=0); our sync-computable bodies = Exit on the first poll.
   let cbFuncs := asyncTargets.map fun (kebab, _) =>
-    s!"  (func $\"[callback][async-lift]demo-exports#{kebab}\" (param i32 i32 i32) (result i32) i32.const 0)"
+    s!"  (func $\"[callback][async-lift]{kebab}\" (param i32 i32 i32) (result i32) i32.const 0)"
   let cbExports := asyncTargets.map fun (kebab, _) =>
-    s!"  (export \"[callback][async-lift]demo-exports#{kebab}\" (func $\"[callback][async-lift]demo-exports#{kebab}\"))"
+    s!"  (export \"[callback][async-lift]{kebab}\" (func $\"[callback][async-lift]{kebab}\"))"
+  -- the task intrinsics' imports (the async lift requires them — see
+  -- the asyncFns' note); the names = the bare kebab (the world-level
+  -- key) for both the task-return and the async-lift pair
+  let asyncImports := asyncTargets.flatMap fun (kebab, _) =>
+    [ s!"  (import \"[export]$root\" \"[task-return]{kebab}\" (func $tr_{kebab} (param i32 i32)))"
+    , "  (import \"$root\" \"[waitable-set-poll]\" (func (param i32 i32) (result i32)))"
+    , "  (import \"$root\" \"[waitable-set-new]\" (func (result i32)))"
+    , "  (import \"$root\" \"[waitable-join]\" (func (param i32 i32)))"
+    , "  (import \"$root\" \"[context-get-0]\" (func (result i32)))"
+    , "  (import \"$root\" \"[context-set-0]\" (func (param i32)))"
+    , "  (import \"[export]$root\" \"[task-cancel]\" (func))"
+    , "  (import \"$root\" \"[waitable-set-drop]\" (func (param i32)))" ]
+  -- the canon lift's indirect calls go through the table + the async
+  -- shims realloc through cabi_realloc (the bump alloc ignores the
+  -- old-ptr/old-size/align args)
 
   -- the EXPORT-NAME map: the SCHEMA fns (get-user/watch-orders) live in
   -- the demo-exports INTERFACE -> the core export = the LEGACY mangling's
@@ -824,13 +879,12 @@ def emitModule (decls : List (Decl .impure))
   -- "demo-exports" — the foreign-package references carry the full
   -- pkg:iface path); the world-level scalars = the bare kebab; the async
   -- ones = the [async-lift] prefix (gated off — see asyncFns).
+  -- ALL exports = the world-level (the async = the [async-lift]-prefixed
+  -- bare name; the interface-split = the wit-component 47's fused
+  -- adapter mismatch — see the asyncFns' note + the plan doc's 1b).
   let exports := exportTargets.map fun (kebab, n) =>
     if asyncFns.contains kebab
-    then s!"  (export \"[async-lift]demo-exports#{kebab}\" (func ${n.toString}_abi))"
-    else if interfaceFns.contains kebab && !(kebab == "get-user")
-    then s!"  (export \"guestlang:demo/demo-exports#{kebab}\" (func ${n.toString}_abi))"
-    else if kebab == "get-user"
-    then s!"  (export \"get-user\" (func ${n.toString}_abi))"
+    then s!"  (export \"[async-lift]{kebab}\" (func ${n.toString}_abi))"
     else s!"  (export \"{kebab}\" (func ${n.toString}_abi))"
   let sp := " "
   let table := if !sigTypes.isEmpty then
@@ -841,6 +895,13 @@ def emitModule (decls : List (Decl .impure))
   -- the canon lift reads guest memory (string/list results are copied
   -- out of it) — the memory MUST be exported under the canonical name
   let memExport := ["  (export \"memory\" (memory 0))"]
-  pure <| String.intercalate "\n" ((["(module", "  (memory 1)"] ++ funcs ++ abiFuncs ++ cbFuncs ++ trampFuncs ++ table) ++ exports ++ cbExports ++ memExport ++ [")"])
+  let asyncEnv := if asyncFns.isEmpty then []
+    else asyncImports
+      ++ ["  (func $cabi_realloc (param i32 i32 i32 i32) (result i32)\n     local.get 3\n     call $alloc)"
+        , "  (export \"cabi_realloc\" (func $cabi_realloc))"]
+      ++ (if st.tramps.isEmpty
+          then ["  (table 4 funcref)", "  (export \"__indirect_function_table\" (table 0))"]
+          else ["  (export \"__indirect_function_table\" (table 0))"])
+  pure <| String.intercalate "\n" (("(module" :: (asyncEnv ++ ["  ;;RUNTIME-SPLICE", "  (memory 1)"] ++ funcs ++ abiFuncs ++ cbFuncs ++ trampFuncs ++ table) ++ exports ++ cbExports ++ memExport ++ [")"]))
 
 end WasmBackend

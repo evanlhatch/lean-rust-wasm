@@ -218,6 +218,23 @@ def main : IO UInt32 := do
     IO.println "FAIL: parseGateArgs surface"
     failures := failures + 1
   else IO.println "✓ parseGateArgs surface"
+  -- GateKit.audit: banned pattern present → finding; required present and
+  -- clean text → none. Negative control: the empty rule list is vacuously
+  -- clean ONLY here, in the test — a real emitter must never ship `[]`.
+  let auditRules : List GateKit.AuditRule :=
+    [ { name := "no-todo", pattern := "TODO", why := "unfinished emission" }
+    , { name := "hdr", pattern := "package guestlang", required := true
+      , why := "the WIT package header is the registry key" } ]
+  let auditOk :=
+    (GateKit.auditFindings auditRules "package guestlang: demo; x TODO y"
+        == ["banned \"TODO\" present — unfinished emission"])
+      && (GateKit.auditFindings auditRules "package guestlang: demo;" == [])
+      && ((GateKit.auditFindings auditRules "no header here").length == 1)
+      && (GateKit.auditFindings ([] : List GateKit.AuditRule) "anything" == [])
+  if !auditOk then
+    IO.println "FAIL: GateKit.auditFindings controls"
+    failures := failures + 1
+  else IO.println "✓ GateKit.auditFindings controls"
   -- DiffSpec: the good gate passes via runDiffs
   let diffCode ← runDiffs [diffGood]
   if diffCode != 0 then failures := failures + 1

@@ -41,6 +41,10 @@ def dupTwo (m : Nat) : Nat := m + 41
 
 end LintKit.TestFixtures.Violations
 
-/-- Planted: outside the `LintKit` prefix expected of this module's root —
-the packageNamespace violation. -/
-def Other.badNs : Nat := 1
+/-- Planted (packageNamespace): helper parked in a CORE namespace —
+the `Fin.ofList?` hazard (foreignRoots). -/
+def List.badNs : Nat := 1
+
+/-- Planted (packageNamespace): helper parked in ANOTHER WORKSPACE
+PACKAGE's namespace. -/
+def Substrait.strayFromLintKit : Nat := 2

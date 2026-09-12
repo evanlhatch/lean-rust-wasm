@@ -2,6 +2,19 @@
 ;; spec source: DemoFn.lean
 ;; regenerate via `just gen`; drift fails CI (byte-tie)
 (module
+  (import "[export]$root" "[task-return]watch-orders" (func $tr_watch-orders (param i32 i32)))
+  (import "$root" "[waitable-set-poll]" (func (param i32 i32) (result i32)))
+  (import "$root" "[waitable-set-new]" (func (result i32)))
+  (import "$root" "[waitable-join]" (func (param i32 i32)))
+  (import "$root" "[context-get-0]" (func (result i32)))
+  (import "$root" "[context-set-0]" (func (param i32)))
+  (import "[export]$root" "[task-cancel]" (func))
+  (import "$root" "[waitable-set-drop]" (func (param i32)))
+  (func $cabi_realloc (param i32 i32 i32 i32) (result i32)
+     local.get 3
+     call $alloc)
+  (export "cabi_realloc" (func $cabi_realloc))
+  (export "__indirect_function_table" (table 0))
 ;; guestlang runtime — pooled allocator + Perceus RC (guestlang-owned;
 ;; NOT Lean's C runtime). GenMain splices these funcs/globals into the
 ;; emitted module — single module, no imports.
@@ -885,7 +898,7 @@
   return
 )
 (func $GuestImpl.watchOrdersImpl._boxed (param $_into i32) (result i32)
-    (local $l75 i64)
+    (local $l75 i32)
   local.get $_into
   call $GuestImpl.watchOrdersImpl
   local.set $l75
@@ -2533,7 +2546,12 @@
   local.get $nU
   i32.store
   i32.const 56
+  i32.const 60
+  i32.load
+  call $tr_watch-orders
+  i32.const 0
 )
+  (func $"[callback][async-lift]watch-orders" (param i32 i32 i32) (result i32) i32.const 0)
 (func $pap_curried._boxed_1 (param $c i32) (param $x0 i32) (param $x1 i32) (result i32)
   local.get $c
   i32.load offset=16
@@ -2567,6 +2585,7 @@
   (export "get-user" (func $GuestImpl.getUserImpl_abi))
   (export "greet" (func $GuestImpl.greet_abi))
   (export "str-len-demo" (func $GuestImpl.strLenDemo_abi))
-  (export "guestlang:demo/demo-exports#watch-orders" (func $GuestImpl.watchOrdersImpl_abi))
+  (export "[async-lift]watch-orders" (func $GuestImpl.watchOrdersImpl_abi))
+  (export "[callback][async-lift]watch-orders" (func $"[callback][async-lift]watch-orders"))
   (export "memory" (memory 0))
 )
