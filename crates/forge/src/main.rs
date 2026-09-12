@@ -169,12 +169,52 @@ fn read_if_exists(p: &Path) -> Option<Vec<u8>> {
 /// `forge push <label> <registry>/<repo>:<tag>`: pack the stored artifact
 /// into an OCI image manifest and upload blobs + manifest to the registry.
 fn cli_push(store: &mut oci::OciStore, args: &[String]) -> Result<(), String> {
-    let usage = "usage: forge push <label> <registry>/<repo>:<tag>";
-    let label = args.get(2).ok_or(usage)?;
-    let target = args.get(3).ok_or(usage)?;
+    let usage = "usage: forge push <label> <registry>/<repo>:<tag> [--axiom-report <path>] [--lean-version]";
+    // Positionals first, then flags (anywhere after): --axiom-report
+    // takes a path argument; --lean-version is a bare switch that
+    // captures `lean --version` output as the kernel version.
+    let mut positional: Vec<&String> = Vec::new();
+    let mut axiom_report: Option<&String> = None;
+    let mut want_lean_version = false;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--axiom-report" => {
+                i += 1;
+                axiom_report = Some(args.get(i).ok_or("--axiom-report needs a path argument")?);
+            }
+            "--lean-version" => want_lean_version = true,
+            _ => positional.push(&args[i]),
+        }
+        i += 1;
+    }
+    let label = positional.get(0).ok_or(usage)?;
+    let target = positional.get(1).ok_or(usage)?;
     let (reg, tag) = registry::Registry::parse(target)?;
 
-    let m = manifest::pack(store, label).map_err(|e| format!("pack {label}: {e}"))?;
+    // Provenance: axioms = verbatim report file (default "unchecked"),
+    // kernel = `lean --version` output (default "unknown"), schema =
+    // forge constant filled in by Provenance::default().
+    let mut provenance = manifest::Provenance::default();
+    if let Some(path) = axiom_report {
+        provenance.axioms = fs::read_to_string(path)
+            .map_err(|e| format!("read axiom report {}: {e}", path))?;
+    }
+    if want_lean_version {
+        let out = Command::new("lean")
+            .arg("--version")
+            .output()
+            .map_err(|e| format!("run `lean --version`: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "`lean --version` failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        provenance.kernel = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    }
+
+    let m = manifest::pack(store, label, &provenance).map_err(|e| format!("pack {label}: {e}"))?;
     let layer = m.layers.first().ok_or("manifest: zero layers")?;
     // Config + layer blobs, read from the content-addressed store; the
     // client re-hashes each, so a drifted cache blob fails the push.

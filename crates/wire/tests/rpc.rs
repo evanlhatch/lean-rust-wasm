@@ -164,6 +164,88 @@ fn val_codec_round_trip() {
     assert_eq!(Val::from_json(&pi.to_json()), Ok(pi));
 }
 
+/// Aggregate round-trips: option/list/record nest arbitrarily and
+/// come back identical, including record FIELD ORDER (the reason
+/// records use a pair array, not a JSON object — serde_json here
+/// sorts object keys).
+#[test]
+fn val_codec_aggregates_round_trip() {
+    // Covers every aggregate shape and every nesting combination:
+    // list of records, option of list, record containing
+    // lists/strings/u64s, deeply nested options.
+    let nested = Val::List(vec![
+        Val::Some(Box::new(Val::List(vec![
+            Val::U64(1),
+            Val::U64(u64::MAX),
+        ]))),
+        Val::None,
+        Val::Record(vec![
+            ("name".to_owned(), Val::String("zed".to_owned())),
+            ("count".to_owned(), Val::U64(9)),
+            ("tags".to_owned(), Val::List(vec![Val::String("a".to_owned())])),
+            ("nick".to_owned(), Val::String("aaa".to_owned())),
+        ]),
+        Val::Some(Box::new(Val::Some(Box::new(Val::Bool(true))))),
+        Val::Record(vec![]),
+        Val::List(vec![]),
+    ]);
+
+    let json = nested.to_json();
+    let back = Val::from_json(&json).unwrap_or_else(|e| panic!("re-decode {json}: {e}"));
+    assert_eq!(back, nested, "nested aggregate round-trip");
+
+    // Field order preserved: `name` before `nick` (a sorted-key JSON
+    // object would flip them; the pair array must not).
+    let record_json = serde_json::json!({"t":"record","v":[["name",{"t":"string","v":"zed"}],["nick",{"t":"string","v":"aaa"}]]});
+    let decoded = Val::from_json(&record_json).unwrap_or_else(|e| panic!("decode {record_json}: {e}"));
+    assert_eq!(
+        decoded,
+        Val::Record(vec![
+            ("name".to_owned(), Val::String("zed".to_owned())),
+            ("nick".to_owned(), Val::String("aaa".to_owned())),
+        ]),
+        "record field order must survive decode"
+    );
+    assert_eq!(decoded.to_json(), record_json, "encode preserves order too");
+
+    // Depth cap sits far above any legitimate type but exists: a
+    // chain of 128 `some`s decodes, 129 does not.
+    let mut deep = Val::None;
+    for _ in 0..MAX_DEPTH_TEST {
+        deep = Val::Some(Box::new(deep));
+    }
+    let deep_json = deep.to_json();
+    assert!(
+        Val::from_json(&deep_json).is_err(),
+        "nesting beyond the depth cap must fault, not recurse"
+    );
+}
+
+/// Depth used by [`val_codec_aggregates_round_trip`]: just over
+/// rpc.rs's `MAX_VAL_DEPTH` (kept in sync — a decode fault is
+/// expected at this depth).
+const MAX_DEPTH_TEST: usize = 129;
+
+/// u64 precision survives INSIDE aggregates: a value > 2^53 (where
+/// JSON numbers lose exactness) nested in a record field round-trips
+/// bit-exactly because scalars travel as decimal strings.
+#[test]
+fn val_codec_precision_inside_aggregate() {
+    let big = u64::MAX;
+    let val = Val::Record(vec![
+        ("amount".to_owned(), Val::U64(big)),
+        ("items".to_owned(), Val::List(vec![Val::U64((1 << 53) + 1)])),
+    ]);
+    let json = val.to_json();
+    // The wire bytes literally carry the full decimal digits.
+    assert_eq!(json["v"][0][1]["v"], big.to_string());
+    assert_eq!(
+        Val::from_json(&json),
+        Ok(val),
+        "u64 > 2^53 inside a record must round-trip exactly"
+    );
+}
+
 /// Malformed tagged JSON is a protocol fault, not a silent coercion.
 #[test]
 fn val_codec_rejects_garbage() {
@@ -172,6 +254,26 @@ fn val_codec_rejects_garbage() {
         serde_json::json!({"t":"i32","v":"3"}), // unknown tag
         serde_json::json!({"t":"u64"}), // missing v
         serde_json::json!(21), // not an object at all
+    ];
+    for v in bad {
+        assert!(Val::from_json(&v).is_err(), "must reject: {v}");
+    }
+}
+
+/// Malformed AGGREGATE tagged JSON: same rule, new tags. Every shape
+/// deviation faults; none coerces.
+#[test]
+fn val_codec_rejects_aggregate_garbage() {
+    let bad: [serde_json::Value; 9] = [
+        serde_json::json!({"t":"some"}), // missing v
+        serde_json::json!({"t":"some","v":21}), // v not a val object
+        serde_json::json!({"t":"list","v":"nope"}), // v not an array
+        serde_json::json!({"t":"list","v":[21]}), // element not a val object
+        serde_json::json!({"t":"record","v":{"a":1}}), // v a JSON object, not a pair array
+        serde_json::json!({"t":"record","v":"nope"}), // v not an array
+        serde_json::json!({"t":"record","v":[["a"]]}), // entry not exactly [name, val]
+        serde_json::json!({"t":"record","v":[[1,{"t":"none"}]]}), // field name not a string
+        serde_json::json!({"t":"record","v":[["a",21]]}), // field value not a val object
     ];
     for v in bad {
         assert!(Val::from_json(&v).is_err(), "must reject: {v}");

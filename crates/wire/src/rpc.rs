@@ -16,11 +16,22 @@
 //! Tagged JSON: `{"t":"u64","v":"<decimal>"}`, `{"t":"f64","v":"..."}`,
 //! `{"t":"bool","v":true|false}`, `{"t":"string","v":"..."}`. Numeric
 //! scalars travel as strings to keep u64 precision and f64 round-trips
-//! exact through JSON. v1 covers scalars + strings only.
+//! exact through JSON.
 //!
-//! TODO(mesh-v2): aggregates (lists, records, results, handles) —
-//! extends the tagged-JSON grammar and BOTH encoders; the wire and the
-//! host must move together.
+//! Aggregates nest the same tagged grammar recursively:
+//!
+//! - option: `{"t":"some","v":<val>}` / `{"t":"none"}` (no `v`)
+//! - list:   `{"t":"list","v":[<val>, ...]}`
+//! - record: `{"t":"record","v":[["<field>", <val>], ...]}`
+//!
+//! Record fields are an ARRAY OF PAIRS, not a JSON object: this crate
+//! builds serde_json without the `preserve_order` feature, so a JSON
+//! object would silently sort keys (BTreeMap) and lose field order —
+//! a semantic difference for WIT records. Pairs keep order exact and
+//! round-trip verifiable. Nesting is arbitrary (list of records,
+//! option of list, ...) with a decode depth cap of [`MAX_VAL_DEPTH`]
+//! so a hostile peer cannot drive unbounded recursion. Results and
+//! handles remain out of scope.
 //!
 //! # Serving
 //!
@@ -45,8 +56,13 @@ use crate::WireError;
 /// against a corrupt or hostile peer directing an unbounded allocation.
 const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
 
-/// A wire-representable component value (v1: scalars + strings only —
-/// see the module-level TODO for the aggregate gap).
+/// Decode recursion cap: no legitimate WIT type nests this deep; a
+/// hostile peer feeding deeply nested `some`/`list`/`record` tags gets
+/// a protocol fault instead of a stack overflow.
+const MAX_VAL_DEPTH: usize = 128;
+
+/// A wire-representable component value: scalars plus the aggregate
+/// shapes option/list/record (see module docs for the exact JSON).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Val {
     /// Unsigned 64-bit integer (`u64` WIT scalar).
@@ -57,18 +73,45 @@ pub enum Val {
     Bool(bool),
     /// Unicode string (`string` WIT type).
     String(String),
+    /// Present option (`option<_>` with a value); payload boxed to
+    /// keep `Val` a reasonable size.
+    Some(Box<Val>),
+    /// Absent option (`option<_>` with no value).
+    None,
+    /// List of values (`list<_>` WIT type), in order.
+    List(Vec<Val>),
+    /// Record: field name / value pairs IN ORDER. Order is semantic
+    /// (WIT record fields are positional in the type), hence the pair
+    /// array on the wire instead of a JSON object — see module docs.
+    Record(Vec<(String, Val)>),
 }
 
 impl Val {
     /// The value's tagged-JSON form. Numeric scalars serialize as
     /// decimal strings (u64 precision, f64 round-trip); bool as a JSON
-    /// boolean; string as a JSON string.
+    /// boolean; string as a JSON string; aggregates nest recursively
+    /// (record fields as an order-preserving pair array).
     pub fn to_json(&self) -> Value {
         match self {
             Val::U64(n) => json!({ "t": "u64", "v": n.to_string() }),
             Val::F64(x) => json!({ "t": "f64", "v": format!("{x}") }),
             Val::Bool(b) => json!({ "t": "bool", "v": b }),
             Val::String(s) => json!({ "t": "string", "v": s }),
+            Val::Some(inner) => json!({ "t": "some", "v": inner.to_json() }),
+            Val::None => json!({ "t": "none" }),
+            Val::List(items) => json!({
+                "t": "list",
+                "v": items.iter().map(Val::to_json).collect::<Vec<_>>(),
+            }),
+            Val::Record(fields) => json!({
+                "t": "record",
+                // Pair array, NOT a JSON object: preserves field order
+                // (serde_json here sorts object keys; see module docs).
+                "v": fields
+                    .iter()
+                    .map(|(name, val)| json!([name, val.to_json()]))
+                    .collect::<Vec<_>>(),
+            }),
         }
     }
 
@@ -76,14 +119,28 @@ impl Val {
     /// is a protocol fault, not a silent coercion.
     ///
     /// # Errors
-    /// Malformed tagged JSON: not an object, unknown tag, or a `v`
-    /// payload that does not parse as the tag's scalar type.
+    /// Malformed tagged JSON: not an object, unknown tag, a `v`
+    /// payload that does not parse as the tag's shape, or aggregate
+    /// nesting deeper than [`MAX_VAL_DEPTH`].
     pub fn from_json(v: &Value) -> Result<Val, String> {
+        Self::from_json_depth(v, 0)
+    }
+
+    /// [`Val::from_json`] with a recursion budget; all decode paths
+    /// funnel here so a hostile peer cannot overflow the stack.
+    fn from_json_depth(v: &Value, depth: usize) -> Result<Val, String> {
+        if depth > MAX_VAL_DEPTH {
+            return Err(format!("val: nesting deeper than {MAX_VAL_DEPTH}"));
+        }
         let obj = v.as_object().ok_or_else(|| "val: not an object".to_owned())?;
         let tag = obj
             .get("t")
             .and_then(Value::as_str)
             .ok_or_else(|| "val: missing `t` tag".to_owned())?;
+        // `none` is the only tag with no payload; all others require `v`.
+        if tag == "none" {
+            return Ok(Val::None);
+        }
         let inner = obj.get("v").ok_or_else(|| "val: missing `v`".to_owned())?;
         match tag {
             "u64" => inner
@@ -104,8 +161,42 @@ impl Val {
                 .as_str()
                 .ok_or_else(|| "val string: `v` not a string".to_owned())
                 .map(|s| Val::String(s.to_owned())),
+            "some" => Self::from_json_depth(inner, depth + 1)
+                .map(Box::new)
+                .map(Val::Some),
+            "list" => inner
+                .as_array()
+                .ok_or_else(|| "val list: `v` not an array".to_owned())?
+                .iter()
+                .map(|item| Self::from_json_depth(item, depth + 1))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Val::List),
+            "record" => inner
+                .as_array()
+                .ok_or_else(|| "val record: `v` not an array".to_owned())?
+                .iter()
+                .map(|entry| Self::record_field(entry, depth))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Val::Record),
             other => Err(format!("val: unknown tag `{other}`")),
         }
+    }
+
+    /// One `["<field>", <val>]` entry of a record's pair array.
+    fn record_field(entry: &Value, depth: usize) -> Result<(String, Val), String> {
+        let pair = entry
+            .as_array()
+            .ok_or_else(|| "val record: field entry not a pair array".to_owned())?;
+        let (name, val) = match pair.as_slice() {
+            [name, val] => (name, val),
+            _ => return Err("val record: field entry not exactly [name, val]".to_owned()),
+        };
+        let name = name
+            .as_str()
+            .ok_or_else(|| "val record: field name not a string".to_owned())?
+            .to_owned();
+        let val = Self::from_json_depth(val, depth + 1)?;
+        Ok((name, val))
     }
 }
 

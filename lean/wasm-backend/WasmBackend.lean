@@ -495,7 +495,7 @@ wrong shape = a differential failure (the host misreads).
   -- then returning 0 (the sync-computable body = done at the first
   -- poll; the callback = the constant Exit=0). The fused-adapter
   -- `type mismatch` seen earlier = the missing task-return import+call.
-def asyncFns : List String := ["watch-orders"]
+def asyncFns : List String := ["watch-orders", "watch-counts"]
   -- GATED OFF: the [async-lift] protocol's shapes are emitted correctly
   -- (the callback + the interface-qualified exports — verified against
   -- the wit-bindgen 0.61 reference + the minimal-module probes), but
@@ -510,6 +510,7 @@ def asyncFns : List String := ["watch-orders"]
 def adapterShape? : String → Option String
   | "get-user" => some "optionUser"
   | "watch-orders" => some "listUser"
+  | "watch-counts" => some "streamU64"
   | _ => none
 
 /-- The WAT for walking a guest List cons chain into a canonical
@@ -703,6 +704,43 @@ def emitAdapter (d : Decl .impure) (shape : String) : M String := do
       -- the list's own (ptr, len) -> the area (the STATIC offsets)
       ++ areaTail)
     pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $v i32)\n  (local $lst i32)\n  (local $curU i32)\n  (local $nU i32)\n  (local $arrU i32)\n  (local $wU i32)\n  (local $e i32)\n  (local $p2 i32)\n  (local $curT i32)\n  (local $nT i32)\n  (local $arrT i32)\n  (local $wT i32)\n  {body}\n)"
+  else if shape == "streamU64" then do
+    -- stream<u64> lowering (the ASYNC watch-counts): stream.new →
+    -- the i64 handle PAIR ((write << 32) | read — wasmtime's libcalls.rs
+    -- ResourcePair packing); the List-UInt64 walk lowers each element
+    -- (the cons head = a BOX ptr @cur+8, the u64 @box+8) into a
+    -- contiguous u64 array; stream.write(wr, arr, n) delivers the items
+    -- (the ASYNC-lowered write: the sync form = the more-async-builtins
+    -- feature, not enabled); task-return(rd) hands the host the READ
+    -- end; drop-writable(wr) closes ours; return 0 (the callback =
+    -- Exit — the items = already buffered).
+    -- the STREAM's delivery dance: the guest CANNOT write before the
+    -- host's consumer exists (a pending write at the task's teardown =
+    -- the items lost). So: the abi fn = task-return(read) + Yield,
+    -- stashing (wr, arr, n) in globals; the HOST registers the consumer
+    -- (the call returns the stream); the writer's resumption event
+    -- fires the CALLBACK — which is the WRITE SITE: write into the
+    -- waiting consumer, then Exit.
+    let sigParams := String.intercalate " "
+      (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
+      ++ " (result i32)"
+    let pass := d.params.toList.map fun p => s!"local.get ${p.binderName.toString}"
+    -- the element: the cons head = the boxed u64 — deref the box
+    let u64Elem : List String :=
+      [ "    local.get $w", "local.get $cur", "i32.load offset=8", "i64.load offset=8", "i64.store" ]
+    let body := String.intercalate "\n  " (pass
+      ++ [s!"call ${d.name.toString}", "local.set $lst"
+        , "call $sn_watch-counts", "local.set $h"
+        , "local.get $h", "i32.wrap_i64", "local.set $rd"
+        , "local.get $h", "i64.const 32", "i64.shr_u", "i32.wrap_i64", "local.set $wr"]
+      ++ listWalkWat ["local.get $lst"] 0 8 "" u64Elem
+      ++ [ -- the stash + the yield (the callback = the write site)
+           "local.get $wr", "global.set $wr_g"
+        , "local.get $arr", "global.set $arr_g"
+        , "local.get $n", "global.set $n_g"
+        , "local.get $rd", "call $tr_watch-counts"
+        , "i32.const 1" ])
+    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $h i64)\n  (local $rd i32)\n  (local $wr i32)\n  (local $lst i32)\n  (local $cur i32)\n  (local $n i32)\n  (local $arr i32)\n  (local $w i32)\n  {body}\n)"
   else do
   let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
   let resultTy := resultTyOf code
@@ -854,21 +892,46 @@ def emitModule (decls : List (Decl .impure))
   -- (i32 ordinal, i32 handle, i32 result) -> i32 (the CallbackCode:
   -- Exit=0); our sync-computable bodies = Exit on the first poll.
   let cbFuncs := asyncTargets.map fun (kebab, _) =>
-    s!"  (func $\"[callback][async-lift]{kebab}\" (param i32 i32 i32) (result i32) i32.const 0)"
+    match adapterShape? kebab with
+    | some "streamU64" =>
+      -- the write SITE: the writer's resumption (the reader = ready)
+      -- re-enters here; write the stashed (wr, arr, n) into the
+      -- waiting consumer, then Exit (0)
+      s!"  (func $\"[callback][async-lift]{kebab}\" (param i32 i32 i32) (result i32)\n     global.get $wr_g\n     global.get $arr_g\n     global.get $n_g\n     call $sw_{kebab}\n     drop\n     i32.const 0)"
+    | _ =>
+      s!"  (func $\"[callback][async-lift]{kebab}\" (param i32 i32 i32) (result i32) i32.const 0)"
   let cbExports := asyncTargets.map fun (kebab, _) =>
     s!"  (export \"[callback][async-lift]{kebab}\" (func $\"[callback][async-lift]{kebab}\"))"
   -- the task intrinsics' imports (the async lift requires them — see
   -- the asyncFns' note); the names = the bare kebab (the world-level
   -- key) for both the task-return and the async-lift pair
-  let asyncImports := asyncTargets.flatMap fun (kebab, _) =>
-    [ s!"  (import \"[export]$root\" \"[task-return]{kebab}\" (func $tr_{kebab} (param i32 i32)))"
-    , "  (import \"$root\" \"[waitable-set-poll]\" (func (param i32 i32) (result i32)))"
+  -- the waitables/context = ONCE (shared); the task-return + the
+  -- stream intrinsics = PER async export, shaped by the adapter's
+  -- RESULT: the list = (ptr, len) = (i32, i32); the stream = the READ
+  -- handle = (i32) + the stream-new/write/drop-writable intrinsics
+  -- (the write = the ASYNC-lowered name — the sync form needs the
+  -- more-async-builtins feature). The stream TYPE index (0) = the
+  -- payload's position in the fn's futures-and-streams list.
+  let waitables : List String :=
+    [ "  (import \"$root\" \"[waitable-set-poll]\" (func (param i32 i32) (result i32)))"
     , "  (import \"$root\" \"[waitable-set-new]\" (func (result i32)))"
     , "  (import \"$root\" \"[waitable-join]\" (func (param i32 i32)))"
     , "  (import \"$root\" \"[context-get-0]\" (func (result i32)))"
     , "  (import \"$root\" \"[context-set-0]\" (func (param i32)))"
     , "  (import \"[export]$root\" \"[task-cancel]\" (func))"
     , "  (import \"$root\" \"[waitable-set-drop]\" (func (param i32)))" ]
+  let perExport : String → List String := fun kebab =>
+    match adapterShape? kebab with
+    | some "streamU64" =>
+      [ s!"  (import \"[export]$root\" \"[task-return]{kebab}\" (func $tr_{kebab} (param i32)))"
+      , s!"  (import \"[export]$root\" \"[stream-new-0]{kebab}\" (func $sn_{kebab} (result i64)))"
+      , s!"  (import \"[export]$root\" \"[async-lower][stream-write-0]{kebab}\" (func $sw_{kebab} (param i32 i32 i32) (result i32)))"
+      , s!"  (import \"[export]$root\" \"[stream-drop-writable-0]{kebab}\" (func $sdw_{kebab} (param i32)))" ]
+    | _ =>
+      [ s!"  (import \"[export]$root\" \"[task-return]{kebab}\" (func $tr_{kebab} (param i32 i32)))" ]
+  let asyncImports :=
+    if asyncTargets.isEmpty then []
+    else waitables ++ asyncTargets.flatMap fun (kebab, _) => perExport kebab
   -- the canon lift's indirect calls go through the table + the async
   -- shims realloc through cabi_realloc (the bump alloc ignores the
   -- old-ptr/old-size/align args)
@@ -895,8 +958,14 @@ def emitModule (decls : List (Decl .impure))
   -- the canon lift reads guest memory (string/list results are copied
   -- out of it) — the memory MUST be exported under the canonical name
   let memExport := ["  (export \"memory\" (memory 0))"]
+  let streamGlobals := if asyncFns.iter.any (fun k => adapterShape? k == some "streamU64")
+    then ["  (global $wr_g (mut i32) (i32.const 0))"
+        , "  (global $arr_g (mut i32) (i32.const 0))"
+        , "  (global $n_g (mut i32) (i32.const 0))"]
+    else []
   let asyncEnv := if asyncFns.isEmpty then []
     else asyncImports
+      ++ streamGlobals
       ++ ["  (func $cabi_realloc (param i32 i32 i32 i32) (result i32)\n     local.get 3\n     call $alloc)"
         , "  (export \"cabi_realloc\" (func $cabi_realloc))"]
       ++ (if st.tramps.isEmpty

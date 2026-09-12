@@ -473,3 +473,26 @@ Reservoir + EdgePython
 
 The critical path: Stages A-G → LCNF backend → guestlang-rt → wRPC.
 Everything else is parallel or downstream.
+
+## Deferred tooling notes (2026-09-09, from the flatland-notes mining)
+
+Not work now; recorded so the ideas survive.
+
+- **Reservoir publishing criteria** (flatland's checklist, applies when
+  this repo goes public): public GitHub repo at the root; a root
+  `lake-manifest.json`; an OSI license; `Reservoir.` eligibility is then
+  checkable via `lake exe reservoir check` upstream. We also need the
+  root `lakefile.toml` to expose every package as a `require`-able target
+  — currently the workspace relies on relative paths.
+- **lean-action CI**: GitHub Actions with `lean-action` handles the Lean
+  matrix + `just lean-build`/`lean-axioms`; the Rust/wasm gates
+  (`gen-check`, `wit-check`, `splice-smoke`, the byte-ties) need the
+  Nix/devenv profile — `devenv shell --profile wasm` in the workflow, or
+  a nix-based action. The `CC` export for ring/noq is required in any
+  CI shell (see the justfile gates recipe).
+- **gonzalgo-style per-package TSV → affected-only test runs**: a
+  `--affected` mode for the drivers — given the module dependency graph
+  (already implicit in `lake env`'s olean headers), run only the test
+  exes whose import closure contains a changed module. Worth ~40 lines
+  in TestKit once CI turnaround makes it matter; before that, full runs
+  are cheap enough.

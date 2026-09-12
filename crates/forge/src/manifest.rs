@@ -20,9 +20,44 @@ pub const WASM_MEDIA_TYPE: &str = "application/wasm";
 /// path). Same key the local index.json uses.
 pub const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 
-/// Axiom-gate report. TODO(registry): plumb `just lean-axioms` output
-/// here — "clean" is a stub until the gate report is wired in.
+/// Axiom-gate report annotation. The value is caller-provenance: the
+/// verbatim content of an axiom-report file (default "unchecked" when
+/// the caller passes no report). forge never runs the gate itself —
+/// running lake at pack time is slow and needs the toolchain; the
+/// caller (CI, `just lean-axioms`) produces the report, forge ships it.
 pub const AXIOMS_ANNOTATION: &str = "com.guestlang.axioms";
+
+/// Lean toolchain (kernel) version annotation.
+pub const LEAN_VERSION_ANNOTATION: &str = "com.guestlang.lean.version";
+
+/// Provenance-record schema version annotation.
+pub const PROVENANCE_SCHEMA_ANNOTATION: &str = "com.guestlang.provenance.schema";
+
+/// Bump when the annotation set/format above changes shape.
+pub const PROVENANCE_SCHEMA_VERSION: &str = "1";
+
+/// Caller-supplied provenance stamped into every packed manifest.
+/// `axioms` defaults to "unchecked" (no report passed); `kernel` to
+/// "unknown" (no `--lean-version` flag).
+#[derive(Debug, Clone)]
+pub struct Provenance {
+    /// Verbatim axiom-gate report (content of `--axiom-report <path>`).
+    pub axioms: String,
+    /// Lean toolchain version string (from `lean --version`).
+    pub kernel: String,
+    /// Provenance-record schema version (forge constant).
+    pub schema_version: String,
+}
+
+impl Default for Provenance {
+    fn default() -> Self {
+        Provenance {
+            axioms: "unchecked".to_string(),
+            kernel: "unknown".to_string(),
+            schema_version: PROVENANCE_SCHEMA_VERSION.to_string(),
+        }
+    }
+}
 
 /// A blob reference inside a manifest. `digest` is the bare 64-hex
 /// sha256 (the `sha256:` prefix is added on the wire).
@@ -122,7 +157,7 @@ fn descriptor(v: &serde_json::Value, what: &str) -> Result<Descriptor, String> {
 /// Build the OCI image manifest for a stored artifact label. The config
 /// blob is generated, hashed, and content-addressed into the store as
 /// part of packing.
-pub fn pack(store: &mut OciStore, label: &str) -> io::Result<Manifest> {
+pub fn pack(store: &mut OciStore, label: &str, provenance: &Provenance) -> io::Result<Manifest> {
     let layer_digest = store
         .digest(label)
         .ok_or_else(|| {
@@ -149,8 +184,13 @@ pub fn pack(store: &mut OciStore, label: &str) -> io::Result<Manifest> {
 
     let mut annotations = BTreeMap::new();
     annotations.insert(REF_NAME_ANNOTATION.to_string(), label.to_string());
-    // TODO(registry): axiom-gate report integration — stub until then.
-    annotations.insert(AXIOMS_ANNOTATION.to_string(), "clean".to_string());
+    // Real provenance, caller-supplied: no stubs, no gate runs here.
+    annotations.insert(AXIOMS_ANNOTATION.to_string(), provenance.axioms.clone());
+    annotations.insert(LEAN_VERSION_ANNOTATION.to_string(), provenance.kernel.clone());
+    annotations.insert(
+        PROVENANCE_SCHEMA_ANNOTATION.to_string(),
+        provenance.schema_version.clone(),
+    );
 
     Ok(Manifest {
         label: label.to_string(),

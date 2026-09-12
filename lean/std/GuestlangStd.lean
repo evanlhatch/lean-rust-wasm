@@ -67,4 +67,10 @@ def watchOrdersImpl (_into : OrderError) : List User :=
   [ { id := 1, name := "first", email := "1@g.dev", tags := ["a"] }
   , { id := 2, name := "second", email := "2@g.dev", tags := ["b"] } ]
 
+/-- The STREAM's differential impl: the same data every call — the
+    stream version of watch-orders' delta shape (the items flow one
+    direction; the host reads until the stream closes). -/
+def watchCountsImpl (_n : UInt64) : List UInt64 :=
+  [ 42, 43 ]
+
 end GuestImpl

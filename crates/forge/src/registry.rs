@@ -8,8 +8,11 @@
 //! - blob:         GET  /v2/<repo>/blobs/sha256:<hex>
 //!
 //! Plain HTTP for local/test registries; https works via ureq's bundled
-//! rustls. TODO(registry): no auth — token flow (WWW-Authenticate →
-//! Bearer) is unimplemented; the current test registry is open.
+//! rustls. Auth: OPTIONAL bearer token — when set, `Authorization:
+//! Bearer <token>` rides on EVERY request (blob POST/PUT/GET, manifest
+//! PUT/GET). No OAuth/OIDC dance here: the token flow's token-exchange
+//! endpoint (WWW-Authenticate → challenge → token fetch) is out of
+//! scope; callers obtain the token however they do and we present it.
 
 use std::fs;
 use std::io::{self, Read};
@@ -26,6 +29,9 @@ pub struct Registry {
     pub base: String,
     /// e.g. `guestlang/demo`
     pub repo: String,
+    /// Optional bearer token: sent as `Authorization: Bearer <token>`
+    /// on all requests when present.
+    pub token: Option<String>,
 }
 
 /// What a pull landed, for reporting.
@@ -60,9 +66,28 @@ impl Registry {
             Registry {
                 base: format!("{scheme}://{host}"),
                 repo: repo.to_string(),
+                token: None,
             },
             tag.to_string(),
         ))
+    }
+
+    /// Client with bearer auth: same shape as `parse`'s output but with
+    /// a token attached (sent on every request).
+    pub fn with_token(base: String, repo: String, token: String) -> Registry {
+        Registry {
+            base,
+            repo,
+            token: Some(token),
+        }
+    }
+
+    /// Attach the Authorization header when a token is set.
+    fn auth(&self, req: ureq::Request) -> ureq::Request {
+        match &self.token {
+            Some(t) => req.set("Authorization", &format!("Bearer {t}")),
+            None => req,
+        }
     }
 
     /// Push blobs (by path; digests are computed from the bytes) then
@@ -151,8 +176,8 @@ impl Registry {
     fn upload_blob(&self, agent: &ureq::Agent, digest: &str, data: &[u8]) -> Result<(), String> {
         // POST /v2/<repo>/blobs/uploads/ → 202 + Location.
         let init_url = format!("{}/v2/{}/blobs/uploads/", self.base, self.repo);
-        let resp = agent
-            .post(&init_url)
+        let resp = self
+            .auth(agent.post(&init_url))
             .set("Content-Type", "application/octet-stream")
             .send_bytes(&[])
             .map_err(|e| http_err(&format!("POST {init_url}"), e))?;
@@ -166,8 +191,8 @@ impl Registry {
         // PUT <location>?digest=sha256:<hex> with the blob bytes.
         let sep = if upload_url.contains('?') { '&' } else { '?' };
         let put_url = format!("{upload_url}{sep}digest=sha256:{digest}");
-        let resp = agent
-            .put(&put_url)
+        let resp = self
+            .auth(agent.put(&put_url))
             .set("Content-Type", "application/octet-stream")
             .send_bytes(data)
             .map_err(|e| http_err(&format!("PUT {put_url}"), e))?;
@@ -179,8 +204,8 @@ impl Registry {
 
     fn put_manifest(&self, agent: &ureq::Agent, tag: &str, manifest: &Manifest) -> Result<(), String> {
         let url = format!("{}/v2/{}/manifests/{}", self.base, self.repo, tag);
-        let resp = agent
-            .put(&url)
+        let resp = self
+            .auth(agent.put(&url))
             .set("Content-Type", MANIFEST_MEDIA_TYPE)
             .send_bytes(&manifest.to_bytes())
             .map_err(|e| http_err(&format!("PUT {url}"), e))?;
@@ -192,8 +217,8 @@ impl Registry {
 
     fn fetch_manifest(&self, agent: &ureq::Agent, tag: &str) -> Result<Vec<u8>, String> {
         let url = format!("{}/v2/{}/manifests/{}", self.base, self.repo, tag);
-        let resp = agent
-            .get(&url)
+        let resp = self
+            .auth(agent.get(&url))
             .set("Accept", MANIFEST_MEDIA_TYPE)
             .call()
             .map_err(|e| http_err(&format!("GET {url}"), e))?;
@@ -207,8 +232,8 @@ impl Registry {
 
     fn fetch_blob(&self, agent: &ureq::Agent, digest: &str) -> Result<Vec<u8>, String> {
         let url = format!("{}/v2/{}/blobs/sha256:{digest}", self.base, self.repo);
-        let resp = agent
-            .get(&url)
+        let resp = self
+            .auth(agent.get(&url))
             .call()
             .map_err(|e| http_err(&format!("GET {url}"), e))?;
         let mut buf = Vec::new();

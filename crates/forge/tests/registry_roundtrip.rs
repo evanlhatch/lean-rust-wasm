@@ -24,6 +24,9 @@ struct Shared {
     blobs: Mutex<HashMap<String, Vec<u8>>>,
     /// tag → manifest bytes
     manifests: Mutex<HashMap<String, Vec<u8>>>,
+    /// Required bearer token (without the "Bearer " prefix). None =
+    /// open registry (no auth checked).
+    token: Option<String>,
 }
 
 /// Some sandboxed environments sever loopback TCP (connect succeeds,
@@ -101,6 +104,22 @@ fn serve(listener: TcpListener, shared: Arc<Shared>) {
     }
 }
 
+/// Bind + spawn a minimal registry (auth'd when `token` is Some).
+/// Returns the `host:port` base and the shared state.
+fn start_registry(token: Option<String>) -> (String, Arc<Shared>) {
+    let host = http_host();
+    let listener = TcpListener::bind((host.as_str(), 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let shared = Arc::new(Shared {
+        blobs: Mutex::new(HashMap::new()),
+        manifests: Mutex::new(HashMap::new()),
+        token,
+    });
+    let handle = shared.clone();
+    thread::spawn(move || serve(listener, shared));
+    (format!("{host}:{port}"), handle)
+}
+
 fn handle_conn(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
     let (head, body) = read_request(&mut stream)?;
     let request_line = head.lines().next().unwrap_or_default();
@@ -111,6 +130,30 @@ fn handle_conn(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
         Some((p, q)) => (p.to_string(), q.to_string()),
         None => (target, String::new()),
     };
+
+    // Bearer-token gate: when the registry has a token, EVERY route
+    // requires `Authorization: Bearer <token>` (401 otherwise). Header
+    // name matched case-insensitively; value compared verbatim.
+    if let Some(expected) = &shared.token {
+        let presented = head
+            .lines()
+            .find_map(|l| {
+                l.split_once(':').and_then(|(k, v)| {
+                    k.eq_ignore_ascii_case("Authorization").then(|| v.trim())
+                })
+            })
+            .unwrap_or_default();
+        if presented != format!("Bearer {expected}") {
+            respond(
+                &mut stream,
+                "401 Unauthorized",
+                None,
+                b"missing or invalid bearer token",
+                "",
+            )?;
+            return Ok(());
+        }
+    }
 
     if method == "POST" && path.ends_with("/blobs/uploads/") {
         let repo = path
@@ -212,16 +255,7 @@ fn respond(
 
 #[test]
 fn push_pull_roundtrip() {
-    // ── start the minimal registry on an ephemeral port ─────────────
-    let host = http_host();
-    let listener = TcpListener::bind((host.as_str(), 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let shared = Arc::new(Shared {
-        blobs: Mutex::new(HashMap::new()),
-        manifests: Mutex::new(HashMap::new()),
-    });
-    let srv_shared = shared.clone();
-    thread::spawn(move || serve(listener, srv_shared));
+    let (base, shared) = start_registry(None); // open registry — token is optional
 
     // ── pack a real artifact if it exists, else a synthetic blob ────
     let demo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -238,12 +272,14 @@ fn push_pull_roundtrip() {
     let original_digest: Digest = store.put(LABEL, &artifact).unwrap();
     store.write_index().unwrap();
 
-    let mut m = forge::manifest::pack(&mut store, LABEL).unwrap();
+    // Default provenance: no report passed → "unchecked".
+    let mut m =
+        forge::manifest::pack(&mut store, LABEL, &forge::manifest::Provenance::default()).unwrap();
     assert_eq!(m.layers[0].digest, original_digest, "pack must reuse the stored digest");
     assert_eq!(
         m.annotations.get("com.guestlang.axioms").map(String::as_str),
-        Some("clean"),
-        "axiom provenance annotation"
+        Some("unchecked"),
+        "axiom provenance annotation (default: no report)"
     );
     assert_eq!(
         m.annotations.get("org.opencontainers.image.ref.name").map(String::as_str),
@@ -252,7 +288,7 @@ fn push_pull_roundtrip() {
     );
 
     // ── push: blobs then manifest ────────────────────────────────────
-    let target = format!("{host}:{port}/guestlang/test:v1");
+    let target = format!("{base}/guestlang/test:v1");
     let (reg, tag) = forge::registry::Registry::parse(&target).unwrap();
     assert_eq!(tag, "v1");
     let blobs = vec![
@@ -304,6 +340,95 @@ fn push_pull_roundtrip() {
         .insert("bad".to_string(), bad_raw);
     let err = reg.pull("bad", &mut OciStore::open(&dir.join("dst2")).unwrap(), &dir);
     assert!(err.is_err(), "tampered manifest must fail the pull");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Auth'd round-trip: the registry requires a bearer token on every
+/// route (401 without), the client presents `Authorization: Bearer` on
+/// every request, and the caller-supplied Provenance lands in the
+/// pushed manifest byte-for-byte.
+///
+/// Scope note: this is bearer-token PRESENTATION only — no OAuth/OIDC
+/// token-exchange dance (see registry.rs header).
+#[test]
+fn push_pull_roundtrip_authed() {
+    const TOKEN: &str = "s3cret-test-token";
+    let (base, shared) = start_registry(Some(TOKEN.to_string()));
+
+    let artifact = (0..2048u32).map(|i| (i % 253) as u8).collect::<Vec<u8>>();
+    let dir =
+        std::env::temp_dir().join(format!("forge-registry-auth-test-{}", std::process::id()));
+    let mut store = OciStore::open(&dir.join("oci")).unwrap();
+    store.put(LABEL, &artifact).unwrap();
+    store.write_index().unwrap();
+
+    // Caller-supplied provenance — what `forge push --axiom-report ...
+    // --lean-version` would produce.
+    let provenance = forge::manifest::Provenance {
+        axioms: "TestKit: clean\nMachines: clean\nwasm-backend: clean".to_string(),
+        kernel: "Lean 4.33.0".to_string(),
+        schema_version: forge::manifest::PROVENANCE_SCHEMA_VERSION.to_string(),
+    };
+    let m = forge::manifest::pack(&mut store, LABEL, &provenance).unwrap();
+
+    // Negative control: tokenless push must be rejected by the registry.
+    let target = format!("{base}/guestlang/secure:v2");
+    let (open_reg, tag) = forge::registry::Registry::parse(&target).unwrap();
+    assert_eq!(tag, "v2");
+    let blobs = vec![
+        store.blob_path(&m.config.digest),
+        store.blob_path(&m.layers[0].digest),
+    ];
+    let err = open_reg.push(&tag, &m, &blobs);
+    assert!(
+        err.as_ref().err().is_some_and(|e| e.contains("401")),
+        "tokenless push must fail with 401, got: {err:?}"
+    );
+    assert!(shared.blobs.lock().unwrap().is_empty(), "no blob may land without auth");
+    assert!(shared.manifests.lock().unwrap().is_empty(), "no manifest may land without auth");
+
+    // Auth'd client: same target, token attached.
+    let reg = forge::registry::Registry::with_token(open_reg.base.clone(), open_reg.repo.clone(), TOKEN.to_string());
+    reg.push(&tag, &m, &blobs).unwrap();
+
+    // Provenance annotations landed BYTE-FOR-BYTE in the pushed manifest.
+    let served_manifest = shared.manifests.lock().unwrap().get("v2").cloned().expect("manifest arrived");
+    let served: serde_json::Value = serde_json::from_slice(&served_manifest).unwrap();
+    assert_eq!(
+        served["annotations"]["com.guestlang.axioms"],
+        provenance.axioms,
+        "axiom report embedded verbatim"
+    );
+    assert_eq!(served["annotations"]["com.guestlang.lean.version"], provenance.kernel);
+    assert_eq!(
+        served["annotations"]["com.guestlang.provenance.schema"],
+        provenance.schema_version
+    );
+    for (key, value) in [
+        ("com.guestlang.axioms", &provenance.axioms),
+        ("com.guestlang.lean.version", &provenance.kernel),
+        ("com.guestlang.provenance.schema", &provenance.schema_version),
+    ] {
+        let on_wire = serde_json::to_string(value).unwrap();
+        assert!(
+            served_manifest
+                .windows(on_wire.len())
+                .any(|w| w == on_wire.as_bytes()),
+            "annotation {key} value must appear byte-for-byte (JSON-escaped) in the pushed manifest bytes"
+        );
+    }
+
+    // Auth'd pull: byte-identity through the auth'd path.
+    let mut dst = OciStore::open(&dir.join("dst-oci")).unwrap();
+    let pulled = reg.pull("v2", &mut dst, &dir).unwrap();
+    assert_eq!(pulled.manifest.label, LABEL);
+    assert_eq!(pulled.artifacts[0].2, artifact, "pulled bytes match original");
+    assert_eq!(
+        pulled.manifest.annotations.get("com.guestlang.axioms").map(String::as_str),
+        Some(provenance.axioms.as_str()),
+        "axiom provenance survives the round-trip"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

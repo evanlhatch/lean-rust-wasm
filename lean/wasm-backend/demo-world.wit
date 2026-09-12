@@ -31,4 +31,5 @@ world demo {
     export greet: func(n: u64) -> string;
     export get-user: func(id: u64) -> option<user>;
     export watch-orders: async func(into: order-error) -> list<user>;
+    export watch-counts: async func(n: u64) -> stream<u64>;
 }

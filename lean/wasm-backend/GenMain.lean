@@ -25,10 +25,11 @@ open Lean
 def wireNames : List (Name × String) :=
   [ (`GuestImpl.getUserImpl, "get-user")
   , (`GuestImpl.watchOrdersImpl, "watch-orders")
+  , (`GuestImpl.watchCountsImpl, "watch-counts")
   , (`GuestImpl.greet, "greet")
   , (`GuestImpl.strLenDemo, "str-len-demo") ]
 
-def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total, `GuestImpl.getUserImpl, `GuestImpl.greet, `GuestImpl.strLenDemo, `GuestImpl.watchOrdersImpl]
+def targetDecls : Array Name := #[`double, `isBig, `adder, `area, `doubleArea, `pick, `applyAll, `runPaps, `curried, `apply2All, `useCurried, `sumList, `total, `GuestImpl.getUserImpl, `GuestImpl.greet, `GuestImpl.strLenDemo, `GuestImpl.watchOrdersImpl, `GuestImpl.watchCountsImpl]
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. -/
 def emitModuleWasm : CoreM String := do
@@ -117,14 +118,15 @@ def worldExports : List (String × List String × String × Bool) :=
   , ("str-len-demo", ["n: u64"], "u64", false)
   , ("greet", ["n: u64"], "string", false)
   , ("get-user", ["id: u64"], "option<user>", false)
-  , ("watch-orders", ["into: order-error"], "list<user>", true) ]
+  , ("watch-orders", ["into: order-error"], "list<user>", true)
+  , ("watch-counts", ["n: u64"], "stream<u64>", true) ]
 
 /-- The oracle's fn names — mirrors `oracleSrc`'s `rows`/`resultOf`
     (kebab, as the JSON spells them). The drift surface 3.4 pins: an
     oracle row for a fn the world does not export is a differential row
     with no component export to run it against. -/
 def oracleFns : List String :=
-  ["double", "is-big", "adder", "double-area", "run-paps", "total", "pick", "str-len-demo", "greet", "get-user"]
+  ["double", "is-big", "adder", "double-area", "run-paps", "total", "pick", "str-len-demo", "greet", "get-user", "watch-counts"]
 
 -- 3.4: every oracle fn IS a world export (the component contract covers
 -- everything the differential manifest exercises).
@@ -190,6 +192,7 @@ def rows : List (String × List String) :=
   ++ (u64s.map fun a => (\"str-len-demo\", [toString a]))
   ++ (u64s.map fun a => (\"greet\", [toString a]))
   ++ (u64s.map fun a => (\"get-user\", [toString a]))
+  ++ (u64s.map fun a => (\"watch-counts\", [toString a]))
 
 def resultOf (fn : String) (args : List String) : String :=
   match fn, args with
@@ -207,6 +210,9 @@ def resultOf (fn : String) (args : List String) : String :=
     | some u =>
       let tagS := String.intercalate \",\" (u.tags.map (fun t => t))
       s!\"some(\\{ id={u.id}, name={u.name}, email={u.email}, tags=({tagS}) })\"
+  -- the stream's expected = the COLLECTED list (the host reads the
+  -- stream to completion; the ser form = the list's)
+  | \"watch-counts\", [_a] => \"(42,43)\"
   | _, _ => \"?\"
 
 def jsonRow (fn : String) (args : List String) (expected : String) : String :=

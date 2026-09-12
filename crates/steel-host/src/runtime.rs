@@ -154,6 +154,11 @@ impl ComponentRuntime {
         &mut self.store
     }
 
+    /// The component instance — for the concurrent-call tests (the
+    /// stream results need the call + the consumer in ONE event loop).
+    pub fn instance(&self) -> Option<&wasmtime::component::Instance> {
+        self.instance.as_ref()
+    }
 }
 
 /// wasmtime::Error → fault. String, not `wasmtime::Error`: that type
@@ -198,6 +203,12 @@ fn default_val(ty: Type) -> SteelResult<Val> {
             Val::Record(fields)
         }
         Type::List(_) => Val::List(Vec::new()),
+        // the STREAM/future results: the lift OVERWRITES the slot
+        // (`*slot = result` — func.rs's finish_call_concurrent/lift zip),
+        // so the placeholder's shape is never read — but the result type
+        // must still be ACCEPTED here (the stream arm = the watch-counts
+        // landing; the host drains the real Val::Stream after the call).
+        Type::Stream(_) | Type::Future(_) => Val::List(Vec::new()),
         other => {
             return Err(HostFault::UnsupportedResult(UnsupportedResult {
                 ty: format!("{other:?}"),

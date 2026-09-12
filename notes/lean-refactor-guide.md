@@ -124,21 +124,30 @@ combinators + Envelope, payoff `composite_decode_encode` closed by simp
 alone). Decode.lean dead pair `splitTopLevel_join_rbracket`/
 `sep_toList_joinCSep` was transformed (not deleted) — deletion candidate.
 
-REMAINING (the full queue, 2026-09-09 late):
-- **6.x LintKit landed but the gate is RED pending 3 triage fixes** (see
-  Phase 6 note below).
-- 6.5.3 emitter-output self-audit recipe (GateKit; unassigned).
-- 6.5.5 deferred-tooling notes append (notes/full-remaining-work.md;
-  notes-only).
-- `body : Name` mandatory-executable-semantics field on fn items
-  (6.5.1 follow-up; deferred by the implementing agent).
-- Migration authoring surface (registry of Migrations for
-  `schema-breaking` to consume; lands with the first real breaking
-  change).
-- When a pure-context role exists in the item algebra, fire
-  `SchemaDiag.volatileInPureContext` from `universeCheck` (ctor armed).
+REMAINING (2026-09-09 late — after the LintKit-triage round):
+- wasm-backend `lake test` identity-control failure is the USER's
+  in-flight trampoline/mesh WIP (their `GenMain.lean`/`WasmBackend.lean`/
+  `demo-world.wit` edits landed mid-session; `def rows` changed under us).
+  Not an agent item — coordinate with the owner.
+- 6.5.3 REMAINING wiring: one `auditFindings` exemplar is live
+  (deltaWit); the other emitters' rule sets are unwired.
+- Deferred follow-ups: `body : Name` fn-item field; migration authoring
+  surface; fire `SchemaDiag.volatileInPureContext` when a pure-context
+  role exists in the item algebra. 6.5.5 notes: DONE
+  (notes/full-remaining-work.md tail).
 
-LANDED since the ledger above: 4.4 (`declare_binop` — `@[command_elab]`
+DONE in the triage round: dupDefBodies skips reducible decls (abbrevs);
+packageNamespace is the foreign-namespace rule (core roots + other
+package roots; local-namespace + local-type-ownership + unprefixed all
+pass; strict mode retained behind an option, default off); schema-lang
+tests no longer import LSpec directly; Demo's `Async.Stream := Future`
+(marker dedup); probeDefaultFn re-signed so the attr probes aren't
+dup-body; GateKit gained `AuditRule`/`auditFindings`/`audit` with
+TestKit controls + the deltaWit exemplar; the two new unusedVariables in
+the user's WasmBackend trampoline code prefixed per the linter's own
+hint.
+
+LANDED earlier this session: 4.4 (`declare_binop` — `@[command_elab]`
 handler in Substrait/Typed/Binop.lean; 8 op pairs → table entries;
 hygiene lessons in the module header), warning hygiene sweep (75 core-
 linter warnings fixed, 0 false positives; substrait/Machines/schema-lang
