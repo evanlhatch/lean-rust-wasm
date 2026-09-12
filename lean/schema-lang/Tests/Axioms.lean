@@ -4,6 +4,7 @@
    round-trip, the codec seeds, the Substrait bridge congruence, and
    the pipeline-machine acyclicity/happy-path proofs. -/
 import SchemaLang
+import SchemaLang.Bridge
 
 #print axioms SchemaLang.Vortex.PType.ofDiscriminant_toDiscriminant
 #print axioms SchemaLang.Vortex.PType.engineName_inj

@@ -96,11 +96,14 @@ def diff (old new : List Item) : List Change :=
   let changed := new.filterMap fun it =>
     match old.find? (fun o => o.name == it.name) with
     | some prev =>
-        -- the item-level gate is derived BEq; the FIELD comparison inside
-        -- `fieldDiffsOf` is EqAns-routed (`Ty.eqViaAns`), and
-        -- `Ty.eqViaAns_beq` + the `diffAgreement` test pin the two to the
-        -- same verdicts. FieldDiffs are the evidence.
-        if prev == it then none else some (.changed it.name (fieldDiffsOf prev it))
+        -- the item-level gate is the SPEC-SURFACE equality (`specEq`):
+        -- `body` (6.5.1) is registry metadata — a snapshot round-trip
+        -- reconstructs it anonymous — so the compat gate must not see it.
+        -- The FIELD comparison inside `fieldDiffsOf` is EqAns-routed
+        -- (`Ty.eqViaAns`), and `Ty.eqViaAns_beq` + the `diffAgreement`
+        -- test pin the two to the same verdicts. FieldDiffs are the
+        -- evidence.
+        if prev.specEq it then none else some (.changed it.name (fieldDiffsOf prev it))
     | none => none
   removed ++ changed ++ added
 

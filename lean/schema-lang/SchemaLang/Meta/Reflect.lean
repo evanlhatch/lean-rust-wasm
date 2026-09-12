@@ -255,30 +255,38 @@ def optArgIdent? (stx : Syntax) : Except String (Option String) :=
     (6.5.1). The builtin `simple` attr parser admits ONE optional
     ident — a dedicated two-ident attr parser was tried and is
     SHADOWED (`simple` wins every parse it can consume; there is no
-    fallback across attr parsers), so both axes travel in ONE ident,
+    fallback across attr parsers), so all axes travel in ONE ident,
     dot-separated: `@[schema_fn volatile]` (determinism only),
     `@[schema_fn strict]` (nullSem only), `@[schema_fn
-    strict.volatile]` (both, either order). Each part names a NullSem
-    or Determinism ctor; unknown names, duplicated axes, and >2 parts
-    are LOUD errors enumerating the valid space. -/
+    strict.volatile]` (both, either order), `@[schema_fn stream]`
+    (delivery), `@[schema_fn strict.volatile.stream]` (all three).
+    Each part names a NullSem, Determinism, or Delivery ctor; unknown
+    names, duplicated axes, and >3 parts are LOUD errors enumerating
+    the valid space. -/
 def funcSemOfStx (stx : Syntax) : Except String FuncSem := do
-  let step (acc : Option NullSem × Option Determinism) (name : String)
-      : Except String (Option NullSem × Option Determinism) :=
-    let (nullSem?, det?) := acc
+  let step (acc : Option NullSem × Option Determinism × Option Delivery) (name : String)
+      : Except String (Option NullSem × Option Determinism × Option Delivery) :=
+    let (nullSem?, det?, del?) := acc
     match name with
     | "strict" | "propagate" | "custom" =>
         if nullSem?.isSome then
           .error s!"duplicate nullSem argument `{name}` — one of strict, propagate, custom"
         else
-          .ok (NullSem.ofToken? name, det?)
+          .ok (NullSem.ofToken? name, det?, del?)
     | "pure" | "stable" | "volatile" =>
         if det?.isSome then
           .error s!"duplicate determinism argument `{name}` — one of pure, stable, volatile"
         else
-          .ok (nullSem?, Determinism.ofToken? name)
+          .ok (nullSem?, Determinism.ofToken? name, del?)
+    | "stream" | "once" =>
+        if del?.isSome then
+          .error s!"duplicate delivery argument `{name}` — one of stream, once"
+        else
+          .ok (nullSem?, det?, Delivery.ofToken? name)
     | other =>
         .error (s!"unknown @[schema_fn] argument `{other}` — valid: "
-          ++ "strict, propagate, custom (nullSem); pure, stable, volatile (determinism)")
+          ++ "strict, propagate, custom (nullSem); pure, stable, volatile (determinism); "
+          ++ "stream, once (delivery)")
   -- `simple` shape: [name ident, one optional arg]; .missing =
   -- programmatic application (no args)
   let opts := match stx with
@@ -288,16 +296,17 @@ def funcSemOfStx (stx : Syntax) : Except String FuncSem := do
   | .error e => .error e
   | .ok idents =>
     let parts := (idents.filterMap id).flatMap (String.splitOn · ".")
-    if parts.length > 2 then
-      .error s!"too many @[schema_fn] arguments ({parts.length}) — at most one nullSem and one determinism"
+    if parts.length > 3 then
+      .error s!"too many @[schema_fn] arguments ({parts.length}) — at most one nullSem, one determinism, one delivery"
     else
-      let init : Option NullSem × Option Determinism := (none, none)
-      match parts.foldlM (fun (acc : Option NullSem × Option Determinism) name =>
+      let init : Option NullSem × Option Determinism × Option Delivery := (none, none, none)
+      match parts.foldlM (fun (acc : Option NullSem × Option Determinism × Option Delivery) name =>
           step acc name) init with
       | .error e => .error e
-      | .ok (nullSem?, det?) =>
+      | .ok (nullSem?, det?, del?) =>
           .ok { nullSem := nullSem?.getD .propagate
-              , determinism := det?.getD .pure }
+              , determinism := det?.getD .pure
+              , delivery := del?.getD .once }
 
 /-- Walk a def's type: gather the EXPLICIT binder (param) types and the
     return type. The signature is the spec; the body is never read. -/
@@ -316,7 +325,8 @@ def funcSignature (env : Environment) (declName : Name) :
         else go acc b
     | _ =>
         match tyOfExpr? env t with
-        | some ret => pure { name := schemaNameOf declName, params := acc, ret := ret }
+        | some ret => pure { name := schemaNameOf declName, params := acc, ret := ret
+                           , body := declName }
         | none => throw s!"return type not in the boundary fragment: {t}"
   go [] di.type
 

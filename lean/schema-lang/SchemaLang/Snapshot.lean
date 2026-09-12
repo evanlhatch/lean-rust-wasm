@@ -150,7 +150,8 @@ def itemLines : Item → List String
           -- the sem line is written ONLY when non-default: pre-6.5.1
           -- baselines (and all-default universes) render byte-identically
           ++ if s.sem == ({} : FuncSem) then []
-             else [s!"sem {s.sem.nullSem.toToken} {s.sem.determinism.toToken}"]
+             else [s!"sem {s.sem.nullSem.toToken} {s.sem.determinism.toToken}"
+               ++ (if s.sem.delivery == (.stream : Delivery) then " stream" else "")]
   | .resource n => [s!"resource {n}"]
 
 /-- The whole universe as snapshot text (registry order, trailing
@@ -172,7 +173,11 @@ private inductive Open where
 private def Open.close : Open → Except String Item
   | .record n fs => .ok (.record n fs.reverse)
   | .variant n cs => .ok (.variant n cs.reverse)
-  | .func n ps (some r) sem => .ok (.func ⟨n, ps.reverse, r, sem.getD {}⟩)
+  | .func n ps (some r) sem =>
+      -- `body` is registry metadata, NOT wire data: the snapshot round-trip
+      -- reconstructs it anonymous (the declaring constant is re-attached by
+      -- the attribute on the Lean side)
+      .ok (.func ⟨n, ps.reverse, r, sem.getD {}, .anonymous⟩)
   | .func n _ none _ => .error s!"snapshot: func `{n}` has no `ret` line"
   | .resource n => .ok (.resource n)
 
@@ -225,7 +230,7 @@ private def parseLine (st : State) (line : String) : State := do
       | some (.func _ _ (some _) _) =>
           throw s!"snapshot: duplicate `ret` (line `{line}`)"
       | _ => throw s!"snapshot: `ret` outside a func (line `{line}`)"
-  | ["sem", nsTok, dsTok] =>
+  | ["sem", nsTok, dsTok] | ["sem", nsTok, dsTok, "stream"] =>
       match cur? with
       | some (.func fn ps (some r) none) => do
           let ns ← match NullSem.ofToken? nsTok with
@@ -234,7 +239,10 @@ private def parseLine (st : State) (line : String) : State := do
           let ds ← match Determinism.ofToken? dsTok with
             | some v => pure v
             | none => throw s!"snapshot: unknown determinism token `{dsTok}` — valid: pure, stable, volatile"
-          pure (done, some (.func fn ps (some r) (some ⟨ns, ds⟩)))
+          -- the OPTIONAL 4th token: the delivery (`stream`; its absence =
+          -- `once` — the default, keeping old baselines parsable)
+          let del : Delivery := if (line.splitOn " ").getLast! == "stream" then .stream else .once
+          pure (done, some (.func fn ps (some r) (some ⟨ns, ds, del⟩)))
       | some (.func _ _ (some _) (some _)) =>
           throw s!"snapshot: duplicate `sem` (line `{line}`)"
       | some (.func _ _ none _) =>

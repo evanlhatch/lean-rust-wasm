@@ -61,13 +61,32 @@ inductive Determinism where
   | pure | stable | volatile
 deriving Repr, BEq, DecidableEq, Inhabited
 
+/-- The delivery contract of a func item: `once` = the result arrives
+    as one value (a list result = ONE payload); `stream` = the host
+    consumes the results INCREMENTALLY (the WASI 0.3 stream — the
+    delta-shaped contracts on the wire). The default (`once`) keeps
+    every existing item unchanged. -/
+inductive Delivery where
+  | once | stream
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- Delivery tokens — the ONE spelling (snapshot + attr args). -/
+def Delivery.toToken : Delivery → String
+  | .once => "once" | .stream => "stream"
+
+def Delivery.ofToken? : String → Option Delivery
+  | "once" => some .once
+  | "stream" => some .stream
+  | _ => none
+
 /-- The semantic contract fields of a func item (6.5.1): nullability +
-    determinism, as DATA. The defaults (`propagate`, `pure`) keep every
-    existing `@[schema_fn]` item unchanged; the attribute's optional
-    ident args override per axis (`SchemaLang.Meta`). -/
+    determinism + delivery, as DATA. The defaults (`propagate`, `pure`,
+    `once`) keep every existing `@[schema_fn]` item unchanged; the
+    attribute's optional ident args override per axis (`SchemaLang.Meta`). -/
 structure FuncSem where
   nullSem : NullSem := .propagate
   determinism : Determinism := .pure
+  delivery : Delivery := .once
 deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- NullSem tokens — the ONE spelling, consumed by the snapshot codec
@@ -100,6 +119,13 @@ structure FuncSig where
   params : List (String × Ty)
   ret : Ty
   sem : FuncSem := {}
+  /-- The declaring Lean constant carrying the EXECUTABLE semantics
+  (6.5.1's "unsigned code doesn't ship"): auto-filled by `@[schema_fn]`
+  with the declaration itself, so downstream consumers (the wasm oracle,
+  future emitters) can derive rows from items instead of hand-mirroring
+  them. NOT part of the Snapshot wire format — it is registry metadata,
+  not spec data (the default keeps every snapshot byte-identical). -/
+  body : Lean.Name := Lean.Name.anonymous
 deriving Repr, BEq, Inhabited
 
 /-- A variant case: name + optional payload type. -/
@@ -122,6 +148,17 @@ def Item.name : Item → String
   | .variant n _ => n
   | .func s => s.name
   | .resource n => n
+
+/-- The SPEC-SURFACE equality: `FuncSig.body` (6.5.1) is registry
+    metadata — the declaring constant, re-attached at `@[schema_fn]`
+    time and reconstructed anonymous by the snapshot round-trip — so
+    two items that agree on name/params/ret/sem ARE the same spec. The
+    compat gate (`diff`) compares through this, not raw BEq. -/
+def Item.specEq : Item → Item → Bool
+  | .func a, .func b =>
+      a.name == b.name && a.params == b.params && a.ret == b.ret
+        && a.sem == b.sem
+  | a, b => a == b
 
 /-- Type-position names only (what `.ty` references may resolve to). -/
 def Item.typeNames : List Item → List String :=

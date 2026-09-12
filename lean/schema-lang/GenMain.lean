@@ -25,8 +25,14 @@ unsafe def main : IO Unit := do
   -- Replay the demo module's `@[schema]` registrations from the oleans
   -- (loadExts; `lake exe` supplies LEAN_PATH).
   let items := (← CodegenCore.loadRegisteredItems schemaItemExt #[`Demo]).map (·.2)
+  -- The generation metadata: ONE assembly (the clock + git), shared by
+  -- every artifact this run writes. The emitters stay pure.
+  let gm ← CodegenCore.Emit.genMeta items.length 0
   for e in emitters do
     for f in e.run items do
+      -- the content hash = per-artifact (the header excluded — the
+      -- drift check strips the header, so ANY metadata is safe)
+      let gm := { gm with contentHash := f.contents.hash }
       CodegenCore.Emit.writeFileCreatingDirs f.path
-        (header e.style "schema-lang" e.specSource ++ f.contents)
+        (header e.style "schema-lang" e.specSource gm ++ f.contents)
       IO.println s!"wrote {f.path}"

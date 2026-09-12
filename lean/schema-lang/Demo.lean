@@ -15,6 +15,7 @@ referenced type before the referencing one — v1 limitation).
 -/
 
 import SchemaLang.Meta.Reflect
+import SchemaLang.Migration
 
 /-! ## Records -/
 
@@ -85,3 +86,17 @@ def watchOrders (_into : OrderError) : Async.Future (List User) :=
 /-- An opaque handle type: the schema records it as a resource. -/
 @[schema_resource]
 def Db : Type := Empty
+
+/-! ## Registered migrations (6.5.2 authoring surface) -/
+
+/-- The remedy evidence `just breaking` consumes (one row per available
+    migration; the exe folds this into `Migration.verdictOf`). A real
+    breaking change lands HERE — the migration def plus its soundness
+    theorem (the `widenU32U64_sound` shape) — and the gate reports
+    `remedied` (exit 2: apply the migration to the event log, then
+    re-baseline) instead of failing. Registered but currently UNEARNED:
+    the baseline has no `qty` retype, so the gate stays `clean` — the
+    row is exercised in Tests. -/
+def registeredMigrations : List SchemaLang.Migration :=
+  [ { item := "OrderItem"
+    , fields := [SchemaLang.widenU32U64 "qty"] } ]

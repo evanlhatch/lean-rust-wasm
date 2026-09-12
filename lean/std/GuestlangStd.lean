@@ -18,6 +18,8 @@ flattens string results through the canonical ABI (greet: done).
 
 import CodegenCore.GuestGate
 import Demo
+import SchemaLang.Meta.Reflect
+import SchemaLang.Validate
 import GuestlangStd.StrOps
 import LintKit.Basic
 
@@ -31,8 +33,8 @@ open GuestlangStd
 /-- The `get-user` implementation: none for the sentinel id, a real
     record otherwise (strings via the std intrinsics; a two-element
     tag list — List cons cells the adapter must walk + flatten). -/
-@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
-def getUserImpl (id : UInt64) : Option User :=
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def getUser (id : UInt64) : Option User :=
   if id == 0 then none
   else some
     { id := id
@@ -45,7 +47,7 @@ def getUserImpl (id : UInt64) : Option User :=
     the embedder's MAX_FLAT_RESULTS=1 convention: the adapter writes
     (bytes-ptr, byte-len) into a static return area and returns its
     pointer. Lean body = the differential oracle. -/
-@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
 def greet (n : UInt64) : String :=
   if n > 0 then strcat "hello " "guest" else "bye"
 
@@ -53,7 +55,7 @@ def greet (n : UInt64) : String :=
     the branch depends on the argument), appended, then measured. The
     differential gate compares Lean's real eval against the wasm
     intrinsics: n > 0 → strlen("hello world") = 11; else 1. -/
-@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
 def strLenDemo (n : UInt64) : UInt64 :=
   strlen (if n > 0 then strcat "hello" " world" else "!")
 
@@ -62,15 +64,185 @@ def strLenDemo (n : UInt64) : UInt64 :=
     computes immediately) — the async-ness lives in the SIGNATURE (the
     canon lift's async option + the task machinery); wit-bindgen's own
     guests are the same shape. The DIFFERENTIAL ORACLE. -/
-@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
-def watchOrdersImpl (_into : OrderError) : List User :=
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def watchOrders (_into : OrderError) : Async.Future (List User) :=
   [ { id := 1, name := "first", email := "1@g.dev", tags := ["a"] }
   , { id := 2, name := "second", email := "2@g.dev", tags := ["b"] } ]
 
 /-- The STREAM's differential impl: the same data every call — the
     stream version of watch-orders' delta shape (the items flow one
-    direction; the host reads until the stream closes). -/
-def watchCountsImpl (_n : UInt64) : List UInt64 :=
+    direction; the host reads until the stream closes). The delivery =
+    the STREAM contract (`delivery = stream`): the world renders the
+    result as `stream<u64>` — the host consumes the items
+    incrementally via the async-lift's stream builtins. -/
+@[guest_std, schema_fn stream] 
+def watchCounts (_n : UInt64) : Async.Future (List UInt64) :=
   [ 42, 43 ]
+
+/-- The USER-payload stream: the same records as watch-orders — the
+    32-byte flat elements flow through the stream. -/
+@[guest_std, schema_fn stream] 
+def watchUsers (_n : UInt64) : Async.Future (List User) :=
+  [ { id := 1, name := "first", email := "1@g.dev", tags := ["a"] }
+  , { id := 2, name := "second", email := "2@g.dev", tags := ["b"] } ]
+
+/-- User's schema, as the validator sees it. THE REDUCIBILITY RULE
+    (`SchemaLang.Field`): `abbrev`, not `def` — instance search sees
+    through reducibles only. -/
+abbrev userSchema : List SchemaLang.Field :=
+  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
+  , ⟨"tags", .list .string⟩ ]
+
+-- The validator's body, SCHEMA-INDEXED: `id > 0` over userSchema.
+-- The field-ref is HasCol-typed — misspell it (`"iid"`) and this
+-- module fails to BUILD (no instance — the elaboration error). The
+-- VExpr/evalV layer (SchemaLang.Validate) is the executable spec; the
+-- wasm backend compiles evalV as an ordinary target (GenMain).
+-- `@[guest_std]`: the guest-mark registry — the backend's manifest fold
+-- compiles every marked decl (no hand-list).
+@[guest_std]
+def userCheck : SchemaLang.VExpr userSchema .bool :=
+  SchemaLang.VExpr.gt (SchemaLang.VExpr.colOf "id") (SchemaLang.VExpr.lit 0)
+
+/-- The name-length condition, SPEC form: the VExpr `strlen` node over
+    the name column (SchemaLang.Validate's Phase 2). NOT `@[guest_std]`
+    — the compiled path does NOT evaluate `VExpr.strlen` (the raw
+    evaluators have no string level; `evalU`'s arm is the loud 0), so
+    this rides `evalV` only. The hand-strlen `userComplete` below is
+    the COMPILED authority; both encode `name length > 3` — the
+    compiled migration waits for the backend's string-level raw
+    evaluator (the `len@+8` load). ASCII note: `evalV`'s length is
+    Lean's `String.length` (chars) = the std `$string_len` (bytes) on
+    ASCII — the StrOps v1 byte/char stance. -/
+def userNameLenCheck : SchemaLang.VExpr userSchema .bool :=
+  SchemaLang.VExpr.gt
+    (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "name"))
+    (SchemaLang.VExpr.lit 3)
+
+/-- List → VList: the tags field's Value payload (the row is fully
+    schema-typed — the strings ride along unopened, guest-legal).
+    `@[guest_std]`: the guest-mark registry — the backend's manifest
+    fold compiles every marked decl (no hand-list). -/
+@[guest_std]
+def toVList : List String → SchemaLang.VList .string
+  | [] => .nil
+  | s :: ss => .cons (.string s) (toVList ss)
+
+/-- The record's values, in schema order — the row evalV consumes.
+    `@[guest_std]`: the guest-mark registry — the backend's manifest
+    fold compiles every marked decl (no hand-list). -/
+@[guest_std]
+def userRow (u : User) : SchemaLang.RowVals userSchema :=
+  .cons (.u64 u.id)
+    (.cons (.string u.name)
+      (.cons (.string u.email)
+        (.cons (.list (toVList u.tags)) .nil)))
+
+-- The FIRST VALIDATOR (the record-PARAM story): a fn taking a record
+-- IN. The canonical ABI hands the guest the record FLAT (7 core
+-- params); the adapter reconstructs the guest User object; the impl
+-- reads ONLY the id scalar (the guest-legal check: no string ops, no
+-- host capabilities). The differential duel: the valid rows (id ≥ 1)
+-- → 1, the INVALID row (id = 0) → 0 — the negative row is the point.
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def userValid (u : User) : Bool :=
+  SchemaLang.validates userCheck (userRow u)
+
+/-- The u64 COUNT of a string list. Guest-legal length: core's
+    `List.length` returns Nat — GMP, banned in the guest; the counter
+    rides the raw u64 scalars (`sumList`'s recursion shape — the
+    backend's proven list-walk target). -/
+@[guest_std, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def listLenU64 : List String → UInt64
+  | [] => 0
+  | _ :: t => listLenU64 t + 1
+
+-- The SECOND record validator (the pattern's RANGE: every field class
+-- in ONE invariant — the id scalar, the name STRING via the `strlen`
+-- INTRINSIC (the guest-legal byte length: the backend maps the name to
+-- `$string_len`, never compiling Lean's Nat-returning String.length),
+-- the tags LIST via listLenU64). The body = the HAND lane: a nested-if
+-- gate over the three conditions.
+-- Deliberately `if`-shaped (no `&&`): the conjunction compiles as the
+-- Bool cases the backend already emits.
+-- MIGRATION NOTE: the VExpr `strlen` node landed SPEC-LEVEL only
+-- (SchemaLang.Validate's Phase 2 — no compiled string evaluator), so
+-- the VExpr form (`userNameLenCheck` above) cannot replace the hand
+-- body without a silent-0 compiled reading; this stays the compiled
+-- authority until the backend emits the `len@+8` load.
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def userComplete (u : User) : Bool :=
+  if u.id > 0 then
+    if strlen u.name > 3 then
+      if listLenU64 u.tags > 0 then true else false
+    else false
+  else false
+
+-- The VARIANT-PARAM validator (the first variant CROSSING the boundary
+-- as a validator's subject): the canonical ABI flattens the variant to
+-- [i32 discr, i64 joined-payload] and the adapter RE-BOXES it (the
+-- watch-orders variantBox shape); the impl's match IS the payload
+-- access — the tag case selects the arm, the invalid-item arm's `id`
+-- rides the box's payload slot @8.
+--
+-- Semantics (CHOSEN + documented): a valid error REPORT is one the
+-- host can act on.
+-- - `emptyCart` → FALSE: an empty cart names nothing actionable — the
+--   validator refuses the no-information case (the negative control's
+--   discr row).
+-- - `invalidItem id` → id > 0: 0 is the absent-item sentinel
+--   (mirroring getUser's sentinel id).
+-- - `insufficientFunds` → true, and the f64 payload is deliberately
+--   UNREAD: the canonical-ABI's f64→i64 flat join + the guest's
+--   boxed-Float repr make the amount's guest-side read the v1
+--   exclusion (a Float compare has no binop in the backend). An
+--   insufficient-funds report is always actionable, so the arm is the
+--   constant true — NO Float op compiles.
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def orderErrorValid (e : OrderError) : Bool :=
+  match e with
+  | .emptyCart => false
+  | .invalidItem id => id > 0
+  | .insufficientFunds _ => true
+
+/-- OrderError's cases, as the variant-VALIDATOR sees them (abbrev —
+    the reducibility rule; mirror of the Demo `@[schema] inductive
+    OrderError`: emptyCart / invalidItem u64 / insufficientFunds f64,
+    kebab-cased as the schema spells them). -/
+abbrev orderErrorCases : List SchemaLang.VariantCase :=
+  [("empty-cart", none), ("invalid-item", some .u64),
+    ("insufficient-funds", some .f64)]
+
+/-- The variant-row builder: the adapter's re-box — the canonical ABI's
+    [i32 discr, i64 joined-payload] flattening turned back into the
+    typed row (the fired tag's position + the payload at it). The f64
+    payload rides the box unopened (the hand body's stance). SPEC
+    LEVEL ONLY — no `@[guest_std]`: it constructs `Value` boxes the
+    guest cannot compile (the `evalV` reason); the hand `match` above
+    stays the compiled authority. -/
+def orderErrorRow : OrderError → SchemaLang.VRow orderErrorCases
+  | .emptyCart => .here ()
+  | .invalidItem id => .there (.here (.u64 id))
+  | .insufficientFunds amount => .there (.there (.here (.f64 amount)))
+
+/-- The SPEC form of `orderErrorValid` (the VCase family —
+    SchemaLang.Validate's Phase 3): valid = NOT empty-cart, AND NOT
+    (invalid-item with a 0 payload). The insufficient-funds arm is the
+    constant true (both atoms false on its row — the payload stays
+    UNREAD, the f64-join exclusion). NOT `@[guest_std]` — the
+    COMPILED-LANE DECISION (the strlen precedent): a raw variant
+    evaluator needs the discr + joined-payload scalar level the
+    backend does not emit, so this rides `evalCase` only and the hand
+    body above stays the compiled authority; the schema-lang tests pin
+    this EXACT shape's eval on the mirrored case list
+    (`valOrderErrorCases`) and the differential duel rows are the
+    end-to-end authority. -/
+def orderErrorSpecValid : SchemaLang.VCase orderErrorCases .bool :=
+  .and
+    (.not (.isCase "empty-cart"))
+    (.not
+      (.and
+        (.isCase "invalid-item")
+        (.not (.gt (.payload "invalid-item") (.litU 0)))))
 
 end GuestImpl

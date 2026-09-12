@@ -13,11 +13,10 @@ the ONLY exit-code mapping):
   exit 2, a loud warning: apply the migration, then re-baseline
 - `unremedied` → exit 1
 
-The remedy evidence list is `[]` today: the migration AUTHORING
-surface (registered `Migration`s the exe consumes) is the documented
-follow-up and lands with the first real breaking change that needs
-one — the verdict machinery itself is exercised in `Tests/Main.lean`.
-`--update` rewrites the baseline (the deliberate-change path — it
+The remedy evidence is `Demo.registeredMigrations` (the authoring
+surface): a migration lands there with its soundness theorem, and the
+gate folds it into `verdictOf`. `--update` rewrites the baseline (the
+deliberate-change path — it
 REFUSES to write names the line format can't round-trip).
 
 Runs from the package root (the justfile recipe `cd`s there), like the
@@ -52,9 +51,11 @@ unsafe def main (args : List String) : IO UInt32 := do
       return 1
   | .ok baseline =>
       let changes := diff baseline items
-      -- 6.5.2: no migration authoring surface yet (see the header) —
-      -- the verdict machinery is `Migration.verdictOf`, tested in Tests
-      let verdict := verdictOf changes []
+      -- 6.5.2: the authoring surface — Demo.registeredMigrations is the
+      -- remedy evidence (a migration lands there with its soundness
+      -- theorem); `just breaking` reports remedied (exit 2) when it covers
+      let migrations := registeredMigrations
+      let verdict := verdictOf changes migrations
       let breaking := changes.filter fun
         | .added _ => false
         | _ => true

@@ -6,6 +6,6 @@ import GuestlangStd
 
 #print axioms GuestlangStd.strlen
 #print axioms GuestlangStd.strcat
-#print axioms GuestImpl.getUserImpl
+#print axioms GuestImpl.getUser
 #print axioms GuestImpl.greet
 #print axioms GuestImpl.strLenDemo

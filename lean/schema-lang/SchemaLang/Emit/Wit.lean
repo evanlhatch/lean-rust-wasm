@@ -7,6 +7,16 @@ output is `Std.Format` → text, byte-tie CI is the drift guard (validated
 by wit-parser roundtrip in CI — the canonical parser, not this printer,
 is the correctness authority).
 
+Text assembly: structural `Std.Format` (hard `line`s — NO `group`s, so
+every line breaks and `.pretty` cannot reflow; `nest` for the block
+bodies, `joinSep` for the comma lists, `.pretty` once at the `String`
+boundary). The bytes are pinned identical to the pre-Format emitter by
+the goldens (`goldens/wit/`, `goldens/wit-fixtures/`): the only
+deliberate quirk preserved is the 4-space column of the func decls —
+`worldOf` folds each under `nest 4 (line ++ …)` while every other
+interface member sits at 2 (as emitted since the first emitter). Leaf payloads (`tyFmt`'s type atoms, the `package`
+line) interpolate — never join.
+
 Lowering decisions (target-neutral universe → WIT):
 - `option t` → `option<t>`, `result ok err` → `result<ok, err>` (1:1)
 - `future t` / `stream t` → `future<t>` / `stream<t>` (WASI 0.3-native)
@@ -25,54 +35,78 @@ import SchemaLang.Item
 namespace SchemaLang.Emit.Wit
 
 open CodegenCore.Emit (kebab)
+open Std.Format
 
-/-- Lower a `Ty` to WIT type text. -/
-def tyWit : Ty → String
+/-- Lower a `Ty` to WIT type text as a format ATOM (no `line`s —
+    `.pretty` is the identity on it, so `tyWit`'s bytes are the old
+    `s!` interpolation's, exactly). -/
+def tyFmt : Ty → Std.Format
   | .bool => "bool"
   | .u8 => "u8" | .u16 => "u16" | .u32 => "u32" | .u64 => "u64"
   | .i8 => "s8" | .i16 => "s16" | .i32 => "s32" | .i64 => "s64"
   | .f32 => "f32" | .f64 => "f64"
   | .string => "string"
   | .bytes => "list<u8>"
-  | .option a => s!"option<{tyWit a}>"
-  | .result ok err => s!"result<{tyWit ok}, {tyWit err}>"
-  | .list a => s!"list<{tyWit a}>"
-  | .future a => s!"future<{tyWit a}>"
-  | .stream a => s!"stream<{tyWit a}>"
+  | .option a => f!"option<{tyFmt a}>"
+  | .result ok err => f!"result<{tyFmt ok}, {tyFmt err}>"
+  | .list a => f!"list<{tyFmt a}>"
+  | .future a => f!"future<{tyFmt a}>"
+  | .stream a => f!"stream<{tyFmt a}>"
   | .ty n => kebab n
 
-/-- One type item as WIT text lines (record/variant/resource). -/
-def typeDecl : Item → List String
-  | .record n fields =>
-    let open_ := "record " ++ kebab n ++ " {"
-    let ls := fields.map fun f => "  " ++ kebab f.name ++ ": " ++ tyWit f.ty ++ ","
-    open_ :: ls ++ ["}"]
-  | .variant n cases =>
-    let open_ := "variant " ++ kebab n ++ " {"
-    let ls := cases.map fun (c, payload) =>
-      match payload with
-      | some t => "  " ++ kebab c ++ "(" ++ tyWit t ++ "),"
-      | none => "  " ++ kebab c ++ ","
-    open_ :: ls ++ ["}"]
-  | .resource n => ["resource " ++ kebab n ++ ";"]
-  | _ => []
+/-- Lower a `Ty` to WIT type text. -/
+def tyWit (t : Ty) : String := (tyFmt t).pretty
 
-/-- One function as a WIT func declaration line. A `future a` return
-becomes an `async func` returning `a` — the wasi 0.3 async ABI: the
-async-ness lives in the FUNCTION TYPE, not in a sync-func-returning-`future`
-(the component validator rejects the latter: the `async` canonical lift
-option requires an async function type). `stream a` stays in the result
-position — `async func(...) -> stream<a>` lifts as an async stream export. -/
-def funcDecl : FuncSig → String :=
+/-- The body of a brace block at column 0: first `line` nested 2 (the
+    members' indent), hard lines BETWEEN the members — none after the
+    last, so no trailing whitespace — and an empty member list degrades
+    to a bare `line` (header and close brace on consecutive lines, the
+    pre-Format fold's shape). -/
+def blockBody (members : List Std.Format) : Std.Format :=
+  match members with
+  | [] => line
+  | _ => nest 2 (line ++ joinSep members line)
+
+/-- One type item as WIT text (record/variant/resource; non-type items
+    are the empty format — `worldOf` filters them out first). -/
+def typeDecl : Item → Std.Format
+  | .record n fields =>
+      f!"record {kebab n} \{" ++ blockBody
+        (fields.map fun f => f!"{kebab f.name}: {tyFmt f.ty},") ++ line ++ f!"}"
+  | .variant n cases =>
+      f!"variant {kebab n} \{" ++ blockBody
+        (cases.map fun (c, payload) =>
+          match payload with
+          | some t => f!"{kebab c}({tyFmt t}),"
+          | none => f!"{kebab c},") ++ line ++ f!"}"
+  | .resource n => f!"resource {kebab n};"
+  | _ => ""
+
+/-- One function as a WIT func declaration (UNINDENTED — `worldOf`
+    nests it, giving the 4-space column the goldens pin). A `future a`
+    return becomes an
+    `async func` returning `a` — the wasi 0.3 async ABI: the async-ness
+    lives in the FUNCTION TYPE, not in a sync-func-returning-`future`
+    (the component validator rejects the latter: the `async` canonical
+    lift option requires an async function type). `delivery = stream`
+    renders the result as `stream<a>` — the delta-shaped contract: the
+    host consumes the results incrementally (the elements of the impl's
+    list, delivered by the async-lift's stream builtins). -/
+def funcDecl : FuncSig → Std.Format :=
   fun s =>
-    let params := s.params.map fun (p, t) => kebab p ++ ": " ++ tyWit t
+    let params := joinSep (s.params.map fun (p, t) => f!"{kebab p}: {tyFmt t}") (text ", ")
+    -- the RESULT: delivery=stream surfaces the list's ELEMENT as the
+    -- stream's item type (the impl's `List a` = the buffered stream)
+    let witRet (t : Ty) : Std.Format :=
+      match t with
+      | .list a => f!"stream<{tyFmt a}>"
+      | a => tyFmt a
     match s.ret with
     | .future a =>
-      "  " ++ kebab s.name ++ ": async func(" ++ String.intercalate ", " params
-        ++ ") -> " ++ tyWit a ++ ";"
+        let r := if s.sem.delivery == (.stream : Delivery) then witRet a else tyFmt a
+        f!"{kebab s.name}: async func({params}) -> {r};"
     | ret =>
-      "  " ++ kebab s.name ++ ": func(" ++ String.intercalate ", " params
-        ++ ") -> " ++ tyWit ret ++ ";"
+        f!"{kebab s.name}: func({params}) -> {tyFmt ret};"
 
 /-- The world, in the wasmtron small-interfaces shape:
 
@@ -88,28 +122,27 @@ def worldOf (packageName worldName : String) (items : List Item) : String :=
     match it with | .record _ _ | .variant _ _ | .resource _ => true | _ => false
   let funcs := items.filterMap fun it =>
     match it with | .func s => some s | _ => none
-  let typeLines := typeItems.flatMap typeDecl
   -- types referenced by func signatures (deduped, registration order)
   let refs :=
     (funcs.flatMap fun s => s.params.map (·.2) ++ [s.ret])
       |>.flatMap Ty.tyRefs
       |>.eraseDups
-  let useLine :=
+  let usePart : Std.Format :=
     if refs.isEmpty then ""
-    else "  use " ++ kebab worldName ++ "-types.{"
-      ++ String.intercalate ", " (refs.map kebab) ++ "};\n"
-  let exportsIface :=
-    "interface " ++ kebab worldName ++ "-exports {\n"
-      ++ useLine
-      ++ String.join (funcs.map (fun s => "  " ++ funcDecl s ++ "\n"))
-      ++ "}\n"
-  "package " ++ packageName ++ ";\n\n"
-    ++ "interface " ++ kebab worldName ++ "-types {\n"
-    ++ String.join (typeLines.map (· ++ "\n"))
-    ++ "}\n\n"
-    ++ exportsIface ++ "\n"
-    ++ "world " ++ kebab worldName ++ " {\n  export " ++ kebab worldName
-    ++ "-exports;\n}\n"
+    else line ++ f!"  use {kebab worldName}-types.\{{joinSep (refs.map kebab) (text ", ")}};"
+  let typesIface : Std.Format :=
+    f!"interface {kebab worldName}-types \{"
+      ++ typeItems.foldl (fun acc it => acc ++ line ++ typeDecl it) ""
+      ++ line ++ "}"
+  let exportsIface : Std.Format :=
+    f!"interface {kebab worldName}-exports \{" ++ usePart
+      ++ funcs.foldl (fun acc s => acc ++ nest 4 (line ++ funcDecl s)) ""
+      ++ line ++ "}"
+  (f!"package {packageName};" ++ line ++ line ++ typesIface ++ line ++ line
+    ++ exportsIface ++ line ++ line
+    ++ f!"world {kebab worldName} \{" ++ line
+    ++ f!"  export {kebab worldName}-exports;" ++ line ++ "}" ++ line
+  ).pretty
 
 end SchemaLang.Emit.Wit
 

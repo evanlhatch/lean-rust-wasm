@@ -28,7 +28,6 @@ refinement predicates (the schema-indexed package owns `{x // P x}`;
 v1 payloads are plain types).
 -/
 
-import Substrait.Typed.Schema
 
 namespace SchemaLang
 
@@ -102,18 +101,28 @@ end
 
 /-! ## Proof-carrying directed equality
 
-`EqAns` lives in `Substrait.Typed` (the original — same `.yes h` /
-`.no` shape, proof-carrying directed equality). SchemaLang consumes the
-substrait type; no local re-declaration.
+`EqAns` is LOCAL (the demotion: the template's core is substrait-free —
+substrait is the OPT-IN expression layer, and `Bridge` is the only
+substrait consumer). The original lives in `Substrait.Typed.Schema`
+(same `.yes h` / `.no` shape, proof-carrying directed equality); the
+Bridge maps between the two copies, and their agreement is the bridge's
+test.
 
 `Ty` derives `DecidableEq` (first-order inductive — the flatland
 `SType`/`SParam` mutual-block trap doesn't apply here), so the decision
 is one `dite` and the proof rides the branch. The wrapper exists only
 because `Option` cannot carry a `Prop`. -/
 
+/-- The directed answer: a proven-or-not answer, `Prop`-safe (`Option`
+    cannot hold a `Prop`). LIFTED from Substrait.Typed.Schema (verbatim
+    shape) at the substrait demotion — the bridge maps the copies. -/
+inductive EqAns (a b : α) : Type where
+  | yes (h : a = b)
+  | no
+
 /-- The directed decision: kernel-derived decidability, proof in the
-    `.yes` branch. Returns substrait's `EqAns`. -/
-def Ty.eqAns (a b : Ty) : Substrait.Typed.EqAns a b :=
+    `.yes` branch. -/
+def Ty.eqAns (a b : Ty) : EqAns a b :=
   if h : a = b then .yes h else .no
 
 /-- Boolean projection of the directed answer — the surface `Diff`

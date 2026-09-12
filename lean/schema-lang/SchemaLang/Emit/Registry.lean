@@ -23,11 +23,13 @@ import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Pipeline
 import SchemaLang.Emit.Wit
+import SchemaLang.Observe
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
 import SchemaLang.Emit.WitFixture
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
+import SchemaLang.Docs
 
 namespace SchemaLang.Emit
 
@@ -175,6 +177,7 @@ def forgeJobs : List (String × List String) :=
     , "../../crates/steel-host/tests/fixtures/wit_fixture_variants.wit"
     , "../../crates/steel-host/tests/fixtures/wit_fixture_async.wit"
     , "../../crates/steel-host/tests/fixtures/wit_manifest.json"
+    , "../../docs/api.md"
     ])]
 
 /-- The manifest CONTENT for this package's rows (no header — the driver
@@ -205,6 +208,7 @@ def emitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
   , forgeJobsEmitter
   , WitFixture.fixtureEmitter
   , WitFixture.manifestEmitter
+  , SchemaLang.Docs.docsEmitter
   ]
 
 /-- Audit: no two emitters claim the same output path. -/
@@ -215,5 +219,23 @@ def pathsUnique : Bool :=
     outputs (no emitter silently outside byte-tie). -/
 def jobsCoverEmitters : Bool :=
   (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2)
+
+/-- 6.5.3 — the emitter self-audit rule-set: constructs NO generated
+artifact may contain (checked over raw `run` output; the GENERATED banner
+is the driver's prepend, owned by gen-check's byte-tie). One list, so a
+new ban is one edit guarding every emitter. The committed artifacts are
+clean against these today; the sweep lives in Tests ("emitter
+self-audit"). -/
+def emitterAuditRules : List TestKit.GateKit.AuditRule :=
+  [ { name := "no-todo", pattern := "TODO"
+    , why := "unfinished emission leaked into a generated artifact" }
+  , { name := "no-fixme", pattern := "FIXME"
+    , why := "unfinished emission leaked into a generated artifact" }
+  , { name := "no-unwrap", pattern := "unwrap()"
+    , why := "generated code must not panic on spec-valid input" }
+  , { name := "no-dbg", pattern := "dbg!"
+    , why := "debug macro leaked into a generated artifact" }
+  , { name := "no-unsafe", pattern := "unsafe "
+    , why := "generated code stays in the safe subset" } ]
 
 end SchemaLang.Emit
