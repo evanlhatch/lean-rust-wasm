@@ -1,0 +1,32 @@
+// The FIRST REAL middleware (Track 2d — notes/async-wrpc-oci-plan.md).
+// The world shape: IMPORT the demo world's wrapped subset (the wac
+// composition wires the demo component's exports here), EXPORT the
+// wrapped surface + the in-wasm counters. The wrapper: count →
+// delegate → return unchanged. Zero hand-WAT: wit-bindgen does the
+// wrapping on both sides.
+//
+// watch-counts is the STREAM leg (phase 2): the ZERO-COPY pass-through
+// FORWARDER — the consumer side reads the INNER's items, the producer
+// side writes them to ITS caller's stream. The item counter counts
+// STREAM ITEMS, not calls.
+package guestlang:mw;
+
+world mw {
+  // the INNER implementations (wired by the composition to
+  // guestlang:demo's exports)
+  import double: func(x: u64) -> u64;
+  import is-big: func(x: u64) -> bool;
+  import watch-counts: async func(n: u64) -> stream<u64>;
+
+  // the served (wrapped) surface
+  export double: func(x: u64) -> u64;
+  export is-big: func(x: u64) -> bool;
+  export watch-counts: async func(n: u64) -> stream<u64>;
+
+  // the middleware's OWN state: the count of wrapped calls so far
+  // (the in-wasm observability — the host's spans stay the SPEC's
+  // data per notes/seam-contract.md; this counter = the count layer
+  // BETWEEN).
+  export calls: func() -> u64;
+
+}

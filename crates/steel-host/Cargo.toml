@@ -23,7 +23,9 @@ wasmtime = { version = "47", default-features = false, features = [
 ] }
 wasmtime-wasi = { version = "47", default-features = false, features = ["p3"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-fast-observe = "0.1"
+# `instant` = the span accumulator — the observability seam's backend
+# (the spans = the schema's manifest: observability_generated.rs).
+fast-observe = { version = "0.1", features = ["instant"] }
 
 [dev-dependencies]
 wasmtime = { version = "47", default-features = false, features = ["wat"] }

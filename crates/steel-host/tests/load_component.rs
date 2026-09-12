@@ -155,6 +155,73 @@ async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// THE VALIDATOR-AT-THE-BOUNDARY pattern: the host consults the schema's
+/// COMPILED validator (`user-complete` — the Lean-authored invariant
+/// over the user schema, shipped inside the guest) BEFORE the
+/// processing call (`get-user`). The invalid record → the validator's
+/// false → the host REFUSES to process (the processing call is never
+/// made — the refusal is OBSERVED via the gate counter, not assumed);
+/// the valid record → the gate passes → the processing call runs. The
+/// validator is the SPEC's code: the host adds no policy, it only
+/// enforces the gate the schema declares.
+#[tokio::test]
+async fn the_validator_gates_the_processing_call() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lean/wasm-backend/target/demo.component.wasm");
+    let Ok(path) = std::fs::canonicalize(&path) else {
+        eprintln!("skipping: run `just wasm-compile` to build {path:?}");
+        return Ok(());
+    };
+    let engine = SteelEngine::new()?;
+    let component = engine.load_component(&path)?;
+    let mut rt = ComponentRuntime::new(engine, CapabilitySet::NONE).await?;
+    rt.instantiate(&component).await?;
+
+    // the record arg = the flat field values (the duel's convention:
+    // the validator's subject crosses the boundary as the record)
+    fn user_record(id: u64, name: &str, email: &str, tags: &[&str]) -> Val {
+        Val::Record(vec![
+            ("id".into(), Val::U64(id)),
+            ("name".into(), Val::String(name.into())),
+            ("email".into(), Val::String(email.into())),
+            (
+                "tags".into(),
+                Val::List(tags.iter().map(|t| Val::String(t.to_string())).collect()),
+            ),
+        ])
+    }
+
+    let mut processed = 0usize;
+    let mut refused = 0usize;
+    for (user, id) in [
+        // the INVALID user: id 0 → the validator refuses → NO
+        // processing call (the gate's else branch)
+        (user_record(0, "zero", "0@g.dev", &["a"]), 0u64),
+        // the VALID user: every gate passes → the processing call runs
+        (user_record(5, "first", "5@g.dev", &["a", "b"]), 5),
+    ] {
+        let verdict = rt.call("user-complete", &[user]).await?;
+        assert_eq!(verdict.len(), 1);
+        let Val::Bool(gate) = &verdict[0] else {
+            panic!("the validator must return a bool, got {:?}", verdict[0]);
+        };
+        if *gate {
+            // the gate OPEN: the host proceeds to the processing call
+            let r = rt.call("get-user", &[Val::U64(id)]).await?;
+            assert!(matches!(&r[0], Val::Option(Some(_))), "the processed user came back");
+            processed += 1;
+        } else {
+            // the gate CLOSED: the processing call never fires — the
+            // refusal is the OBSERVED control (a refused row that still
+            // processed would double-count `processed`)
+            refused += 1;
+        }
+    }
+    assert_eq!(refused, 1, "the invalid user must be refused at the gate");
+    assert_eq!(processed, 1, "only the valid user reaches processing");
+    Ok(())
+}
+
 /// Stage C done-criteria: ONE E-code space across the boundary. The host's
 /// generated registry (E104-E107, from Faults/Spec/Host.lean — host
 /// codes start at 100 + the guest registry's length) and the guest's
@@ -247,5 +314,51 @@ async fn compiled_lean_component_runs() -> Result<(), Box<dyn std::error::Error>
     // doubleArea 5 = 100 — ctor alloc → sproj read → Perceus dec → pool.
     let r = rt.call("double-area", &[Val::U64(5)]).await?;
     assert_eq!(r, vec![Val::U64(100)]);
+    Ok(())
+}
+
+/// THE OBSERVABILITY SEAM'S CONTROL: the host's call path spans EXACTLY
+/// what the schema declares (`observability_generated.rs` = the
+/// schema-registry manifest, byte-tied). A registered call records a
+/// span with the spec's name + the delivery tag; the span table's
+/// COVERAGE = the registry by construction (an unregistered fn has no
+/// span to open — the host cannot invent one).
+#[tokio::test]
+async fn the_span_manifest_governs_the_host_spans() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lean/wasm-backend/target/demo.component.wasm");
+    let Ok(path) = std::fs::canonicalize(&path) else {
+        eprintln!("skipping: run `just wasm-compile` to build {path:?}");
+        return Ok(());
+    };
+    let engine = SteelEngine::new()?;
+    let component = engine.load_component(&path)?;
+    let mut rt = ComponentRuntime::new(engine, CapabilitySet::NONE).await?;
+    rt.instantiate(&component).await?;
+
+    // the spec's table covers the world's exports (the schema's manifest
+    // — the names = the kebab fn names; the delivery = the contract)
+    for name in ["double", "watch-counts"] {
+        assert!(
+            steel_host::observability_generated::SPANS.iter().any(|s| s.name == name),
+            "the spec's span table must cover {name}"
+        );
+    }
+
+    rt.call("double", &[Val::U64(21)]).await?;
+    let spans = fast_observe::breakdown::drain_spans();
+    let double_span = spans
+        .iter()
+        .find(|s| s.name == "double")
+        .expect("the registered call must be spanned");
+    assert_eq!(double_span.tag, Some("once"), "the delivery tag = the spec's");
+
+    // the stream fn's span carries the STREAM delivery tag (the
+    // spec's contract, not the host's guess)
+    let stream_spec = steel_host::observability_generated::SPANS
+        .iter()
+        .find(|s| s.name == "watch-counts")
+        .expect("the stream's span spec");
+    assert_eq!(stream_spec.delivery, "stream");
     Ok(())
 }

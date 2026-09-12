@@ -117,6 +117,18 @@ impl ComponentRuntime {
         let Some(instance) = self.instance else {
             return Err(HostFault::NotInstantiated.into());
         };
+        // THE OBSERVABILITY SEAM: the span = SPEC DATA (the generated
+        // table = the schema registry's manifest). A span exists ONLY
+        // for a registered export — the host cannot invent one — and
+        // the span's name/fields = the spec's (the fast-observe
+        // instant guard records on drop; the current-thread constraint
+        // is the steel-host's execution model).
+        let _span = crate::observability_generated::SPANS
+            .iter()
+            .find(|s| s.name == func)
+            .map(|spec| {
+                fast_observe::profiling::instant::enter(spec.name, Some(spec.delivery))
+            });
         let Some(f) = instance.get_func(&mut self.store, func) else {
             return Err(HostFault::MissingExport(MissingExport {
                 name: func.to_string(),

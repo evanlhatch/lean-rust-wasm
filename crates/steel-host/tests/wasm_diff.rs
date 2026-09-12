@@ -13,7 +13,9 @@
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use steel_host::{CapabilitySet, ComponentRuntime, HostState, SteelEngine};
+use steel_host::{CapabilitySet, ComponentRuntime, SteelEngine};
+use steel_host::HostState;
+use steel_host::bindings::GatewayUser;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{StreamConsumer, StreamResult, Source, Val};
 
@@ -115,9 +117,17 @@ fn ser_val(v: &Val) -> String {
 /// pipe-set is never polled: the loop exits before pumping). Empty +
 /// not-finished = Pending (returning Dropped there ENDS the stream and
 /// the in-flight items are lost).
-struct Drain(Arc<Mutex<Vec<u64>>>);
-impl StreamConsumer<HostState> for Drain {
-    type Item = u64;
+struct DrainCommon<T, F> {
+    out: Arc<Mutex<Vec<String>>>,
+    render: F,
+    _ty: std::marker::PhantomData<T>,
+}
+impl<T, F> StreamConsumer<HostState> for DrainCommon<T, F>
+where
+    T: wasmtime::component::Lift + Send + Sync + 'static,
+    F: Fn(&T) -> String + Send + Sync + 'static,
+{
+    type Item = T;
     fn poll_consume(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -125,7 +135,7 @@ impl StreamConsumer<HostState> for Drain {
         mut source: Source<'_, Self::Item>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        let mut buf: Vec<u64> = Vec::with_capacity(64);
+        let mut buf: Vec<T> = Vec::with_capacity(16);
         source.read(store, &mut buf)?;
         if buf.is_empty() {
             if finish {
@@ -133,22 +143,67 @@ impl StreamConsumer<HostState> for Drain {
             }
             return Poll::Pending;
         }
-        self.0.lock().unwrap().extend(buf.drain(..));
+        let render = &self.render;
+        self.out
+            .lock()
+            .unwrap()
+            .extend(buf.drain(..).map(move |t| render(&t)));
         Poll::Ready(Ok(StreamResult::Completed))
     }
 }
 
-struct DrainTask {
-    reader: wasmtime::component::StreamReader<u64>,
-    sink: Arc<Mutex<Vec<u64>>>,
+type DrainU64 = DrainCommon<u64, fn(&u64) -> String>;
+type DrainUser = DrainCommon<GatewayUser, fn(&GatewayUser) -> String>;
+
+fn render_user(u: &GatewayUser) -> String {
+    format!(
+        "{{ id={}, name={}, email={}, tags=({}) }}",
+        u.id,
+        u.name,
+        u.email,
+        u.tags.join(",")
+    )
 }
-impl wasmtime::component::AccessorTask<HostState> for DrainTask {
+
+struct DrainTaskU64 {
+    reader: wasmtime::component::StreamReader<u64>,
+    sink: Arc<Mutex<Vec<String>>>,
+}
+impl wasmtime::component::AccessorTask<HostState> for DrainTaskU64 {
     fn run(
         self,
         accessor: &wasmtime::component::Accessor<HostState>,
     ) -> impl std::future::Future<Output = wasmtime::Result<()>> + Send {
-        let DrainTask { reader, sink } = self;
-        async move { accessor.with(|access| reader.pipe(access, Drain(sink))) }
+        let DrainTaskU64 { reader, sink } = self;
+        async move {
+            accessor.with(|access| {
+                reader.pipe(
+                    access,
+                    DrainCommon { out: sink, render: |v: &u64| v.to_string(), _ty: Default::default() },
+                )
+            })
+        }
+    }
+}
+
+struct DrainTaskUser {
+    reader: wasmtime::component::StreamReader<GatewayUser>,
+    sink: Arc<Mutex<Vec<String>>>,
+}
+impl wasmtime::component::AccessorTask<HostState> for DrainTaskUser {
+    fn run(
+        self,
+        accessor: &wasmtime::component::Accessor<HostState>,
+    ) -> impl std::future::Future<Output = wasmtime::Result<()>> + Send {
+        let DrainTaskUser { reader, sink } = self;
+        async move {
+            accessor.with(|access| {
+                reader.pipe(
+                    access,
+                    DrainCommon { out: sink, render: render_user, _ty: Default::default() },
+                )
+            })
+        }
     }
 }
 
@@ -176,40 +231,104 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
     rt.instantiate(&component).await?;
 
     let mut failures: Vec<String> = Vec::new();
+    // The record-ARG convention: a record-valued param's row args = the
+    // FIELD VALUES FLAT (id, name, email, tags comma-joined) — the
+    // manifest rows are List String, so the arg-builder constructs the
+    // Val::Record from them (the canonical ABI flattens the user to
+    // u64 + 3×(ptr,len); wasmtime lowers the Val tree the same way).
+    fn user_record(strs: &[&str]) -> Val {
+        Val::Record(vec![
+            ("id".into(), Val::U64(strs[0].parse::<u64>().expect("user id"))),
+            ("name".into(), Val::String(strs[1].to_string())),
+            ("email".into(), Val::String(strs[2].to_string())),
+            (
+                "tags".into(),
+                Val::List(
+                    strs[3]
+                        .split(',')
+                        .map(|t| Val::String(t.to_string()))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+    // The VARIANT-ARG convention: a variant-valued param's row args =
+    // [discr, payload] — the canonical-ABI flat form. The discr = the
+    // WIT case order (empty-cart=0, invalid-item=1, insufficient-funds=2);
+    // the payload rides the joined i64 slot (u64 raw, f64 bits — the
+    // wasm-side read of the f64 case is the constant arm, see the guest
+    // impl).
+    fn order_error_variant(strs: &[&str]) -> Val {
+        match strs[0] {
+            "0" => Val::Variant("empty-cart".into(), None),
+            "1" => Val::Variant(
+                "invalid-item".into(),
+                Some(Box::new(Val::U64(
+                    strs[1].parse::<u64>().expect("invalid-item payload"),
+                ))),
+            ),
+            _ => Val::Variant(
+                "insufficient-funds".into(),
+                Some(Box::new(Val::Float64(
+                    strs[1].parse::<f64>().expect("insufficient-funds payload"),
+                ))),
+            ),
+        }
+    }
     for row in &rows {
         let f = row["fn"].as_str().expect("fn");
-        let args: Vec<Val> = row["args"]
+        let strs: Vec<&str> = row["args"]
             .as_array()
             .expect("args")
             .iter()
-            .enumerate()
-            .map(|(i, a)| match (f, i, a.as_str().expect("arg str")) {
-                ("pick", 0, "0" | "1") => Val::Bool(a.as_str() == Some("1")),
-                (_, _, s) => Val::U64(s.parse::<u64>().expect("u64 arg")),
-            })
+            .map(|a| a.as_str().expect("arg str"))
             .collect();
+        let args: Vec<Val> = if f == "user-valid" || f == "user-complete" {
+            vec![user_record(&strs)]
+        } else if f == "order-error-valid" {
+            vec![order_error_variant(&strs)]
+        } else {
+            strs.iter()
+                .enumerate()
+                .map(|(i, a)| match (f, i, *a) {
+                    ("pick", 0, "0" | "1") => Val::Bool(*a == "1"),
+                    (_, _, s) => Val::U64(s.parse::<u64>().expect("u64 arg")),
+                })
+                .collect()
+        };
         let expected = row["expected"].as_str().expect("expected");
-        let gotStr = if f == "watch-counts" {
+        let gotStr = if f == "watch-counts" || f == "watch-users" {
             // the STREAM rows: the call + the drain in ONE event loop —
             // the consumer must be a background task while the loop
             // pumps the guest's pending write (a post-call drain never
             // gets polled — the loop already exited).
             let out = Arc::new(Mutex::new(Vec::new()));
             let instance = rt.instance().expect("instance").clone();
+            let is_counts = f == "watch-counts";
+            let fname = f.to_string();
             let sink = out.clone();
             rt.store_mut()
                 .run_concurrent(async move |accessor| {
                     let f = accessor.with(|access| {
-                        instance.get_func(access, "watch-counts").expect("export")
+                        instance.get_func(access, &fname).expect("export")
                     });
-                    let mut results = [Val::List(vec![])];
+                    let mut results = [if is_counts { Val::U64(0) } else { Val::List(vec![]) }];
                     f.call_concurrent(accessor, &args, &mut results).await?;
                     let any = match results[0].clone() {
                         Val::Stream(a) => a,
-                        other => panic!("watch-counts: not a stream: {other:?}"),
+                        other => panic!("{fname}: not a stream: {other:?}"),
                     };
-                    let reader = any.try_into_stream_reader::<u64>()?;
-                    accessor.spawn(DrainTask { reader, sink })?.await;
+                    if is_counts {
+                        let reader = any.try_into_stream_reader::<u64>()?;
+                        accessor
+                            .spawn(DrainTaskU64 { reader, sink })?
+                            .await;
+                    } else {
+                        let reader = any.try_into_stream_reader::<GatewayUser>()?;
+                        accessor
+                            .spawn(DrainTaskUser { reader, sink })?
+                            .await;
+                    }
                     Ok::<(), wasmtime::Error>(())
                 })
                 .await??;

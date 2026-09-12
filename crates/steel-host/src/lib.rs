@@ -20,6 +20,14 @@ pub mod engine;
 pub mod runtime;
 pub mod valves;
 
+/// The OBSERVABILITY MANIFEST (generated, byte-tied): the spans are
+/// spec data — `SchemaLang.Observe` emits this table from the registry.
+/// The host spans exactly what the spec declares, by name, with the
+/// spec's fields; an unregistered fn = no span (the coverage = the
+/// registry by construction).
+#[path = "../../../src/observability_generated.rs"]
+pub mod observability_generated;
+
 pub use engine::SteelEngine;
 pub use runtime::{ComponentRuntime, SteelResult, start_epoch_thread};
 pub use valves::HostFault;

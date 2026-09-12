@@ -1,0 +1,16 @@
+[package]
+name = "splicer-mw"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Guest-side bindings for the middleware world (splicer-mw.wit):
+# the world IMPORTS the demo world's scalar subset (double, is-big) and
+# EXPORTS wrapped versions + the `calls` counter. wit-bindgen embeds the
+# component-type section, so `wasm-tools component new` lifts directly
+# (same build shape as guest-demo's gateway component).
+wit-bindgen = { version = "0.61" }

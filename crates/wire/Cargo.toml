@@ -21,6 +21,10 @@ rcgen = "0.14"
 # navigation only — no serde derive (workspace pattern, see
 # steel-host's test note).
 serde_json = "1"
+# Stream trait + StreamExt for the streaming-call verb (rpc.rs
+# RpcTarget::stream, item forwarding). Light shape: no default
+# features (futures-util is already in the graph via noq/tokio).
+futures-util = { version = "0.3", default-features = false, features = ["async-await"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
