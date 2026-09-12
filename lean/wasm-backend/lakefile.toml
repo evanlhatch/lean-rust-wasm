@@ -37,6 +37,15 @@ path = "../TestKit"
 [[lean_lib]]
 name = "WasmBackend"
 roots = ["WasmBackend"]
+# Correct.lean (the translation-correctness lane) is not imported by the
+# root module (the emitter) — glob it explicitly so `lake build` gates it.
+globs = ["WasmBackend", "WasmBackend.Correct", "WasmBackend.Audit", "WasmBackend.Sem"]
+
+# The audit lane's test module (hand-program positive/negative controls
+# for WasmBackend.Audit) — a lib root so `Tests.Main` can import it.
+[[lean_lib]]
+name = "WasmBackendTestsLib"
+roots = ["Tests"]
 
 [[lean_lib]]
 name = "DemoFn"

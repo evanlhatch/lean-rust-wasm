@@ -1,8 +1,10 @@
 import Lean
 import WasmBackend
 import WasmBackend.Check
+import WasmBackend.Audit
 import Oracle
 import TestKit
+import Tests.Audit
 
 /-!
 # WasmBackend tests — the `@[guest]` gate's pure predicate

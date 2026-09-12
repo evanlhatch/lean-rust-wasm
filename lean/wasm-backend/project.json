@@ -1,0 +1,4 @@
+{
+  "spec-modules": ["DemoFn"],
+  "impl-modules": ["DemoFn", "GuestlangStd"]
+}

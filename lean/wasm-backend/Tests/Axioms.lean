@@ -1,11 +1,46 @@
 import WasmBackend
+import WasmBackend.Correct
+import WasmBackend.Audit
 
-/- Axiom gate: wasm-backend is an emitter package — zero theorems by
-design (the robustness contract is runtime `throw`s + the differential
-gate, not kernel proofs). The import above is the gate: any axiom leak
-in the imported modules fails here. Headline defs get `#print axioms`
-as they gain proof obligations. -/
+/- Axiom gate: wasm-backend's robustness contract = the runtime `throw`s
+   + the differential gate, PLUS the Sem module's proved type-safety
+   (the Talos-lite foundation: the well-typed programs don't
+   stack-underflow). Headline defs get `#print axioms`. -/
 
 #print axioms WasmBackend.wasmTyOf?
 #print axioms WasmBackend.emitModule
 #print axioms WasmBackend.emitAdapter
+#print axioms WasmBackend.Sem.exec_typed
+#print axioms WasmBackend.Sem.checkFrame_ok
+
+-- The translation-correctness lane (seam #7, the straight-line slice):
+-- the emitted templates' Sem-execution = the source arithmetic.
+#print axioms WasmBackend.Correct.spec_double_ok
+#print axioms WasmBackend.Correct.spec_add_ok
+#print axioms WasmBackend.Correct.tpl_add_ret_ok
+#print axioms WasmBackend.Correct.buggy_ne_spec
+
+-- The translation-correctness lane (seam #7, the BRANCH slice): the
+-- cases template's execution = the chosen alt's semantics; the demo on
+-- the is-big branch shape; the tag-inverted negative control.
+#print axioms WasmBackend.Correct.specCases_ok
+#print axioms WasmBackend.Correct.specCases_alt1
+#print axioms WasmBackend.Correct.specCases_trap
+#print axioms WasmBackend.Correct.isBig_250
+#print axioms WasmBackend.Correct.isBig_42
+#print axioms WasmBackend.Correct.branch_br0_entry_stack
+#print axioms WasmBackend.Correct.branch_buggy_disagrees
+
+-- The translation-correctness lane (seam #7, the CALLS + CLOSURES
+-- slice): the calling-convention contract (the caller's pushes = the
+-- callee's entry state, over the prep/prologue composition), the
+-- trampoline's arg-forward contract, the run-paps 5 = 8 inner-call
+-- demo, and the arg-order-swap negative control.
+#print axioms WasmBackend.Correct.call_convention1
+#print axioms WasmBackend.Correct.call_convention2
+#print axioms WasmBackend.Correct.trampoline_convention1
+#print axioms WasmBackend.Correct.trampoline_convention2
+#print axioms WasmBackend.Correct.runPaps_inner_8
+#print axioms WasmBackend.Correct.call_convention2_buggy_disagrees
+#print axioms WasmBackend.Wat.Audit.audit
+#print axioms WasmBackend.Wat.Audit.audit_nil

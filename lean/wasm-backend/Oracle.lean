@@ -60,7 +60,7 @@ def resultOf (fn : String) (args : List String) : String :=
   | "pick", [b, a, x] => toString (pick (b == "1") a.toNat!.toUInt64 x.toNat!.toUInt64)
   | "str-len-demo", [a] => toString (GuestImpl.strLenDemo a.toNat!.toUInt64)
   | "greet", [a] => GuestImpl.greet a.toNat!.toUInt64
-  | "get-user", [a] => match GuestImpl.getUserImpl a.toNat!.toUInt64 with
+  | "get-user", [a] => match GuestImpl.getUser a.toNat!.toUInt64 with
     | none => "none"
     | some u =>
       let tagS := String.intercalate "," (u.tags.map (fun t => t))

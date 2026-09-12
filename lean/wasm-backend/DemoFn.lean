@@ -1,5 +1,6 @@
 import WasmBackend.Check
 import LintKit.PackageNamespace
+import SchemaLang.Meta.Reflect
 
 /- DemoFn — the functions the WASM backend compiles (compiler-line demo
    stage). `@[guest]` checks each def at ELABORATION: banned runtimes
@@ -11,16 +12,16 @@ import LintKit.PackageNamespace
 set_option linter.guestlang.packageNamespace false -- because these decl names are the WIT export contract (demo-world.wit), not library API
 
 /-- The backend's hello-world: pure integer arithmetic. -/
-@[guest]
+@[guest, schema_fn]
 def double (x : UInt64) : UInt64 := x + x
 
 /-- Branching: lowers to LCNF branches. -/
-@[guest]
+@[guest, schema_fn]
 def isBig (x : UInt64) : Bool := x > 100
 
 /-- Closure: LCNF `fun` + captured env (`pap`) — mono eta-reduces it. -/
-@[guest]
-def adder (a : UInt64) : UInt64 → UInt64 := fun b => a + b
+@[guest, schema_fn]
+def adder (a : UInt64) : (b : UInt64) → UInt64 := fun b => a + b
 
 /-- Constructor dispatch: LCNF `cases` + `sproj` (byte offsets).
 Guest-compat is enforced on the FUNCTIONS using the type. -/
@@ -37,13 +38,13 @@ def area (s : Shape) : UInt64 :=
 /-- The full OBJECT LIFECYCLE: ctor alloc ($alloc, rc=1) → call →
     Perceus dec ($rc_dec → pooled free) → scalar out. The differential
     smoke asserts the pooled allocator doesn't corrupt values. -/
-@[guest]
+@[guest, schema_fn]
 def doubleArea (r : UInt64) : UInt64 := area (.circle (r + r))
 
 /-- An ESCAPING closure: returned from a conditional — mono cannot
     eta-reduce it (the body branches). Exercises pap + closure apply. -/
-@[guest]
-def pick (b : Bool) (a : UInt64) : UInt64 → UInt64 :=
+@[guest, schema_fn]
+def pick (b : Bool) (a : UInt64) : (x : UInt64) → UInt64 :=
   fun x => if b then a + x else a * x
 
 /-- Closures stored in objects SURVIVE mono (boxed into the erased
@@ -54,7 +55,7 @@ def applyAll (fs : List (UInt64 → UInt64)) (x : UInt64) : UInt64 :=
   | [] => x
   | f :: rest => f (applyAll rest x)
 
-@[guest]
+@[guest, schema_fn]
 def runPaps (x : UInt64) : UInt64 := applyAll [adder 1, adder 2] x
 
 /-- Tail recursion: `let r := fap ...; return r` fuses to return_call
@@ -82,5 +83,5 @@ def apply2All (fs : List (UInt64 → UInt64 → UInt64)) (x y : UInt64) : UInt64
 @[guest]
 def useCurried (a : UInt64) : UInt64 := apply2All [curried a] 3 4
 
-@[guest]
+@[guest, schema_fn]
 def total (a b c : UInt64) : UInt64 := sumList [a, b, c] 0

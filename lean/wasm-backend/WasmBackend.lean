@@ -1,12 +1,43 @@
 import Lean
 import Lean.Compiler.LCNF
 import WasmBackend.Check
+import WasmBackend.Layout
+import WasmBackend.Sem
+import WasmBackend.Wat
 
 /-!
 # WasmBackend — LCNF → WAT emission
 
 The `leanir` re-run pattern (see GenMain): the final impure-phase LCNF →
 WebAssembly Text. Toolchain: `wasm-tools parse -g` → validate → wasmtime.
+
+TYPED WAT (the doctrine): the module is assembled as a `Wat.Module` and
+rendered by `Wat.Module.render` (`Std.Format` — never string
+interpolation for structure). The adapters' field offsets come from the
+PROVED `Layout.offsets` (user_offsets = [0,8,16,24], user_size = 32) —
+the emitted instrs are structurally the proved function's outputs.
+
+The HONEST LEDGER of `Instr.raw` (the escape hatch, counted at emission;
+the count is printed by GenMain — 0 since the raw→typed migration:
+everything — the adapters (string/optionUser/listUser/streamU64/
+streamUser + the userParam RECORD-PARAM adapter), the general path's
+instruction emission (emitCode/emitLet/emitCases/goAlts/emitReturn/
+emitArg — restructured: goAlts builds NESTED `if_` bodies via
+`emitScoped` instead of flat if/else/end lines), the trampolines, the
+callbacks, cabi_realloc, and the module-level assembly — is typed.
+* The `Wat.Item.raw "  ;;RUNTIME-SPLICE"` marker is BY DESIGN raw
+  (GenMain replaces those exact bytes with runtime.wat) — the ONE
+  module-level raw; it is not an instruction, so the emitted raw-count
+  stays 0.
+* The record-param adapter's ABI fact (probed against the encoder):
+  a record param crosses FLAT while its flattened form fits
+  MAX_FLAT_PARAMS=16 — the demo's user (u64 + 3×(ptr,len) = 7 flat
+  values) arrives as 7 core params `[i64, i32×6]`; a POINTER-form
+  adapter FAILS the `component new` encode (`expected [I64, I32, …]`).
+  The adapter reconstructs the guest object: strings = alloc(16+len)
+  {tag=250, len@8, memory.copy bytes@16}, the tags list = a cons chain
+  built by walking the flat (ptr,len) array BACKWARD, the User = the
+  refs-first object {tag, name@8, email@16, tags@24, id@32}.
 
 Layout (guestlang-owned): `{rc u32@0, tag u8@4, class u8@5, fields @8}`.
 Lean's field conventions: ref fields at `8+i*8` (oproj[i]); scalar fields
@@ -49,7 +80,10 @@ def paramWasmTy (p : Param .impure) : String :=
 structure S where
   fvars : Std.HashMap FVarId (String × String) := {}
   locals : Array (String × String) := #[]
-  out : Array String := #[]
+  out : Array Wat.Instr := #[]
+  /-- the `Instr.raw` count so far — the migration's progress metric.
+      Zero raw = fully typed. -/
+  rawCount : Nat := 0
   n : Nat := 0
   /-- trampolines emitted so far (pap closures): (fnName, nPartial). -/
   tramps : Array (Name × Nat) := #[]
@@ -62,7 +96,10 @@ structure S where
 
 abbrev M := StateT S (Except String)
 
-def emit (line : String) : M Unit := modify fun s => { s with out := s.out.push line }
+/-- The PRIMITIVE: emit one typed instruction. -/
+def emitI (i : Wat.Instr) : M Unit := do
+  let bump := match i with | .raw _ => 1 | _ => 0
+  modify fun s => { s with out := s.out.push i, rawCount := s.rawCount + bump }
 
 def unsupported (what : String) : M Unit :=
   throw s!"WasmBackend: unsupported construct: {what}"
@@ -87,19 +124,20 @@ def localTy? (fvarId : FVarId) : M (Option String) := do
   match (← get).fvars[fvarId]? with
   | some (_, ty) => pure (some ty)
   | none => pure none
+/-- The local's NAME (typed emission wraps it in `.localget`). -/
 def load (fvarId : FVarId) : M String := do
   match (← get).fvars[fvarId]? with
-  | some (n, _) => pure s!"local.get ${n}"
+  | some (n, _) => pure n
   | none => throw s!"WasmBackend: unbound fvar {fvarId.name}"
 
 /-! ## Primitives -/
 
-def binop? : Name → Option String
-  | ``UInt64.add => some "i64.add"
-  | ``UInt64.sub => some "i64.sub"
-  | ``UInt64.mul => some "i64.mul"
-  | ``UInt64.decLt => some "i64.lt_u"
-  | ``UInt64.decEq => some "i64.eq"
+def binop? : Name → Option Wat.Op
+  | ``UInt64.add => some .i64add
+  | ``UInt64.sub => some .i64sub
+  | ``UInt64.mul => some .i64mul
+  | ``UInt64.decLt => some .i64ltu
+  | ``UInt64.decEq => some .i64eq
   | _ => none
 
 /-! ## guestlang-std string intrinsics
@@ -118,16 +156,24 @@ def stringTag : Nat := 250
     result is the IMPL convention: UInt64 = raw i64; String = object
     pointer (i32). -/
 def stdOp? : Name → Option String
-  | `GuestlangStd.strlen => some "call $string_len"
-  | `GuestlangStd.strcat => some "call $string_cat"
+  | `GuestlangStd.strlen => some "string_len"
+  | `GuestlangStd.strcat => some "string_cat"
   | _ => none
 
-def storeOp (ty : Option String) : String :=
-  match ty with | some "i32" => "i32.store" | _ => "i64.store"
+def storeMemOp (ty : Option String) : Wat.MemOp :=
+  match ty with | some "i32" => .i32store | _ => .i64store
+
+def loadMemOp (tyS : String) : Wat.MemOp :=
+  if tyS == "i64" then .i64load else .i32load
+
+def emitIs (is : List Wat.Instr) : M Unit :=
+  is.forM emitI
 
 def emitArg : Arg .impure → M Unit
-  | .fvar fvarId => do emit (← load fvarId)
-  | _ => emit ";; ERASED arg"
+  | .fvar fvarId => do emitI (.localget (← load fvarId))
+  -- erased args push NOTHING (a no-op then and now — LCNF is ANF, so
+  -- real args are always fvars; the erased case is the unit filler)
+  | _ => pure ()
 
 mutual
 
@@ -135,7 +181,6 @@ partial def resultTyOfAlt : Alt .impure → Option String
   | .ctorAlt _ code => resultTyOf code
   | .default code => resultTyOf code
   | .alt _ _ _ h => absurd h (by simp)
-
 partial def resultTyOf : Code .impure → Option String :=
   resultTyOfWalk none
 
@@ -167,20 +212,20 @@ partial def emitCode (code : Code .impure) : M Unit := do
           -- fall through to the normal let path
           if rv == decl.fvarId && (binop? fn).isNone && (stdOp? fn).isNone then
             for a in args do emitArg a
-            emit s!"return_call ${fn.toString}"
+            emitI (.returncall fn.toString)
           else
             emitLet decl; emitCode k
       | _, _ => emitLet decl; emitCode k
   | .return fvarId => emitReturn fvarId
   | .cases c => emitCases c
   | .inc fvarId _ _ _ k =>
-      emit (← load fvarId); emit "call $rc_inc"; emitCode k
+      emitI (.localget (← load fvarId)); emitI (.call "rc_inc"); emitCode k
   | .dec fvarId _ _ _ _ k =>
-      emit (← load fvarId); emit "call $rc_dec"; emitCode k
+      emitI (.localget (← load fvarId)); emitI (.call "rc_dec"); emitCode k
   | .del _ k => emitCode k
   | .jp _ k => emitCode k
   | .jmp .. => unsupported "Code.jmp"
-  | .unreach _ => emit "unreachable"
+  | .unreach _ => emitI .unreach
   | .sset _f i offset y ty k =>
       -- field store: sset var[slot, off] := y → mem[var + 8 + slot*8 + off]
       -- (the RC pass splits ctor-alloc from field-init AND reorders the
@@ -189,17 +234,29 @@ partial def emitCode (code : Code .impure) : M Unit := do
       -- is slot 3 (@8+3*8) AFTER the three ref slots. The old emission
       -- discarded `i` — the id CLOBBERED the first ref's pointer: the
       -- object case was never exercised before the schema records.)
-      emit (← load _f)
-      emit (← load y)
-      emit s!"{storeOp (wasmTyOf? ty)} offset={8 + i * 8 + offset}"
+      emitI (.localget (← load _f))
+      emitI (.localget (← load y))
+      emitI (.mem (storeMemOp (wasmTyOf? ty)) (8 + i * 8 + offset) none)
       emitCode k
   | .oset .. | .uset .. | .setTag .. =>
     unsupported "in-place mutation (oset/uset/setTag)"
   | .fun _ _ h => absurd h (by simp)
 
 partial def emitReturn (fvarId : FVarId) : M Unit := do
-  emit (← load fvarId)
-  emit "return"
+  emitI (.localget (← load fvarId))
+  emitI .ret
+
+/-- Run `emitCode` in a FORKED state (fresh `out`), returning the branch
+    body as a nested instr list while KEEPING the fork's local bindings,
+    the fresh-local counter, and the trampolines in the outer state
+    (wasm locals are function-scoped; LCNF branches terminate, so the
+    branch's fvars are dead after — keeping them bound is harmless,
+    the fresh-name counter guarantees uniqueness). -/
+partial def emitScoped (code : Code .impure) : M (List Wat.Instr) := do
+  let s ← get
+  let ((), s2) ← (emitCode code).run { s with out := #[] }
+  set { s2 with out := s.out }
+  pure s2.out.toList
 
 partial def emitCases (c : Cases .impure) : M Unit := do
   -- SCALAR scrutinees (Bool/UInt8 — the impl param is a raw flat
@@ -208,49 +265,31 @@ partial def emitCases (c : Cases .impure) : M Unit := do
   let scalar := c.typeName == `Bool || c.typeName == `UInt8
     || c.typeName == `UInt32 || c.typeName == `UInt64
   if scalar then
-    goAltsRaw (← load c.discr) c.alts.toList
+    let v ← load c.discr
+    emitIs (← goAlts v c.alts.toList)
   else do
-    emit (← load c.discr)
-    emit "i32.load8_u offset=4"
+    emitI (.localget (← load c.discr))
+    emitI (.mem .i32load8u 4 none)
     let tag ← bindFresh "i32"
-    emit s!"local.set ${tag}"
-    goAlts tag c.alts.toList
+    emitI (.localset tag)
+    emitIs (← goAlts tag c.alts.toList)
 
-partial def goAltsRaw (value : String) : List (Alt .impure) → M Unit
-  | [] => emit "unreachable ;; no matching scalar case"
+partial def goAlts (scrut : String) : List (Alt .impure) → M (List Wat.Instr)
+  | [] => pure [.unreach]
   | alt :: rest => do
       match alt with
       | .ctorAlt info code =>
-          emit value
-          emit s!"i32.const {info.cidx}"
-          emit "i32.eq"
-          -- the if's result = the branch value's type (i64 scalar OR i32
-          -- object — greet's string branches are the first object case)
-          let resTy := resultTyOf code |>.getD "i64"
-          emit s!"if (result {resTy})"
-          emitCode code
-          emit "else"
-          goAltsRaw value rest
-          emit "end"
-      | .default code => emitCode code
-      | .alt _ _ _ h => absurd h (by simp)
-
-partial def goAlts (tag : String) : List (Alt .impure) → M Unit
-  | [] => emit "unreachable ;; no matching ctor tag"
-  | alt :: rest => do
-      match alt with
-      | .ctorAlt info code =>
-          emit s!"local.get ${tag}"
-          emit s!"i32.const {info.cidx}"
-          emit "i32.eq"
-          -- same: the branch value's type decides (scalar i64 / object i32)
-          let resTy := resultTyOf code |>.getD "i64"
-          emit s!"if (result {resTy})"
-          emitCode code
-          emit "else"
-          goAlts tag rest
-          emit "end"
-      | .default code => emitCode code
+          -- the if's result = the BRANCH JOIN's type: the first alt in
+          -- the CHAIN whose code RESOLVES (a bare `return` arm resolves
+          -- to none — the join defers to a later alt's shape; the old
+          -- first-alt-only read emitted i64 for a mixed join and
+          -- mis-typed the nested-case else — userComplete's gate)
+          let resTy := ((alt :: rest).filterMap resultTyOfAlt).head?.getD "i64"
+          let thenI ← emitScoped code
+          let elseI ← goAlts scrut rest
+          pure ([.localget scrut, .i32const info.cidx, .op .i32eq]
+            ++ [.if_ (some resTy) thenI elseI])
+      | .default code => emitScoped code
       | .alt _ _ _ h => absurd h (by simp)
 
 partial def emitLet (decl : LetDecl .impure) : M Unit := do
@@ -258,10 +297,10 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
   match decl.value with
   | .lit (.uint64 v) =>
       let l ← bindLocal decl.fvarId "i64"
-      emit s!"i64.const {v}"; emit s!"local.set ${l}"
+      emitI (.i64const v.toNat); emitI (.localset l)
   | .lit (.uint8 v) | .lit (.uint32 v) =>
       let l ← bindLocal decl.fvarId "i32"
-      emit s!"i32.const {v}"; emit s!"local.set ${l}"
+      emitI (.i32const v.toNat); emitI (.localset l)
   | .lit (.nat _) => unsupported "Nat literal (GMP — banned in the guest)"
   | .lit (.str v) =>
       -- guestlang-std string literal: variable-size object {rc, tag=250,
@@ -270,52 +309,52 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       let bytes := v.toByteArray
       let n := bytes.size
       let l ← bindLocal decl.fvarId "i32"
-      emit s!"i32.const {16 + n}"; emit "call $alloc"; emit s!"local.set ${l}"
-      emit (← load decl.fvarId)
-      emit s!"i32.const {stringTag}"
-      emit "i32.store8 offset=4"
-      emit (← load decl.fvarId)
-      emit s!"i32.const {n}"
-      emit "i32.store offset=8"
+      emitI (.i32const (16 + n)); emitI (.call "alloc"); emitI (.localset l)
+      emitI (.localget (← load decl.fvarId))
+      emitI (.i32const stringTag)
+      emitI (.mem .i32store8 4 none)
+      emitI (.localget (← load decl.fvarId))
+      emitI (.i32const n)
+      emitI (.mem .i32store 8 none)
       let mut off := 16
       for b in bytes do
-        emit (← load decl.fvarId)
-        emit s!"i32.const {b.toNat}"
-        emit s!"i32.store8 offset={off}"
+        emitI (.localget (← load decl.fvarId))
+        emitI (.i32const b.toNat)
+        emitI (.mem .i32store8 off none)
         off := off + 1
   | .lit _ => unsupported "literal kind (uint16/usize)"
   | .erased => pure ()
   | .fvar fvarId args =>
       if args.isEmpty then
         let l ← bindLocal decl.fvarId (ty.getD "i64")
-        emit (← load fvarId); emit s!"local.set ${l}"
+        emitI (.localget (← load fvarId)); emitI (.localset l)
       else
         -- CLOSURE APPLICATION: f is an object; call its trampoline:
         -- push closure-ptr, fresh args (boxed), fnIdx; call_indirect.
         -- The sig is picked by the FRESH-arg count (sig_1box, sig_2box…).
         let l ← bindLocal decl.fvarId "i32"  -- result: boxed obj
-        emit (← load fvarId)  -- closure ptr (also the trampoline's 1st arg)
+        emitI (.localget (← load fvarId))  -- closure ptr (also the trampoline's 1st arg)
         for a in args do emitArg a
-        emit (← load fvarId)
-        emit "i32.load offset=8"  -- fnIdx
-        emit s!"call_indirect (type $sig_{args.size}box)"
-        emit s!"local.set ${l}"
+        emitI (.localget (← load fvarId))
+        emitI (.mem .i32load 8 none)  -- fnIdx
+        emitI (.callindirect s!"sig_{args.size}box")
+        emitI (.localset l)
   | .fap fn args =>
       match binop? fn, stdOp? fn with
       | some op, _ =>
           let l ← bindLocal decl.fvarId (ty.getD "i64")
           for a in args do emitArg a
-          emit op
-          emit s!"local.set ${l}"
-      | _, some call =>
+          emitI (.op op)
+          emitI (.localset l)
+      | _, some callee =>
           -- std intrinsic: strlen (obj) → raw i64; strcat (obj obj) → obj
           let resTy : String := match fn with
             | `GuestlangStd.strlen => "i64"
             | _ => "i32"
           let l ← bindLocal decl.fvarId resTy
           for a in args do emitArg a
-          emit call
-          emit s!"local.set ${l}"
+          emitI (.call callee)
+          emitI (.localset l)
       | none, _ =>
           -- the local's type = the CALLEE's actual wasm result type
           -- (scalar i64 vs object i32) — the LCNF type default alone
@@ -328,83 +367,86 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
             (if args.isEmpty then "i32" else calleeTy.getD (ty.getD "i64"))
           -- 0-ary fap = top-level closure const (obj); else a scalar call
           for a in args do emitArg a
-          emit s!"call ${fn.toString}"
-          emit s!"local.set ${l}"
+          emitI (.call fn.toString)
+          emitI (.localset l)
   | .pap fn args =>
       -- closure: alloc {rc, tag=254, class, fnIdx, partial args…}
       let nA := args.size
       let _tramp := s!"pap_{fn.toString}_{nA}"
       -- table slot: position in the deduped tramp list (push-order)
-      let idx : Int ← do
+      let idx : Nat ← do
         let ts := (← get).tramps
         match ts.idxOf? (fn, nA) with
-        | some i => pure (i : Int)
+        | some i => pure i
         | none =>
             modify fun s => { s with tramps := s.tramps.push (fn, nA) }
-            pure (ts.size : Int)
+            pure ts.size
       let l ← bindLocal decl.fvarId "i32"
-      emit s!"i32.const {16 + nA * 8}"
-      emit "call $alloc"
-      emit s!"local.set ${l}"
-      emit (← load decl.fvarId)
-      emit "i32.const 254"
-      emit "i32.store8 offset=4"
-      emit (← load decl.fvarId)
-      emit s!"i32.const {idx}"
-      emit "i32.store offset=8"
+      emitI (.i32const (16 + nA * 8))
+      emitI (.call "alloc")
+      emitI (.localset l)
+      emitI (.localget (← load decl.fvarId))
+      emitI (.i32const 254)
+      emitI (.mem .i32store8 4 none)
+      emitI (.localget (← load decl.fvarId))
+      emitI (.i32const idx)
+      emitI (.mem .i32store 8 none)
       let mut off := 16
       for a in args do
-        emit (← load decl.fvarId)
+        emitI (.localget (← load decl.fvarId))
         emitArg a
-        emit s!"i32.store offset={off}"
+        emitI (.mem .i32store off none)
         off := off + 8
-  | .sproj _ offset var _ =>
+  | .sproj n offset var _ =>
+      -- the slot index n = the field's position in the REORDERED
+      -- (ref-first) layout, offset = the byte offset within the slot —
+      -- the SAME convention as the sset WRITER below. (The pre-migration
+      -- emitter discarded n — it read the byte offset alone: latent
+      -- until userValid, the first reader of a slot-3 scalar.)
       let tyS := ty.getD "i64"
       let l ← bindLocal decl.fvarId tyS
-      emit (← load var)
-      let loadOp := if tyS == "i64" then "i64.load" else "i32.load"
-      emit s!"{loadOp} offset={8 + offset}"
-      emit s!"local.set ${l}"
+      emitI (.localget (← load var))
+      emitI (.mem (loadMemOp tyS) (8 + n * 8 + offset) none)
+      emitI (.localset l)
   | .oproj i var _ =>
       -- ref field: 8-byte slot at 8+i*8, an object pointer
       let l ← bindLocal decl.fvarId "i32"
-      emit (← load var)
-      emit s!"i32.load offset={8 + i * 8}"
-      emit s!"local.set ${l}"
+      emitI (.localget (← load var))
+      emitI (.mem .i32load (8 + i * 8) none)
+      emitI (.localset l)
   | .box ty var _ =>
       -- scalar → object: alloc 16, store the scalar @8 (op by scalar ty)
       let l ← bindLocal decl.fvarId "i32"
-      emit "i32.const 16"
-      emit "call $alloc"
-      emit s!"local.set ${l}"
-      emit (← load decl.fvarId)
-      emit (← load var)
-      emit s!"{storeOp (wasmTyOf? ty)} offset=8"
+      emitI (.i32const 16)
+      emitI (.call "alloc")
+      emitI (.localset l)
+      emitI (.localget (← load decl.fvarId))
+      emitI (.localget (← load var))
+      emitI (.mem (storeMemOp (wasmTyOf? ty)) 8 none)
   | .unbox var _ =>
       -- the box's slot type = the unboxed scalar's type (Bool→i32, u64→i64)
       let tyS := ty.getD "i64"
       let l ← bindLocal decl.fvarId tyS
-      emit (← load var)
-      let loadOp := if tyS == "i64" then "i64.load" else "i32.load"
-      emit s!"{loadOp} offset=8"
-      emit s!"local.set ${l}"
+      emitI (.localget (← load var))
+      emitI (.mem (loadMemOp tyS) 8 none)
+      emitI (.localset l)
   | .ctor info args =>
       -- bare alloc + tag; REF args stored @8+i*8. Scalar fields arrive
       -- via sset afterwards (the RC pass splits scalar ctors — verified:
       -- `ctor_0.0.8[Shape.circle]` then `sset [0,0]`); ref ctors keep
       -- their args (verified: `ctor_1[List.cons] _f.2 _x.1`).
       let p ← bindLocal decl.fvarId "i32"
-      emit s!"i32.const {8 + info.size * 8 + info.ssize}"
-      emit "call $alloc"
-      emit s!"local.set ${p}"
-      emit (← load decl.fvarId)
-      emit s!"i32.const {info.cidx}"
-      emit "i32.store8 offset=4"
+      emitI (.i32const (8 + info.size * 8 + info.ssize))
+      emitI (.call "alloc")
+      emitI (.localset p)
+      emitI (.localget (← load decl.fvarId))
+      emitI (.i32const info.cidx)
+      emitI (.mem .i32store8 4 none)
       let mut refOff := 8
       for a in args do
-        emit (← load decl.fvarId)
+        emitI (.localget (← load decl.fvarId))
         emitArg a
-        emit s!"i32.store offset={refOff}"
+        emitI (.mem .i32store refOff none)
         refOff := refOff + 8
   | .proj .. | .uproj .. =>
       unsupported "proj/uproj"
@@ -415,36 +457,36 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       | some op, false =>
           let l ← bindLocal decl.fvarId (ty.getD "i64")
           for a in args do emitArg a
-          emit op
-          emit s!"local.set ${l}"
+          emitI (.op op)
+          emitI (.localset l)
       | none, true =>
           -- 0-ary const: a top-level closure constant (_closed decls)
           let l ← bindLocal decl.fvarId "i32"
-          emit s!"call ${fn.toString}"
-          emit s!"local.set ${l}"
+          emitI (.call fn.toString)
+          emitI (.localset l)
       | _, _ => unsupported s!"const {fn}"
 
 end
 
 /-! ## Decl emission -/
 
-def emitDecl (d : Decl .impure) : M String := do
+/-- TYPED: the decl's func = a `Wat.Func` — the general path's body is
+    fully typed `Instr`s (the raw→typed migration; the header's ledger). -/
+def emitDecl (d : Decl .impure) : M Wat.Func := do
   let code := match d.value with
     | .code c => c
     | .extern .. => .unreach (Expr.const `Unit [])
-  let params := d.params.toList.map fun p =>
-    s!"(param ${p.binderName.toString} {paramWasmTy p})"
   let resultTy := resultTyOf code
-  let header :=
-    s!"(func ${d.name.toString} {String.intercalate " " params}"
-      ++ (match resultTy with | some t => s!" (result {t})" | none => "")
   for p in d.params do
     bindNamed p.fvarId p.binderName.toString (paramWasmTy p)
   emitCode code
   let s ← get
-  let locals := s.locals.toList.map fun (n, t) => s!"  (local ${n} {t})"
-  let body := String.intercalate "\n  " (locals ++ s.out.toList)
-  pure s!"{header}\n  {body}\n)"
+  pure { name := d.name.toString
+       , params := d.params.toList.map fun p =>
+           { name := some p.binderName.toString, ty := paramWasmTy p }
+       , result := resultTy
+       , locals := s.locals.toList
+       , body := s.out.toList }
 
 /-- Dedup trampolines (the same (fn, nPartial) pap may appear at several
     sites; the table gets ONE func per distinct trampoline). -/
@@ -495,7 +537,7 @@ wrong shape = a differential failure (the host misreads).
   -- then returning 0 (the sync-computable body = done at the first
   -- poll; the callback = the constant Exit=0). The fused-adapter
   -- `type mismatch` seen earlier = the missing task-return import+call.
-def asyncFns : List String := ["watch-orders", "watch-counts"]
+def asyncFns : List String := ["watch-orders", "watch-counts", "watch-users"]
   -- GATED OFF: the [async-lift] protocol's shapes are emitted correctly
   -- (the callback + the interface-qualified exports — verified against
   -- the wit-bindgen 0.61 reference + the minimal-module probes), but
@@ -511,77 +553,207 @@ def adapterShape? : String → Option String
   | "get-user" => some "optionUser"
   | "watch-orders" => some "listUser"
   | "watch-counts" => some "streamU64"
+  | "watch-users" => some "streamUser"
+  | "user-valid" => some "userParam"
+  | "user-complete" => some "userParam"
+  | "order-error-valid" => some "variantParam"
   | _ => none
 
-/-- The WAT for walking a guest List cons chain into a canonical
+/-- The TYPED WAT for walking a guest List cons chain into a canonical
     (array-ptr, count) pair written at `areaOff`/`areaOff+4`. Two passes:
     COUNT the cons cells, `$alloc(n × elemSize)`, then FILL each element
-    via `lowerElem` (the per-element WAT; `$cur` = the cons — its head
-    object = `load($cur{suffix} + 8)` — `$w{suffix}` = the element's
-    destination address). `suffix` uniquifies the locals/labels (the
-    NESTED walks: the list-of-records' elements carry their own lists —
-    the inner walk = the same generator, a different suffix). The
+    via `lowerElem` (the per-element instrs; `$cur{suffix}` = the cons —
+    its head object = `load($cur{suffix} + 8)` — `$w{suffix}` = the
+    element's destination address). `suffix` uniquifies the locals/labels
+    (the NESTED walks: the list-of-records' elements carry their own
+    lists — the inner walk = the same generator, a different suffix). The
     cons's layout: {tag@4 (nil=0/cons=1), head@8, tail@16}. -/
-def listWalkWat (loadSeq : List String) (areaOff : Nat)
-    (elemSize : Nat) (suffix : String) (lowerElem : List String) : List String :=
-  let cur := s!"$cur{suffix}"
-  let n := s!"$n{suffix}"
-  let arr := s!"$arr{suffix}"
-  let w := s!"$w{suffix}"
-  let doneL := s!"$done{suffix}"
-  let countL := s!"$count{suffix}"
-  let doneF := s!"$donef{suffix}"
-  let fillL := s!"$fill{suffix}"
-  let countLoop :=
-    loadSeq ++ [ s!"local.set {cur}"
-    , "i32.const 0", s!"local.set {n}"
-    , s!"block {doneL}"
-    , s!"  loop {countL}"
-    , s!"    local.get {cur}", "i32.load8_u offset=4", "i32.eqz", s!"br_if {doneL}"
-    , s!"    local.get {n}", "i32.const 1", "i32.add", s!"local.set {n}"
-    , s!"    local.get {cur}", "i32.load offset=16", s!"local.set {cur}"  -- tail @16
-    , s!"    br {countL}"
-    , "  end"
-    , "end" ]
-  let fillLoop :=
-    loadSeq ++ [ s!"local.set {cur}"
-    , s!"local.get {n}", s!"i32.const {elemSize}", "i32.mul", "call $alloc", s!"local.set {arr}"
-    , s!"local.get {arr}", s!"local.set {w}"
-    , s!"block {doneF}"
-    , s!"  loop {fillL}"
-    , s!"    local.get {cur}", "i32.load8_u offset=4", "i32.eqz", s!"br_if {doneF}"
-    ] ++ lowerElem ++ [
-    s!"    local.get {w}", s!"i32.const {elemSize}", "i32.add", s!"local.set {w}"
-    , s!"    local.get {cur}", "i32.load offset=16", s!"local.set {cur}"
-    , s!"    br {fillL}"
-    , "  end"
-    , "end" ]
-  -- the (ptr, len) stores: the dst = a caller-supplied expression (the
-  -- static `areaOff` for the top-level lists; a computed address for the
-  -- record-EMBEDDED lists — the dst = the enclosing record's cursor + the
-  -- field's offset)
-  let dstPtr := if areaOff == 0 then [ s!"local.get {w}", "i32.const 0", "i32.add" ]
-    else [ s!"i32.const {areaOff}" ]
-  let dstLen := if areaOff == 0 then [ s!"local.get {w}", "i32.const 4", "i32.add" ]
-    else [ s!"i32.const {areaOff + 4}" ]
+def listWalk (loadSeq : List Wat.Instr) (areaOff : Nat)
+    (elemSize : Nat) (suffix : String) (lowerElem : List Wat.Instr) : List Wat.Instr :=
+  let cur := s!"cur{suffix}"
+  let n := s!"n{suffix}"
+  let arr := s!"arr{suffix}"
+  let w := s!"w{suffix}"
+  let doneL := s!"done{suffix}"
+  let countL := s!"count{suffix}"
+  let doneF := s!"donef{suffix}"
+  let fillL := s!"fill{suffix}"
+  let countBody : List Wat.Instr :=
+    [ .localget cur, .mem .i32load8u 4 none, .op .i32eqz, .brif doneL
+    , .localget n, .i32const 1, .op .i32add, .localset n
+    , .localget cur, .mem .i32load 16 none, .localset cur  -- tail @16
+    , .br countL ]
+  let fillBody : List Wat.Instr :=
+    [ .localget cur, .mem .i32load8u 4 none, .op .i32eqz, .brif doneF ]
+    ++ lowerElem
+    ++ [ .localget w, .i32const elemSize, .op .i32add, .localset w
+       , .localget cur, .mem .i32load 16 none, .localset cur
+       , .br fillL ]
+  let countLoop : List Wat.Instr :=
+    loadSeq ++ [ .localset cur
+    , .i32const 0, .localset n
+    , .block doneL [.loop countL countBody] ]
+  let fillLoop : List Wat.Instr :=
+    loadSeq ++ [ .localset cur
+    , .localget n, .i32const elemSize, .op .i32mul, .call "alloc", .localset arr
+    , .localget arr, .localset w
+    , .block doneF [.loop fillL fillBody] ]
+  -- the (ptr, len) stores: STATIC areaOff only (e.g. get-user's tags
+  -- at 88/92). `areaOff = 0` means NO MEMORY WRITE: the callers who need
+  -- the list's (ptr,len) read the walk's `$arr`/`$n` LOCALS (the stream
+  -- stash, the per-element tags copy) — the old scratch write at the
+  -- fill-end cursor CORRUPTED the next bump allocation (it landed on the
+  -- first inner-walk array — element 1's tags became the outer walk's
+  -- own (ptr,len) pair). Scratch writes to "unused" memory are not
+  -- unused: the bump allocator hands that region out next.
   countLoop ++ fillLoop ++
-    (dstPtr ++ [s!"local.get {arr}", "i32.store"])
-    ++ (dstLen ++ [s!"local.get {n}", "i32.store"])
+    (if areaOff == 0 then []
+     else [ .i32const areaOff, .localget arr, .mem .i32store 0 none
+          , .i32const (areaOff + 4), .localget n, .mem .i32store 0 none ])
 
 /-- The per-element lowering of a `String` element (the flat pair =
     (head+16 [bytes inline], load(head+8) [len]) at `$w{suffix}`). -/
-def strElemLower (suffix : String) : List String :=
-  let cur := s!"$cur{suffix}"
-  let w := s!"$w{suffix}"
-  [ s!"    local.get {w}", s!"local.get {cur}", "i32.load offset=8", "i32.const 16", "i32.add", "i32.store"
-  , s!"    local.get {w}", s!"local.get {cur}", "i32.load offset=8", "i32.load offset=8", "i32.store offset=4" ]
+def strElemLower (suffix : String) : List Wat.Instr :=
+  let cur := s!"cur{suffix}"
+  let w := s!"w{suffix}"
+  [ .localget w, .localget cur, .mem .i32load 8 none, .i32const 16, .op .i32add
+  , .mem .i32store 0 none
+  , .localget w, .localget cur, .mem .i32load 8 none, .mem .i32load 8 none
+  , .mem .i32store 4 none ]
+
+/-- The PROVED canonical-ABI flat layout of the demo's user record
+    (id@0, name@8, email@16, tags@24 — size 32): the adapters' field
+    offsets are THIS function's outputs, structurally. -/
+def userLayout : List Nat :=
+  WasmBackend.Layout.offsets [.u64, .string, .string, .list .string]
+
+/-- The PROVED record size (= the stream/element-array stride). -/
+def userSize : Nat :=
+  WasmBackend.Layout.size [.u64, .string, .string, .list .string]
+
+/-- (ptr, len) pair of the string object `src` → ABSOLUTE memory at
+    `off`/`off+4` (bytes inline at src+16, len at src+8). -/
+def pairAbs (off : Nat) (src : String) : List Wat.Instr :=
+  [ .i32const off, .localget src, .i32const 16, .op .i32add, .mem .i32store 0 none
+  , .i32const (off + 4), .localget src, .mem .i32load 8 none, .mem .i32store 0 none ]
+
+/-- (ptr, len) pair of the string object `src` → the address in local
+    `base` at `off`/`off+4` (the element-lowering form). -/
+def pairRel (base : String) (off : Nat) (src : String) : List Wat.Instr :=
+  [ .localget base, .localget src, .i32const 16, .op .i32add
+  , .mem .i32store off none
+  , .localget base, .localget src, .mem .i32load 8 none
+  , .mem .i32store (off + 4) none ]
+
+/-! ## The record-PARAM adapter (the canonical ABI's input direction)
+
+A record param crosses the boundary FLAT while its flattened form fits
+MAX_FLAT_PARAMS=16 (probed: the encoder DEMANDS `[I64, I32, I32, I32,
+I32, I32, I32] -> [I32]` for the demo's user — a pointer-form core sig
+fails `component new`). The caller's flat values are IN GUEST MEMORY
+the same way the result-side flat forms are (the lower wrote (ptr,len)
+pairs; the lift wrote (ptr,len) pairs) — the adapter INVERTS the
+result-side lowering: strings = alloc(16+len) + {tag=250, len@8,
+memory.copy bytes@16} (strElemLower's read form, constructed); the
+tags list = the cons chain; the user = the refs-first guest object.
+
+The flat param list for the user record — DERIVED from the field types
+(the same `.u64/.string/.list` list Layout.offsets consumes): a u64
+flattens to one i64; a string/list flattens to the (ptr, len) i32
+pair. -/
+
+def userFieldTys : List SchemaLang.Ty :=
+  [.u64, .string, .string, .list .string]
+
+/-- One flat core type per canonical-ABI field flattening. -/
+def flatTyOf : SchemaLang.Ty → List String
+  | .u64 | .i64 => ["i64"]
+  | .f64 => ["f64"]
+  | .f32 => ["f32"]
+  | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 => ["i32"]
+  | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
+  | .stream _ | .ty _ => ["i32", "i32"]
+
+def userFlatTys : List String := userFieldTys.flatMap flatTyOf
+
+/-- The flat params' NAMES: the id, then (ptr, len) per ref field
+    (name, email, tags) — same order as `userFlatTys`. -/
+def userParamNames : List String := ["id", "np", "nl", "ep", "el", "tp", "tl"]
+
+/-- String-object construction from a flat (bytes-ptr, len) pair held
+    in locals `src`/`len`: alloc(16+len) — rc=1 by the allocator — then
+    tag=250 @4, len @8, and `memory.copy` moves the bytes to +16 (the
+    inline form the result-side lowerings READ: strElemLower's
+    inverse). The object ptr lands in local `dst`. -/
+def stringCtor (src len dst : String) : List Wat.Instr :=
+  [ .localget len, .i32const 16, .op .i32add, .call "alloc", .localset dst
+  , .localget dst, .i32const stringTag, .mem .i32store8 4 none
+  , .localget dst, .localget len, .mem .i32store 8 none
+  , .localget dst, .i32const 16, .op .i32add
+  , .localget src, .localget len, .memcopy ]
+
+/-- The cons chain from the flat tags array: locals `arr` (array ptr)
+    and `n` (count) → the guest List<string> head in local `acc`.
+    Walks the flat array BACKWARD (i = n-1 … 0), consing each element
+    onto the accumulator — the chain comes out in order. The cons
+    object: {rc=1 (alloc), tag=1 @4, head@8 = the string object,
+    tail@16}. -/
+def consChain (arr n : String) : List Wat.Instr :=
+  let i := "ti"; let p := "tq"; let src := "tsp"; let len := "tln"
+  let s := "ts"; let c := "tc"; let acc := "acc"
+  let body : List Wat.Instr :=
+    [ .localget i, .op .i32eqz, .brif "tags-done"
+    , .localget i, .i32const 1, .op .i32sub, .localset i
+    -- p = arr + i*8: the i-th (ptr, len) pair
+    , .localget i, .i32const 8, .op .i32mul, .localget arr, .op .i32add
+    , .localset p
+    , .localget p, .mem .i32load 0 none, .localset src
+    , .localget p, .mem .i32load 4 none, .localset len ]
+    ++ stringCtor src len s
+    ++ [ .i32const 24, .call "alloc", .localset c
+       , .localget c, .i32const 1, .mem .i32store8 4 none
+       , .localget c, .localget s, .mem .i32store 8 none
+       , .localget c, .localget acc, .mem .i32store 16 none
+       , .localget c, .localset acc
+       , .br "tags-loop" ]
+  [ .i32const 0, .localset acc
+  , .localget n, .localset i
+  , .block "tags-done" [.loop "tags-loop" body] ]
+
+/-- The per-element lowering of a USER record (listUser + streamUser
+    share it): the cons head = load(curU+8) → the guest User object e;
+    the 32-byte flat record lands at $wU — id (the u64 @32 in the guest
+    object — the ref-first order), then the (ptr,len) pairs; the tags =
+    a NESTED string-list walk (the inner walk's own (ptr,len) dst = its
+    scratch cursor at areaOff=0 — the ELEMENT slot is dynamic, so copy
+    the (arrT,nT) into the tags field after). -/
+def userElemLower : List Wat.Instr :=
+  let fld (i : Nat) : Nat := userLayout.getD i 0
+  [ .localget "curU", .mem .i32load 8 none, .localset "e"
+  , .localget "wU", .localget "e", .mem .i64load 32 none
+  , .mem .i64store (fld 0) none
+  , .localget "e", .mem .i32load 8 none, .localset "p2" ]
+  ++ pairRel "wU" (fld 1) "p2"
+  ++ [ .localget "e", .mem .i32load 16 none, .localset "p2" ]
+  ++ pairRel "wU" (fld 2) "p2"
+  ++ listWalk [.localget "e", .mem .i32load 24 none] 0 8 "T" (strElemLower "T")
+  ++ [ .localget "wU", .localget "arrT", .mem .i32store (fld 3) none
+     , .localget "wU", .localget "nT", .mem .i32store (fld 3 + 4) none ]
 
 /-- Canonical-ABI adapter: flat component args → the impl's calling
 convention. Borrowed-scalar params (objects in the impl) get BOXED;
 raw scalars pass through; an object RESULT gets unboxed to the flat
 i64. Exported under the WIT name; the impl stays internal (internal
-callers keep calling it directly). -/
-def emitAdapter (d : Decl .impure) (shape : String) : M String := do
+callers keep calling it directly).
+
+TYPED: every shape builds a `Wat.Func` — ZERO `Instr.raw` (the offsets
+are structured fields fed from the PROVED `userLayout`). -/
+def emitAdapter (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func := Id.run do
+  -- pass-through of the flat params (every shape's prologue)
+  let pass : List Wat.Instr :=
+    d.params.toList.map fun p => .localget p.binderName.toString
+  let paramsOf : List Wat.Param :=
+    d.params.toList.map fun p => { name := some p.binderName.toString, ty := paramWasmTy p }
   -- STRING result: the post-return convention — the core signature takes
   -- the return-area pointer as its LAST param; the adapter calls the impl
   -- (→ the string object), then writes (bytes-ptr, byte-len) into it.
@@ -590,7 +762,7 @@ def emitAdapter (d : Decl .impure) (shape : String) : M String := do
   -- (The STRING-ness comes from the ORIGINAL def type — GenMain looks it
   -- up in the imported env — the LCNF type is erased to `obj` for every
   -- object result, Shape and String alike.)
-  if shape == "string" then do
+  if shape == "string" then
     -- the shim: pass the flat args through, call the impl, write the
     -- canonical-ABI string flattening (bytes-ptr, byte-len) into a STATIC
     -- return area, return the area pointer — the embedder's convention
@@ -600,17 +772,16 @@ def emitAdapter (d : Decl .impure) (shape : String) : M String := do
     -- fixed scratch slot at 48 (the freelist owns 0..24, the heap starts
     -- at 64; 24..64 is dead space — single-threaded, no clobber). The
     -- guest string's bytes live INLINE at +16, so bytes-ptr = obj + 16.
-    let sigParams := String.intercalate " "
-      (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
-      ++ " (result i32)"
-    let pass := d.params.toList.map fun p => s!"local.get ${p.binderName.toString}"
-    let tail := [s!"call ${d.name.toString}", "local.set $p"
-      , "i32.const 48", "local.get $p", "i32.const 16", "i32.add", "i32.store"
-      , "i32.const 48", "local.get $p", "i32.load offset=8", "i32.store offset=4"
-      , "i32.const 48"]
-    let body := String.intercalate "\n  " (pass ++ tail)
-    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $p i32)\n  {body}\n)"
-  else if shape == "optionUser" then do
+    let body : List Wat.Instr :=
+      pass ++ [ .call d.name.toString, .localset "p"
+      , .i32const 48, .localget "p", .i32const 16, .op .i32add
+      , .mem .i32store 0 none
+      , .i32const 48, .localget "p", .mem .i32load 8 none, .mem .i32store 4 none
+      , .i32const 48 ]
+    { name := s!"{d.name.toString}_abi"
+      params := paramsOf, result := some "i32"
+      locals := [("p", "i32")], body }
+  else if shape == "optionUser" then
     -- option<user> lowering: the return area (56..96) holds the
     -- option's MEMORY representation (packed, aligned — wasmtime's
     -- lift reads the area as the type's memory layout): discr u32 @56,
@@ -618,40 +789,95 @@ def emitAdapter (d : Decl .impure) (shape : String) : M String := do
     -- @72/76, email @80/84, tags (ptr,len) @88/92. The guest User
     -- object: refs @8/16/24 (name/email/tags), the id scalar @32
     -- (sset [3, 0]).
-    -- The tags list<string>: the cons-chain walk (listWalkWat) fills an
+    -- The tags list<string>: the cons-chain walk (listWalk) fills an
     -- 8n-byte array of (ptr,len) pairs. The option's ctor tags:
     -- none = 0, some = 1 (Lean's ctor order); the payload rides @8.
-    let sigParams := String.intercalate " "
-      (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
-      ++ " (result i32)"
-    let pass := d.params.toList.map fun p => s!"local.get ${p.binderName.toString}"
     let area := 56
-    let body := String.intercalate "\n  " (pass
-      ++ [s!"call ${d.name.toString}", "local.set $opt"
-        , ";; discr = the option's ctor tag (none=0 / some=1)"
-        , "local.get $opt", "i32.load8_u offset=4", "local.set $tag"
-        , s!"i32.const {area}", "local.get $tag", "i32.store"
-        , ";; the some branch: flatten the user record"
-        , "local.get $tag", "i32.const 1", "i32.eq"
-        , "if"
-        , "local.get $opt", "i32.load offset=8", "local.set $u"
-        , s!"i32.const {area + 8}", "local.get $u", "i64.load offset=32", "i64.store"
-        -- the STRING fields: the record's slot holds the STRING OBJECT's
-        -- POINTER (p); the flat pair = (p+16 [bytes inline], load(p+8)
-        -- [len]) — ONE more indirection than greet (whose result WAS the
-        -- string object)
-        , s!"local.get $u", "i32.load offset=8", "local.set $p"
-        , s!"i32.const {area + 16}", "local.get $p", "i32.const 16", "i32.add", "i32.store"
-        , s!"i32.const {area + 20}", "local.get $p", "i32.load offset=8", "i32.store"
-        , s!"local.get $u", "i32.load offset=16", "local.set $p"
-        , s!"i32.const {area + 24}", "local.get $p", "i32.const 16", "i32.add", "i32.store"
-        , s!"i32.const {area + 28}", "local.get $p", "i32.load offset=8", "i32.store"
-        ]
-      ++ listWalkWat ["local.get $u", "i32.load offset=24"] (area + 32) 8 "" (strElemLower "")
-      ++ ["end"
-        , s!"i32.const {area}"])
-    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $opt i32)\n  (local $tag i32)\n  (local $u i32)\n  (local $p i32)\n  (local $cur i32)\n  (local $n i32)\n  (local $arr i32)\n  (local $w i32)\n  {body}\n)"
-  else if shape == "listUser" then do
+    -- the record sits @64 (area+8); the FIELD offsets = the PROVED
+    -- canonical-ABI flat layout (Layout.user_offsets = [0,8,16,24])
+    let fld (i : Nat) : Nat := area + 8 + userLayout.getD i 0
+    let thenI : List Wat.Instr :=
+      [ .localget "opt", .mem .i32load 8 none, .localset "u"
+      -- the id (the u64 @32 in the guest object — the ref-first order)
+      , .i32const (fld 0), .localget "u", .mem .i64load 32 none
+      , .mem .i64store 0 none
+      -- the STRING fields: the record's slot holds the STRING OBJECT's
+      -- POINTER (p); the flat pair = (p+16 [bytes inline], load(p+8)
+      -- [len]) — ONE more indirection than greet (whose result WAS the
+      -- string object)
+      , .localget "u", .mem .i32load 8 none, .localset "p" ]
+      ++ pairAbs (fld 1) "p"
+      ++ [ .localget "u", .mem .i32load 16 none, .localset "p" ]
+      ++ pairAbs (fld 2) "p"
+      ++ listWalk [.localget "u", .mem .i32load 24 none] (fld 3) 8 "" (strElemLower "")
+    let body : List Wat.Instr :=
+      pass ++ [ .call d.name.toString, .localset "opt"
+      -- discr = the option's ctor tag (none=0 / some=1)
+      , .localget "opt", .mem .i32load8u 4 none, .localset "tag"
+      , .i32const area, .localget "tag", .mem .i32store 0 none
+      -- the some branch: flatten the user record (the condition = tag==1)
+      , .localget "tag", .i32const 1, .op .i32eq
+      , .if_ none thenI []
+      , .i32const area ]
+    { name := s!"{d.name.toString}_abi"
+      params := paramsOf, result := some "i32"
+      locals := [("opt", "i32"), ("tag", "i32"), ("u", "i32"), ("p", "i32")
+                 , ("cur", "i32"), ("n", "i32"), ("arr", "i32"), ("w", "i32")]
+      body }
+  else if shape == "userParam" then
+    -- The RECORD-PARAM adapter (user-valid): the canonical ABI hands
+    -- the record FLAT — id i64 + (ptr, len) per ref field (7 core
+    -- params; the encoder rejects the pointer form — see the ledger).
+    -- RECONSTRUCT the guest object: string objects from the flat
+    -- (bytes-ptr, len) pairs (memory.copy the bytes inline), the tags
+    -- cons chain from the flat (ptr, len) array, then the refs-first
+    -- User object {rc, tag@4, name@8, email@16, tags@24, id@32} (the
+    -- ctor alloc 8 + 3 refs * 8 + the u64 ssize = 40; the id scalar
+    -- rides the sproj [3, 0] slot = 8 + 3*8). The impl reads only the
+    -- id — the validator's guest-legal shape.
+    let params : List Wat.Param :=
+      userFlatTys.zipIdx.map fun (ty, i) =>
+        { name := some (userParamNames.getD i "flat"), ty }
+    let body : List Wat.Instr :=
+      consChain "tp" "tl"
+      ++ stringCtor "np" "nl" "ns"
+      ++ stringCtor "ep" "el" "es"
+      ++ [ .i32const 40, .call "alloc", .localset "u"
+         , .localget "u", .i32const 0, .mem .i32store8 4 none
+         , .localget "u", .localget "ns", .mem .i32store 8 none
+         , .localget "u", .localget "es", .mem .i32store 16 none
+         , .localget "u", .localget "acc", .mem .i32store 24 none
+         , .localget "u", .localget "id", .mem .i64store 32 none
+         , .localget "u"
+         , .call d.name.toString ]
+    { name := s!"{d.name.toString}_abi"
+      params := params, result := some "i32"
+      locals := [("ti", "i32"), ("tq", "i32"), ("tsp", "i32"), ("tln", "i32")
+                , ("ts", "i32"), ("tc", "i32"), ("acc", "i32")
+                , ("ns", "i32"), ("es", "i32"), ("u", "i32")]
+      body }
+  else if shape == "variantParam" then
+    -- The VARIANT-PARAM adapter (order-error-valid): the canonical ABI
+    -- hands a variant FLAT — the discr i32 + the JOINED payload (the
+    -- max of the cases' flat types: invalid-item's [i64] (u64) and
+    -- insufficient-funds' [f64] join to i64 — the SAME flat form the
+    -- listUser adapter's variantBox consumes for watch-orders). The
+    -- RE-BOX: alloc(16) {rc, tag=discr @4, payload i64 @8} → the
+    -- guest's variant object. The SYNC bool result: the impl's Bool =
+    -- raw i32 (the userParam convention) — no return area.
+    let body : List Wat.Instr :=
+      [ .i32const 16, .call "alloc", .localset "v"
+      , .localget "v", .localget "into_disc", .mem .i32store8 4 none
+      , .localget "v", .localget "into_payload", .mem .i64store 8 none
+      , .localget "v"
+      , .call d.name.toString ]
+    { name := s!"{d.name.toString}_abi"
+      params := [ { name := some "into_disc", ty := "i32" }
+                , { name := some "into_payload", ty := "i64" } ]
+      result := some "i32"
+      locals := [("v", "i32")]
+      body }
+  else if shape == "listUser" then
     -- list<user> lowering (the ASYNC watch-orders' result): the impl
     -- returns the List-User cons chain; the outer walk lowers EACH
     -- user into a 32-byte flat record (id i64 @0; name (ptr,len) @8/12;
@@ -665,122 +891,120 @@ def emitAdapter (d : Decl .impure) (shape : String) : M String := do
     -- encoder VALIDATES the async export's core sig against the FLAT
     -- form. The adapter RE-BOXES: alloc(16) {rc, tag=discr, payload
     -- i64@8} -> the guest's variant object.
-    let sigParams := "(param $into_disc i32) (param $into_payload i64) (result i32)"
-    let variantBox := [ "i32.const 16", "call $alloc", "local.set $v"
-      , "local.get $v", "local.get $into_disc", "i32.store8 offset=4"
-      , "local.get $v", "local.get $into_payload", "i64.store offset=8"
-      , "local.get $v" ]
-    -- the per-element lowering: $curU = the cons; the element's user =
-    -- load(curU+8) -> $e; the dst = $wU
-    let userLower : List String :=
-      [ "    local.get $curU", "i32.load offset=8", "local.set $e"
-      -- the id (the u64 @32 — the ref-first order)
-      , "    local.get $wU", "local.get $e", "i64.load offset=32", "i64.store"
-      -- the name: p = load(e+8); (p+16, load(p+8))
-      , "    local.get $e", "i32.load offset=8", "local.set $p2"
-      , "    local.get $wU", "local.get $p2", "i32.const 16", "i32.add", "i32.store"
-      , "    local.get $wU", "local.get $p2", "i32.load offset=8", "i32.store offset=4"
-      -- the email: p = load(e+16)
-      , "    local.get $e", "i32.load offset=16", "local.set $p2"
-      , "    local.get $wU", "local.get $p2", "i32.const 16", "i32.add", "i32.store"
-      , "    local.get $wU", "local.get $p2", "i32.load offset=8", "i32.store offset=4"
-      -- the tags: the NESTED string-list walk (the dst = $wU+24 — the
-      -- EMBEDDED mode: areaOff = 0)
-      ]
-      ++ listWalkWat ["local.get $e", "i32.load offset=24"] 0 8 "T" (strElemLower "T")
-    let areaTail :=
-      -- the ASYNC delivery (the listUser shape = watch-orders-specific,
-      -- and watch-orders = the async fn): call task-return(ptr, len) —
-      -- the flat results — then return 0 (the task = complete at the
-      -- first poll; the callback = Exit). The area (56..64) = still
-      -- filled (the lift's copy-out = the task-return's arg-based).
-      [ "i32.const 56", "local.get $arrU", "i32.store"
-      , "i32.const 60", "local.get $nU", "i32.store"
-      , "i32.const 56", "i32.const 60", "i32.load", "call $tr_watch-orders"
-      , "i32.const 0" ]
-    let body := String.intercalate "\n  " (variantBox
-      ++ [s!"call ${d.name.toString}", "local.set $lst"]
-      ++ listWalkWat ["local.get $lst"] 0 32 "U" userLower
-      -- the list's own (ptr, len) -> the area (the STATIC offsets)
-      ++ areaTail)
-    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $v i32)\n  (local $lst i32)\n  (local $curU i32)\n  (local $nU i32)\n  (local $arrU i32)\n  (local $wU i32)\n  (local $e i32)\n  (local $p2 i32)\n  (local $curT i32)\n  (local $nT i32)\n  (local $arrT i32)\n  (local $wT i32)\n  {body}\n)"
-  else if shape == "streamU64" then do
-    -- stream<u64> lowering (the ASYNC watch-counts): stream.new →
-    -- the i64 handle PAIR ((write << 32) | read — wasmtime's libcalls.rs
-    -- ResourcePair packing); the List-UInt64 walk lowers each element
-    -- (the cons head = a BOX ptr @cur+8, the u64 @box+8) into a
-    -- contiguous u64 array; stream.write(wr, arr, n) delivers the items
-    -- (the ASYNC-lowered write: the sync form = the more-async-builtins
-    -- feature, not enabled); task-return(rd) hands the host the READ
-    -- end; drop-writable(wr) closes ours; return 0 (the callback =
-    -- Exit — the items = already buffered).
-    -- the STREAM's delivery dance: the guest CANNOT write before the
-    -- host's consumer exists (a pending write at the task's teardown =
-    -- the items lost). So: the abi fn = task-return(read) + Yield,
-    -- stashing (wr, arr, n) in globals; the HOST registers the consumer
-    -- (the call returns the stream); the writer's resumption event
-    -- fires the CALLBACK — which is the WRITE SITE: write into the
-    -- waiting consumer, then Exit.
-    let sigParams := String.intercalate " "
-      (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
-      ++ " (result i32)"
-    let pass := d.params.toList.map fun p => s!"local.get ${p.binderName.toString}"
-    -- the element: the cons head = the boxed u64 — deref the box
-    let u64Elem : List String :=
-      [ "    local.get $w", "local.get $cur", "i32.load offset=8", "i64.load offset=8", "i64.store" ]
-    let body := String.intercalate "\n  " (pass
-      ++ [s!"call ${d.name.toString}", "local.set $lst"
-        , "call $sn_watch-counts", "local.set $h"
-        , "local.get $h", "i32.wrap_i64", "local.set $rd"
-        , "local.get $h", "i64.const 32", "i64.shr_u", "i32.wrap_i64", "local.set $wr"]
-      ++ listWalkWat ["local.get $lst"] 0 8 "" u64Elem
-      ++ [ -- the stash + the yield (the callback = the write site)
-           "local.get $wr", "global.set $wr_g"
-        , "local.get $arr", "global.set $arr_g"
-        , "local.get $n", "global.set $n_g"
-        , "local.get $rd", "call $tr_watch-counts"
-        , "i32.const 1" ])
-    pure s!"(func ${d.name.toString}_abi {sigParams}\n  (local $h i64)\n  (local $rd i32)\n  (local $wr i32)\n  (local $lst i32)\n  (local $cur i32)\n  (local $n i32)\n  (local $arr i32)\n  (local $w i32)\n  {body}\n)"
-  else do
-  let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
-  let resultTy := resultTyOf code
-  let mut flats : List String := []
-  let mut body : List String := []
-  let mut boxLocals : Array String := #[]
-  let mut pIdx := 0
-  for p in d.params do
-    let flat := paramWasmTy p
-    if p.borrow then
-      -- box the flat arg (scalar op: i32 for Bool/u8/u32, else i64).
-      -- The TAG byte = the flat value for i32 params (bools are CASES'd
-      -- — the impl reads the tag); i64 params get tag 0.
-      let op := if flat == "i64" then "i64.store" else "i32.store"
-      let pName := s!"b{pIdx}"
-      body := body ++ [s!"i32.const 16", "call $alloc", s!"local.set ${pName}",
-        s!"local.get ${pName}", s!"local.get ${p.binderName.toString}", s!"{op} offset=8",
-        s!"local.get ${pName}"]
-      if flat == "i32" then
-        body := body ++ [s!"local.get ${p.binderName.toString}", "i32.store8 offset=4"]
+    let variantBox : List Wat.Instr :=
+      [ .i32const 16, .call "alloc", .localset "v"
+      , .localget "v", .localget "into_disc", .mem .i32store8 4 none
+      , .localget "v", .localget "into_payload", .mem .i64store 8 none
+      , .localget "v" ]
+    -- the ASYNC delivery (the listUser shape = watch-orders-specific,
+    -- and watch-orders = the async fn): call task-return(ptr, len) —
+    -- the flat results — then return 0 (the task = complete at the
+    -- first poll; the callback = Exit). The area (56..64) = still
+    -- filled (the lift's copy-out = the task-return's arg-based).
+    let areaTail : List Wat.Instr :=
+      [ .i32const 56, .localget "arrU", .mem .i32store 0 none
+      , .i32const 60, .localget "nU", .mem .i32store 0 none
+      , .i32const 56, .i32const 60, .mem .i32load 0 none, .call s!"tr_{kebab}"
+      , .i32const 0 ]
+    let body : List Wat.Instr :=
+      variantBox
+      ++ [ .call d.name.toString, .localset "lst" ]
+      ++ listWalk [.localget "lst"] 0 userSize "U" userElemLower
+      ++ areaTail
+    { name := s!"{d.name.toString}_abi"
+      params := [ { name := some "into_disc", ty := "i32" }
+                , { name := some "into_payload", ty := "i64" } ]
+      result := some "i32"
+      locals := [("v", "i32"), ("lst", "i32"), ("curU", "i32"), ("nU", "i32")
+                 , ("arrU", "i32"), ("wU", "i32"), ("e", "i32"), ("p2", "i32")
+                 , ("curT", "i32"), ("nT", "i32"), ("arrT", "i32"), ("wT", "i32")]
+      body }
+  else if shape == "streamU64" || shape == "streamUser" then
+    -- STREAM lowering (the ASYNC watch-counts/watch-users): stream.new
+    -- → the i64 handle PAIR ((write << 32) | read — wasmtime's
+    -- libcalls.rs ResourcePair packing); the List walk lowers each
+    -- element into a contiguous item array (the u64: the cons head = a
+    -- BOX ptr @cur+8, the value @box+8 → 8 bytes; the user: the
+    -- 32-byte flat record — the NESTED tags walk embedded); the
+    -- stream.write = the ASYNC-lowered name (the sync form = the
+    -- more-async-builtins feature, not enabled). THE DELIVERY DANCE:
+    -- the abi fn = task-return(read) + stash (wr, arr, n) in the
+    -- GLOBALS + return 1 (YIELD — the abi fn's result = the callback
+    -- code; 0 = Exit tears the task down and the in-flight write's
+    -- items are LOST); the HOST registers the consumer post-call (the
+    -- stream = the returned result); the writer's resumption event
+    -- fires the CALLBACK = the WRITE SITE: write into the waiting
+    -- consumer, then Exit.
+    -- the per-element lowering + the walk's shape, by the payload
+    let (elemSize, elemLower, walkSuffix, extraLocals) :=
+      if shape == "streamU64" then
+        (8,
+         [ .localget "w", .localget "cur", .mem .i32load 8 none
+         , .mem .i64load 8 none, .mem .i64store 0 none ],
+         "", [])
       else
-        body := body ++ ["i32.const 0", "i32.store8 offset=4"]
-      body := body ++ [s!"local.get ${pName}"]
-      boxLocals := boxLocals.push pName
-    else
-      body := body ++ [s!"local.get ${p.binderName.toString}"]
-    flats := flats ++ [flat]
-    pIdx := pIdx + 1
-  body := body ++ (match resultTy with
-    | some _ => [s!"call ${d.name.toString}"]
-    | none => [s!"call ${d.name.toString}", "i64.load offset=8"])
-  let sigParams := String.intercalate " "
-    (d.params.toList.map fun p => s!"(param ${p.binderName.toString} {paramWasmTy p})")
-  let resDecl := match resultTy with
-    | some t => s!" (result {t})"
-    | none => " (result i64)"
-  let locals := boxLocals.toList.map fun n => s!"  (local ${n} i32)"
-  pure <| s!"(func ${d.name.toString}_abi {sigParams}{resDecl}\n" ++
-    String.intercalate "\n  " locals ++ "\n  " ++
-    String.intercalate "\n  " body ++ "\n)"
+        -- the SAME proved layout as watch-orders' listUser (the element
+        -- encoding = the canonical record — userLayout)
+        (32, userElemLower, "U",
+         [ ("curU", "i32"), ("nU", "i32"), ("arrU", "i32"), ("wU", "i32")
+         , ("e", "i32"), ("p2", "i32"), ("curT", "i32"), ("nT", "i32")
+         , ("arrT", "i32"), ("wT", "i32") ])
+    let arrN := if shape == "streamU64" then "arr" else "arrU"
+    let nN := if shape == "streamU64" then "n" else "nU"
+    let body : List Wat.Instr :=
+      pass ++ [ .call d.name.toString, .localset "lst"
+      , .call s!"sn_{kebab}", .localset "h"
+      , .localget "h", .op .i32wrapi64, .localset "rd"
+      , .localget "h", .i64const 32, .op .i64shru, .op .i32wrapi64, .localset "wr" ]
+      ++ listWalk [.localget "lst"] 0 elemSize walkSuffix elemLower
+      ++ [ -- the stash + the yield (the callback = the write site)
+           .localget "wr", .globalset "wr_g"
+        , .localget arrN, .globalset "arr_g"
+        , .localget nN, .globalset "n_g"
+        , .localget "rd", .call s!"tr_{kebab}"
+        , .i32const 1 ]
+    { name := s!"{d.name.toString}_abi"
+      params := paramsOf, result := some "i32"
+      locals := [("h", "i64"), ("rd", "i32"), ("wr", "i32"), ("lst", "i32")
+                 , ("cur", "i32"), ("n", "i32"), ("arr", "i32"), ("w", "i32")]
+                 ++ extraLocals
+      body }
+  else
+    -- the GENERAL prologue: pass through / re-box the flat params, call
+    -- the impl, return its result (the object case unboxes the flat i64
+    -- from the box's slot @8). TYPED (the adapters' minimum).
+    let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
+    let resultTy := resultTyOf code
+    let mut body : List Wat.Instr := []
+    let mut boxLocals : Array String := #[]
+    let mut pIdx := 0
+    for p in d.params do
+      let flat := paramWasmTy p
+      if p.borrow then
+        -- box the flat arg (scalar op: i32 for Bool/u8/u32, else i64).
+        -- The TAG byte = the flat value for i32 params (bools are CASES'd
+        -- — the impl reads the tag); i64 params get tag 0.
+        let stOp : Wat.MemOp := if flat == "i64" then .i64store else .i32store
+        let pName := s!"b{pIdx}"
+        body := body ++ [ .i32const 16, .call "alloc", .localset pName
+          , .localget pName, .localget p.binderName.toString, .mem stOp 8 none
+          , .localget pName ]
+        if flat == "i32" then
+          body := body ++ [ .localget p.binderName.toString, .mem .i32store8 4 none ]
+        else
+          body := body ++ [ .i32const 0, .mem .i32store8 4 none ]
+        body := body ++ [ .localget pName ]
+        boxLocals := boxLocals.push pName
+      else
+        body := body ++ [ .localget p.binderName.toString ]
+      pIdx := pIdx + 1
+    body := body ++ (match resultTy with
+      | some _ => [ .call d.name.toString ]
+      | none => [ .call d.name.toString, .mem .i64load 8 none ])
+    { name := s!"{d.name.toString}_abi"
+      params := paramsOf, result := some (resultTy.getD "i64")
+      locals := boxLocals.toList.map fun n => (n, "i32")
+      body }
 
 /-- Emit the module: runtime + funcs + trampolines + table + adapters +
 exports. The state THREADS across decls (tramps accumulate). -/
@@ -794,7 +1018,7 @@ def emitModule (decls : List (Decl .impure))
       let rt := match d.value with | .code c => resultTyOf c | .extern .. => none
       m.insert d.name (d.params.map (fun p => paramWasmTy p), rt.getD "i32")) {}
   let mut st : S := { sigs := sigs }
-  let mut funcs : List String := []
+  let mut funcs : List Wat.Func := []
   for d in decls do
     let (f, s2) ← emitDecl d |>.run st
     st := { s2 with out := #[], locals := #[] }
@@ -808,61 +1032,58 @@ def emitModule (decls : List (Decl .impure))
   -- The FRESH count = the target's arity − nA; every arg (captured or
   -- fresh) is a boxed object; the target's param types decide unbox-vs-
   -- forward; a raw i64 result gets boxed.
-  let mut trampFuncs : List String := []
+  let mut trampFuncs : List Wat.Func := []
   let mut elem : List String := []
   for (fn, nA) in dedupTramps st.tramps.toList do
     let name := s!"pap_{fn.toString}_{nA}"
     let (paramTys, resTy) := sigs[fn]?.getD (#[], "i32")
     let nFresh := paramTys.size - nA
     let boxed := fn.toString.endsWith "_boxed" || fn.toString.endsWith "_closed"
-    let mut body : List String := []
+    let mut body : List Wat.Instr := []
     let mut off := 16
     if boxed then
       -- boxed target: forward every arg as-is (objects in, object out)
       for _ in [0:nA] do
-        body := body ++ [s!"local.get $c", s!"i32.load offset={off}"]
+        body := body ++ [ .localget "c", .mem .i32load off none ]
         off := off + 8
       for i in [0:nFresh] do
-        body := body ++ [s!"local.get $x{i}"]
-      body := body ++ [s!"call ${fn.toString}"]
+        body := body ++ [ .localget s!"x{i}" ]
+      body := body ++ [ .call fn.toString ]
     else
       -- raw scalar target: unbox captured + fresh args, call, box result
       for _i in [0:nA] do
-        body := body ++ [s!"local.get $c", s!"i32.load offset={off}", "i64.load offset=8"]
+        body := body ++ [ .localget "c", .mem .i32load off none, .mem .i64load 8 none ]
         off := off + 8
       for i in [0:nFresh] do
-        body := body ++ [s!"local.get $x{i}", "i64.load offset=8"]
-      body := body ++ [s!"call ${fn.toString}", "local.set $r", "i32.const 16",
-        "call $alloc", "local.tee $p", "local.get $r", "i64.store offset=8", "local.get $p"]
-    let paramDecls := String.intercalate " "
-      (["(param $c i32)"] ++ (List.range nFresh).map fun i => s!"(param $x{i} i32)")
-    let f :=
-      if resTy == "i64" then
-        s!"(func ${name} {paramDecls} (result i32)\n" ++
-          String.intercalate "\n  " ["  (local $r i64)", "  (local $p i32)"] ++ "\n  " ++
-          String.intercalate "\n  " body ++ "\n)"
-      else
-        s!"(func ${name} {paramDecls} (result i32)\n  " ++
-          String.intercalate "\n  " body ++ "\n)"
-    trampFuncs := trampFuncs ++ [f]
-    elem := elem ++ [s!"${name}"]
+        body := body ++ [ .localget s!"x{i}", .mem .i64load 8 none ]
+      body := body ++ [ .call fn.toString, .localset "r", .i32const 16
+        , .call "alloc", .localtee "p", .localget "r", .mem .i64store 8 none
+        , .localget "p" ]
+    let params : List Wat.Param :=
+      { name := some "c", ty := "i32" } ::
+        (List.range nFresh).map fun i => { name := some s!"x{i}", ty := "i32" }
+    let locals : List (String × String) :=
+      if resTy == "i64" then [("r", "i64"), ("p", "i32")] else []
+    trampFuncs := trampFuncs ++
+      [ { name, params, result := some "i32", locals, body } ]
+    elem := elem ++ [name]
   -- the call_indirect TYPE per distinct fresh count (all params i32:
   -- the closure ptr + boxed fresh args — the result is always a box)
   let mut freshCounts : List Nat := []
   for (fn, nA) in dedupTramps st.tramps.toList do
     let nF := (sigs[fn]?.getD (#[], "i32")).1.size - nA
     if !freshCounts.contains nF then freshCounts := freshCounts ++ [nF]
-  let sigTypes := freshCounts.map fun nF =>
-    let ps := String.intercalate " " ((List.range (nF + 1)).map fun _ => "(param i32)")
-    s!"  (type $sig_{nF}box (func {ps} (result i32)))"
+  let sigTypes : List Wat.Item := freshCounts.map fun nF =>
+    .ty { name := s!"sig_{nF}box"
+        , params := (List.range (nF + 1)).map fun _ => { name := none, ty := "i32" }
+        , result := some "i32" }
   -- canonical-ABI adapters for the export targets
-  let mut abiFuncs : List String := []
+  let mut abiFuncs : List Wat.Func := []
   for (kebab, n) in exportTargets do
     for d in decls do
       if d.name.toString == n.toString then
         let shape := if stringResult? n then "string" else adapterShape? kebab |>.getD "default"
-        let (a, _) ← emitAdapter d shape |>.run st
-        abiFuncs := abiFuncs ++ [a]
+        abiFuncs := abiFuncs ++ [emitAdapter d shape kebab]
   -- DECISION (the post-return functions): wit-bindgen's modules carry
   -- `cabi_post_<name>` (the dealloc hook the canon lift calls after
   -- copying the results). OURS don't — the adapters use the STATIC
@@ -891,17 +1112,25 @@ def emitModule (decls : List (Decl .impure))
   -- async encoder), the callback = `[callback][async-lift]{name}`. The callback's sig =
   -- (i32 ordinal, i32 handle, i32 result) -> i32 (the CallbackCode:
   -- Exit=0); our sync-computable bodies = Exit on the first poll.
-  let cbFuncs := asyncTargets.map fun (kebab, _) =>
+  let cbFuncs : List Wat.Func := asyncTargets.map fun (kebab, _) =>
+    let sig3 : List Wat.Param :=
+      [{ name := none, ty := "i32" }, { name := none, ty := "i32" }, { name := none, ty := "i32" }]
     match adapterShape? kebab with
-    | some "streamU64" =>
+    | some "streamU64" | some "streamUser" =>
       -- the write SITE: the writer's resumption (the reader = ready)
       -- re-enters here; write the stashed (wr, arr, n) into the
       -- waiting consumer, then Exit (0)
-      s!"  (func $\"[callback][async-lift]{kebab}\" (param i32 i32 i32) (result i32)\n     global.get $wr_g\n     global.get $arr_g\n     global.get $n_g\n     call $sw_{kebab}\n     drop\n     i32.const 0)"
+      { name := s!"[callback][async-lift]{kebab}"
+        params := sig3, result := some "i32", locals := []
+        body := [ .globalget "wr_g", .globalget "arr_g", .globalget "n_g"
+                , .call s!"sw_{kebab}", .drop, .i32const 0 ] }
     | _ =>
-      s!"  (func $\"[callback][async-lift]{kebab}\" (param i32 i32 i32) (result i32) i32.const 0)"
-  let cbExports := asyncTargets.map fun (kebab, _) =>
-    s!"  (export \"[callback][async-lift]{kebab}\" (func $\"[callback][async-lift]{kebab}\"))"
+      { name := s!"[callback][async-lift]{kebab}"
+        params := sig3, result := some "i32", locals := []
+        body := [ .i32const 0 ] }
+  let cbExports : List Wat.Item := asyncTargets.map fun (kebab, _) =>
+    .export { name := s!"[callback][async-lift]{kebab}"
+            , desc := .func s!"[callback][async-lift]{kebab}" }
   -- the task intrinsics' imports (the async lift requires them — see
   -- the asyncFns' note); the names = the bare kebab (the world-level
   -- key) for both the task-return and the async-lift pair
@@ -912,24 +1141,45 @@ def emitModule (decls : List (Decl .impure))
   -- (the write = the ASYNC-lowered name — the sync form needs the
   -- more-async-builtins feature). The stream TYPE index (0) = the
   -- payload's position in the fn's futures-and-streams list.
-  let waitables : List String :=
-    [ "  (import \"$root\" \"[waitable-set-poll]\" (func (param i32 i32) (result i32)))"
-    , "  (import \"$root\" \"[waitable-set-new]\" (func (result i32)))"
-    , "  (import \"$root\" \"[waitable-join]\" (func (param i32 i32)))"
-    , "  (import \"$root\" \"[context-get-0]\" (func (result i32)))"
-    , "  (import \"$root\" \"[context-set-0]\" (func (param i32)))"
-    , "  (import \"[export]$root\" \"[task-cancel]\" (func))"
-    , "  (import \"$root\" \"[waitable-set-drop]\" (func (param i32)))" ]
-  let perExport : String → List String := fun kebab =>
+  let waitables : List Wat.Item :=
+    [ .imp { module := "$root", name := "[waitable-set-poll]", id := none
+           , params := [{ name := none, ty := "i32" }, { name := none, ty := "i32" }]
+           , result := some "i32" }
+    , .imp { module := "$root", name := "[waitable-set-new]", id := none
+           , params := [], result := some "i32" }
+    , .imp { module := "$root", name := "[waitable-join]", id := none
+           , params := [{ name := none, ty := "i32" }, { name := none, ty := "i32" }]
+           , result := none }
+    , .imp { module := "$root", name := "[context-get-0]", id := none
+           , params := [], result := some "i32" }
+    , .imp { module := "$root", name := "[context-set-0]", id := none
+           , params := [{ name := none, ty := "i32" }], result := none }
+    , .imp { module := "[export]$root", name := "[task-cancel]", id := none
+           , params := [], result := none }
+    , .imp { module := "$root", name := "[waitable-set-drop]", id := none
+           , params := [{ name := none, ty := "i32" }], result := none } ]
+  let perExport : String → List Wat.Item := fun kebab =>
     match adapterShape? kebab with
-    | some "streamU64" =>
-      [ s!"  (import \"[export]$root\" \"[task-return]{kebab}\" (func $tr_{kebab} (param i32)))"
-      , s!"  (import \"[export]$root\" \"[stream-new-0]{kebab}\" (func $sn_{kebab} (result i64)))"
-      , s!"  (import \"[export]$root\" \"[async-lower][stream-write-0]{kebab}\" (func $sw_{kebab} (param i32 i32 i32) (result i32)))"
-      , s!"  (import \"[export]$root\" \"[stream-drop-writable-0]{kebab}\" (func $sdw_{kebab} (param i32)))" ]
+    | some "streamU64" | some "streamUser" =>
+      [ .imp { module := "[export]$root", name := s!"[task-return]{kebab}"
+             , id := some s!"tr_{kebab}", params := [{ name := none, ty := "i32" }]
+             , result := none }
+      , .imp { module := "[export]$root", name := s!"[stream-new-0]{kebab}"
+             , id := some s!"sn_{kebab}", params := [], result := some "i64" }
+      , .imp { module := "[export]$root", name := s!"[async-lower][stream-write-0]{kebab}"
+             , id := some s!"sw_{kebab}"
+             , params := [{ name := none, ty := "i32" }, { name := none, ty := "i32" }
+                        , { name := none, ty := "i32" }]
+             , result := some "i32" }
+      , .imp { module := "[export]$root", name := s!"[stream-drop-writable-0]{kebab}"
+             , id := some s!"sdw_{kebab}", params := [{ name := none, ty := "i32" }]
+             , result := none } ]
     | _ =>
-      [ s!"  (import \"[export]$root\" \"[task-return]{kebab}\" (func $tr_{kebab} (param i32 i32)))" ]
-  let asyncImports :=
+      [ .imp { module := "[export]$root", name := s!"[task-return]{kebab}"
+             , id := some s!"tr_{kebab}"
+             , params := [{ name := none, ty := "i32" }, { name := none, ty := "i32" }]
+             , result := none } ]
+  let asyncImports : List Wat.Item :=
     if asyncTargets.isEmpty then []
     else waitables ++ asyncTargets.flatMap fun (kebab, _) => perExport kebab
   -- the canon lift's indirect calls go through the table + the async
@@ -945,32 +1195,51 @@ def emitModule (decls : List (Decl .impure))
   -- ALL exports = the world-level (the async = the [async-lift]-prefixed
   -- bare name; the interface-split = the wit-component 47's fused
   -- adapter mismatch — see the asyncFns' note + the plan doc's 1b).
-  let exports := exportTargets.map fun (kebab, n) =>
-    if asyncFns.contains kebab
-    then s!"  (export \"[async-lift]{kebab}\" (func ${n.toString}_abi))"
-    else s!"  (export \"{kebab}\" (func ${n.toString}_abi))"
-  let sp := " "
-  let table := if !sigTypes.isEmpty then
+  let exports : List Wat.Item := exportTargets.map fun (kebab, n) =>
+    .export { name := if asyncFns.contains kebab then s!"[async-lift]{kebab}" else kebab
+            , desc := .func s!"{n.toString}_abi" }
+  let table : List Wat.Item := if !sigTypes.isEmpty then
     sigTypes ++
-    [s!"  (table {st.tramps.size} funcref)",
-     s!"  (elem (i32.const 0) {String.intercalate sp elem})"]
+    [ .table { size := st.tramps.size, elemTy := "funcref" }
+    , .elem { offset := .i32const 0, funcs := elem } ]
   else []
   -- the canon lift reads guest memory (string/list results are copied
   -- out of it) — the memory MUST be exported under the canonical name
-  let memExport := ["  (export \"memory\" (memory 0))"]
-  let streamGlobals := if asyncFns.iter.any (fun k => adapterShape? k == some "streamU64")
-    then ["  (global $wr_g (mut i32) (i32.const 0))"
-        , "  (global $arr_g (mut i32) (i32.const 0))"
-        , "  (global $n_g (mut i32) (i32.const 0))"]
+  let memExport : List Wat.Item := [ .export { name := "memory", desc := .memory 0 } ]
+  let isStream : String → Bool := fun k =>
+    match adapterShape? k with | some "streamU64" | some "streamUser" => true | _ => false
+  let streamGlobals : List Wat.Item := if asyncFns.iter.any isStream
+    then [ .global { name := "wr_g", ty := "i32", isMut := true, init := .i32const 0 }
+         , .global { name := "arr_g", ty := "i32", isMut := true, init := .i32const 0 }
+         , .global { name := "n_g", ty := "i32", isMut := true, init := .i32const 0 } ]
     else []
-  let asyncEnv := if asyncFns.isEmpty then []
+  let cabiRealloc : Wat.Func :=
+    { name := "cabi_realloc"
+      params := (List.range 4).map fun _ => { name := none, ty := "i32" }
+      result := some "i32", locals := []
+      body := [ .localget "3", .call "alloc" ] }
+  let asyncEnv : List Wat.Item := if asyncFns.isEmpty then []
     else asyncImports
       ++ streamGlobals
-      ++ ["  (func $cabi_realloc (param i32 i32 i32 i32) (result i32)\n     local.get 3\n     call $alloc)"
-        , "  (export \"cabi_realloc\" (func $cabi_realloc))"]
+      ++ [ .func cabiRealloc
+         , .export { name := "cabi_realloc", desc := .func "cabi_realloc" } ]
       ++ (if st.tramps.isEmpty
-          then ["  (table 4 funcref)", "  (export \"__indirect_function_table\" (table 0))"]
-          else ["  (export \"__indirect_function_table\" (table 0))"])
-  pure <| String.intercalate "\n" (("(module" :: (asyncEnv ++ ["  ;;RUNTIME-SPLICE", "  (memory 1)"] ++ funcs ++ abiFuncs ++ cbFuncs ++ trampFuncs ++ table) ++ exports ++ cbExports ++ memExport ++ [")"]))
+          then [ .table { size := 4, elemTy := "funcref" }
+               , .export { name := "__indirect_function_table", desc := .table 0 } ]
+          else [ .export { name := "__indirect_function_table", desc := .table 0 } ])
+  -- THE TYPED MODULE: rendered by Wat.Module.render (Std.Format). The
+  -- splice marker = the ONE module-level raw (GenMain replaces its exact
+  -- bytes with runtime.wat).
+  let mod : Wat.Module :=
+    { start := none
+      items := asyncEnv ++ [ .raw "  ;;RUNTIME-SPLICE", .memory 1 ]
+        ++ (funcs.map Wat.Item.func) ++ (abiFuncs.map Wat.Item.func)
+        ++ (cbFuncs.map Wat.Item.func) ++ (trampFuncs.map Wat.Item.func)
+        ++ table ++ exports ++ cbExports ++ memExport }
+  -- the outer StateT state = the mut var's final value (the decl loop
+  -- runs in INNER .run's — without this put, StateT.run returns the
+  -- initial {}). GenMain reads rawCount from it.
+  modify (fun _ => st)
+  pure mod.render
 
 end WasmBackend
