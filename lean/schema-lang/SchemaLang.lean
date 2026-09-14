@@ -27,5 +27,6 @@ import SchemaLang.Meta.Derive
 import SchemaLang.Invariant
 import SchemaLang.Emit.Invariant
 import SchemaLang.Update
+import SchemaLang.TickCascade
 import SchemaLang.Emit.Update
 import SchemaLang.Session

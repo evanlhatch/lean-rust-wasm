@@ -55,6 +55,19 @@ handler absorbs `0` (restore the frame-ENTRY stack, continue — or, for
 to `n` for the parent. Uncaught at the function's top level = the
 function-return signal, interpreted by the (unmodeled) call layer.
 
+THE LATER LAYERS (this file, below the calls layer): the FRAMES layer
+(v2 of calls — the frame MACHINE `Frame`/`pushFrame`/`popFrame`/
+`runToReturn`/`callProtocol`, proven to compute the same result as the
+big-step composition `call_split` — the machine the emitter's
+`call_indirect` protocol assumes; frame separation structural, the
+wrong-return-address negative control pinned) and the ALLOCATOR layer
+(the EXECUTABLE model that is the SPEC of the spliced `runtime.wat`:
+`$alloc` bump+freelist, `$rc_inc`/`$rc_dec` — with the no-alias /
+freelist-return / free-exactly-once theorems over `Inv`, induction on
+the op list, plus the double-free and use-after-free negative
+controls). The allocator model's deltas from the splice are documented
+in its section header (one freelist, granular sizes, no OOM path).
+
 Relation to Wat.Instr: `Sem.Instr` mirrors the flat subset 1:1
 (`i32const`↔`i32const`, `block`/`loop` drop the label — labels are
 syntactic, `localget n` takes the resolved index where `Wat.localget`
@@ -1633,5 +1646,804 @@ open Calls
         | .ok s' => s'.stack == [.i64 42] | .error _ => false) = true
 
 end CallTests
+
+/-! ## The frames layer (v2) — the call MACHINE over call frames
+
+THE SCOPE DECISION (the FRAMES lane): the calls layer above is v1 —
+CALLS AS FUNCTION-COMPOSITION (`call_split`): no frames, the callee's
+params bound into the caller's locals-map (the pairwise-distinctness
+hypotheses were the frame separation's stand-in). This section lifts
+the model to FRAMES: a call FREEZES the caller — its locals, its
+operand stack (args popped), and its remaining code (the return
+address, `retTo`) — into a `Frame`; the callee runs in its own frame;
+the return pops and hands the result to the restored caller.
+
+THE FRAME THEOREM (`callProtocol_agrees` + the composition corollary
+`callProtocol_is_call_split`): the machine's call protocol — the
+caller's flat prep, `pushFrame`, `runToReturn`, the pop — computes the
+SAME result as the big-step composition (`callExecFuel` / `call_split`):
+the callee's run inside the machine IS the big-step's sub-exec (same
+`bindArgs` state, same body, same fuel). The machine the emitter's
+`call_indirect` protocol assumes IS the composition semantics. Frame
+separation is now STRUCTURAL (`frame_demo_separation`): the caller's
+locals survive the call even where the callee's params overlap them.
+
+HONEST LIMITS: DIRECT calls only (no funcref table — the model is the
+PROTOCOL the `call_indirect` dispatch drives); one result value per
+frame (the fragment's return convention — a frame returning NO value
+halts the machine at `popFrame`'s `none`); the calls are the DRIVER
+API (`pushFrame`), not `Instr`s — an `Instr.call` would break the
+statement-frozen `checkStack`/`exec_typed` exhaustiveness; the
+agreement theorems are pinned on the NON-RECURSIVE fragment (one call
+per protocol run — `runToReturn` itself is frame-stack-general). The
+protocol's caller contract: the args already pushed, stack EXACTLY
+`args.reverse` (the emitter's calls happen with an empty operand
+stack — everything lives in locals). Fuel artifact: every phase entry
+and every pop consumes one unit, so the protocol runs at the
+composition's sub-exec budget + 1.
+-/
+
+namespace Calls
+
+/-- One call frame: the FROZEN caller. On the pop the machine restores
+    exactly these three things — the frame separation IS this record. -/
+structure Frame where
+  /-- The caller's locals (the callee's param bindings live in its OWN
+      frame, never here). -/
+  locals : Nat → Val
+  /-- The caller's remaining code — the RETURN ADDRESS (what the
+      machine resumes at the pop). -/
+  retTo : List Instr
+  /-- The caller's operand stack at the call, args popped (the result
+      is pushed on top at the pop). -/
+  retStack : List Val
+
+/-- The machine state: the frame stack, the CURRENT frame's `State`
+    (its locals + operand stack; the MEMORY is shared — it lives in
+    `cur` and flows forward through the pops, the callee's stores
+    persist), and the current frame's remaining code. -/
+structure Mach where
+  frames : List Frame
+  cur : State
+  code : List Instr
+
+/-- The machine's flat phase: run the current code to exhaustion (the
+    frame's return point). One fuel unit per instruction (`execList`'s
+    budget). -/
+def mRun (fuel : Nat) (m : Mach) : Except Err Mach :=
+  match execList fuel m.cur m.code with
+  | .ok s' => .ok { m with cur := s', code := [] }
+  | .error e => .error e
+
+/-- `pushFrame` — THE CALL (arity-guarded, the big-step guard
+    mirrored): the args are popped off the current stack (bottom
+    removal — under the entry contract the stack IS `args.reverse`) and
+    bound to the callee's param locals (param i = the i-th pushed —
+    `bindArgs`'s map); the callee starts with an EMPTY operand stack;
+    the caller freezes into a `Frame` with `retTo` = its remaining
+    code. Wrong arity = the trap. -/
+def pushFrame (f : Fn) (args : List Val) (retTo : List Instr) (m : Mach) :
+    Except Err Mach :=
+  if args.length = f.params then
+    .ok { frames := Frame.mk m.cur.locals retTo
+            (dropBottom args.length m.cur.stack) :: m.frames
+        , cur := { locals := fun n => args.getD n (m.cur.locals n)
+                 , stack := []
+                 , mem := m.cur.mem, memSize := m.cur.memSize }
+        , code := f.body }
+  else .error .trap
+
+/-- `popFrame` — THE RETURN: the current frame's stack TOP is the
+    result (the return convention); the frame pops, the frozen caller
+    resumes — its locals, its stack with the result pushed, its
+    `retTo` as the code. The memory stays the callee's (shared, stores
+    persist). A frame returning NO value, or no frame to pop (the
+    top-level return), is `none`. -/
+def popFrame (m : Mach) : Option Mach :=
+  match m.frames with
+  | [] => none
+  | fr :: rest =>
+      match m.cur.stack with
+      | [] => none
+      | r :: rs =>
+          some { frames := rest
+               , cur := { locals := fr.locals, stack := r :: fr.retStack
+                        , mem := m.cur.mem, memSize := m.cur.memSize }
+               , code := fr.retTo }
+
+/-- `runToReturn` — run the machine: flat phase, pop, repeat, until
+    nothing is left to pop (the program's result). Every phase entry
+    and every pop consumes one fuel unit. Errors propagate: a
+    branch/trap in ANY frame kills the machine (branches do not cross
+    calls in this fragment — the layered-err note at the top). -/
+def runToReturn : Nat → Mach → Except Err Mach
+  | 0, _ => .error .outOfFuel
+  | fuel + 1, m =>
+      match mRun fuel m with
+      | .error e => .error e
+      | .ok done =>
+          match popFrame done with
+          | some m' => runToReturn fuel m'
+          | none => .ok done
+
+/-- THE CALL PROTOCOL — what the emitter's `call_indirect` sequence
+    assumes: the caller's flat prep has ALREADY pushed the args (v1's
+    `pushArgs_exec`; the entry contract `s.stack = args.reverse` — the
+    caller's operand stack is empty at the call), the machine frames
+    the call (`pushFrame`, the caller's remaining code `rest` = the
+    return address), and `runToReturn` runs the callee to its return
+    and pops back into the caller at `retTo`. -/
+def callProtocol (fuel : Nat) (f : Fn) (args : List Val) (s : State)
+    (rest : List Instr) : Except Err Mach :=
+  match pushFrame f args rest ⟨[], s, []⟩ with
+  | .error e => .error e
+  | .ok m2 => runToReturn fuel m2
+
+/-- The pop's contract (kernel-checked, definitional): popping a frame
+    resumes EXACTLY the frozen caller — its locals, its stack with the
+    result on top, its `retTo` as the code, the shared memory. -/
+theorem popFrame_restores (fr : Frame) (rest : List Frame) (s : State) (r : Val)
+    (rs : List Val) :
+    ∃ m', popFrame ⟨fr :: rest, { s with stack := r :: rs }, []⟩ = some m'
+      ∧ m'.cur.locals = fr.locals
+      ∧ m'.cur.stack = r :: fr.retStack
+      ∧ m'.code = fr.retTo
+      ∧ m'.frames = rest := by
+  refine ⟨{ frames := rest
+          , cur := { locals := fr.locals, stack := r :: fr.retStack
+                   , mem := s.mem, memSize := s.memSize }
+          , code := fr.retTo }, ?_, ?_, ?_, ?_, ?_⟩
+  all_goals simp [popFrame]
+
+/-- THE FRAME THEOREM: the frame machine's call protocol computes the
+    SAME result as the big-step composition — same result value, same
+    errors. The callee's run inside the machine IS `callExecFuel`'s
+    sub-exec (`call_split`'s right side): same `bindArgs` state, same
+    body, same fuel. The machine the emitter's `call_indirect` protocol
+    assumes IS the composition semantics. The 2-slack fuel hypothesis
+    is the model artifact (the pop + the resume phase each consume a
+    unit). Kernel-checked. -/
+theorem callProtocol_agrees (fuel : Nat) (f : Fn) (args : List Val) (s : State)
+    (harity : args.length = f.params) (hs : s.stack = args.reverse)
+    (hf : 2 ≤ fuel) :
+    (match callProtocol (fuel + 1) f args s [] with
+     | .ok m => m.cur.stack.head?
+     | .error _ => none)
+      =
+    (match execList fuel (bindArgs args s) f.body with
+     | .ok s' => s'.stack.head?
+     | .error _ => none) := by
+  rw [callProtocol, pushFrame, if_pos harity]
+  dsimp only
+  -- the machine's bound state IS the big-step's bindArgs state
+  have hbound : ({ locals := fun n => args.getD n (s.locals n)
+                 , stack := ([] : List Val), mem := s.mem
+                 , memSize := s.memSize } : State)
+      = bindArgs args s := by
+    simp only [bindArgs, dropBottom, hs, List.reverse_reverse, List.drop_length,
+      List.reverse_nil]
+  rw [hbound]
+  simp only [runToReturn, mRun]
+  cases hx : execList fuel (bindArgs args s) f.body with
+  | error e => simp
+  | ok s'' =>
+      simp only [popFrame]
+      cases hs2 : s''.stack with
+      | nil => simp [hs2]
+      | cons r rs =>
+          cases fuel with
+          | zero => simp [execList] at hx
+          | succ k =>
+              cases k with
+              | zero => exact absurd hf (by omega)
+              | succ k' => simp [runToReturn, mRun, execList, popFrame, hs2]
+
+/-- THE COMPOSITION COROLLARY: the machine ≡ the FULL flat composition
+    (`call_split`'s left side — prep pushes, binding pops, callee body)
+    at the matched budget. The emitter's `call_indirect` protocol and
+    the composition semantics are the same machine. Kernel-checked. -/
+theorem callProtocol_is_call_split (fuel : Nat) (f : Fn) (args : List Val) (s : State)
+    (harity : args.length = f.params) (hs0 : s.stack = [])
+    (hf : 2 * args.length + 2 ≤ fuel) :
+    (match callProtocol (fuel - 2 * args.length + 1) f args
+        { s with stack := args.reverse } [] with
+     | .ok m => m.cur.stack.head?
+     | .error _ => none)
+      =
+    (match execList fuel s (pushArgs args ++ (popParams args.length ++ f.body)) with
+     | .ok s' => s'.stack.head?
+     | .error _ => none) := by
+  rw [call_split fuel f args s harity hs0 (by have := hf; omega)]
+  rw [callExecFuel, if_pos harity]
+  have h := callProtocol_agrees (fuel - 2 * args.length) f args
+    { s with stack := args.reverse } harity rfl (by have := hf; omega)
+  rw [h]
+  have hEq : bindArgs args { s with stack := args.reverse } = bindArgs args s := by
+    simp [bindArgs, dropBottom, hs0, List.drop_length]
+  rw [hEq]
+
+/-- The frame-demo caller state: the post-prep convention (the args
+    pushed — `callProtocol`'s entry contract), a live value in local 5
+    (the caller's own), locals 0/1 = 0 (the callee's params will bind
+    21/21 in ITS OWN frame). -/
+def frameDemo : State :=
+  ⟨fun n => if n = 5 then .i64 77 else .i64 0, [.i64 21, .i64 21],
+   fun _ => (0 : UInt8), 64⟩
+
+/-- THE FRAME-SEPARATION PIN (kernel-checked): after the protocol, the
+    caller's local 5 is INTACT (77) and local 0 is the CALLER's (0 —
+    the callee's param binding did not leak into the caller's frame),
+    with the result on the stack. The flat model's
+    pairwise-distinctness hypotheses, made structural. -/
+theorem frame_demo_separation :
+    (match callProtocol 50 adderFn [.i64 21, .i64 21] frameDemo [] with
+     | .ok m => (m.cur.locals 5, m.cur.locals 0, m.cur.stack)
+     | .error _ => (.i64 0, .i64 0, []))
+      = (.i64 77, .i64 0, [.i64 42]) := by
+  decide
+
+/-! ### THE NEGATIVE CONTROL — the wrong return address -/
+
+/-- THE BUGGY VARIANT (the return-address corruption class): the frame
+    records the WRONG `retTo` — here the CALLEE's body as the caller's
+    return address (the "return into the callee" bug). -/
+def pushFrameBuggy (f : Fn) (args : List Val) (retTo : List Instr) (m : Mach) :
+    Except Err Mach :=
+  if args.length = f.params then
+    .ok { frames := Frame.mk m.cur.locals f.body
+            (dropBottom args.length m.cur.stack) :: m.frames
+        , cur := { locals := fun n => args.getD n (m.cur.locals n)
+                 , stack := []
+                 , mem := m.cur.mem, memSize := m.cur.memSize }
+        , code := f.body }
+  else .error .trap
+
+/-- The protocol over the corrupt `pushFrameBuggy`. -/
+def callProtocolBuggy (fuel : Nat) (f : Fn) (args : List Val) (s : State)
+    (rest : List Instr) : Except Err Mach :=
+  match pushFrameBuggy f args rest ⟨[], s, []⟩ with
+  | .error e => .error e
+  | .ok m2 => runToReturn fuel m2
+
+/-- THE WRONG-RETURN-ADDRESS NEGATIVE CONTROL: the corrupted frame
+    runs the callee body AGAIN after the pop (the wrong `retTo`) — the
+    final machine state disagrees with the correct protocol's (the
+    caller's stack grows instead of halting at the result). If a
+    regression corrupted the frame's return address, this theorem's
+    shape is the sabotage control. Kernel-checked (decide). -/
+theorem callProtocolBuggy_disagrees :
+    (match callProtocolBuggy 50 adderFn [.i64 21, .i64 21] frameDemo [] with
+     | .ok m => m.cur.stack | .error _ => [])
+      ≠
+    (match callProtocol 50 adderFn [.i64 21, .i64 21] frameDemo [] with
+     | .ok m => m.cur.stack | .error _ => []) := by
+  decide
+
+end Calls
+
+/-! ### The frames layer's tests — build-failing #guards -/
+
+section FrameTests
+
+open Calls
+
+-- 1. THE PROTOCOL PIN: the protocol computes the adder's 42.
+#guard (match callProtocol 50 adderFn [.i64 21, .i64 21] frameDemo [] with
+        | .ok m => m.cur.stack == [.i64 42] | .error _ => false) = true
+
+-- 2. THE ARITY GUARD, machine level: a 1-arg call to the 2-param
+--    adder TRAPS in pushFrame (the big-step guard, mirrored).
+#guard (match callProtocol 50 adderFn [.i64 21] frameDemo [] with
+        | .error .trap => true | _ => false) = true
+
+-- 3. THE CALLER RESUMES: rest = the post-call code runs with the
+--    RESULT on top (what the caller's `local.set` consumes).
+#guard (match callProtocol 50 adderFn [.i64 21, .i64 21] frameDemo
+          [.localset 6, .localget 6] with
+        | .ok m => m.cur.stack == [.i64 42] && m.cur.locals 6 == .i64 42
+        | .error _ => false) = true
+
+-- 4. TWO HOPS: the first call's result feeds the second (the frames
+--    stack and unwind — the run-paps shape).
+#guard (match callProtocol 50 adderFn [.i64 21, .i64 21] frameDemo [] with
+        | .ok m1 =>
+            match callProtocol 50 adderFn [.i64 42, .i64 8]
+                { m1.cur with stack := .i64 8 :: m1.cur.stack } [] with
+            | .ok m2 => m2.cur.stack == [.i64 50]
+            | .error _ => false
+        | .error _ => false) = true
+
+end FrameTests
+
+/-! ## The allocator layer — the SPEC of the spliced `runtime.wat`
+
+THE LOAD-BEARING SPLICE: GenMain splices `runtime.wat`'s funcs/globals
+into the emitted module (single module, no imports) — the allocator
+(`$alloc`: size-class freelist + bump) and the Perceus RC discipline
+(`$rc_inc`/`$rc_dec`: dec→0 pushes the block back to its class pool).
+This section is the EXECUTABLE MODEL = the SPEC of that splice (not a
+copy): alloc/free over a byte-array mem + freelist, with the
+THEOREM-LEVEL invariants the emitter's object code silently relies on:
+
+* `aAlloc_no_alias` — an alloc never returns a block overlapping a
+  LIVE object (the no-alias invariant), and it preserves `Inv`, so by
+  induction (`runOps_inv`) EVERY alloc in a run is alias-free against
+  the live set at its own moment;
+* `aFree_returns` — a freed block RETURNS to the freelist and leaves
+  the live set;
+* `aFree_twice_errors` / `rcDec_frees_once` — rc_dec to zero frees
+  EXACTLY ONCE: the second dec (or a bare double free) TRIPS.
+
+Kernel-checked (small closed list shapes — the induction goes
+through); the concrete traces are additionally #guard-witnessed below,
+with the double-free negative control.
+
+THE MODEL DELTAS (documented, honest): ONE freelist (the runtime's 6
+size classes are 6 independent copies of this ONE discipline — the
+class index is dropped); the freelist links live in the state (the
+runtime stores `next` in the block's first word, `p.next =
+freelist[cls]`); sizes are the GRANULAR (16-byte-class) sizes, the
+16-align rounding folded into the caller's size; the bump's
+`memory.grow` OOM path and the 48..256 canonical-ABI return-area
+reserve are the caller's initialization (unmodeled). `rc_dec` on an
+rc-0 block ERRORS here where the runtime's `i32.sub` would WRAP to
+0xFFFFFFFF and free nothing — the model is stricter, pinned as the
+use-after-free class.
+-/
+
+namespace Alloc
+
+/-- A block: (byte address, granular size). The runtime's blocks are
+    the object records `{ rc: u32 @0, tag: u8 @4, class: u8 @5,
+    fields @8 }` (runtime.wat's layout comment). -/
+abbrev Blk := Nat × Nat
+
+/-- Two blocks' byte ranges do not overlap. -/
+def disj (p q : Blk) : Prop := p.1 + p.2 ≤ q.1 ∨ q.1 + q.2 ≤ p.1
+
+theorem disj_symm {p q : Blk} (h : disj p q) : disj q p := by
+  cases h with
+  | inl h => exact Or.inr h
+  | inr h => exact Or.inl h
+
+/-- Pairwise range-disjointness over a block list. Deliberately NO
+    `p ≠ q` side condition: a nonempty block never overlaps itself, so
+    this definition also forbids duplicate entries and duplicate
+    addresses (under `Inv`'s positivity) — the discipline that keeps
+    the freelist honest. -/
+def pairwise : List Blk → Prop
+  | [] => True
+  | b :: bs => (∀ q, q ∈ bs → disj b q) ∧ pairwise bs
+
+/-- The allocator state — the SPEC of the spliced `runtime.wat`
+    (guestlang-owned pooled allocator + Perceus RC):
+    * `freeL` — the freelist (head = next pop; the runtime's 6 size
+      classes are 6 independent copies of this one discipline);
+    * `liveL` — the blocks handed out and not yet freed (the OBSERVER
+      the invariants need; the runtime has no such registry);
+    * `top` — `$heap` (the bump pointer; the 48..256 return-area
+      reserve is the caller's init, unmodeled);
+    * `mem` — the linear memory as a byte function; `mem blk` is the
+      block's rc cell — `$rc_inc`/`$rc_dec`'s target. -/
+structure ASt where
+  freeL : List Blk
+  liveL : List Blk
+  top : Nat
+  mem : Nat → UInt8
+
+/-- THE ALLOCATOR INVARIANT: every block (free or live) is nonempty
+    and ends at or below the bump pointer, and ALL blocks — across the
+    free/live boundary — are pairwise range-disjoint. Preserved by
+    every op (`runOps_inv`); it is what makes every alloc in a run
+    alias-free (`aAlloc_no_alias`), not just the first. (`InvP` over
+    explicit components + the `abbrev` — the components, not the state
+    record, are what the proofs destructure.) -/
+def InvP (fl live : List Blk) (top : Nat) : Prop :=
+  (∀ p ∈ fl ++ live, p.1 + p.2 ≤ top)
+    ∧ (∀ p ∈ fl ++ live, 0 < p.2)
+    ∧ pairwise (fl ++ live)
+
+abbrev Inv (a : ASt) : Prop := InvP a.freeL a.liveL a.top
+
+theorem pairwise_head_nmem {b : Blk} {bs : List Blk} (hpos : 0 < b.2)
+    (h : pairwise (b :: bs)) : b ∉ bs := by
+  intro hb
+  have hd := h.1 b hb
+  cases hd with
+  | inl hd => omega
+  | inr hd => omega
+
+/-- The split: a pairwise list's parts are pairwise, and cross-disjoint
+    (unconditionally — the `≠`-free definition). -/
+theorem pairwise_append {xs ys : List Blk} (h : pairwise (xs ++ ys)) :
+    pairwise xs ∧ pairwise ys ∧ ∀ x ∈ xs, ∀ y ∈ ys, disj x y := by
+  induction xs with
+  | nil => exact ⟨True.intro, h, fun x hx => absurd hx (by simp)⟩
+  | cons b bs ih =>
+      obtain ⟨hall, hpair⟩ := h
+      obtain ⟨h1, h2, h3⟩ := ih hpair
+      refine ⟨⟨fun q hq => hall q (List.mem_append.mpr (Or.inl hq)), h1⟩, h2, ?_⟩
+      intro x hx y hy
+      rcases List.mem_cons.mp hx with rfl | hx'
+      · exact hall y (List.mem_append.mpr (Or.inr hy))
+      · exact h3 x hx' y hy
+
+/-- The maker (the append direction the proofs need). -/
+theorem pairwise_append_mk {xs ys : List Blk} (h1 : pairwise xs) (h2 : pairwise ys)
+    (hcross : ∀ x ∈ xs, ∀ y ∈ ys, disj x y) : pairwise (xs ++ ys) := by
+  induction xs with
+  | nil => exact h2
+  | cons b bs ih =>
+      show (∀ q, q ∈ bs ++ ys → disj b q) ∧ pairwise (bs ++ ys)
+      refine ⟨fun q hq => ?_, ih h1.2 (fun x hx y hy => hcross x
+        (List.mem_cons_of_mem _ hx) y hy)⟩
+      rcases List.mem_append.mp hq with hq' | hq'
+      · exact h1.1 q hq'
+      · exact hcross b (by simp) q hq'
+
+/-- Filtering a pairwise list preserves pairwise disjointness (the
+    free's live-set removal). -/
+theorem pairwise_filter (g : Blk → Bool) (l : List Blk) (h : pairwise l) :
+    pairwise (l.filter g) := by
+  induction l with
+  | nil => exact trivial
+  | cons b bs ih =>
+      by_cases hb : g b = true
+      · rw [List.filter_cons_of_pos hb]
+        exact ⟨fun q hq => h.1 q (List.mem_filter.mp hq).1, ih h.2⟩
+      · rw [List.filter_cons_of_neg hb]
+        exact ih h.2
+
+/-- `$alloc` (runtime.wat): pop the class freelist if non-empty (the
+    rc cell RESET to 1 — the runtime's `rc reset to 1` comment), else
+    BUMP (`$heap` advances; the 16-align rounding is folded into the
+    granular `size`). Returns the new state and the block record. -/
+def aAlloc (size : Nat) (a : ASt) : ASt × Blk :=
+  match a.freeL with
+  | p :: rest =>
+      (⟨rest, p :: a.liveL, a.top,
+        fun i => if i = p.1 then (1 : UInt8) else a.mem i⟩, p)
+  | [] =>
+      (⟨[], (a.top, size) :: a.liveL, a.top + size,
+        fun i => if i = a.top then (1 : UInt8) else a.mem i⟩, (a.top, size))
+
+/-- THE NO-ALIAS THEOREM: an alloc from an `Inv` state returns a block
+    whose byte range overlaps NO LIVE block (`liveL`) — and preserves
+    `Inv`, so by induction (`runOps_inv`) EVERY alloc in a run is
+    alias-free against the live set at its own moment. Kernel-checked. -/
+theorem aAlloc_no_alias (size : Nat) (a : ASt) (h : Inv a) (hsz : 0 < size) :
+    Inv (aAlloc size a).1 ∧ ∀ p ∈ a.liveL, disj (aAlloc size a).2 p := by
+  obtain ⟨hend, hpos, hpair⟩ := h
+  obtain ⟨hfreeP, hliveP, hcross⟩ := pairwise_append hpair
+  cases hfl : a.freeL with
+  | nil =>
+      -- the bump path: the new block starts AT the bump pointer
+      simp only [aAlloc, hfl, Inv]
+      refine ⟨⟨?_, ?_, ?_⟩, fun p hp => Or.inr ?_⟩
+      · intro q hq
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · omega
+        · have := hend q (List.mem_append.mpr (Or.inr hq'))
+          omega
+      · intro q hq
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · omega
+        · exact hpos q (List.mem_append.mpr (Or.inr hq'))
+      · refine ⟨fun q hq => Or.inr ?_, hliveP⟩
+        have := hend q (List.mem_append.mpr (Or.inr hq))
+        omega
+      · have := hend p (List.mem_append.mpr (Or.inr hp))
+        omega
+  | cons p rest =>
+      -- the freelist-pop path: the popped block is REUSED
+      simp only [aAlloc, hfl, Inv]
+      rw [hfl] at hfreeP
+      obtain ⟨hfreeHead, hfreeTail⟩ := hfreeP
+      have hmemFL : ∀ x ∈ rest, x ∈ a.freeL := by
+        intro x hx; rw [hfl]; exact List.mem_cons_of_mem _ hx
+      have hheadFL : p ∈ a.freeL := by rw [hfl]; simp
+      refine ⟨⟨?_, ?_, ?_⟩, fun y hy => ?_⟩
+      · intro q hq
+        rcases List.mem_append.mp hq with hq' | hq'
+        · exact hend q (List.mem_append.mpr (Or.inl (hmemFL q hq')))
+        · rcases List.mem_cons.mp hq' with hc | hq''
+          · rw [hc]
+            exact hend p (List.mem_append.mpr (Or.inl hheadFL))
+          · exact hend q (List.mem_append.mpr (Or.inr hq''))
+      · intro q hq
+        rcases List.mem_append.mp hq with hq' | hq'
+        · exact hpos q (List.mem_append.mpr (Or.inl (hmemFL q hq')))
+        · rcases List.mem_cons.mp hq' with hc | hq''
+          · rw [hc]
+            exact hpos p (List.mem_append.mpr (Or.inl hheadFL))
+          · exact hpos q (List.mem_append.mpr (Or.inr hq''))
+      · refine pairwise_append_mk hfreeTail ⟨fun y hy => hcross p hheadFL y hy,
+          hliveP⟩ ?_
+        intro x hx y hy
+        rcases List.mem_cons.mp hy with hc | hy'
+        · rw [hc]
+          exact disj_symm (hfreeHead x hx)
+        · exact hcross x (hmemFL x hx) y hy'
+      · exact hcross p hheadFL y hy
+
+/-- Any two DISTINCT entries of a pairwise list are disjoint in one
+    order or the other (position-independent). -/
+theorem pairwise_mem2 {cs : List Blk} (hpos : ∀ p ∈ cs, 0 < p.2) (h : pairwise cs) :
+    ∀ p ∈ cs, ∀ q ∈ cs, p ≠ q → disj p q ∨ disj q p := by
+  induction cs with
+  | nil => intro p hp; cases hp
+  | cons b bs ih =>
+      obtain ⟨hall, hpair⟩ := h
+      have hpos' : ∀ p ∈ bs, 0 < p.2 := fun p hp => hpos p (List.mem_cons_of_mem _ hp)
+      intro p hp q hq hne
+      rcases List.mem_cons.mp hp with rfl | hp'
+      · rcases List.mem_cons.mp hq with hq' | hq'
+        · exact absurd hq' (fun hc => hne hc.symm)
+        · exact Or.inl (hall q hq')
+      rcases List.mem_cons.mp hq with rfl | hq'
+      · exact Or.inr (hall p hp')
+      · exact ih hpos' hpair p hp' q hq' hne
+
+/-- `$rc_dec`'s dec→0 arm (runtime.wat): return the block to its class
+    pool — `p.next = freelist[cls]; freelist[cls] = p`. Freeing an
+    address that is NOT live (never allocated, or ALREADY FREED — the
+    double-free) is an ERROR: the model trips where the runtime's
+    freelist push would silently corrupt (the pinned bug class). -/
+def aFree (blk : Nat) (a : ASt) : Except String ASt :=
+  match a.liveL.find? (fun p => p.1 = blk) with
+  | some p => .ok ⟨p :: a.freeL, a.liveL.filter (fun q => q.1 != blk), a.top, a.mem⟩
+  | none => .error s!"free of unowned / double-freed block {blk}"
+
+/-- THE FREELIST-RETURN THEOREM: freeing a live block returns it to
+    the freelist (the popped-again record), removes it from the live
+    set (NO entry with that address remains live), preserves `Inv`,
+    and leaves the memory untouched. Kernel-checked. -/
+theorem aFree_returns (blk : Nat) (a : ASt) (h : Inv a)
+    (hmem : ∃ sz, (blk, sz) ∈ a.liveL) :
+    ∃ a', aFree blk a = .ok a'
+      ∧ (∃ sz, (blk, sz) ∈ a'.freeL)
+      ∧ (∀ sz, (blk, sz) ∉ a'.liveL)
+      ∧ a'.mem = a.mem
+      ∧ Inv a' := by
+  obtain ⟨sz, hmem⟩ := hmem
+  have hfind : a.liveL.find? (fun p => p.1 = blk) ≠ none := by
+    intro hnone
+    have := List.find?_eq_none.mp hnone (blk, sz) hmem
+    simp at this
+  obtain ⟨p, hfound⟩ : ∃ q, a.liveL.find? (fun q => q.1 = blk) = some q := by
+    cases hf : a.liveL.find? (fun q => q.1 = blk) with
+    | none => exact absurd hf hfind
+    | some q => exact ⟨q, rfl⟩
+  have hp1 : p.1 = blk := by simpa using List.find?_some hfound
+  subst hp1
+  have hpmem : p ∈ a.liveL := List.mem_of_find?_eq_some hfound
+  obtain ⟨hend, hpos, hpair⟩ := h
+  obtain ⟨hfreeP, hliveP, hcross⟩ := pairwise_append hpair
+  have hpos' : ∀ q ∈ a.liveL, 0 < q.2 := fun q hq => hpos q (List.mem_append.mpr (Or.inr hq))
+  refine ⟨⟨p :: a.freeL, a.liveL.filter (fun q => q.1 != p.1), a.top, a.mem⟩, by
+      simp only [aFree, hfound], ⟨p.2, by simp [List.mem_cons]⟩, ?_, rfl, ⟨?_, ?_, ?_⟩⟩
+  · -- the address left the live set (filter removes EVERY match)
+    intro sz hq
+    have hq' := (List.mem_filter.mp hq).2
+    simp at hq'
+  · -- endLE: p from liveEnd (it was live), the rest unchanged
+    intro q hq
+    rcases List.mem_append.mp hq with hq' | hq'
+    · rcases List.mem_cons.mp hq' with hc | hq''
+      · rw [hc]
+        exact hend p (List.mem_append.mpr (Or.inr hpmem))
+      · exact hend q (List.mem_append.mpr (Or.inl hq''))
+    · exact hend q (List.mem_append.mpr (Or.inr (List.mem_filter.mp hq').1))
+  · -- pos
+    intro q hq
+    rcases List.mem_append.mp hq with hq' | hq'
+    · rcases List.mem_cons.mp hq' with hc | hq''
+      · rw [hc]
+        exact hpos' p hpmem
+      · exact hpos q (List.mem_append.mpr (Or.inl hq''))
+    · exact hpos' q (List.mem_filter.mp hq').1
+  · -- pairAll: pairwise ((p :: freeL) ++ filter (=≠ blk) liveL)
+    show (∀ q, q ∈ a.freeL ++ a.liveL.filter (fun q => q.1 != p.1) → disj p q)
+      ∧ pairwise (a.freeL ++ a.liveL.filter (fun q => q.1 != p.1))
+    refine ⟨fun q hq => ?_, pairwise_append_mk hfreeP
+      (pairwise_filter (fun q => q.1 != p.1) a.liveL hliveP)
+      (fun x hx y hy => hcross x hx y (List.mem_filter.mp hy).1)⟩
+    rcases List.mem_append.mp hq with hq' | hq'
+    · -- q free: q before p in the old append → cross + symm
+      exact disj_symm (hcross q hq' p hpmem)
+    · -- q live (filtered): its address ≠ p.1 → q ≠ p
+      have hqm : q ∈ a.liveL := (List.mem_filter.mp hq').1
+      have hqp : q ≠ p := by
+        intro hc
+        rw [hc] at hq'
+        simp at hq'
+      rcases pairwise_mem2 hpos' hliveP p hpmem q hqm hqp.symm with hd | hd
+      · exact hd
+      · exact disj_symm hd
+
+/-- THE DOUBLE-FREE NEGATIVE CONTROL (theorem-level): a second free
+    of the same address — with no re-alloc in between — ALWAYS trips.
+    Kernel-checked. -/
+theorem aFree_twice_errors (blk : Nat) (a a' : ASt) (h : Inv a)
+    (hmem : ∃ sz, (blk, sz) ∈ a.liveL) (hok : aFree blk a = .ok a') :
+    ∃ e, aFree blk a' = .error e := by
+  obtain ⟨sz, hmem⟩ := hmem
+  have hfind : a.liveL.find? (fun p => p.1 = blk) ≠ none := by
+    intro hnone
+    have h0 := List.find?_eq_none.mp hnone (blk, sz) hmem
+    simp at h0
+  cases hf : a.liveL.find? (fun p => p.1 = blk) with
+  | none => exact absurd hf hfind
+  | some p =>
+      simp only [aFree, hf] at hok
+      cases hok
+      refine ⟨s!"free of unowned / double-freed block {blk}", ?_⟩
+      have hnone :
+          (a.liveL.filter (fun q => q.1 != blk)).find? (fun q => q.1 = blk) = none := by
+        apply List.find?_eq_none.mpr
+        intro x hx
+        have hne : x.1 ≠ blk := by
+          simpa using (List.mem_filter.mp hx).2
+        simp [hne]
+      simp [aFree, hnone]
+
+/-- `$rc_inc` (runtime.wat): `rc += 1` — the model's rc cell IS the
+    block's first byte (`mem blk`). -/
+def rcInc (blk : Nat) (a : ASt) : ASt :=
+  { a with mem := fun i => if i = blk then a.mem blk + 1 else a.mem i }
+
+/-- `$rc_dec` (runtime.wat): decrement the rc cell; rc → 0 returns the
+    block to its pool (the `aFree` arm — the runtime's `rc == 0 →
+    return the block to its class pool`). rc = 0 BEFORE the decrement
+    is the USE-AFTER-FREE error: the runtime's `i32.sub` would WRAP to
+    0xFFFFFFFF and free nothing — the model is stricter, pinned as its
+    own class. -/
+def rcDec (blk : Nat) (a : ASt) : Except String ASt :=
+  match a.mem blk |>.toNat with
+  | 0 => .error s!"use after free: rc({blk}) already 0"
+  | 1 => aFree blk { a with mem := fun i => if i = blk then (0 : UInt8) else a.mem i }
+  | rc + 2 =>
+      .ok { a with mem := fun i => if i = blk then (rc + 1 : Nat).toUInt8 else a.mem i }
+
+/-- THE RC THEOREM — rc_dec to zero frees EXACTLY ONCE: a live block
+    at rc = 1, on `rcDec`, leaves the live set, enters the freelist,
+    its rc cell reads 0 — and a SECOND `rcDec` TRIPS (use after
+    free). No double-free. Kernel-checked. -/
+theorem rcDec_frees_once (blk : Nat) (a : ASt) (h : Inv a)
+    (hmem : ∃ sz, (blk, sz) ∈ a.liveL) (hrc : a.mem blk = 1) :
+    ∃ a', rcDec blk a = .ok a'
+      ∧ (∀ sz, (blk, sz) ∉ a'.liveL)
+      ∧ (∃ sz, (blk, sz) ∈ a'.freeL)
+      ∧ a'.mem blk = 0
+      ∧ (∃ e, rcDec blk a' = .error e) := by
+  obtain ⟨hend, hpos, hpair⟩ := h
+  have hsetInv : Inv { a with mem := fun i => if i = blk then (0 : UInt8) else a.mem i } :=
+    ⟨hend, hpos, hpair⟩
+  have hset : ({ a with mem := fun i => if i = blk then (0 : UInt8) else a.mem i }).mem blk = 0 :=
+    by simp
+  obtain ⟨a', hfree, hfl, hnl, hmem', hinv'⟩ :=
+    aFree_returns blk { a with mem := fun i => if i = blk then (0 : UInt8) else a.mem i }
+      hsetInv hmem
+  refine ⟨a', ?_, hnl, hfl, ?_, ?_⟩
+  · simp only [rcDec, hrc]
+    exact hfree
+  · rw [hmem']
+    exact hset
+  · refine ⟨s!"use after free: rc({blk}) already 0", ?_⟩
+    have h0 : a'.mem blk = 0 := by rw [hmem']; exact hset
+    simp [rcDec, h0]
+
+/-- One allocator operation: `$alloc size`, or `$rc_dec` with the rc
+    reaching 0 (the free). -/
+inductive AOp where
+  | alloc (size : Nat)
+  | free (blk : Nat)
+
+/-- Run an op list. A free of an unowned address KILLS the run (the
+    error propagates — see `aFree_twice_errors` for the double-free
+    instance). -/
+def runOps : List AOp → ASt → Except String ASt
+  | [], a => .ok a
+  | .alloc size :: rest, a => runOps rest (aAlloc size a).1
+  | .free blk :: rest, a => aFree blk a >>= runOps rest
+
+/-- THE OP-LIST THEOREM (the induction the shapes allow): `runOps`
+    preserves `Inv` (the alloc sizes positive — the runtime never
+    allocates an empty class record) — so every alloc in a run from a
+    sound state is alias-free against the live set AT ITS OWN MOMENT
+    (per-op: `aAlloc_no_alias`), every free returns its block (per-op:
+    `aFree_returns`), and any free of an unowned/double-freed address
+    kills the run (the `.error` arm — the `True` there is the vacuous
+    side of the match; the error ITSELF is pinned by
+    `aFree_twice_errors` and the #guard traces). Kernel-checked. -/
+theorem runOps_inv : ∀ (ops : List AOp),
+    (∀ sz : Nat, AOp.alloc sz ∈ ops → 0 < sz) →
+    ∀ a, Inv a →
+    (match runOps ops a with
+     | .ok a' => Inv a'
+     | .error _ => True) := by
+  intro ops
+  induction ops with
+  | nil => intro _ a h; simp only [runOps]; exact h
+  | cons op ops ih =>
+      intro hsz a h
+      cases op with
+      | alloc size =>
+          simp only [runOps]
+          exact ih (fun sz hsz' => hsz sz (List.mem_cons_of_mem _ hsz')) _
+            (aAlloc_no_alias size a h (hsz size (by simp))).1
+      | free blk =>
+          simp only [runOps]
+          by_cases hlive : ∃ sz, (blk, sz) ∈ a.liveL
+          · obtain ⟨a', hfree, _, hnl, hmem', hinv'⟩ := aFree_returns blk a h hlive
+            rw [hfree]
+            show (match runOps ops a' with | .ok a'' => Inv a'' | .error _ => True)
+            exact ih (fun sz hsz' => hsz sz (List.mem_cons_of_mem _ hsz')) a' hinv'
+          · have hnone : a.liveL.find? (fun p => p.1 = blk) = none := by
+              apply List.find?_eq_none.mpr
+              intro x hx
+              have hne : x.1 ≠ blk := by
+                intro hc
+                cases x with
+                | mk xa xb =>
+                    have hxab : xa = blk := hc
+                    rw [hxab] at hx
+                    exact hlive ⟨xb, hx⟩
+              simp [hne]
+            obtain ⟨e, herr⟩ : ∃ e, aFree blk a = .error e :=
+              ⟨s!"free of unowned / double-freed block {blk}", by
+                simp only [aFree, hnone]⟩
+            simp only [herr]
+            exact trivial
+
+end Alloc
+
+/-! ### The allocator layer's traces — build-failing #guards -/
+
+section AllocTests
+
+open Alloc
+
+/-- The demo allocator state: the heap top at 256 (above the 48..256
+    return-area reserve — runtime.wat's `$heap` init), zeroed memory. -/
+def demoASt : ASt := ⟨[], [], 256, fun _ => (0 : UInt8)⟩
+
+-- 1. Two allocs bump: live addrs 256, 288 (the granular records),
+--    top at 320 — the second never aliases the first (witnessed).
+#guard (match runOps [.alloc 32, .alloc 32] demoASt with
+        | .ok a => a.liveL.map Prod.fst == [288, 256] && a.top == 320
+        | .error _ => false) = true
+
+-- 2. THE FREELIST RETURN + REUSE: free the first block → it returns
+--    to the freelist; the next alloc REUSES it (the pop) — the freed
+--    address comes back, the live one (288) untouched.
+#guard (match runOps [.alloc 32, .alloc 32, .free 256, .alloc 32] demoASt with
+        | .ok a => a.liveL.map Prod.fst == [256, 288] && a.freeL == []
+        | .error _ => false) = true
+
+-- 3. THE DOUBLE-FREE NEGATIVE CONTROL: the second free of the same
+--    address TRIPS (the run dies) — never a silent freelist corruption.
+#guard (match runOps [.alloc 32, .free 256, .free 256] demoASt with
+        | .error _ => true | .ok _ => false) = true
+
+-- 4. rc_dec TO ZERO FREES EXACTLY ONCE: alloc (rc = 1), two rc_inc
+--    (rc = 3), three rc_dec — the third frees (rc cell 0, block on
+--    the freelist); a FOURTH trips (use after free).
+#guard (match rcDec 256 (rcInc 256 (rcInc 256 (aAlloc 32 demoASt).1)) with
+        | .ok a1 => match rcDec 256 a1 with
+          | .ok a2 => match rcDec 256 a2 with
+            | .ok a => (256, 32) ∈ a.freeL && a.mem 256 == 0
+            | .error _ => false
+          | .error _ => false
+        | .error _ => false) = true
+#guard (match rcDec 256 (rcInc 256 (rcInc 256 (aAlloc 32 demoASt).1)) with
+        | .ok a1 => match rcDec 256 a1 with
+          | .ok a2 => match rcDec 256 a2 with
+            | .ok a => match rcDec 256 a with | .error _ => true | .ok _ => false
+            | .error _ => false
+          | .error _ => false
+        | .error _ => false) = true
+
+end AllocTests
 
 end WasmBackend.Sem
