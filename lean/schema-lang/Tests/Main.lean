@@ -1128,11 +1128,17 @@ def sizeV : (t : Ty) → Value t → Nat
   | .future a, .future x => sizeV a x + 1
   | .list a, .list vl => sizeL a vl + 1
   | .stream a, .stream vl => sizeL a vl + 1
-  | .tensor _ a, .tensor tv => sizeT a tv
+  | .tensor _ a, .tensor tv => sizeT a tv + 1
 
+def sizeL : (t : Ty) → VList t → Nat
+  | _, .nil => 0
+  | t, .cons v vl => sizeV t v + sizeL t vl + 1
+
+-- every wrapper +1: the repr chain (valueReprStr ⇄ valueTReprStr ⇄
+-- slicesReprStr) needs each cross-function call to STRICTLY decrease
 def sizeT : (t : Ty) → {dims : List Nat} → TVal t dims → Nat
-  | t, _, .scalar v => sizeV t v
-  | t, _, .dim ss => sizeS t ss
+  | t, _, .scalar v => sizeV t v + 1
+  | t, _, .dim ss => sizeS t ss + 1
 
 def sizeS : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → Nat
   | t, _, _, .nil => 0
@@ -1177,7 +1183,6 @@ def valueReprStr : (t : Ty) → Value t → String
   | .bytes, .bytes bs => s!"bytes {bs}"
   | .option _, .none => "none"
   | .option t, .some x => s!"some ({valueReprStr t x})"
-  | .tensor _ a, .tensor tv => valueTReprStr a tv
   | .result ok _, .ok x => s!"ok ({valueReprStr ok x})"
   | .result _ err, .err x => s!"err ({valueReprStr err x})"
   | .future t, .future x => s!"future ({valueReprStr t x})"
@@ -1199,7 +1204,7 @@ def slicesReprStr : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t d
       let rest := slicesReprStr t ss
       let head := valueTReprStr t x
       if rest == "" then head else s!"{head}, {rest}"
-  termination_by t _ ss => sizeS t ss
+  termination_by t _ _ ss => sizeS t ss
 decreasing_by all_goals (simp [sizeV, sizeT, sizeS] <;> omega)
 
 def vListReprStr : (t : Ty) → VList t → String
@@ -2176,7 +2181,7 @@ def moduleDocsChecks : CheckResult := do
   _ ← assert (!empty.contains "## ") "empty control: no sections"
   -- negative control 2: a doc-less module → heading + explicit gap
   -- marker (missing documentation is information, not silence)
-  let gap := SchemaLang.ModuleDocs.pageOf [("Foo.Bar", none)]
+  let gap := SchemaLang.ModuleDocs.pageOf [(`Foo.Bar, none)]
   _ ← assert (gap.contains "## Foo.Bar") "gap control: heading present"
   _ ← assert (gap.contains "no module docstrings in the environment")
     "gap control: explicit marker"

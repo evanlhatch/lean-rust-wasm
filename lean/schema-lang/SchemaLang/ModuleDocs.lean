@@ -21,11 +21,12 @@ Provenance and deliberate scope:
 - WasmBackend's modules are NOT in the manifest: schema-lang cannot
   import wasm-backend (std → schema-lang, wasm-backend → std — a back
   edge would cycle the package graph). Reported to the owning lane.
-- The rich block-comment headers (`/- # Module …`) of Item/Diff/Validate/Sim are
-  PLAIN block comments — not in the environment. The extraction
-  carries the modules' `/-!` docstrings (the section prose, verbatim);
-  converting the big headers to `/-!` is a one-character edit per file
-  in files this lane does not own. Reported, not done.
+- The rich block-comment headers of Item/Diff/Validate/Sim (the
+  `# Module …` first-block form) are PLAIN block comments — not in the
+  environment. The extraction carries the modules' docstrings (the
+  `!`-form section prose, verbatim); converting the big headers to the
+  docstring form is a one-character edit per file in files this lane
+  does not own. Reported, not done.
 
 Driving decisions:
 - KEEP SIMPLE: the docstring prose IS the page's content. No decl
@@ -56,6 +57,8 @@ import SchemaLang.Session
 import SchemaLang.Emit.GenCtx
 import Machines.Session
 import Machines.Sim
+
+open Lean Elab Term
 
 namespace SchemaLang.ModuleDocs
 
@@ -106,20 +109,25 @@ def internalsModules : List Lean.Name :=
 
 /-! ## The build-time capture (the probe) -/
 
-/-- The capture point: at THIS module's elaboration, fold the manifest
-    over the current environment (the imports' replayed docstrings).
-    The probe: `SchemaLang.Item` MUST have visible module docs — it
-    ships several `/-!` sections; `none` here means the cross-import
-    replay broke and the page would be a list of gap markers. Fail the
-    build with the diagnosis instead. -/
-open Lean Elab Term in
-elab "capturedInternalsPage" : term => do
+/-
+The capture point: at THIS module's elaboration, fold the manifest
+over the current environment (the imports' replayed docstrings).
+The probe: `SchemaLang.Item` MUST have visible module docs — it
+ships several docstring sections; `none` here means the cross-import
+replay broke and the page would be a list of gap markers. Fail the
+build with the diagnosis instead. (A doc comment cannot sit between
+`open … in` and `elab` — this is a block comment.)
+-/
+private def capturePage : TermElabM Expr := do
   let env ← getEnv
-  if (Lean.getModuleDoc? env `SchemaLang.Item).isNone then
-    throwError "internals extraction: SchemaLang.Item has no module docs in the" ++
-      " environment — the cross-import docstring replay failed (server-level" ++
-      " export/olean-level change?). Fix the extraction, do not ship gap markers."
-  return .lit (.litStr (moduleDocsOf env internalsModules))
+  match Lean.getModuleDoc? env `SchemaLang.Item with
+  | none =>
+      throwError ("internals extraction: SchemaLang.Item has no module docs in the" ++
+        " environment — the cross-import docstring replay failed (server-level" ++
+        " export/olean-level change?). Fix the extraction, do not ship gap markers.")
+  | some _ => return .lit (.strVal (moduleDocsOf env internalsModules))
+
+elab "capturedInternalsPage" : term => capturePage
 
 /-- The captured page — plain data by the time the emitter reads it. -/
 def internalsPage : String := capturedInternalsPage
