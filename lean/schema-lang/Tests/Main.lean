@@ -2286,7 +2286,8 @@ open Lean Elab Command in
 run_cmd do
   let env ← getEnv
   for n in ["reset_id", "echo_email", "self_bump", "updPureCall"] do
-    unless env.contains ((`SchemaLang).str "instUpdatePure").str n do
+    let base := ((`SchemaLang).str "instUpdatePure").str n
+    unless env.contains base do
       throwError s!"instUpdatePure_{n}: the registration-emitted "
         ++ "UpdatePure instance is missing"
 
@@ -2323,7 +2324,9 @@ instance : UpdatePure updUserFields ⟨"id", .u64⟩ updCompA := ⟨rfl⟩
 instance : UpdatePure updUserFields ⟨"email", .string⟩ updCompB := ⟨rfl⟩
 
 instance : NonInterfering updUserFields ⟨"id", .u64⟩ ⟨"email", .string⟩
-    updCompA updCompB := by decide
+    updCompA updCompB := ⟨by
+  simp only [UpdateItem.reads, VExpr.reads, UpdateItem.writes, updCompA, updCompB]
+  decide⟩
 
 -- the legal composite CONSTRUCTS (the instances assemble the legality)
 def compCascade : List (RowVals updUserFields) → List (RowVals updUserFields) :=
@@ -2332,15 +2335,32 @@ def compCascade : List (RowVals updUserFields) → List (RowVals updUserFields) 
 -- the composite's runtime pin: comp-a resets the id, comp-b copies
 -- name → email (both guards unconditional)
 example :
-    (compCascade [invRow 150 "abcd"]).map updRowId = [0] := rfl
+    (compCascade [invRow 150 "abcd"]).map updRowId = [0] := by
+  simp [compCascade, UpdateItem.cascade2, UpdateItem.applyRow, validates,
+    evalB, evalU, evalV, updRowId, invRow, updCompA, updCompB, boolToU64]
+  rfl
 
 -- THE LAW: the legal composite is order-free — `cascade_two_commute`
 -- recovered STRUCTURALLY (the swap needs only the `symm` instance; the
 -- four non-interference hypotheses come from the class field alone).
+-- Stated HERE: `cascade_two_commute` lives in `TickCascade`, which
+-- imports Update — the theorem cannot sit next to `cascade2` without
+-- an import cycle (Update.lean's doc note).
+theorem cascade2_commutes {fs : List Field} {f₁ f₂ : Field}
+    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂)
+    [_hP₁ : UpdatePure fs f₁ u₁] [_hP₂ : UpdatePure fs f₂ u₂]
+    [hNI : NonInterfering fs f₁ f₂ u₁ u₂]
+    (rows : List (RowVals fs)) :
+    UpdateItem.cascade2 u₁ u₂ rows = UpdateItem.cascade2 u₂ u₁ rows := by
+  show (rows.map u₂.applyRow).map u₁.applyRow
+     = (rows.map u₁.applyRow).map u₂.applyRow
+  obtain ⟨hg₁, hv₁, hg₂, hv₂, hne⟩ := hNI.cascadeHyps
+  exact cascade_two_commute u₁ u₂ hg₁ hv₁ hg₂ hv₂ hne rows
+
 example :
     UpdateItem.cascade2 updCompB updCompA [invRow 150 "abcd"]
       = UpdateItem.cascade2 updCompA updCompB [invRow 150 "abcd"] :=
-  UpdateItem.cascade2_commute updCompB updCompA [invRow 150 "abcd"]
+  cascade2_commutes updCompB updCompA [invRow 150 "abcd"]
 
 /-- The hand mirrors of the registered updates (the runtime pins
     evaluate THESE — the same data the command registered; the run_cmd
@@ -2632,6 +2652,19 @@ def subRowNew (n : UInt64) : RowVals subUserNew :=
   .cons (.u64 n) (.cons (.string "Evan") (.cons (.string "e@x")
     (.cons (.string "ev") .nil)))
 
+/-- Record fixtures for the migration-tie checks (V1 → V2 adds an
+    email; the retype and the shrink are the breaking controls). -/
+def subItemV1 : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩]
+def subItemV2 : Item :=
+  .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩]
+def subItemRetype : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .u32⟩]
+def subItemShrink : Item := .record "user" [⟨"id", .u64⟩]
+
+/-- The composite's showable form (assertEq needs ToString; the
+    Vortex types derive Repr, not ToString — one local bridge). -/
+instance : ToString (Option (List (Vortex.FieldName × Vortex.DType))) :=
+  ⟨reprStr⟩
+
 def subschemaChecks : CheckResult := do
   -- §7.3 demo, executed: the projections read the RIGHT columns —
   -- and CANNOT fail (no failure value exists to return)
@@ -2678,14 +2711,6 @@ def subschemaChecks : CheckResult := do
     (subId.vortexSelect [("only", .null)]) none
   .ok ()
 
-/-- Record fixtures for the migration-tie checks (V1 → V2 adds an
-    email; the retype and the shrink are the breaking controls). -/
-def subItemV1 : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩]
-def subItemV2 : Item :=
-  .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩]
-def subItemRetype : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .u32⟩]
-def subItemShrink : Item := .record "user" [⟨"id", .u64⟩]
-
 -- THE ERGONOMICS' NEGATIVE CONTROLS (the misspelled-field gate, the
 -- same shape the `HasCol` gate gives VExpr): a NOT-subschema has NO
 -- evidence — `repeat constructor` runs out of constructors and the
@@ -2710,13 +2735,13 @@ case a
 example : Subschema [⟨"id", .string⟩] subUserOld := by repeat constructor
 
 /-- error: Application type mismatch: The argument
-  Subschema [⟨"id", .u64⟩] subUserOld
+  Subschema [{ name := "id", ty := Ty.u64 }] subUserOld
 has type
   Type
 of sort `Type 1` but is expected to have type
   Prop
 of sort `Type` in the application
-  @decide (Subschema [⟨"id", .u64⟩] subUserOld) -/
+  @decide (Subschema [{ name := "id", ty := Ty.u64 }] subUserOld) -/
 #guard_msgs in
 example : Subschema [⟨"id", .u64⟩] subUserOld := by decide
 
@@ -2758,14 +2783,16 @@ def userCompleteCheckHand : VExpr dslUserSchema .bool :=
 -- constructor tree (definitional, not just eval-equal).
 example : userCompleteCheckDsl = userCompleteCheckHand := rfl
 
-def dslPositive : VExpr valUserFields .bool := [inv| id > 0]
-def dslEq : VExpr valUserFields .bool := [inv| id == 7]
-def dslAnd : VExpr valUserFields .bool := [inv| id > 0 && id == 7]
-def dslNameLong : VExpr valUserFields .bool := [inv| strlen(name) > 3]
+def dslPositive : VExpr dslUserSchema .bool := [inv| id > 0]
+def dslPositiveHand : VExpr dslUserSchema .bool :=
+  VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
+def dslEq : VExpr dslUserSchema .bool := [inv| id == 7]
+def dslAnd : VExpr dslUserSchema .bool := [inv| id > 0 && id == 7]
+def dslNameLong : VExpr dslUserSchema .bool := [inv| strlen(name) > 3]
 -- the precedence pins: `&&` parses TIGHTER — `||` is the top node
-def dslOrTop : VExpr valUserFields .bool :=
+def dslOrTop : VExpr dslUserSchema .bool :=
   [inv| id == 7 && id == 5 || id == 9]
-def dslAndTight : VExpr valUserFields .bool :=
+def dslAndTight : VExpr dslUserSchema .bool :=
   [inv| id == 7 || id == 5 && id == 9]
 
 /-- The full 4-field row (the tags list rides empty — the check does
@@ -2780,10 +2807,8 @@ def dslChecks : CheckResult := do
   -- `validates`)
   for n in [0, 1, 5, 7, 9, 42] do
     let row := dslRow n.toUInt64 "bobby"
-    _ ← assertEq s!"dsl: positive spec≡hand id={n}"
-      (validates dslPositive row) (validates (s := valUserFields)
-        (VExpr.gt (VExpr.colOf "id") (VExpr.lit 0))
-        (.cons (.u64 n.toUInt64) (.cons (.string "n") (.cons (.string "e") .nil))))
+    _ ← assertEq s!"dsl: positive ≡ hand id={n}"
+      (validates dslPositive row) (validates dslPositiveHand row)
     _ ← assertEq s!"dsl: positive spec≡compiled id={n}"
       (evalVBool dslPositive row) (validates dslPositive row)
   -- the driving example's rows
