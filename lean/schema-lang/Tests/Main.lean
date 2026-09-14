@@ -10,6 +10,7 @@ import SchemaLang.Emit.Invariant
 import SchemaLang.Emit.Update
 import SchemaLang.Bridge
 import Demo
+import SchemaLang.Trace
 import TestKit
 
 open SchemaLang TestKit
@@ -2335,6 +2336,99 @@ unsafe def updateGoldenChecks (update : Bool) : IO (String × CheckResult) := do
   let r ← TestKit.Golden.checkAgainstGolden "update" out golden update
   pure ("updateGolden", r)
 
+/-! ## Trace (SPEC-core §11): the scenario/trace spec item -/
+
+/-- The scenario's batches ride the registered demo updates' SHAPE —
+    the SAME `UpdateItem`s the update lane registered (the mirrors),
+    wrapped as `SomeUpdate` rows over the User fields. -/
+def trResetId : SomeUpdate :=
+  { fields := updUserFields, field := ⟨"id", .u64⟩
+  , update := updResetIdMirror }
+def trEchoEmail : SomeUpdate :=
+  { fields := updUserFields, field := ⟨"email", .string⟩
+  , update := updEchoEmailMirror }
+def trSelfBump : SomeUpdate :=
+  { fields := updUserFields, field := ⟨"id", .u64⟩
+  , update := updSelfBumpMirror }
+
+/-- The scenario: User, 2 rows, 3 ticks (reset-id → echo-email →
+    self-bump). Rows reuse the update lane's `invRow` (id, name, "e",
+    []). -/
+def trScenario : Scenario :=
+  { fields := updUserFields
+  , init := [invRow 1 "a", invRow 200 "bobby"]
+  , ticks := [ [trResetId], [trEchoEmail], [trSelfBump] ] }
+
+def traceChecks : CheckResult := do
+  let oracle := runScenario trScenario
+  -- tick-by-tick pins (Lean's semantics = THE ORACLE):
+  -- tick 0 = init
+  _ ← assertEq "trace: tick count" oracle.length 4
+  _ ← assertEq "tick 0 = init" (oracle[0].map updRowId) [1, 200]
+  -- tick 1: reset-id fires ONLY on the guarded row (id > 100)
+  _ ← assertEq "tick 1: reset-id resets the 200 row"
+    (oracle[1].map updRowId) [1, 0]
+  -- tick 2: echo-email copies name into email (strlen(name) > 3)
+  _ ← assertEq "tick 2: echo-email copies the name"
+    (oracle[2].map updRowEmail) ["e", "bobby"]
+  -- tick 3: self-bump reads the ORIGINAL id — a no-op on the value
+  _ ← assertEq "tick 3: self-bump keeps the ids"
+    (oracle[3].map updRowId) [1, 0]
+  -- the fold view and the trace agree on the final state
+  _ ← assertEq "finalState = last tick (ids)"
+    (trScenario.finalState.map updRowId) (oracle.getLast!.map updRowId)
+  _ ← assertEq "finalState = last tick (emails)"
+    (trScenario.finalState.map updRowEmail)
+    (oracle.getLast!.map updRowEmail)
+  -- CONFORMANCE (positive): the oracle's own output conforms
+  _ ← assertEq "conforms: oracle output"
+    (trScenario.conforms oracle.getLast!) true
+  -- order-independence: the rows' order is not observable
+  _ ← assertEq "conforms: reversed rows"
+    (trScenario.conforms oracle.getLast!.reverse) true
+  -- NEGATIVE CONTROL: a corrupted final state — "engine accepted what
+  -- the spec rejects" is the bug class. The verdict flips AND the
+  -- divergence is LOCALIZED: tick 3 + the row mismatch.
+  let corrupted : List (RowVals updUserFields) :=
+    [invRow 1 "a",
+     .cons (.u64 0) (.cons (.string "bobby") (.cons (.string "x")
+       (.cons (.list .nil) .nil)))]
+  _ ← assertEq "conforms: corrupted final"
+    (trScenario.conforms corrupted) false
+  match diverge trScenario corrupted with
+  | some report =>
+      _ ← assert (report.contains "tick 3") "diverge names the final tick"
+      _ ← assert (report.contains "expected row")
+        "diverge reports the row mismatch"
+  | none => throw "diverge: corrupted final reported NO divergence"
+  -- the STALL bug class: engine rows stuck at init — named tick 0
+  match diverge trScenario trScenario.init with
+  | some report =>
+      _ ← assert (report.contains "tick 0") "diverge names the stall tick"
+      _ ← assert (report.contains "stalled") "diverge names the stall"
+  | none => throw "diverge: stalled engine reported NO divergence"
+  -- clean run: no divergence
+  _ ← assertEq "diverge: clean run" (diverge trScenario oracle.getLast!) none
+  -- THE CODEC (the observation half, closed User fields): the trace
+  -- round-trips the wire (theorem `decTrace_encTrace_append`, executed)
+  let wire := encTrace updUserFields oracle
+  match decTrace? updUserFields (wire ++ [9, 9]) with
+  | some (trace', rest) =>
+      _ ← assertEq "codec: append form" rest [9, 9]
+      _ ← assertEq "codec: trace survives the wire"
+        (trace'.map (fun rows => rows.map (rowKey updUserFields)))
+        (oracle.map (fun rows => rows.map (rowKey updUserFields)))
+  | none => throw "codec: the trace did NOT decode"
+  -- per-tick codec round trip on the final state
+  match decRows? updUserFields (encRows updUserFields trScenario.finalState ++ []) with
+  | some (rows, rest) =>
+      _ ← assertEq "codec: final-state rows"
+        (rows.map (rowKey updUserFields))
+        (trScenario.finalState.map (rowKey updUserFields))
+      _ ← assertEq "codec: no remainder" rest []
+  | none => throw "codec: the final state did NOT decode"
+  .ok ()
+
 /-! ## Error goldens: the exact `SchemaDiag` renders (the API docs)
 
 The LLM contract (Part 11): the diagnostic renders ARE the agents'
@@ -2430,6 +2524,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("variant", variantChecks)
      , ("invariantChecks", invariantChecks)
      , ("updateChecks", updateChecks)
+     , ("trace", traceChecks)
      , ("migration", migrationChecks)
      , ("docs", docsChecks)
      , ("diagGolden", diagGoldenChecks)

@@ -29,4 +29,6 @@ import SchemaLang.Emit.Invariant
 import SchemaLang.Update
 import SchemaLang.TickCascade
 import SchemaLang.Emit.Update
+import SchemaLang.Emit.Typestate
+import SchemaLang.Trace
 import SchemaLang.Session

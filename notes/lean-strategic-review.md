@@ -122,10 +122,12 @@ STATUS 2026-09-14 — LANDED THIS SESSION:
 - Shift-left/elab-time: reserved-word gate at registration (field/case
   names rejected in both WIT+Rust spellings at elab).
 
-REMAINING (in leverage order): Sem coverage of frames/call_indirect /
-the total-emitCode correctness theorem; recursive types + record-payload
-variants; Update/Tick authoring concepts (see flatland-alignment.md);
-trace/scenario spec item + corpus-from-divergences; substrait Rel decode.
+REMAINING (the research-grade frontier — everything else LANDED 2026-09-14:
+see the wave-1/wave-2 commit series): the total `emitCode` correctness
+theorem (needs the index-generalized LCNF source-semantics model); FULL
+schedule-equivalence (stage-walker ≡ queue-cascade via Refine — the seed
+laws landed in TickCascade.lean); recursive types (μ-types in the
+effectively-leveled registry); multi-table updates + the read/write Dag.
 
 1. **Prove the lowering relation**: a `Ty`-indexed "faithful lowering"
    relation with per-ctor lemmas that `tyRust`/`tyFmt`/`tyWit`/Vortex
