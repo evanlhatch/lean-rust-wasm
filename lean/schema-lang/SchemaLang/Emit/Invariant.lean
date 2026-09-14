@@ -76,6 +76,10 @@ def defaultValue? : (t : Ty) → Option (Value t)
   | .bytes => some (.bytes [])
   | .option _ => some .none
   | .list _ => some (.list .nil)
+  -- the zero-dims default only: `TVal.scalar` IS the 0-dim shape; a
+  -- nonzero-dims tensor needs per-element literals (none available)
+  | .tensor [] a => do let v ← defaultValue? a; some (Value.tensor (TVal.scalar v))
+  | .tensor (_ :: _) _ => none
   | .result ok _ => do let v ← defaultValue? ok; some (.ok v)
   | .future a => do let v ← defaultValue? a; some (.future v)
   | .stream _ => some (.stream .nil)
@@ -110,6 +114,12 @@ def rustDefault? : Ty → Option String
   | .bytes => some "Vec::new()"
   | .option _ => some "None"
   | .list _ => some "Vec::new()"
+  -- the flat default: `Vec::new()` (empty = the zero-count flat form —
+  -- the wire's dims list carries the shape, an empty Vec is the
+  -- only self-contained literal consistent with any dims... the
+  -- HONEST default: `none` — an empty Vec's shape is 0, not dims —
+  -- a tensor field gets no emitted test literal (the .ty rule)).
+  | .tensor _ _ => none
   | .result _ _ | .future _ | .stream _ | .ty _ => none
 
 /-! ## The module assembly -/

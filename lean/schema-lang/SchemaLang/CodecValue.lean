@@ -164,7 +164,76 @@ theorem listToVList_vListToList :
       simp only [vListToList, listToVList]
       rw [listToVList_vListToList vl]
 
+/-! ## The tensor payload: shape-indexed values, flat wire form
+
+The wire form is SELF-DESCRIBING and SHAPE-GATED: the dims list
+(length-prefixed), then the flat row-major element list (length-
+prefixed). Decode CHECKS the wire dims against the TYPE's static dims
+and the element count against `dims.prod` — a mismatch is a decode
+failure (`none`), the corruption-is-a-gate-failure rule — then
+rebuilds the shape-indexed `TVal` (a wrong-shape value is
+unconstructible, the `RowVals` discipline).
+
+The builder (`buildTVal?`) is fuel-explicit: the shape tree's node
+count is bounded by `elems.length * (dims.length + 1) + 10` (each
+level consumes its elements), and every recursive call decrements —
+no mutual-WF gymnastics, one measure.
+-/
+
 /-! ## The codec -/
+
+-- (plain comment: a doc comment cannot precede `mutual` — the parser
+-- rejects the block token after a dangling doc comment, the Update
+-- lesson. The doc: the tensor's flat element list — the encode side's
+-- row-major flatten, the `vListToList` pattern over the second family.)
+mutual
+def TSlices.toList : {t : Ty} → {dims : List Nat} → {m : Nat} →
+    TSlices t dims m → List (Value t)
+  | _, _, _, .nil => []
+  | _, _, _, .cons v ss => TVal.toList v ++ TSlices.toList ss
+
+def TVal.toList : {t : Ty} → {dims : List Nat} → TVal t dims → List (Value t)
+  | _, _, .scalar v => [v]
+  | _, _, .dim ss => TSlices.toList ss
+end
+
+-- (plain comment: doc comments cannot precede `mutual`. The doc:
+-- rebuild `k` slices of shape `dims` off the front of a flat element
+-- list. Every recursive path decrements `fuel` — the caller's bound
+-- (`elems.length * (dims.length + 1) + 10`, the header's theorem) —
+-- so `fuel = 0` = the shape could not be filled (the corruption gate).)
+def TSlices.ofCount? : {t : Ty} → {dims : List Nat} → (k : Nat) →
+    List (TVal t dims) → Option (TSlices t dims k)
+  | _, _, 0, [] => some .nil
+  | _, _, k + 1, x :: xs => do
+      let ss ← TSlices.ofCount? k xs
+      some (.cons x ss)
+  | _, _, _, _ => none
+
+mutual
+def buildSlices? : (t : Ty) → (fuel : Nat) → (dims : List Nat) → (k : Nat) →
+    List (Value t) → Option (List (TVal t dims) × List (Value t))
+  | _, 0, _, _ + 1, _ => none
+  | _, _, _, 0, vs => some ([], vs)
+  | t, fuel + 1, dims, k + 1, vs => do
+      let (x, r) ← buildOne? t fuel dims vs
+      let (xs, r2) ← buildSlices? t fuel dims k r
+      pure (x :: xs, r2)
+  termination_by _ fuel dims k _ => (fuel, k, List.length dims)
+
+def buildOne? : (t : Ty) → (fuel : Nat) → (dims : List Nat) →
+    List (Value t) → Option (TVal t dims × List (Value t))
+  | _, _, [], [v] => some (TVal.scalar v, [])
+  | _, _, [], _ => none
+  | _, 0, _ :: _, _ => none
+  | t, fuel + 1, d :: ds, vs => do
+      -- d inner slices of shape ds, off the front; the count-checked
+      -- list → the length-indexed slice list
+      let (inner, r) ← buildSlices? t fuel ds d vs
+      let ss ← TSlices.ofCount? d inner
+      some (TVal.dim ss, r)
+  termination_by _ fuel dims _ => (fuel, 0, dims.length)
+end
 
 /-- Encode a schema-typed value. Composite types reuse Codec's
     combinators; `future`/`stream` erase to their payload (the
@@ -188,6 +257,11 @@ def encodeValue : (t : Ty) → Value t → List UInt8
   | .list a, .list vl => Codec.encList (encodeValue a) (vListToList vl)
   | .future a, .future x => encodeValue a x
   | .stream a, .stream vl => Codec.encList (encodeValue a) (vListToList vl)
+  -- the tensor wire: the dims list, then the flat row-major elements
+  -- (each length-prefixed by `encList` — self-describing + gated)
+  | .tensor dims a, .tensor tv =>
+      Codec.encList Codec.encVarNat dims
+        ++ Codec.encList (encodeValue a) (TVal.toList tv)
   | .ty _, v => nomatch v
 
 /-- The append-form decoder: returns the value AND the remaining bytes —
@@ -260,6 +334,21 @@ def decVal? (t : Ty) (bs : List UInt8) : Option (Value t × List UInt8) :=
       match Codec.decList? (decVal? a) bs with
       | some (xs, r) => some (.stream (listToVList xs), r)
       | none => none
+  | .tensor dims a =>
+      -- THE SHAPE GATE: wire dims must equal the TYPE's static dims,
+      -- and the flat elements must fill `dims.prod` — a mismatch is a
+      -- decode failure, never a mis-shaped `TVal` (unconstructible).
+      match Codec.decList? Codec.decNat? bs with
+      | none => none
+      | some (wireDims, r) =>
+          if wireDims != dims then none
+          else match Codec.decList? (decVal? a) r with
+            | none => none
+            | some (elems, r2) =>
+                if elems.length != dims.prod then none
+                else match buildOne? a (elems.length * (dims.length + 1) + 10) dims elems with
+                  | some (tv, []) => some (.tensor tv, r2)
+                  | _ => none
   | .ty _ => none
 
 /-- The user-facing decoder: same wire, remainder discarded. -/

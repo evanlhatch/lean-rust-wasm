@@ -434,6 +434,12 @@ def tyToExpr : Ty → Expr
   | .list a => .app (.const ``Ty.list []) (tyToExpr a)
   | .future a => .app (.const ``Ty.future []) (tyToExpr a)
   | .stream a => .app (.const ``Ty.stream []) (tyToExpr a)
+  | .tensor dims a =>
+      let dimsE := dims.foldr (fun d acc =>
+        .app (.app (.app (.const ``List.cons [0]) (.const ``Nat []))
+          (.lit (.natVal d))) acc)
+        (.app (.const ``List.nil [0]) (.const ``Nat []))
+      .app (.app (.const ``Ty.tensor []) dimsE) (tyToExpr a)
   | .ty n => .app (.const ``Ty.ty []) (.lit (.strVal n))
 
 /-- One field → the `Field.mk` application (the GADT's index term). -/

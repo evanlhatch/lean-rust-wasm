@@ -50,6 +50,14 @@ inductive Ty where
   | list (α : Ty)
   | future (α : Ty)
   | stream (α : Ty)
+  /-- A dense row-major tensor: static DIMS (outermost first, the
+      TorchLean `Tensor α [dims…]` convention) over an element type.
+      Boundary rendering is the TARGET's job (WIT: `list<elem>` — the
+      flat form, dims dropped; Rust: `Vec<elem>`; snapshot: the paren
+      encoding `tensor(dims…,elem)`); the dims are VERIFIED data — the
+      payload constructor (TVal.tensor below) cannot hold a wrong-shape
+      value, the `RowVals` discipline. -/
+  | tensor (dims : List Nat) (α : Ty)
   | ty (name : TyRef)
 deriving Repr, BEq, DecidableEq, Inhabited
 
@@ -90,6 +98,10 @@ inductive Value : Ty → Type where
   | list : {t : Ty} → VList t → Value (.list t)
   | future : {t : Ty} → Value t → Value (.future t)
   | stream : {t : Ty} → VList t → Value (.stream t)
+  /-- A tensor payload: shape-indexed by construction (the TVal
+      family — a value for `.tensor [2, 3] t` cannot have the wrong
+      shape, the `RowVals` discipline). -/
+  | tensor : {t : Ty} → {dims : List Nat} → TVal t dims → Value (.tensor dims t)
 
 /-- A value list. Nested inductives (`List (Value t)` inside the GADT)
     are forbidden by the kernel — the flatland `AnyExpr` lesson — so the
@@ -97,6 +109,26 @@ inductive Value : Ty → Type where
 inductive VList : Ty → Type where
   | nil : {t : Ty} → VList t
   | cons : {t : Ty} → Value t → VList t → VList t
+
+/-- The shape-indexed tensor payload (the TorchLean `View` shape —
+    `scalar`/`dim` over static dims). The outer dimension's slices ride
+    the LENGTH-INDEXED `TSlices` sibling (not a `Fin n →` function — the
+    list form is what the codecs build from flat wire data). The kernel
+    trap is only NESTED type constructors over the GADT family (the
+    `VList` sibling rule); length-indexed siblings are fine. The
+    tensor's ELEMENTS are full `Value t`s — a `.tensor [2] .u64`
+    element is a `Value .u64`. -/
+inductive TVal : Ty → List Nat → Type where
+  | scalar : {t : Ty} → Value t → TVal t []
+  | dim : {n : Nat} → {t : Ty} → {dims : List Nat} →
+      TSlices t dims n → TVal t (n :: dims)
+
+/-- The length-indexed slice list under a `TVal.dim` (the `VList`
+    pattern: a sibling per index shape). -/
+inductive TSlices : Ty → List Nat → Nat → Type where
+  | nil : {t : Ty} → {dims : List Nat} → TSlices t dims 0
+  | cons : {t : Ty} → {dims : List Nat} → {m : Nat} →
+      TVal t dims → TSlices t dims m → TSlices t dims (m + 1)
 end
 
 /-! ## Proof-carrying directed equality
@@ -183,6 +215,9 @@ def Ty.toType : Ty → TySem → Type
   | .list a, sem => List (a.toType sem)
   | .future a, sem => a.toType sem
   | .stream a, sem => a.toType sem
+  -- the tensor's Lean payload is the ROW-MAJOR FLAT form (the dims are
+  -- static verified data — TVal carries them; the Lean reading flattens)
+  | .tensor _ a, sem => List (a.toType sem)
   | .ty n, sem => sem n
 
 end SchemaLang

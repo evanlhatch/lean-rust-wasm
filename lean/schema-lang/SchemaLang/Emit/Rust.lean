@@ -86,6 +86,9 @@ def tyRust : Ty → String
   | .f32 => "f32" | .f64 => "f64"
   | .string => "String"
   | .bytes => "Vec<u8>"
+  -- the flat form: `Vec<elem>` (row-major; the dims are schema
+  -- metadata — a shape-bearing newtype is v2 with the derives work)
+  | .tensor _ a => s!"Vec<{tyRust a}>"
   | .option a => s!"Option<{tyRust a}>"
   | .result ok err => s!"Result<{tyRust ok}, {tyRust err}>"
   | .list a => s!"Vec<{tyRust a}>"

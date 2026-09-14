@@ -1128,10 +1128,15 @@ def sizeV : (t : Ty) → Value t → Nat
   | .future a, .future x => sizeV a x + 1
   | .list a, .list vl => sizeL a vl + 1
   | .stream a, .stream vl => sizeL a vl + 1
+  | .tensor _ a, .tensor tv => sizeT a tv
 
-def sizeL : (t : Ty) → VList t → Nat
-  | _, .nil => 0
-  | t, .cons v vl => sizeV t v + sizeL t vl + 1
+def sizeT : (t : Ty) → {dims : List Nat} → TVal t dims → Nat
+  | t, _, .scalar v => sizeV t v
+  | t, _, .dim ss => sizeS t ss
+
+def sizeS : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → Nat
+  | t, _, _, .nil => 0
+  | t, _, _, .cons x ss => sizeT t x + sizeS t ss + 1
 
 end
 
@@ -1172,13 +1177,30 @@ def valueReprStr : (t : Ty) → Value t → String
   | .bytes, .bytes bs => s!"bytes {bs}"
   | .option _, .none => "none"
   | .option t, .some x => s!"some ({valueReprStr t x})"
+  | .tensor _ a, .tensor tv => valueTReprStr a tv
   | .result ok _, .ok x => s!"ok ({valueReprStr ok x})"
   | .result _ err, .err x => s!"err ({valueReprStr err x})"
   | .future t, .future x => s!"future ({valueReprStr t x})"
   | .list t, .list vl => s!"list [{vListReprStr t vl}]"
   | .stream t, .stream vl => s!"stream [{vListReprStr t vl}]"
+  | .tensor _ a, .tensor tv => s!"tensor [{valueTReprStr a tv}]"
   termination_by t v => sizeV t v
-decreasing_by all_goals (simp [sizeV, sizeL] <;> omega)
+decreasing_by all_goals (simp [sizeV, sizeL, sizeT, sizeS] <;> omega)
+
+def valueTReprStr : (t : Ty) → {dims : List Nat} → TVal t dims → String
+  | t, _, .scalar v => valueReprStr t v
+  | t, _, .dim ss => slicesReprStr t ss
+  termination_by t _ tv => sizeT t tv
+decreasing_by all_goals (simp [sizeV, sizeT, sizeS] <;> omega)
+
+def slicesReprStr : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → String
+  | _, _, _, .nil => ""
+  | t, _, _, .cons x ss =>
+      let rest := slicesReprStr t ss
+      let head := valueTReprStr t x
+      if rest == "" then head else s!"{head}, {rest}"
+  termination_by t _ ss => sizeS t ss
+decreasing_by all_goals (simp [sizeV, sizeT, sizeS] <;> omega)
 
 def vListReprStr : (t : Ty) → VList t → String
   | _, .nil => ""
@@ -2126,6 +2148,49 @@ def docsChecks : CheckResult := do
     "docs emitter registered"
   .ok ()
 
+/-! ## Module-docs emitter (DOCSTRING-EXTRACTION lane): lean-internals.md -/
+
+def moduleDocsChecks : CheckResult := do
+  let md := SchemaLang.ModuleDocs.internalsPage
+  -- the extraction probe (the eval's question), pinned: module docstrings
+  -- ARE visible cross-import and the page carries REAL prose
+  _ ← assert (md.contains "# Lean internals — module documentation") "title"
+  _ ← assert (md.contains "## SchemaLang.Item") "Item section"
+  _ ← assert (md.contains "## Items") "Item's `## Items` docstring, verbatim"
+  _ ← assert (md.contains "## SchemaLang.Diff") "Diff section"
+  _ ← assert (md.contains "## SchemaLang.Validate") "Validate section"
+  _ ← assert (md.contains "## SchemaLang.Session") "schema-lang Session section"
+  _ ← assert (md.contains "## Machines.Session") "Machines Session section"
+  _ ← assert (md.contains "## Machines.Sim") "Machines Sim section"
+  -- every manifest entry renders its heading (the manifest and the page
+  -- cannot drift — the page is folded FROM the manifest)
+  for m in SchemaLang.ModuleDocs.internalsModules do
+    _ ← assert (md.contains s!"## {m}") s!"manifest heading {m}"
+  -- no gap markers today: every manifest module has docstrings (a gap
+  -- marker would mean a plain-comment header landed on the manifest)
+  _ ← assert (!md.contains "no module docstrings in the environment")
+    "no gap markers over today's manifest"
+  -- negative control 1: the EMPTY manifest → intro only, no sections
+  let empty := SchemaLang.ModuleDocs.pageOf []
+  _ ← assert (empty.contains "# Lean internals") "empty control: intro present"
+  _ ← assert (!empty.contains "## ") "empty control: no sections"
+  -- negative control 2: a doc-less module → heading + explicit gap
+  -- marker (missing documentation is information, not silence)
+  let gap := SchemaLang.ModuleDocs.pageOf [("Foo.Bar", none)]
+  _ ← assert (gap.contains "## Foo.Bar") "gap control: heading present"
+  _ ← assert (gap.contains "no module docstrings in the environment")
+    "gap control: explicit marker"
+  -- the emitter: declared path + registered in the registry + covered by
+  -- the DERIVED forge-jobs manifest (the golden loop's auto-pickup)
+  let files := SchemaLang.ModuleDocs.internalsEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly [])
+  _ ← assertEq "internals path" (files.head?.map (·.path)) (some "../../docs/lean-internals.md")
+  _ ← assert (SchemaLang.Emit.emitters.any fun e => e.name == "internals-docs")
+    "internals emitter registered"
+  _ ← assert (SchemaLang.Emit.forgeJobs.any fun (_, outs) =>
+    outs.contains "../../docs/lean-internals.md")
+    "internals output in the byte-tie manifest"
+  .ok ()
+
 /-! ## Updates (SPEC-core §3, demoted): the schema_update lane
 
 The happy registrations MOVED to Demo.lean (spec data lives in the
@@ -2970,6 +3035,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("migration", migrationChecks)
      , ("subschema", subschemaChecks)
      , ("docs", docsChecks)
+    , ("moduleDocs", moduleDocsChecks)
      , ("diagGolden", diagGoldenChecks)
      ])
   if code != 0 then return code

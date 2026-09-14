@@ -36,6 +36,7 @@ import SchemaLang.Emit.Typestate
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
 import SchemaLang.Docs
+import SchemaLang.ModuleDocs
 
 namespace SchemaLang.Emit
 
@@ -176,6 +177,7 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   , WitFixture.fixtureEmitter
   , WitFixture.manifestEmitter
   , SchemaLang.Docs.docsEmitter
+  , SchemaLang.ModuleDocs.internalsEmitter
   ]
 
 /-- The manifest's OWN output path — the one output no core emitter

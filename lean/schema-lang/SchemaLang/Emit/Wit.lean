@@ -48,6 +48,11 @@ def tyFmt : Ty → Std.Format
   | .f32 => "f32" | .f64 => "f64"
   | .string => "string"
   | .bytes => "list<u8>"
+  -- the flat form: WIT has no tensors — a tensor field lowers to
+  -- `list<elem>` (row-major; the dims are schema metadata the WIT
+  -- boundary cannot carry — the canonical-ABI pair-form keeps the
+  -- count, not the shape)
+  | .tensor _ a => f!"list<{tyFmt a}>"
   | .option a => f!"option<{tyFmt a}>"
   | .result ok err => f!"result<{tyFmt ok}, {tyFmt err}>"
   | .list a => f!"list<{tyFmt a}>"

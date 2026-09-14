@@ -65,6 +65,14 @@ def Ty.lower (sem : VortexSem) (null : Nullability) : Ty → Option DType
       -- stamps the LIST's top-level flag only
       let inner ← Ty.lower sem .nonNullable a
       some (DType.list inner null)
+  | .tensor _ a =>
+      -- the flat form: a tensor column is a LIST of its elements (row
+      -- major); the static dims are schema metadata, not Vortex dtype
+      -- data. The element's nullability is its own (non-nullable), the
+      -- `list` precedent.
+      do
+        let inner ← Ty.lower sem .nonNullable a
+        some (DType.list inner null)
   | .future _ => none  -- not tabular
   | .stream _ => none  -- not tabular
   | .ty n => (sem n).map (·.withNullability null)

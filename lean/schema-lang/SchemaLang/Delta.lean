@@ -138,6 +138,9 @@ def litTy? : Ty → Option String
   | .option _ => some "None"
   | .result ok _ => ("Ok(" ++ · ++ ")") <$> litTy? ok
   | .list _ => some "vec![]"
+  -- no self-contained tensor literal (the nested-record rule: the
+  -- shape needs per-element literals + a shape-checked constructor)
+  | .tensor _ _ => none
   | .future a | .stream a => litTy? a
   | .ty _ => none
 

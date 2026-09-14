@@ -54,6 +54,10 @@ def Ty.toSnapshot : Ty → String
   | .list a => s!"list({a.toSnapshot})"
   | .future a => s!"future({a.toSnapshot})"
   | .stream a => s!"stream({a.toSnapshot})"
+  | .tensor dims a =>
+      -- the dims ride as ';'-separated nat atoms BEFORE the element:
+      -- `tensor(2;3;u64)` (a 2×3 u64 tensor); zero dims = `tensor(;elem)`
+      s!"tensor({String.intercalate "" (dims.map (fun d => s!"{d};"))}{a.toSnapshot})"
   | .ty n => s!"ty({n})"
 
 -- the `<nullsem>`/`<determinism>` tokens are `NullSem.toToken` /
@@ -123,6 +127,35 @@ private def parseTy : Nat → List Char → Except String (Ty × List Char)
               | ')' :: r => .ok (.ty (String.ofList nm), r)
               | _ => .error "snapshot: expected ')' after ty ref"
           | _ => .error "snapshot: expected '(' after `ty`"
+      | "tensor" =>
+          -- `tensor(` (dim ';')* elem ')` — the nat atoms first (each
+          -- consumed WITH its ';'), then the element type, then ')'.
+          -- Zero dims = the empty prefix: `tensor(;elem)`.
+          -- parseDims is fuel-bounded (each recursive call consumed a
+          -- digit-run + ';' — ≥ 2 chars — so fuel = input length is
+          -- strictly sufficient, the parseTy fuel discipline).
+          match rest with
+          | '(' :: r =>
+              let rec parseDims (f : Nat) (cs : List Char) (acc : List Nat) :
+                  Except String (List Nat × List Char) :=
+                  match f with
+                  | 0 => .error "snapshot: parse fuel exhausted (tensor dims)"
+                  | f + 1 =>
+                      let (ds, r) := cs.span Char.isDigit
+                      if ds.isEmpty then .ok (acc.reverse, r)
+                      else match r with
+                        | ';' :: r => parseDims f r ((String.ofList ds).toNat! :: acc)
+                        | _ => .error "snapshot: expected ';' after tensor dim"
+              match parseDims (r.length + 1) r [] with
+              | .error e => .error e
+              | .ok (dims, r) =>
+                  match parseTy fuel r with
+                  | .error e => .error e
+                  | .ok (elem, r) =>
+                      match r with
+                      | ')' :: r => .ok (.tensor dims elem, r)
+                      | _ => .error "snapshot: expected ')' after tensor"
+          | _ => .error "snapshot: expected '(' after `tensor`"
       | other => .error s!"snapshot: unknown type token `{other}`"
 
 /-- Parse a whole type token; trailing garbage is an error. -/

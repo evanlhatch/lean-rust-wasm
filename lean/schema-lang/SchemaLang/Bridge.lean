@@ -56,6 +56,9 @@ def Ty.toSType? : Ty → Option SType
   | .f64 => some .fp64
   | .string => some .string
   | .list a => a.toSType?.map SType.list
+  -- the flat form: a tensor column is a LIST of its elements (row
+  -- major); the static dims are schema metadata, not query data
+  | .tensor _ a => a.toSType?.map SType.list
   | .ty n => some (.userDefined "" n [])
   -- not queryable (option is unwrapped into the nullable flag by
   -- `SchemaCol.ofField`, which owns the column context)

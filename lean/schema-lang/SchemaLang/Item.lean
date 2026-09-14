@@ -177,6 +177,7 @@ def Ty.tyRefs : Ty → List String
   | .list a => a.tyRefs
   | .future a => a.tyRefs
   | .stream a => a.tyRefs
+  | .tensor _ a => a.tyRefs
   | .ty n => [n]
   | _ => []
 
@@ -285,6 +286,7 @@ def Ty.check (known : List String) : Ty → List SchemaDiag
   | .list a => a.check known
   | .future a => a.check known
   | .stream a => a.check known
+  | .tensor _ a => a.check known
   | .ty n => if known.contains n then [] else [.unknownRef n (didYouMean n known) known]
   | _ => []
 
@@ -296,6 +298,7 @@ def Ty.banAsync : Ty → Bool
   | .result ok err => ok.banAsync && err.banAsync
   | .list a => a.banAsync
   | .future _ | .stream _ => false
+  | .tensor _ a => a.banAsync
   | _ => true
 
 /-! ## The diagnostic authority (supersedes the Bool) -/

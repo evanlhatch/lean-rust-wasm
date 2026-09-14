@@ -56,6 +56,9 @@ def tyTerm : Ty → CommandElabM Term
   | .option a => do `(.option $(← tyTerm a))
   | .result o e => do `(.result $(← tyTerm o) $(← tyTerm e))
   | .list a => do `(.list $(← tyTerm a))
+  | .tensor dims a => do
+      let ds : Array Term := (dims.map (fun d => (⟨Syntax.mkNatLit d⟩ : Term))).toArray
+      `(.tensor ([$ds,*] : List Nat) $(← tyTerm a))
   | .future a => do `(.future $(← tyTerm a))
   | .stream a => do `(.stream $(← tyTerm a))
   | .ty n => `(.ty $(quote n))

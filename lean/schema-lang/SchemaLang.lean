@@ -12,6 +12,7 @@ import SchemaLang.Emit.Rust
 import SchemaLang.Delta
 import SchemaLang.Emit.Registry
 import SchemaLang.Docs
+import SchemaLang.ModuleDocs
 import SchemaLang.Codec
 import SchemaLang.CodecValue
 import SchemaLang.Field
