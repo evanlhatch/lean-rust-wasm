@@ -39,7 +39,12 @@ namespace LintKit
 (the justfile `lean-axioms` rule, kept identical in meaning). -/
 def isAllowedAxiom (n : Name) : Bool :=
   n == `propext || n == `Classical.choice || n == `Quot.sound ||
-  ((toString n).splitOn "_native.native_decide.").length != 1
+  -- the disclosed native_decide trust base (the justfile `lean-axioms`
+  -- rule) + its bv_decide sibling (the same runner-checked certificate
+  -- class: `Foo._native.bv_decide.ax_*` — the proofkit binop lane's
+  -- disclosed form)
+  ((toString n).splitOn "_native.native_decide.").length != 1 ||
+  ((toString n).splitOn "_native.bv_decide.").length != 1
 
 meta def axiomAllowlistTest (decl : Name) : MetaM (Option MessageData) := do
   if ← skipDecl decl then return none

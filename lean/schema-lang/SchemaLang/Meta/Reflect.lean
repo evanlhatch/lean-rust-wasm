@@ -391,8 +391,10 @@ family. The command elaborates the author's term against
 error and a misspelled COLUMN is the `HasCol` instance failure (the
 same gate the validator tests pin). The tier is COMPUTED here: an
 executable term alone registers `boundaryCheck`; the optional `proved
-<thm>` clause cites a theorem name (stored — resolving the citation is
-CI's job later).
+<thm>` clause cites a theorem name, RESOLVED at registration
+(`SchemaLang.checkCitation?` — the `Dbsp.Certs.#check_cert` pattern:
+missing, non-theorem, sorry-tainted, or wrong-shape citations fail
+to elaborate).
 -/
 
 /-- The invariant registry: append-only, replayed from oleans at import
@@ -489,7 +491,7 @@ unsafe def elabSchemaInvariant : CommandElab := fun (stx : Syntax) => do
     match found? with
     | some (_, .record n fields) => pure (n, fields)
     | _ =>
-        let cands := didYouMean recId.toString recordNames
+        let cands := CodegenCore.didYouMean recId.toString recordNames
         let hint := if cands.isEmpty then ""
           else s!" — did you mean: {String.intercalate ", " cands}?"
         throwError s!"schema_invariant `{invName}`: `{recId}` is not a registered record{hint}"
@@ -510,6 +512,18 @@ unsafe def elabSchemaInvariant : CommandElab := fun (stx : Syntax) => do
     let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
     let ev : VExpr fsVal .bool ← Meta.evalExpr (VExpr fsVal .bool) expected e
     pure (e, { fields := fsVal, expr := ev })
+  -- THE PROVED-TIER CITATION GATE (the wire — `SchemaLang.checkCitation?`,
+  -- the `Dbsp.Certs.#check_cert` pattern): a `proved <thm>` citation must
+  -- resolve HERE — missing, non-theorem, sorry-tainted, or wrong-shape
+  -- citations are ELABORATION errors (the stored-but-unchecked hole is
+  -- closed; formerly "resolution is CI's job later").
+  if let some pn := proofName? then
+    liftTermElabM do
+      let env' ← getEnv
+      let fsListE ← fieldsToExpr fields
+      match ← checkCitation? env' fsListE exprTerm pn with
+      | some d => throwError s!"schema_invariant `{invName}`: {d}"
+      | none => pure ()
   modifyEnv fun env =>
     invariantItemExt.addEntry env
       { name := invName, schemaRef := recordName, tier := tierOf proofName?
@@ -626,7 +640,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     match found? with
     | some (_, .record n fields) => pure (n, fields)
     | _ =>
-        let cands := didYouMean recId.toString recordNames
+        let cands := CodegenCore.didYouMean recId.toString recordNames
         let hint := if cands.isEmpty then ""
           else s!" — did you mean: {String.intercalate ", " cands}?"
         throwError s!"schema_update `{uname}`: `{recId}` is not a registered record{hint}"
@@ -637,7 +651,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     match fields.find? (fun fl => fl.name == colId) with
     | some f => pure f
     | none =>
-        let cands := didYouMean colId fieldNames
+        let cands := CodegenCore.didYouMean colId fieldNames
         let hint := if cands.isEmpty then ""
           else s!" — did you mean: {String.intercalate ", " cands}?"
         throwError s!"schema_update `{uname}`: `{colId}` is not a column of `{recordName}`{hint}"

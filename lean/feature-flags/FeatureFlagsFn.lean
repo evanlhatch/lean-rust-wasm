@@ -40,6 +40,11 @@ import CodegenCore.GuestGate
 import SchemaLang.Meta.Reflect
 import FeatureFlags
 
+-- the schema_update registrations here emit their instances into
+-- SchemaLang by the framework's construction (Reflect's command) — same
+-- as Demo
+set_option linter.guestlang.packageNamespace false -- because the framework's registration command emits the instances into SchemaLang by construction; no source-site attribute exists
+
 namespace FeatureFlagsImpl
 
 /-- The defaults: enabled, rollout 0 (off until raised — the safe

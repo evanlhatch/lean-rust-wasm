@@ -140,6 +140,34 @@ def knownTypesChecks (typeNames : List String) : CheckResult := do
       (["user", "role", "order-error"] == typeNames) false
   .ok ()
 
+/-- The error paths' did-you-mean + the schema-diag E-codes (the ONE
+    E-code universe): a fault payload's unresolved type renders the
+    closed-world suggestion (via `Ty.check` → `CodegenCore.didYouMean`),
+    and the elaboration diagnostics resolve THEIR E-codes from the same
+    allocation schedule (single lookup). Negative control: the lookup is
+    keyed on the constructor kind — a sabotaged kind misses. -/
+def diagCodeChecks : CheckResult := do
+  -- the faults error path: did-you-mean reaches the payload diagnostics
+  let broken : FailureModeItem :=
+    { name := "bad", display := "d", category := .content, advice := "a"
+    , payload := [("x", .ty "usr")] }
+  let ds := broken.diagnose Spec.knownTypes
+  _ ← assertEq "diagnose nonempty" ds.isEmpty false
+  _ ← assertEq "diagnose did-you-mean" (ds.any fun d => d.contains "did you mean") true
+  -- the schema-diag block: allocated AFTER the fault registries (4 + 4)
+  _ ← assertEq "schema-diag codes start E108"
+    ((Faults.Emit.schemaDiagCodes.map (·.2)).head?.getD "") "E108"
+  _ ← assertEq "schema-diag block size"
+    Faults.Emit.schemaDiagCodes.length Faults.Emit.schemaDiagKinds.length
+  -- the cross-ref: single-lookup coded render
+  _ ← assertEq "coded render"
+    (Faults.Emit.renderDiagCoded (.dupName "user"))
+    "[E109] duplicate name `user` — names must be unique"
+  -- negative control: the lookup is kind-keyed — a bogus kind misses
+  _ ← assertEq "kind-keyed lookup misses bogus (control)"
+    (Faults.Emit.schemaDiagCodes.lookup "bogus") (none : Option String)
+  .ok ()
+
 unsafe def main : IO UInt32 := do
   let typeNames ← loadDemoTypeNames
   mainOfChecks "Faults"
@@ -149,4 +177,5 @@ unsafe def main : IO UInt32 := do
     , ("emit", emitChecks)
     , ("emitterAudit", emitterAuditChecks)
     , ("knownTypesTie", knownTypesChecks typeNames)
+    , ("diagCodes", diagCodeChecks)
     ]

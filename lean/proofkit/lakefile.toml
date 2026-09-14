@@ -1,0 +1,33 @@
+name = "Proofkit"
+defaultTargets = ["Proofkit", "ProofkitTests"]
+
+# LSpec's @[test_driver]-registered runner for `lake test`.
+testDriver = "ProofkitTests"
+
+# The proof-flow smalls (flatland TOOLKIT Part 4, adopted): the PO
+# discharge LADDER (4.2 — autoParam defaults on bundled obligations),
+# the bv_decide binop CONTRACT (overflow/alignment on the emitted Rust —
+# the wasm-backend binop lane's consumer, stated Lean-side), and the
+# @[implemented_by] pattern (oracle eval: model stupid-clear, prove
+# slow = fast, run fast).
+#
+# Deps: TestKit only for the ladder/implemented_by surface; SchemaLang
+# for the Update PO-slot demonstration (the `UpdatePure` /
+# `NonInterfering` autoParam defaults in action).
+
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
+[[require]]
+name = "SchemaLang"
+path = "../schema-lang"
+
+[[lean_lib]]
+name = "Proofkit"
+roots = ["Proofkit"]
+
+[[lean_exe]]
+name = "ProofkitTests"
+root = "Tests.Main"
+supportInterpreter = true

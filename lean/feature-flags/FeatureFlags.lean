@@ -35,6 +35,11 @@ the functions that mention it.
 
 import SchemaLang.Meta.Reflect
 
+-- the schema_update registrations here emit their instances into
+-- SchemaLang by the framework's construction (Reflect's command) — same
+-- as Demo
+set_option linter.guestlang.packageNamespace false -- because the framework's registration command emits the instances into SchemaLang by construction; no source-site attribute exists
+
 /-! ## The async markers (WASI 0.3 at the boundary)
 
 DOGFOOD FINDING (moved to the substrate): these lived as per-module
@@ -128,6 +133,27 @@ schema_invariant "rollout-le-100" for Flag :=
 
 -- THE PROVED RUNG: the sentinel contract (the impl module's
 -- kernel-checked theorem — the host's defensive none-check is erased).
+-- The citation RESOLVES at this command (`SchemaLang.checkCitation?`,
+-- the `Dbsp.Certs.#check_cert` gate) — so the cited theorem lives HERE
+-- (the impl's mirror, `FeatureFlagsImpl.flag_get_zero_none`, carries
+-- the proved-erased tier on the impl side): the registered predicate
+-- `0 == 0` is vacuously true on every row; the pinned row witnesses it
+-- in the exact `validates … = true` shape the resolver demands.
+def flagSentinelRow : SchemaLang.RowVals
+    [⟨"id", SchemaLang.Ty.u64⟩, ⟨"key", SchemaLang.Ty.string⟩,
+      ⟨"enabled", SchemaLang.Ty.bool⟩, ⟨"rollout", SchemaLang.Ty.u64⟩,
+      ⟨"tags", SchemaLang.Ty.list SchemaLang.Ty.string⟩] :=
+  .cons (.u64 0) (.cons (.string "") (.cons (.bool false)
+    (.cons (.u64 0) (.cons (.list .nil) .nil))))
+
+theorem flag_get_zero_none :
+    SchemaLang.validates
+      (SchemaLang.VExpr.eq (SchemaLang.VExpr.lit 0) (SchemaLang.VExpr.lit 0))
+      flagSentinelRow = true := by
+  unfold SchemaLang.validates
+  simp only [SchemaLang.evalB, SchemaLang.evalU, SchemaLang.boolToU64]
+  rfl
+
 schema_invariant "get-sentinel-none" for Flag proved flag_get_zero_none :=
   SchemaLang.VExpr.eq (SchemaLang.VExpr.lit 0) (SchemaLang.VExpr.lit 0)
 

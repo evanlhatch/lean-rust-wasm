@@ -103,18 +103,45 @@ the byte-tied `invariants_generated.rs` / `updates_generated.rs`
 reflect. Names are STRINGS where the registry name is kebab (`
 id-positive`) — the emitted Rust carries it verbatim; a kebab word is
 not a Lean ident (the string-form name is Meta.Reflect's authoring
-surface for exactly this). `proved` cites a theorem name, STORED only —
-the theorem (`userNameLenProved`) lives in Tests and the citation is
-resolved there (the CI half of the ladder). The `where` clause is
-REQUIRED (`VExpr .bool` has no literal-true — the always-true idiom for
-`self_bump`). -/
+surface for exactly this). `proved` cites a theorem name, RESOLVED at
+the registration (`SchemaLang.checkCitation?` — the elaboration gate:
+the theorem must live where it's cited, so `userNameLenProved` is
+below, in THIS module). The `where` clause is REQUIRED (`VExpr .bool`
+has no literal-true — the always-true idiom for `self_bump`). -/
 
 -- The executable boundary check (tier: boundary-check).
 schema_invariant "id-positive" for User :=
   SchemaLang.VExpr.gt (SchemaLang.VExpr.colOf "id") (SchemaLang.VExpr.lit 0)
 
+-- The row the cited theorem pins: id 5, name "abcd" (length 4 > 3 —
+-- the `name-min-length` predicate's verdict is `true`).
+def userNameLenRow :
+    SchemaLang.RowVals
+      [⟨"id", SchemaLang.Ty.u64⟩, ⟨"name", SchemaLang.Ty.string⟩,
+        ⟨"email", SchemaLang.Ty.string⟩,
+        ⟨"tags", SchemaLang.Ty.list SchemaLang.Ty.string⟩] :=
+  .cons (.u64 5) (.cons (.string "abcd")
+    (.cons (.string "e") (.cons (.list .nil) .nil)))
+
+-- THE CITED THEOREM (the proved tier's resolver target): the
+-- `name-min-length` predicate's verdict on the pinned row, as a
+-- kernel-checked `validates … = true` — the exact shape
+-- `SchemaLang.checkCitation?` demands at the registration below.
+theorem userNameLenProved :
+    SchemaLang.validates
+      (SchemaLang.VExpr.gt
+        (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "name"))
+        (SchemaLang.VExpr.lit 3))
+      userNameLenRow = true := by
+  unfold SchemaLang.validates
+  simp only [SchemaLang.evalB, SchemaLang.evalU, SchemaLang.VExpr.colOf,
+    SchemaLang.hasColHead, SchemaLang.ColPath.get,
+    _root_.string_len, SchemaLang.string_len, SchemaLang.boolToU64]
+  rfl
+
 -- The proved registration: the tier is `proved` via the CITED theorem
--- name (stored — resolution is CI's job later).
+-- name (RESOLVED at this command — a dangling or wrong-shaped citation
+-- fails right here, the `Dbsp.Certs.#check_cert` gate).
 schema_invariant "name-min-length" for User proved userNameLenProved :=
   SchemaLang.VExpr.gt (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "name")) (SchemaLang.VExpr.lit 3)
 

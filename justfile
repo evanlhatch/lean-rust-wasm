@@ -154,7 +154,7 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang schema-lang faults dbsp std wasm-backend ledger feature-flags"
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -210,6 +210,7 @@ lean-lint: lean-build
 	run codegen-core CodegenCore Tests.Main
 	run substrait Substrait Tests.Main
 	run qlang QLang Tests.Main
+	run proofkit Proofkit Tests.Main
 	run schema-lang SchemaLang Demo Tests.Main
 	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
 	run dbsp Dbsp Tests.Main
@@ -223,6 +224,12 @@ gen:
 	cargo run -p forge -- gen
 
 gen-check:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# Host-cargo builds under devenv need the profile cc (ring's C bits
+	# fail under the devenv clang — the established fix, same as `demo`).
+	PCC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc"
+	[ -x "$PCC" ] && export CC="$PCC"
 	cargo run -p forge -- gen --check
 
 # ── Cloudflare Pages (devenv/dev/cloudflare.nix) ─────────────────────
@@ -304,7 +311,9 @@ gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schem
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed
-# set is the core triple + native_decide's disclosed trust base).
+# set is the core triple + the DISCLOSED trust bases: native_decide's
+# external-tool facts and bv_decide's LRAT certificates — the fixed-width
+# rung, Proofkit.Binop).
 lean-axioms:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -313,7 +322,7 @@ lean-axioms:
 	  if echo "$out" | grep -q "sorryAx"; then echo "FAIL: sorryAx in $p"; exit 1; fi
 	  bad=$(echo "$out" | grep -vE "does not depend|^warning:|^info:" | sed "s/.*depends on axioms: //" | tr -d "[]" | tr "," "\n" \
 	    | sed "s/^ *//;s/ *$//" \
-	    | grep -vE "^(propext|Classical.choice|Quot.sound|.*native_decide..*|)$" || true)
+	    | grep -vE "^(propext|Classical.choice|Quot.sound|.*native_decide..*|.*bv_decide..*|)$" || true)
 	  if [ -n "$bad" ]; then echo "FAIL: $p unexpected axioms:"; echo "$bad"; exit 1; fi
 	  echo "$p: axioms clean"
 	done

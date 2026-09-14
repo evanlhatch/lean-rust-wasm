@@ -49,6 +49,16 @@ def FailureModeItem.wellFormed (known : List String) (m : FailureModeItem) : Boo
 def namesUnique (items : List FailureModeItem) : Bool :=
   (items.map (·.name)).Nodup
 
+/-- The registry's diagnostic authority (wellFormed is the Bool
+    projection; this NAMES the failure). Rides `Ty.check` — the ONE
+    resolver shared with SchemaLang — whose `unknownRef` render carries
+    the closed-world suggestion (`CodegenCore.didYouMean`, moved here-
+    adjacent so every error path reaches it core-only). -/
+def FailureModeItem.diagnose (known : List String) (m : FailureModeItem) :
+    List String :=
+  m.payload.flatMap fun (fname, t) =>
+    (t.check known).map fun d => s!"`{m.name}` payload `{fname}`: {d}"
+
 /-- The universe check: every mode well formed, names unique. -/
 def universeWellFormed (known : List String) (items : List FailureModeItem) : Bool :=
   items.all (fun m => m.wellFormed known) && namesUnique items

@@ -20,6 +20,7 @@ negative controls keep them honest).
 import Lean
 import SchemaLang.Meta.Reflect
 import CodegenCore.Emit.Core
+import CodegenCore.DidYouMean
 
 namespace SchemaLang.Meta
 
@@ -40,7 +41,7 @@ def registeredVariant? (env : Environment) (declName : Name) :
   | some it =>
       .error s!"`{declName}` is registered as `{it.name}`, not a variant"
   | none =>
-      let cands := didYouMean declName.toString (registeredNames env)
+      let cands := CodegenCore.didYouMean declName.toString (registeredNames env)
       let hint := match cands with
         | [] => ""
         | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"

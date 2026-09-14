@@ -23,9 +23,9 @@ Registration is attribute-first (`@[schema]`/`@[schema_fn]`/
 `CodegenCore.mkRegistryExt`; the emitters read the replayed registry.
 -/
 
-import SchemaLang.DidYouMean
 import SchemaLang.Ty
 import CodegenCore.Emit.Core
+import CodegenCore.DidYouMean
 
 namespace SchemaLang
 
@@ -287,7 +287,9 @@ def Ty.check (known : List String) : Ty → List SchemaDiag
   | .future a => a.check known
   | .stream a => a.check known
   | .tensor _ a => a.check known
-  | .ty n => if known.contains n then [] else [.unknownRef n (didYouMean n known) known]
+  | .ty n =>
+      if known.contains n then []
+      else [.unknownRef n (CodegenCore.didYouMean n known) known]
   | _ => []
 
 /-- Async types are banned in FIELD position (WIT grammar: records can't

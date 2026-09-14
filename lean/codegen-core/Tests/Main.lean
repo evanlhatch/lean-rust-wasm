@@ -119,12 +119,29 @@ def emitChecks : CheckResult := do
   _ ← assertEq "no raw" (out.contains "raw") false
   .ok ()
 
+/-! ## DidYouMean (moved here from SchemaLang — the every-error-path
+    engine; wasm-backend and faults reach it core-only) -/
+
+def didYouMeanChecks : CheckResult := do
+  -- nearest-first ordering, cutoff-bounded
+  _ ← assertEq "didYouMean nearest first"
+    (didYouMean "usr" ["role", "user", "admin"]) ["user"]
+  _ ← assertEq "didYouMean ties sort stably"
+    (didYouMean "usre" ["user", "users", "roles"])
+    ((didYouMean "usre" ["roles", "users", "user"]))
+  -- the empty result = the closed world has no near neighbor (a NEGATIVE
+  -- control: the filter is not vacuous — far strings stay out)
+  _ ← assertEq "didYouMean cutoff excludes far entries"
+    (didYouMean "completely-unrelated-token" ["user", "role"]) []
+  .ok ()
+
 def main : IO UInt32 := do
   let code ← mainOfChecks "CodegenCore"
     [ ("mangle", mangleChecks)
     , ("header", headerCheck)
     , ("registry", registryChecks)
     , ("emit", emitChecks)
+  , ("didYouMean", didYouMeanChecks)
     ]
   if code != 0 then return code
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND

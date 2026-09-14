@@ -5,6 +5,7 @@
    the pipeline-machine acyclicity/happy-path proofs. -/
 import SchemaLang
 import SchemaLang.Bridge
+import Demo
 
 #print axioms SchemaLang.Vortex.PType.ofDiscriminant_toDiscriminant
 #print axioms SchemaLang.Vortex.PType.engineName_inj
@@ -31,3 +32,10 @@ import SchemaLang.Bridge
 #print axioms SchemaLang.reject_out_of_order
 #print axioms SchemaLang.reset_from_failed
 #print axioms SchemaLang.widenU32U64_sound
+
+-- The proved-tier citation wire (the `Dbsp.Certs.#check_cert` pattern
+-- applied to `schema_invariant ... proved`): the resolver (a def — its
+-- own footprint is part of the gate) and the demo-cited theorem the
+-- registration RESOLVES at elaboration (Demo.lean's `name-min-length`).
+#print axioms SchemaLang.checkCitation?
+#print axioms userNameLenProved

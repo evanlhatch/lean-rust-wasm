@@ -1976,6 +1976,29 @@ schema_invariant invTypo for User := VExpr.gt (VExpr.colOf "iid") (VExpr.lit 0)
 #guard_msgs in
 schema_invariant invBogus for Usr := VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
 
+-- The WIRED proved-tier citation gate (the elaboration-time resolver,
+-- `SchemaLang.checkCitation?`): a dangling, non-theorem, or
+-- wrong-shaped citation fails ELABORATION — the stored-but-unchecked
+-- hole is closed. Negative controls (the positive one is Demo.lean's
+-- `name-min-length` registration, which resolves `userNameLenProved`
+-- at every build).
+/-- error: schema_invariant `invCiteDangling`: cited proof `noSuchTheoremAnywhere` does not resolve -/
+#guard_msgs in
+schema_invariant invCiteDangling for User proved noSuchTheoremAnywhere :=
+  VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
+
+/-- error: schema_invariant `invCiteNotAThm`: cited proof `invRow` is not a theorem — a proved-tier citation cites a proof -/
+#guard_msgs in
+schema_invariant invCiteNotAThm for User proved invRow :=
+  VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
+
+theorem citationWrongShape : 1 = 1 := rfl
+
+/-- error: schema_invariant `invCiteWrongShape`: cited proof `citationWrongShape` has type `Eq.{1} Nat (OfNat.ofNat.{0} Nat 1 (instOfNatNat 1)) (OfNat.ofNat.{0} Nat 1 (instOfNatNat 1))` — not the proved-invariant shape `validates <the registered predicate> <row> = true` -/
+#guard_msgs in
+schema_invariant invCiteWrongShape for User proved citationWrongShape :=
+  VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
+
 /-- The hand mirrors of the registered predicates (the runtime verdict
     pins evaluate THESE — the same terms the command elaborated). -/
 def invIdPositiveMirror : VExpr invUserFields .bool := .gt (.colOf "id") (.lit 0)
@@ -2044,28 +2067,23 @@ unsafe def invariantGoldenChecks (update : Bool) : IO (String × CheckResult) :=
   let r ← TestKit.Golden.checkAgainstGolden "invariant" out golden update
   pure ("invariantGolden", r)
 
-/-! ## Proved-tier citation resolution (the cert pattern, made real)
+/-! ## Proved-tier citation resolution (the cert pattern, MADE REAL)
 
 `Tier.proved` stores a `proofName : Option Name`; the registration
-command leaves it UNRESOLVED ("CI's job later"). This IS that job:
-`citationDiag?` walks the registered invariants, `Environment.find?`
-resolves every cited name, and the resolved decl must be a theorem or
-def whose axiom footprint (Lean's `collectAxioms`) contains no
-`sorryAx` — an axiom-cited (or sorry-cited) invariant fails. The check
-runs at build time (run_cmd): an unresolvable citation fails THIS
-module's build.
--/
+command now RESOLVES it at elaboration (`SchemaLang.checkCitation?` in
+SchemaLang.Invariant — the `Dbsp.Certs.#check_cert` pattern): the cited
+decl must exist, be a theorem, have a clean axiom footprint (no
+`sorryAx`), and carry the expected SHAPE — `validates <the registered
+predicate> <row> = true` for some row. A bad citation fails the
+REGISTRATION — Demo.lean's `userNameLenProved` (moved here-to-spec:
+the citation must live where it's cited) is the positive control that
+rides every build. This module keeps the row-level sweep + its
+negative controls (the resolver CATCHES a bogus name and an axiom
+citation — a resolver that accepts everything is vacuous). -/
 
-/-- The theorem the proved-tier invariant `invNameMinLength` cites —
-    previously a dangling name ("resolution is CI's job later"), now a
-    resolvable, kernel-checked decl: the executable mirror's verdict on
-    the long name, proved. -/
-theorem userNameLenProved :
-    validates invNameMinLengthMirror (invRow 5 "abcd") = true := by
-  unfold validates invNameMinLengthMirror invRow
-  simp only [evalB, evalU, VExpr.colOf, hasColHead, ColPath.get,
-    _root_.string_len]
-  rfl
+-- The theorem the proved-tier invariant `invNameMinLength` cites now
+-- lives in Demo.lean (the citation resolves at the registration, so
+-- the theorem must be declared there — this module imports it). -/
 
 /-- Resolve ONE proved-tier citation. `none` = resolved clean; `some`
     = the diagnostic (unresolvable, not a theorem/def, or `sorryAx`-

@@ -11,8 +11,10 @@ file's lock discipline), and the emission in `SchemaLang.Emit.Invariant`.
 
 - `Tier` — the computed enforcement ladder: `boundaryCheck` (the
   executable VExpr is compiled to the emitted check fn — v1's computed
-  rung), `proved` (a theorem name is CITED at registration; resolving
-  the citation is CI's job later — the name is stored, not checked),
+  rung), `proved` (a theorem name is CITED at registration and RESOLVED
+  at registration — `checkCitation?` below, the `Dbsp.Certs`
+  `#check_cert` pattern: a missing, non-theorem, sorry-tainted, or
+  wrong-shape citation is an ELABORATION error),
   `oracleCovered` (a differential-oracle row covers it — wired when the
   first oracle consumer lands; a closed ctor so the ladder is total).
 - `SchemaInvariant` — the existential wrapper: the field list PLUS the
@@ -39,7 +41,7 @@ namespace SchemaLang
 
 /-- The tier: HOW the invariant is enforced. v1 computes
     `boundaryCheck` for executable VExpr rows; `proved` rows cite a
-    theorem name (stored — resolution is CI's job later). -/
+    theorem name (RESOLVED at registration — `checkCitation?` below). -/
 inductive Tier where
   | boundaryCheck
   | proved
@@ -59,6 +61,49 @@ instance : ToString Tier := ⟨Tier.render⟩
 def tierOf : Option Lean.Name → Tier
   | some _ => .proved
   | none => .boundaryCheck
+
+/-! ## The proved-tier citation resolver (the `Dbsp.Certs` wire) -/
+
+/-- THE RESOLVER — the `Dbsp.Certs.#check_cert` pattern, applied to the
+    proved tier's stored citation. The cited name must
+    (1) resolve in the environment (`Environment.find?`),
+    (2) BE a theorem (certs cite proofs — a def/axiom citation is
+        rejected),
+    (3) have a clean axiom footprint (no `sorryAx`), and
+    (4) carry the expected SHAPE — `validates <the invariant's own
+        stored term> <row> = true` for some row (up to defeq; the row
+        is a unification variable — the citation pins the PREDICATE,
+        any row witnesses it).
+
+    `none` = resolved clean; `some d` = the diagnostic. The caller
+    (Meta.Reflect's `schema_invariant` command) turns `some d` into an
+    ELABORATION error — a proved-invariant registration with a
+    missing/mistyped citation fails the build (the former
+    stored-but-unchecked hole is closed). `fsList` is the invariant's
+    field list as a `List Field` literal term (`fieldsToExpr` at the
+    call site) and `exprTerm` the item's stored elaborated predicate —
+    exactly the term the shape check must pin. -/
+def checkCitation? (env : Lean.Environment)
+    (fsList exprTerm : Lean.Expr) (pn : Lean.Name) :
+    Lean.Meta.MetaM (Option String) := do
+  let some ci := env.find? pn
+    | return some s!"cited proof `{pn}` does not resolve"
+  unless ci.isTheorem do
+    return some s!"cited proof `{pn}` is not a theorem — a proved-tier citation cites a proof"
+  let axs ← Lean.collectAxioms pn
+  if axs.contains `sorryAx then
+    return some s!"cited proof `{pn}` depends on `sorryAx`"
+  -- the expected shape: the cited theorem is the predicate's verdict on
+  -- some row (`validates <stored term> <row> = true`); `mkEq` builds the
+  -- `Eq` application with its universe instantiated (a raw `mkConst
+  -- ``Eq` is `Eq.[]` — malformed, and the defeq check fails spuriously)
+  let rowMv ← Lean.Meta.mkFreshExprMVar none
+  let expected ← Lean.Meta.mkEq
+    (Lean.mkApp3 (Lean.mkConst ``validates) fsList exprTerm rowMv)
+    (Lean.mkConst ``Bool.true)
+  unless ← Lean.Meta.isDefEq ci.type expected do
+    return some s!"cited proof `{pn}` has type `{ci.type}` — not the proved-invariant shape `validates <the registered predicate> <row> = true`"
+  pure none
 
 /-! ## The item -/
 

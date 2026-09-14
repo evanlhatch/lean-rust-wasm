@@ -96,5 +96,51 @@ def jobs : List (Emitter FaultsSpec × FaultsSpec) :=
   [(guestEmitter, Spec.apiFaults), (hostEmitter, Spec.hostFaults)
    , (forgeJobsEmitter, [])]
 
+/-! ## The schema-elaboration block (the ONE E-code universe, completed)
+
+`SchemaLang.SchemaDiag` — the elaboration-level diagnostics — previously
+had NO codes: a DISJOINT second universe (elaboration errors unnumbered,
+fault codes E100+). They join the SAME space here, where both fault
+registries and schema-lang are visible (faults sits downstream of
+schema-lang — the payloads are `Ty`-typed — so the schedule cannot live
+on the other side of the import edge). The block starts AFTER the guest
+and host fault registries (DERIVED — `100 + guest + host`, never
+hand-set), allocated by the SAME `CodegenCore.allocateCodes` over the
+diag-kind names. Append-only registry ⇒ stable codes, CI byte-tie
+enforces. -/
+
+/-- The `SchemaDiag` constructor names — the allocation AND lookup key
+    order (one list; the render resolves by a single `lookup`). -/
+def schemaDiagKinds : List String :=
+  [ "unknownRef", "dupName", "asyncField", "nonBoundaryType"
+  , "notAStructure", "noCtor", "binderMismatch", "multiPayload"
+  , "reservedWord", "volatileInPureContext" ]
+
+/-- The schema-diag E-codes: same allocator, same space, after the
+    fault registries. -/
+def schemaDiagCodes : List (String × String) :=
+  CodegenCore.allocateCodes "E"
+    (100 + Spec.apiFaults.length + Spec.hostFaults.length) schemaDiagKinds
+
+/-- A diag's kind name (the lookup key — the constructor, spelled). -/
+def schemaDiagKind : SchemaLang.SchemaDiag → String
+  | .unknownRef .. => "unknownRef"
+  | .dupName .. => "dupName"
+  | .asyncField .. => "asyncField"
+  | .nonBoundaryType .. => "nonBoundaryType"
+  | .notAStructure .. => "notAStructure"
+  | .noCtor .. => "noCtor"
+  | .binderMismatch .. => "binderMismatch"
+  | .multiPayload .. => "multiPayload"
+  | .reservedWord .. => "reservedWord"
+  | .volatileInPureContext .. => "volatileInPureContext"
+
+/-- The coded render: the diag + its E-code — the cross-ref is ONE
+    lookup into `schemaDiagCodes` (no second allocation to drift). -/
+def renderDiagCoded (d : SchemaLang.SchemaDiag) : String :=
+  match schemaDiagCodes.lookup (schemaDiagKind d) with
+  | some c => s!"[{c}] {SchemaLang.SchemaDiag.render d}"
+  | none => SchemaLang.SchemaDiag.render d
+
 
 end Faults.Emit

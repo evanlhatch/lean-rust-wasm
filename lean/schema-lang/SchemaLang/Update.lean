@@ -127,21 +127,22 @@ data. -/
 class UpdatePure (fs : List Field) (f : Field)
     (u : UpdateItem fs f) : Prop where
   /-- The stored volatile-ref set is empty (the scan's decided fact). -/
-  volatileFree : u.volatileRefs = []
+  volatileFree : u.volatileRefs = [] := by decide
 
 /-- THE NON-INTERFERENCE LOCK — literally `cascade_two_commute`'s
 hypothesis set as ONE class: neither update's TERMS (guard or value)
 read the other's written column, and the write columns differ. Every
 fact rides the DERIVED reads (never hand-listed); concrete updates
-decide at registration (`by decide` — decidable membership over the
-derived lists). -/
+discharge at construction via the slot's autoParam default (TOOLKIT
+4.2's ladder, the `decide` rung — decidable membership over the derived
+lists; the full ladder lives in `Proofkit.Ladder`). -/
 class NonInterfering (fs : List Field) (f₁ f₂ : Field)
     (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂) : Prop where
   /-- The four non-membership facts + the distinct write columns. -/
   noOverlap :
     f₂.name ∉ u₁.guard.reads ∧ f₂.name ∉ u₁.value.reads
       ∧ f₁.name ∉ u₂.guard.reads ∧ f₁.name ∉ u₂.value.reads
-      ∧ f₁.name ≠ f₂.name
+      ∧ f₁.name ≠ f₂.name := by decide
 
 /-- The class → `cascade_two_commute`'s hypotheses: the class IS the
 hypothesis set — the extraction is the identity (the derived reads earn

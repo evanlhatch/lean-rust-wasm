@@ -1,5 +1,6 @@
 /- CodegenCore — the registry/emitter core (the buf machinery). -/
 import CodegenCore.Registry
+import CodegenCore.DidYouMean
 import CodegenCore.Emit.Core
 import CodegenCore.Emit.Certified
 import CodegenCore.Emit.Rust

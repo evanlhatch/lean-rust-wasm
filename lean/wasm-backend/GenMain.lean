@@ -445,7 +445,13 @@ unsafe def main : IO Unit := do
   let worldExports := worldExportsOf env targetDecls
   for f in oracleFns do
     unless worldExports.any fun (w, _, _, _) => w == f do
-      throw (IO.userError s!"oracle fn `{f}` is not a world export")
+      -- the closed-world suggestion (CodegenCore.didYouMean — the
+      -- every-error-path engine, reachable core-only from HERE): the
+      -- misspell candidate lists the world's ACTUAL exports.
+      let cands := CodegenCore.didYouMean f (worldExports.map fun (w, _, _, _) => w)
+      let hint := if cands.isEmpty then ""
+        else s!" — did you mean: {String.intercalate ", " cands}?"
+      throw (IO.userError s!"oracle fn `{f}` is not a world export{hint}")
   -- the generation metadata (the clock + git; the drift check strips
   -- the header, so the wall-clock is byte-tie-safe)
   let gm ← CodegenCore.Emit.genMeta worldExports.length

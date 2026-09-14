@@ -22,6 +22,17 @@ import Dbsp
 #check_cert Dbsp.seminaive_ok : ∀ {A B : Type} [AddCommGroup A] [AddCommGroup B] (R : B → A → A) (i : B) (n : Nat),
     (R i)^[n + 1] 0 = (R i)^[n] 0 → Dbsp.seminaive R i = (R i)^[n] 0
 
+-- Negative controls: the mechanism CATCHES a bad cert (a resolver
+-- that accepts everything is vacuous). A fully-dangling name dies at
+-- realization; a resolvable-but-unregistered name hits the cert gate.
+/-- error: Unknown constant `Dbsp.noSuchCert` -/
+#guard_msgs in
+#check_cert Dbsp.noSuchCert : True
+
+/-- error: `Dbsp.Stream` is not a registered certificate (missing @[cert]) -/
+#guard_msgs in
+#check_cert Dbsp.Stream : True
+
 -- §5.5.4 DeltaSystem influence algebra (Dbsp.Effects)
 #print axioms Dbsp.applySeq_perm
 #print axioms Dbsp.applySeq_swap_at
