@@ -697,7 +697,7 @@ mutation-proof:
 	echo "── (b) elab gate: key → kye in the key-nonempty invariant ──"
 	f=lean/feature-flags/FeatureFlags.lean
 	save "$f"
-	<<-'PYEOF' python3 - "$f" || { echo "FAIL: apply failed"; exit 1; }
+	<<-'PYEOF' "$PCC/../python3" - "$f" || { echo "FAIL: apply failed"; exit 1; }
 	import sys
 	p = sys.argv[1]
 	s = open(p).read()
@@ -737,7 +737,7 @@ mutation-proof:
 	echo "── (d) the oracle: strlen +1 in GuestlangStd.StrOps ──"
 	f=lean/std/GuestlangStd/StrOps.lean
 	save "$f"
-	<<-'PYEOF' python3 - "$f" || { echo "FAIL: apply failed"; exit 1; }
+	<<-'PYEOF' "$PCC/../python3" - "$f" || { echo "FAIL: apply failed"; exit 1; }
 	import sys
 	p = sys.argv[1]
 	s = open(p).read()
@@ -759,7 +759,7 @@ mutation-proof:
 	echo "── (e) compat gate: User gains extra : UInt64 ──"
 	f=lean/schema-lang/Demo.lean
 	save "$f"
-	<<-'PYEOF' python3 - "$f" || { echo "FAIL: apply failed"; exit 1; }
+	<<-'PYEOF' "$PCC/../python3" - "$f" || { echo "FAIL: apply failed"; exit 1; }
 	import sys
 	p = sys.argv[1]
 	s = open(p).read()

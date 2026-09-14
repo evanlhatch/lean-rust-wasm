@@ -91,7 +91,7 @@ theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
       have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
       have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
       simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
-  | strlen e ih =>
+  | «strlen» e ih =>
       intro p₁ hne row v
       have he : n₁ ∉ e.reads := hne
       simp [evalV, ih p₁ he row v]
@@ -117,7 +117,7 @@ theorem VExpr.evalU_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
         exact Or.inl h.symm)
       have := ColPath.get_set_neutral p p₁ hnn row v
       simp only [evalU, this]
-  | strlen e =>
+  | «strlen» e =>
       intro p₁ hne row v
       -- the operand is a field ref (the only `.string` shape)
       cases e with

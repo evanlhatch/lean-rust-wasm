@@ -14,10 +14,9 @@ import TestKit.Harness
 namespace TestKit.GateKit
 
 /-- Uniform gate-exe argv parser. Returns `some update`:
-    `["--check"]` (or empty) → `some false`; `["--update"]` → `some true`;
-    `["--help"]` prints usage and returns `some false` after the caller
-    pattern... no: `--help` and anything malformed return `none` (caller
-    prints usage / exits nonzero). -/
+    `[]`/`["--check"]` → `some false` (check is the default);
+    `["--update"]` → `some true`; `--help` and anything malformed →
+    `none` (caller prints usage / exits nonzero). -/
 def parseGateArgs : List String → Option Bool
   | [] => some false
   | ["--check"] => some false

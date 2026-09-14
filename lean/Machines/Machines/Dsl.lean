@@ -14,6 +14,13 @@ machine! counter where
     safety: (by intro s _ h; exact h)   -- optional; default is `machine_safety`
 ```
 
+Acyclicity clause (optional): `rank: <stateRankFn> rewind: <labelCtor>` —
+when present, `machine!` additionally generates `counter_rank_advances`
+(every non-rewind event strictly increases the rank) and
+`counter_rank_advances_tr` (the same, over `counter.tr`) — the acyclicity
+pair three machines (schema-lang's pipeline/tick/orderMachine) used to
+carry by hand, byte-identical modulo names.
+
 generates:
 - `counter.Label` — an inductive with one constructor per event name (the
   veil Assemble pattern: proofs case-split and execution enumerates the
@@ -74,6 +81,15 @@ macro "machine_safety" : tactic => `(tactic| (intros; first | (simp_all; done) |
     token table is untouched. -/
 syntax machineEvent := "event:" ident "guard:" term "action:" term ("safety:" term)?
 
+-- The optional acyclicity clause: `rank:` names the STATE's rank function
+-- (a def on the state type — the theorem statements unfold it), `rewind:`
+-- names the Label ctor whose edges may go backward (the recovery edge).
+-- When present, `machine!` generates `X_rank_advances` (every non-rewind
+-- event strictly increases the rank) + `X_rank_advances_tr` (the same over
+-- `X.tr`) — the hand-written pair this replaces lived in three machines
+-- byte-identical modulo names.
+syntax machineRank := "rank:" term "rewind:" ident
+
 /-- Generate a `Machines.Machine` from State/Inv and a list of events.
     Optional binders between the name and `where` make a parameterized
     machine: `machine! counter (max : Nat) where …` generates
@@ -81,7 +97,7 @@ syntax machineEvent := "event:" ident "guard:" term "action:" term ("safety:" te
     (the Label inductive and the labels list stay parameter-free — event
     names don't depend on parameters). -/
 syntax (name := machineCmd) "machine!" ident bracketedBinder* "where"
-  "State:" term "Inv:" term machineEvent* : command
+  "State:" term "Inv:" term (machineRank)? machineEvent* : command
 
 open Lean.Parser.Term in
 def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
@@ -91,7 +107,10 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
     (stx[2]!.getArgs).map (⟨·⟩)
   let sty : Term := ⟨stx[5]!⟩
   let invty : Term := ⟨stx[7]!⟩
-  let evs : Array Syntax := stx[8]!.getArgs
+  -- stx[8] = the optional rank/rewind group (a null node when absent:
+  -- [rank:, term, rewind:, ident] when present); stx[9] = the events.
+  let optRank : Syntax := stx[8]!
+  let evs : Array Syntax := stx[9]!.getArgs
   let labelId := mkIdentFrom stx (name.getId ++ `Label)
   let specId := mkIdentFrom stx (name.getId ++ `spec)
   let mut ctors : Array (TSyntax `Lean.Parser.Command.ctor) := #[]
@@ -139,6 +158,37 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   elabCommand (← `(command|
     theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
       intro l; cases l <;> decide))
+  -- The acyclicity pair, generated when the rank clause is present. The
+  -- proof mirrors the hand-written originals verbatim (cases over the
+  -- enumerated state/label space, then omega over the rank arithmetic).
+  if optRank.getNumArgs > 0 then
+    let rankT : Term := ⟨optRank[1]!⟩
+    let rewindId : TSyntax `ident := ⟨optRank[3]!⟩
+    let advId := mkIdentFrom stx (name.getId ++ `rank_advances)
+    let advTrId := mkIdentFrom stx (name.getId ++ `rank_advances_tr)
+    let rewindFull : Term :=
+      ⟨mkIdentFrom stx (name.getId ++ `Label ++ rewindId.getId)⟩
+    let specLem ← `(term| _root_.Machines.Machine.spec $name)
+    -- elemsAndSeps = the lemmas INTERLEAVED with the separator atoms
+    let sep := Syntax.atom .none ","
+    let lem (t : Term) : Syntax := Syntax.node .none ``Lean.Parser.Tactic.simpLemma #[t.raw]
+    let simpLemmas : Syntax.TSepArray `Lean.Parser.Tactic.simpLemma "," :=
+      ⟨#[lem name, sep, lem specLem, sep, lem rankT]⟩
+    elabCommand (← `(command|
+      theorem $advId (s : $sty) (l : $labelId)
+          (hnr : l ≠ $rewindFull)
+          (w : (_root_.Machines.Machine.event $name l).guard s = true) :
+          $rankT s < $rankT ((_root_.Machines.Machine.event $name l).action s w) := by
+        cases s <;> cases l <;>
+          simp only [$simpLemmas,*] at hnr w ⊢ <;> omega))
+    elabCommand (← `(command|
+      theorem $advTrId (s s' : $sty) (l : $labelId)
+          (htr : _root_.Machines.Machine.tr $name s l s') (hnr : l ≠ $rewindFull) :
+          $rankT s < $rankT s' := by
+        obtain ⟨w, hact⟩ := htr
+        have h := $advId s l hnr w
+        rw [hact] at h
+        exact h))
 
 /-- The registration form the attribute accepts: the type must be the
     literal `CommandElab` synonym, so the impl is a separate def. -/

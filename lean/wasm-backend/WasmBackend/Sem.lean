@@ -385,6 +385,14 @@ theorem checkFrame_ok (locals : Nat → Ty) (base : List Ty) (body : List Instr)
 
 /-! ## Type safety -/
 
+/-- The error-tail discharge: the `trap`/`outOfFuel`/`structural` arms
+    of `exec_typed`'s triples. A non-underflow, non-branch error is
+    OBSERVABLE — the underflow exclusion, the ok-preservation (vacuous on
+    an error), and the branch-locals preservation all hold trivially.
+    One definition, the ~12 repeated four-line triples deleted. -/
+local macro "err_tail" : tactic =>
+  `(tactic| exact ⟨fun h => (nomatch h), fun s' h => (nomatch h), fun n' ls' hEq => (nomatch hEq)⟩)
+
 /-- THE core lemma. Part 2 additionally assumes the tail `is` is checked
     `base → final` (the restart re-enters at `.loop body :: is`). -/
 theorem exec_typed (locals : Nat → Ty) :
@@ -652,22 +660,13 @@ theorem exec_typed (locals : Nat → Ty) :
               exact absurd hx hin.1
             | trap =>
               simp only [execList, hx]
-              refine ⟨?_, ?_, ?_⟩
-              · intro h; cases h
-              · intro s' h; cases h
-              · intro n' ls' hEq; cases hEq
+              err_tail
             | outOfFuel =>
               simp only [execList, hx]
-              refine ⟨?_, ?_, ?_⟩
-              · intro h; cases h
-              · intro s' h; cases h
-              · intro n' ls' hEq; cases hEq
+              err_tail
             | structural =>
               simp only [execList, hx]
-              refine ⟨?_, ?_, ?_⟩
-              · intro h; cases h
-              · intro s' h; cases h
-              · intro n' ls' hEq; cases hEq
+              err_tail
             | branch k ls =>
               cases k with
               | zero =>
@@ -703,22 +702,13 @@ theorem exec_typed (locals : Nat → Ty) :
               exact absurd hx hin.1
             | trap =>
               simp only [execList, hx]
-              refine ⟨?_, ?_, ?_⟩
-              · intro h; cases h
-              · intro s' h; cases h
-              · intro n' ls' hEq; cases hEq
+              err_tail
             | outOfFuel =>
               simp only [execList, hx]
-              refine ⟨?_, ?_, ?_⟩
-              · intro h; cases h
-              · intro s' h; cases h
-              · intro n' ls' hEq; cases hEq
+              err_tail
             | structural =>
               simp only [execList, hx]
-              refine ⟨?_, ?_, ?_⟩
-              · intro h; cases h
-              · intro s' h; cases h
-              · intro n' ls' hEq; cases hEq
+              err_tail
             | branch k ls =>
               cases k with
               | zero =>
@@ -777,22 +767,13 @@ theorem exec_typed (locals : Nat → Ty) :
                         exact absurd hx hthen.1
                       | trap =>
                         simp only [execList, hx]
-                        refine ⟨?_, ?_, ?_⟩
-                        · intro h; cases h
-                        · intro s' h; cases h
-                        · intro n' ls' hEq; cases hEq
+                        err_tail
                       | outOfFuel =>
                         simp only [execList, hx]
-                        refine ⟨?_, ?_, ?_⟩
-                        · intro h; cases h
-                        · intro s' h; cases h
-                        · intro n' ls' hEq; cases hEq
+                        err_tail
                       | structural =>
                         simp only [execList, hx]
-                        refine ⟨?_, ?_, ?_⟩
-                        · intro h; cases h
-                        · intro s' h; cases h
-                        · intro n' ls' hEq; cases hEq
+                        err_tail
                       | branch k ls =>
                         cases k with
                         | zero =>
@@ -819,22 +800,13 @@ theorem exec_typed (locals : Nat → Ty) :
                         exact absurd hx helse.1
                       | trap =>
                         simp only [execList, hx]
-                        refine ⟨?_, ?_, ?_⟩
-                        · intro h; cases h
-                        · intro s' h; cases h
-                        · intro n' ls' hEq; cases hEq
+                        err_tail
                       | outOfFuel =>
                         simp only [execList, hx]
-                        refine ⟨?_, ?_, ?_⟩
-                        · intro h; cases h
-                        · intro s' h; cases h
-                        · intro n' ls' hEq; cases hEq
+                        err_tail
                       | structural =>
                         simp only [execList, hx]
-                        refine ⟨?_, ?_, ?_⟩
-                        · intro h; cases h
-                        · intro s' h; cases h
-                        · intro n' ls' hEq; cases hEq
+                        err_tail
                       | branch k ls =>
                         cases k with
                         | zero =>
@@ -892,10 +864,7 @@ theorem exec_typed (locals : Nat → Ty) :
                                 msz⟩
                               hcheck' hts hloc'
                           . simp only [execList, step, if_neg hlt]
-                            refine ⟨?_, ?_, ?_⟩
-                            · intro h; cases h
-                            · intro s' h; cases h
-                            · intro n' ls hEq; cases hEq
+                            err_tail
         | i32load8u off =>
           -- the tag-read lane: the i32store8 mirror with ONE popped
           -- operand (the base address); the checker case is net-zero
@@ -924,10 +893,7 @@ theorem exec_typed (locals : Nat → Ty) :
                       ⟨loc, .i32 (mem (a.toNat + off)).toUInt32 :: vs1, mem, msz⟩
                       hcheck' (by simp [stackTys, hts]) hloc'
                   . simp only [execList, step, if_neg hlt]
-                    refine ⟨?_, ?_, ?_⟩
-                    · intro h; cases h
-                    · intro s' h; cases h
-                    · intro n' ls hEq; cases hEq
+                    err_tail
     . intro is body base final s hfr hcheck hstack hloc
       obtain ⟨loc, stk, mem, msz⟩ := s
       have hloc' : ∀ m, tyOf (loc m) = locals m := fun m => hloc m
@@ -944,22 +910,13 @@ theorem exec_typed (locals : Nat → Ty) :
           exact absurd hx hin.1
         | trap =>
           simp only [execList, hx]
-          refine ⟨?_, ?_, ?_⟩
-          · intro h; cases h
-          · intro s' h; cases h
-          · intro n' ls' hEq; cases hEq
+          err_tail
         | outOfFuel =>
           simp only [execList, hx]
-          refine ⟨?_, ?_, ?_⟩
-          · intro h; cases h
-          · intro s' h; cases h
-          · intro n' ls' hEq; cases hEq
+          err_tail
         | structural =>
           simp only [execList, hx]
-          refine ⟨?_, ?_, ?_⟩
-          · intro h; cases h
-          · intro s' h; cases h
-          · intro n' ls' hEq; cases hEq
+          err_tail
         | branch k ls =>
           cases k with
           | zero =>

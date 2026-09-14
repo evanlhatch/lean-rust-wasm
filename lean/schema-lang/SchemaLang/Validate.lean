@@ -560,21 +560,21 @@ declare_syntax_cat vexpr
 
 -- the atoms (atom-like rules default to `maxPrec` — parseable at any
 -- operand position)
-syntax ident : vexpr
-syntax num : vexpr
-syntax "strlen" noWs "(" ident ")" : vexpr
-syntax "(" vexpr ")" : vexpr
-syntax "!" vexpr:65 : vexpr
+scoped syntax ident : vexpr
+scoped syntax num : vexpr
+scoped syntax "strlen" noWs "(" ident ")" : vexpr
+scoped syntax "(" vexpr ")" : vexpr
+scoped syntax "!" vexpr:65 : vexpr
 -- the operators: the book's `:50/:40` precedence pattern (higher
 -- number = tighter); the right operand at prec+1 = left assoc
-syntax:60 vexpr " > " vexpr:61 : vexpr
-syntax:60 vexpr " == " vexpr:61 : vexpr
-syntax:50 vexpr " && " vexpr:51 : vexpr
-syntax:40 vexpr " || " vexpr:41 : vexpr
+scoped syntax:60 vexpr " > " vexpr:61 : vexpr
+scoped syntax:60 vexpr " == " vexpr:61 : vexpr
+scoped syntax:50 vexpr " && " vexpr:51 : vexpr
+scoped syntax:40 vexpr " || " vexpr:41 : vexpr
 
 /-- The term-level embedding: `def myCheck : VExpr s .bool :=
 [inv| id > 0 && strlen(name) > 3]`. -/
-syntax "[inv| " vexpr " ]" : term
+scoped syntax "[inv| " vexpr " ]" : term
 
 open Lean in
 /-- The string literal as a `Term` (the colOf argument). -/
@@ -682,7 +682,7 @@ partial def elabVExpr : TSyntax `vexpr → TermElabM Expr
   | _ => throwUnsupportedSyntax
 
 open Lean Elab Term in
-elab "[inv| " e:vexpr " ]" : term => elabVExpr e
+scoped elab "[inv| " e:vexpr " ]" : term => elabVExpr e
 
 /-! ### The unexpanders — a VExpr pretty-prints back to `[inv| … ]` -/
 

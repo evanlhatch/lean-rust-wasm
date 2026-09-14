@@ -695,8 +695,16 @@ def userFlatTys (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = 
   (userFieldTys cert).flatMap flatTyOf
 
 /-- The flat params' NAMES: the id, then (ptr, len) per ref field
-    (name, email, tags) — same order as `userFlatTys`. -/
+    (name, email, tags) — same order as `userFlatTys`. The length pin
+    (below) makes a drift with the field types a BUILD failure — the
+    `getD` fallback at the emission site is then dead, not a mask. -/
 def userParamNames : List String := ["id", "np", "nl", "ep", "el", "tp", "tl"]
+
+/-- THE LENGTH PIN: one name per flat core value. If `userTys` (via
+    `Layout.userTys`) grows or reorders fields, this `rfl` breaks the
+    build until the names list follows. -/
+theorem userParamNames_length :
+    userParamNames.length = (Layout.userTys.flatMap flatTyOf).length := rfl
 
 /-- String-object construction from a flat (bytes-ptr, len) pair held
     in locals `src`/`len`: alloc(16+len) — rc=1 by the allocator — then
