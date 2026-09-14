@@ -22,7 +22,13 @@ import Demo
 #print axioms SchemaLang.Codec.decEnvelope_encEnvelope
 #print axioms SchemaLang.Codec.decEnvelope_wrong_version
 #print axioms SchemaLang.Ty.toSType?_congr
+#print axioms SchemaLang.decode_encodeValue_append
+#print axioms SchemaLang.TVal.toList_length
+#print axioms SchemaLang.buildOne?_toList
 #print axioms SchemaLang.pipeline.rank_advances
+#print axioms SchemaLang.decode_encodeValue_append
+#print axioms SchemaLang.TVal.toList_length
+#print axioms SchemaLang.buildOne?_toList
 #print axioms SchemaLang.pipeline.rank_advances_tr
 #print axioms SchemaLang.tick.rank_advances
 #print axioms SchemaLang.tick.rank_advances_tr

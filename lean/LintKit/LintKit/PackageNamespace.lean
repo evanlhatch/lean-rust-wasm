@@ -77,7 +77,8 @@ def packagePrefixes : List (Name × List Name) := [
   (`Ledger,       [`Ledger]),
   (`LedgerFn,     [`LedgerFn]),
   (`FeatureFlags,       [`FeatureFlags]),
-  (`FeatureFlagsFn,     [`FeatureFlagsFn])
+  (`FeatureFlagsFn,     [`FeatureFlagsFn]),
+  (`EdgePython,   [`EdgePython]),
 ]
 
 /-- Parse the comma-separated `extraPrefixes` option. -/

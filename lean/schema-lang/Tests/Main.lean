@@ -1221,6 +1221,43 @@ decreasing_by all_goals (simp [sizeV, sizeL] <;> omega)
 
 end
 
+/-! ### the TENSOR round trip (the shape gate, pinned both ways) -/
+
+-- the 2×3 u64 tensor, row-major (2 rows of 3)
+def demoDims : List Nat := [2, 3]
+
+def demoRow (a b c : UInt64) : TVal .u64 [3] :=
+  .dim (.cons (.scalar (.u64 a)) (.cons (.scalar (.u64 b))
+    (.cons (.scalar (.u64 c)) .nil)))
+
+def demoTv : TVal .u64 demoDims :=
+  .dim (.cons (demoRow 0 1 2) (.cons (demoRow 3 4 5) .nil))
+
+def demoVal : Value (.tensor demoDims .u64) := .tensor demoTv
+
+-- the flatten's length = the product (the count gate's input)
+#guard (TVal.toList demoTv).length = 6
+
+-- THE ROUND TRIP, executed: encode → decode = the same value (the
+-- byte-equality — the GADT has no DecidableEq, the valueEq route)
+#guard (match decodeValue (.tensor demoDims .u64)
+      (encodeValue (.tensor demoDims .u64) demoVal) with
+  | some v => valueEq (.tensor demoDims .u64) v demoVal
+  | none => false) = true
+
+-- THE NEGATIVE CONTROL: the wire's dims ([2,3]) against a [2,4]-typed
+-- decode — the FIRST shape gate (wireDims = the type's dims) refuses;
+-- the corruption is a decode failure, never a mis-shaped TVal
+-- (unconstructible). (A TRUNCATION control is NOT the shape gate's:
+-- the varint's documented totality — empty input reads (0, []) —
+-- makes a truncated ELEMENT stream decode with a zero-padded last
+-- element; the count prefix there is intact.)
+#guard (match decodeValue (.tensor [2, 4] .u64)
+      (encodeValue (.tensor demoDims .u64) demoVal) with
+  | none => true
+  | some _ => false) = true
+
+
 -- (the checks consuming these renderings follow)
 
 instance : Repr Pack where
@@ -1277,6 +1314,15 @@ def genVal : (t : Ty) → CodecClosed t → Nat → Gen (Value t)
   | .future t, .future h, fuel + 1 => do pure (.future (← genVal t h fuel))
   | .stream t, .stream h, fuel + 1 => do
       pure (.stream (listToVList (← genShortList (genVal t h fuel) 3)))
+  | .tensor dims a, .tensor h, fuel + 1 => do
+      -- the shape-FILLED random tensor: the flat elements generated at
+      -- the type's count (the dims are the type's data, not a choice),
+      -- assembled by the codec's own shape-checked builder; the
+      -- fallback = the default tensor (the generator's base)
+      let elems ← (List.range dims.prod).mapM (fun _ => genVal a h (fuel - 1))
+      match buildOne? a (dims.prod * (dims.length + 1) + dims.length + 10) dims elems with
+      | some (tv, []) => pure (.tensor tv)
+      | _ => pure (defaultValue (.tensor dims a) (.tensor h))
   -- fuel 0: composites fall back to the default value (u8 is the
   -- oneOfWithDefault default leaf below, so the control still bites)
   | t, h, 0 => pure (defaultValue t h)

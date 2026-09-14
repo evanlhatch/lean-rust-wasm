@@ -154,7 +154,7 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags"
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -218,6 +218,7 @@ lean-lint: lean-build
 	run ledger Ledger LedgerFn
 	run feature-flags FeatureFlags FeatureFlagsFn
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
+	run EdgePython EdgePython Tests.Main
 
 # Codegen pipeline shim — all logic lives in the forge crate.
 gen:
@@ -473,6 +474,32 @@ rt-conformance:
 	[ -f lean/wasm-backend/target/demo.wasm ] || { echo "FAIL: no demo.wasm — run 'just wasm-compile'"; exit 1; }
 	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" cargo test -p guestlang-rt
 	echo "rt-conformance: wasmi runs the compiler line's output"
+
+# ── EdgePython: the SECOND FRONTEND (the IR-seam neutrality proof) ────
+# The honest Python subset (scalars only: +-*, < ==, if/else, while,
+# calls, return) compiled by lean/edgepython DIRECTLY to the FROZEN
+# WasmBackend.Wat AST (zero new constructors — the IR seam is the
+# backend's), rendered, parsed + validated by the same wasm-tools
+# pipeline, then run under BOTH engines with the SAME results the Lean
+# parity theorems pin. No alloc/RC: nothing heap-allocated, so the
+# guestlang runtime splice is simply not needed.
+edgepython:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	TC="{{lean_tc}}"
+	(cd lean/edgepython && PATH="$TC:$PATH" "$TC/lake" build \
+	  && PATH="$TC:$PATH" "$TC/lake" test \
+	  && PATH="$TC:$PATH" "$TC/lake" env lean Tests/Axioms.lean > /dev/null \
+	  && PATH="$TC:$PATH" "$TC/lake" exe py-gen)
+	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
+	[ -x "$WT" ] || WT=wasm-tools
+	"$WT" parse lean/edgepython/target/py.wat -o lean/edgepython/target/py.wasm
+	"$WT" validate lean/edgepython/target/py.wasm
+	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" \
+	  cargo test -p steel-host --test edgepython
+	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" \
+	  cargo test -p guestlang-rt --test edgepython
+	echo "edgepython: compiled + VALID + duel green (Lean × wasmtime × wasmi)"
 
 # ── Template scaffold (notes/reuse-map.md — the instantiation lane) ──
 # new-project: instantiate template/ as lean/<name> (the spec+impl

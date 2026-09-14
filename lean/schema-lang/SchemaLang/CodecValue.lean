@@ -210,12 +210,114 @@ def TSlices.ofCount? : {t : Ty} → {dims : List Nat} → (k : Nat) →
       some (.cons x ss)
   | _, _, _, _ => none
 
+/-! ## The rebuild inverse (the round trip's Lean half)
+
+`buildOne?`/`buildSlices?` rebuild a `TVal` from its flat element list.
+The theorems: the rebuild of the FLATTENED tensor is the tensor — for
+any fuel `f` at least the shape's need. The need is ONE per nesting
+level (the builder decrements on level changes; SIBLINGS SHARE the
+fuel — `buildSlices?` passes its own `fuel` to both sub-calls), so
+`needS` at any positive count is the element need. Proof-carrying defs
+(the `evalBNeutral` pattern: the mutual GADT bars the `induction`
+tactic, the defs recurse structurally on the payload family).
+-/
+
+-- (plain comment: doc comments cannot precede `mutual` — the Update
+-- lesson's third occurrence). The rebuild's fuel need, by shape: ONE
+-- per nesting level (the builder's dim level decrements; the slice
+-- siblings SHARE the fuel — `buildSlices?` passes its own `fuel` to
+-- both sub-calls).
+mutual
+def needOne (t : Ty) : List Nat → Nat
+  | [] => 0
+  | d :: ds => 1 + needS t ds d
+
+def needS (t : Ty) (dims : List Nat) : Nat → Nat
+  | 0 => 0
+  | _ + 1 => needOne t dims
+end
+
+theorem needS_le (t : Ty) (dims : List Nat) : ∀ k, needS t dims k ≤ needS t dims (k + 1)
+  | 0 => by simp [needS]
+  | k + 1 => by simp [needS]
+
+/-- the rebuild's fuel need is at most the DIM LIST's length + 1 (each
+    nesting level contributes one; a zero dim cuts the chain) — so the
+    decode's generous element-count bound always covers it -/
+theorem needOne_le_len (t : Ty) : ∀ dims, needOne t dims ≤ dims.length + 1
+  | [] => by simp [needOne]
+  | d :: ds => by
+      have h := needOne_le_len t ds
+      have hNeedS : needS t ds d ≤ needOne t ds := by
+        cases d with
+        | zero => simpa [needS] using Nat.zero_le _
+        | succ _ => simpa [needS] using h
+      simp only [needOne, List.length_cons]
+      omega
+
+/-- the flat length by shape: the product, as a structural def (the
+    same recursion the flatten uses, so the length lemmas are
+    structural too) -/
+def flatLength (t : Ty) : List Nat → Nat
+  | [] => 1
+  | d :: ds => d * flatLength t ds
+
+/-- the slice-list's flat length, by count (the siblings' sum) -/
+def slicesLength (t : Ty) : List Nat → Nat → Nat
+  | _, 0 => 0
+  | dims, k + 1 => flatLength t dims + slicesLength t dims k
+
+theorem flatLength_eq_prod (t : Ty) : ∀ dims, flatLength t dims = dims.prod
+  | [] => rfl
+  | d :: ds => by
+      simp only [flatLength]
+      rw [show (d :: ds).prod = d * ds.prod from rfl]
+      rw [flatLength_eq_prod t ds]
+
+theorem slicesLength_mul (t : Ty) : ∀ (dims : List Nat) (k : Nat),
+    slicesLength t dims k = k * flatLength t dims
+  | _, 0 => by simp [slicesLength]
+  | dims, k + 1 => by
+      simp only [slicesLength]
+      rw [slicesLength_mul t dims k, Nat.succ_mul, Nat.add_comm]
+
+mutual
+theorem TSlices.toList_length : {t : Ty} → {dims : List Nat} → {m : Nat} →
+    (ss : TSlices t dims m) → (TSlices.toList ss).length = slicesLength t dims m
+  | _, _, _, .nil => rfl
+  | t, dims, _, .cons x ss => by
+      simp only [TSlices.toList, List.length_append]
+      rw [TVal.toList_length x, TSlices.toList_length ss]
+      rfl
+
+theorem TVal.toList_length : {t : Ty} → {dims : List Nat} → (tv : TVal t dims) →
+    (TVal.toList tv).length = flatLength t dims
+  | _, _, .scalar v => rfl
+  | t, (d :: ds), .dim ss => by
+      simp only [TVal.toList, flatLength]
+      rw [TSlices.toList_length ss, slicesLength_mul t ds d]
+end
+
+def TSlices.sliceList : {t : Ty} → {dims : List Nat} → {m : Nat} →
+    TSlices t dims m → List (TVal t dims)
+  | _, _, _, .nil => []
+  | _, _, _, .cons x ss => x :: TSlices.sliceList ss
+
+/-- `ofCount?` on a slices-list's own list rebuilds it (the counted
+    builder's inverse on data it produced). -/
+theorem TSlices.ofCount?_sliceList : {t : Ty} → {dims : List Nat} → {m : Nat} →
+    (ss : TSlices t dims m) → TSlices.ofCount? m ss.sliceList = some ss
+  | _, _, _, .nil => rfl
+  | _, _, _, .cons _ ss => by
+      simp only [TSlices.sliceList, TSlices.ofCount?]
+      rw [ofCount?_sliceList ss]
+      simp
+
 mutual
 def buildSlices? : (t : Ty) → (fuel : Nat) → (dims : List Nat) → (k : Nat) →
     List (Value t) → Option (List (TVal t dims) × List (Value t))
-  | _, 0, _, _ + 1, _ => none
   | _, _, _, 0, vs => some ([], vs)
-  | t, fuel + 1, dims, k + 1, vs => do
+  | t, fuel, dims, k + 1, vs => do
       let (x, r) ← buildOne? t fuel dims vs
       let (xs, r2) ← buildSlices? t fuel dims k r
       pure (x :: xs, r2)
@@ -223,8 +325,13 @@ def buildSlices? : (t : Ty) → (fuel : Nat) → (dims : List Nat) → (k : Nat)
 
 def buildOne? : (t : Ty) → (fuel : Nat) → (dims : List Nat) →
     List (Value t) → Option (TVal t dims × List (Value t))
-  | _, _, [], [v] => some (TVal.scalar v, [])
-  | _, _, [], _ => none
+  | _, _, [], [] => none
+  -- ONE element off the front, the TAIL FLOWS to the siblings (the
+  -- `[v]`-pattern bug this replaced consumed the tail and rejected
+  -- every multi-element tensor — invisible without the round-trip
+  -- theorem above; this is why the theorem is mandatory, not
+  -- decoration)
+  | _, _, [], v :: rest => some (TVal.scalar v, rest)
   | _, 0, _ :: _, _ => none
   | t, fuel + 1, d :: ds, vs => do
       -- d inner slices of shape ds, off the front; the count-checked
@@ -234,6 +341,51 @@ def buildOne? : (t : Ty) → (fuel : Nat) → (dims : List Nat) →
       some (TVal.dim ss, r)
   termination_by _ fuel dims _ => (fuel, 0, dims.length)
 end
+
+mutual
+def buildSlices?_toList : {t : Ty} → {dims : List Nat} → {k : Nat} →
+    (ss : TSlices t dims k) → (f : Nat) → needS t dims k ≤ f →
+    ∀ rest : List (Value t),
+      buildSlices? t f dims k (TSlices.toList ss ++ rest)
+        = some (TSlices.sliceList ss, rest)
+  | _, _, _, .nil, _, _, rest => by
+      -- the builder is WF (termination_by) — its equations are simp
+      -- lemmas, not definitional (rfl cannot whnf a WellFounded.fix)
+      simp [TSlices.toList, TSlices.sliceList, buildSlices?]
+  | t, dims, _, @TSlices.cons _ _ _ x ss', fuel, h, rest => by
+      -- the sibling fuel is SHARED: both sub-calls run at the SAME
+      -- `fuel`, and `needS (k'+1) = needOne dims` covers each
+      have h' : needOne t dims ≤ fuel := by simpa [needS] using h
+      have hss' : needS t dims _ ≤ fuel := Nat.le_trans (needS_le t dims _) h
+      have hx := buildOne?_toList x fuel h' (TSlices.toList ss' ++ rest)
+      have hss := buildSlices?_toList ss' fuel hss' rest
+      simp only [TSlices.toList, List.append_assoc, TSlices.sliceList,
+        buildSlices?]
+      rw [hx]
+      simp [hss]
+  termination_by _ _ _ ss _ _ _ => sizeOf ss
+
+def buildOne?_toList : {t : Ty} → {dims : List Nat} → (tv : TVal t dims) →
+    (f : Nat) → needOne t dims ≤ f → ∀ rest : List (Value t),
+      buildOne? t f dims (TVal.toList tv ++ rest) = some (tv, rest)
+  | _, [], .scalar v, _, _, rest => by
+      simp only [TVal.toList]
+      simp [buildOne?]
+  | _, _ :: _, .dim _, 0, h, _ => by simp [needOne] at h
+  | t, (d :: ds), .dim ss, fuel + 1, h, rest => by
+      -- h : needOne t (d :: ds) = 1 + needS t ds d ≤ fuel + 1 — the dim
+      -- level's one decrement buys the slices' need
+      have hNeed : needS t ds d ≤ fuel := by
+        have hdef : needOne t (d :: ds) = 1 + needS t ds d := by simp [needOne]
+        omega
+      simp only [TVal.toList, TSlices.toList]
+      simp only [buildOne?]
+      rw [buildSlices?_toList ss fuel hNeed rest]
+      simp [TSlices.ofCount?_sliceList]
+  termination_by _ _ tv _ _ _ => sizeOf tv
+end
+
+
 
 /-- Encode a schema-typed value. Composite types reuse Codec's
     combinators; `future`/`stream` erase to their payload (the
@@ -346,7 +498,7 @@ def decVal? (t : Ty) (bs : List UInt8) : Option (Value t × List UInt8) :=
             | none => none
             | some (elems, r2) =>
                 if elems.length != dims.prod then none
-                else match buildOne? a (elems.length * (dims.length + 1) + 10) dims elems with
+                else match buildOne? a (elems.length * (dims.length + 1) + dims.length + 10) dims elems with
                   | some (tv, []) => some (.tensor tv, r2)
                   | _ => none
   | .ty _ => none
@@ -378,6 +530,9 @@ inductive CodecClosed : Ty → Type where
   | result {ok err : Ty} : CodecClosed ok → CodecClosed err →
       CodecClosed (.result ok err)
   | list {t : Ty} : CodecClosed t → CodecClosed (.list t)
+  | /-- the tensor's element codec (the dims are static data — the
+      shape gate needs no closure hypothesis) -/
+  tensor {t : Ty} {dims : List Nat} : CodecClosed t → CodecClosed (.tensor dims t)
   | future {t : Ty} : CodecClosed t → CodecClosed (.future t)
   | stream {t : Ty} : CodecClosed t → CodecClosed (.stream t)
 
@@ -496,6 +651,30 @@ theorem decode_encodeValue_append (t : Ty) (h : CodecClosed t) :
       | stream vl =>
           simp only [encodeValue]
           rw [decode_encStreamVList_append _ ih vl rest]
+  | @tensor a dims h ih =>
+      intro v rest
+      cases v with
+      | tensor tv =>
+          -- the wire: dims-list ++ flat-elements; both round trip (the
+          -- dims by the combinator, the elements by the ih), the count
+          -- gate reads the flatten's length (the product), and the
+          -- rebuild-inverse assembles the original TVal
+          simp only [encodeValue, decVal?]
+          rw [List.append_assoc, Codec.decList_encList_append Codec.encVarNat
+            Codec.decNat? Codec.decNat_encVarNat_append dims
+            (Codec.encList (encodeValue a) (TVal.toList tv) ++ rest)]
+          simp only [decVal?]
+          rw [Codec.decList_encList_append (encodeValue a) (decVal? a) ih
+            (TVal.toList tv) rest]
+          simp only [TVal.toList_length tv, flatLength_eq_prod,
+            List.append_nil, List.length_nil,
+            if_neg (by simp : ¬((dims != dims) = true)),
+            if_neg (by simp : ¬((dims.prod != dims.prod) = true))]
+          have hApp : tv.toList = tv.toList ++ [] := (List.append_nil _).symm
+          rw [hApp]
+          rw [buildOne?_toList tv _ (by
+            have h1 := needOne_le_len a dims
+            omega) []]
 
 /-- The plain round trip: `decodeValue t (encodeValue t v) = some v`. -/
 theorem decode_encodeValue (t : Ty) (v : Value t) (h : CodecClosed t) :
@@ -522,9 +701,46 @@ def listClosed {t : Ty} (h : CodecClosed (.list t)) : CodecClosed t :=
 def streamClosed {t : Ty} (h : CodecClosed (.stream t)) : CodecClosed t :=
   match h with | .stream h' => h'
 
-/-- A default value for any codec-closed type — the generator/shrinker
-    base case (structural recursion on the `CodecClosed` proof). -/
+/-- the closed-tensor's element proof (the resultOkClosed pattern) -/
+def tensorClosed {t : Ty} {dims : List Nat} (h : CodecClosed (.tensor dims t)) :
+    CodecClosed t :=
+  match h with | .tensor h' => h'
+
+-- (plain comment: doc comments cannot precede `mutual`. The doc:
+-- a default value for any codec-closed type — the generator/shrinker
+-- base case (structural recursion on the CodecClosed proof). The
+-- tensor default FILLS the shape with the element's default.)
+/-- the counted builder never fails on a length-matched list (the
+    default-tensor's extraction) -/
+theorem ofCount?_of_length : ∀ {t : Ty} {dims : List Nat} (l : List (TVal t dims)) (k : Nat),
+    l.length = k → ∃ ss, TSlices.ofCount? k l = some ss
+  | _, _, [], 0, _ => ⟨.nil, rfl⟩
+  | _, _, x :: l, k + 1, h => by
+      have hl : l.length = k := by
+        have h2 := h
+        simp at h2
+        exact h2
+      have ⟨ss, hss⟩ := ofCount?_of_length l k hl
+      exact ⟨.cons x ss, by simp [TSlices.ofCount?, hss]⟩
+
+def defaultTVal (elemDefault : Value t) : (dims : List Nat) → TVal t dims
+  | [] => .scalar elemDefault
+  | d :: ds => by
+      have hex := ofCount?_of_length
+        (List.replicate d (defaultTVal elemDefault ds)) d
+        (by simp [List.length_replicate])
+      cases hop : TSlices.ofCount? d (List.replicate d (defaultTVal elemDefault ds)) with
+      | some ss' => exact .dim ss'
+      | none =>
+          have hFalse : False := by
+            obtain ⟨ss, hs⟩ := hex
+            rw [hs] at hop
+            exact absurd hop (by simp)
+          exact hFalse.elim
+
 def defaultValue : (t : Ty) → CodecClosed t → Value t
+  | .tensor dims t, h' =>
+      .tensor (defaultTVal (defaultValue t (tensorClosed h')) dims)
   | .bool, _ => .bool false
   | .u8, _ => .u8 0
   | .u16, _ => .u16 0

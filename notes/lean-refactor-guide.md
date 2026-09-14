@@ -124,9 +124,31 @@ combinators + Envelope, payoff `composite_decode_encode` closed by simp
 alone). Decode.lean dead pair `splitTopLevel_join_rbracket`/
 `sep_toList_joinCSep` was transformed (not deleted) — deletion candidate.
 
-REMAINING (2026-09-13 late — after the FIVE-AGENT round: the richer
-VExpr + the branch-correctness + the range-audit + the vendored deps +
-the docs emitter — see below; the ecosystem's = the edge items):
+REMAINING (2026-09-15 — after the FINAL round: EdgePython + the
+warm-start — the template's headline-capabilities ALL landed; the
+open = the research-tail + the owner's WIP):
+
+- **EdgePython LANED** (`lean/edgepython` + the two crates' tests): the
+  SECOND FRONTEND — the Python-subset (the int-arith/ifs/while/calls)
+  compiles to `Wat.Instr` with ZERO new constructors (the type-check =
+  the proof: the test-file cannot name a new one!) — the IR-seam's
+  neutrality = by construction; the THREE-engine conformance (the
+  Lean-parity theorems (native_decide-disclosed) + wasmtime + wasmi);
+  the negative controls (the buggy mul→sub DIVERGES); the honest
+  finding: the heap-layer = guestlang's concern (the scalars-frontend
+  needs no alloc/RC — the runtime-splice = absent).
+- **The warm-start LANED**: the hot-reload's state-migration = the
+  EVENT-LOG REPLAY (the wasmtime-level memory-injection = rejected
+  with vendored-source evidence: no component-level memory-escape);
+  the carryover = the replay's (the calls-counter = 2 post-replay);
+  the negative = the no-replay = the state-lost; the soundness =
+  DEPENDS on the deterministic profile (the doctrine-tie!).
+- The remaining = the RESEARCH-tail: the full translation-correctness
+  (emitCode's totalization + the LCNF-source-semantics), the VExpr's
+  variant-family's compiled-path, the audit's dataflow, the subprocess
+  pool's IPC-hardening, the EdgePython's string/list-extension (the
+  heap-layer's = the reuse!), Reservoir (excluded per owner), the CI's
+  first real run (owner's secrets).
 
 - **The parameterized backend LANED**: `lean/wasm-backend/project.json`
   (the spec-modules + the impl-modules = the manifest) → `targetDeclsOf
