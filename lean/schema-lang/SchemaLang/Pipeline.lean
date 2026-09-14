@@ -51,11 +51,22 @@ deriving Repr, BEq, DecidableEq, Inhabited
 -- `failed`). The invariant excludes ONLY `failed` — an error state is
 -- not a legal resting state. (plain comment: doc comments cannot
 -- precede machine! — the custom command rejects them)
+/-- Position along the happy chain; `failed` and `idle` both rank 0
+    (both only leave via `reset`, which re-enters at 0). -/
+def PipelineState.rank : PipelineState → Nat
+  | .idle => 0
+  | .reflecting => 1
+  | .checked => 2
+  | .emitted => 3
+  | .tied => 4
+  | .failed _ _ => 0
+
 machine! pipeline where
   State: PipelineState
   Inv: fun s => match s with
     | .failed _ _ => false  -- failed is NOT in the invariant (error state)
     | _ => true
+  rank: PipelineState.rank rewind: reset
   event: reflect guard: (fun s => s = .idle) action: (fun _ _ => .reflecting)
   event: check guard: (fun s => s = .reflecting) action: (fun _ _ => .checked)
   event: emit guard: (fun s => s = .checked) action: (fun _ _ => .emitted)
@@ -94,38 +105,6 @@ machine! pipelineDead where
     safety: (by intro s h; simp at h)
 
 /-! ## Acyclicity — the happy path is a linear chain -/
-
-/-- Position along the happy chain; `failed` and `idle` both rank 0
-    (both only leave via `reset`, which re-enters at 0). -/
-def PipelineState.rank : PipelineState → Nat
-  | .idle => 0
-  | .reflecting => 1
-  | .checked => 2
-  | .emitted => 3
-  | .tied => 4
-  | .failed _ _ => 0
-
-/-- Core acyclicity fact, on the action directly: firing ANY non-`reset`
-    event from ANY state lands strictly higher on the chain (the guard
-    rules out the non-advancing firings). -/
-theorem rank_advances (s : PipelineState) (l : pipeline.Label)
-    (hnr : l ≠ .reset) (w : (pipeline.event l).guard s = true) :
-    s.rank < ((pipeline.event l).action s w).rank := by
-  cases s <;> cases l <;>
-    simp [pipeline, pipeline.spec, PipelineState.rank] at hnr w ⊢ <;>
-    omega
-
-/-- Every NON-reset transition strictly increases the rank: the pipeline
-    is a DAG whose only cycles pass through `reset` (the explicit recovery
-    edge). The happy chain idle → reflecting → checked → emitted → tied
-    can never return to an earlier stage. -/
-theorem rank_advances_tr (s s' : PipelineState) (l : pipeline.Label)
-    (htr : pipeline.tr s l s') (hnr : l ≠ .reset) :
-    s.rank < s'.rank := by
-  obtain ⟨w, hact⟩ := htr
-  have h := rank_advances s l hnr w
-  rw [hact] at h
-  exact h
 
 /-- The happy path EXECUTES: reflect, check, emit, tie — idle to tied in
     four accepted steps. -/

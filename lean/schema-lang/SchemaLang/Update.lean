@@ -291,9 +291,16 @@ inductive TickState where
 deriving Repr, BEq, DecidableEq, Inhabited
 
 -- (plain comment: doc comments cannot precede machine!)
+/-- The phase rank: idle 0 → settled 1 → cascaded 2 → resolved 3 →
+    committed 4 (stale rides at 0 — unreachable). -/
+def TickState.rank : TickState → Nat
+  | .idle => 0 | .settled => 1 | .cascaded => 2
+  | .resolved => 3 | .committed => 4 | .stale => 0
+
 machine! tick where
   State: TickState
   Inv: fun s => s ≠ .stale
+  rank: TickState.rank rewind: reset
   event: settle guard: (fun s => s = .idle) action: (fun _ _ => .settled)
   event: cascade guard: (fun s => s = .settled) action: (fun _ _ => .cascaded)
   event: resolve guard: (fun s => s = .cascaded) action: (fun _ _ => .resolved)
@@ -308,29 +315,6 @@ instance : DecidablePred tick.Inv := fun s =>
   | .cascaded => isTrue (fun h => TickState.noConfusion h)
   | .resolved => isTrue (fun h => TickState.noConfusion h)
   | .committed => isTrue (fun h => TickState.noConfusion h)
-
-/-- The phase rank: idle 0 → settled 1 → cascaded 2 → resolved 3 →
-    committed 4 (stale rides at 0 — unreachable). -/
-def TickState.rank : TickState → Nat
-  | .idle => 0 | .settled => 1 | .cascaded => 2
-  | .resolved => 3 | .committed => 4 | .stale => 0
-
-/-- Every non-reset transition strictly increases the rank (the tick is
-    a DAG whose only cycles pass through `reset`). -/
-theorem tick_rank_advances (s : TickState) (l : tick.Label)
-    (hnr : l ≠ .reset) (w : (tick.event l).guard s = true) :
-    s.rank < ((tick.event l).action s w).rank := by
-  cases s <;> cases l <;>
-    simp [tick, tick.spec, TickState.rank] at hnr w ⊢ <;>
-    omega
-
-theorem tick_rank_advances_tr (s s' : TickState) (l : tick.Label)
-    (htr : tick.tr s l s') (hnr : l ≠ .reset) :
-    s.rank < s'.rank := by
-  obtain ⟨w, hact⟩ := htr
-  have h := tick_rank_advances s l hnr w
-  rw [hact] at h
-  exact h
 
 /-- Committed is terminal: only `reset` leaves it (a committed tick is
     history — the journal, not mutable state). -/
@@ -377,3 +361,4 @@ theorem tickTableStep?_eq_step? (e : tick.Label) (s : TickState) :
   cases s <;> cases e <;> simp [tickTableStep?, tick, tick.spec]
 
 end SchemaLang
+

@@ -21,8 +21,12 @@ import SchemaLang.Bridge
 #print axioms SchemaLang.Codec.decEnvelope_encEnvelope
 #print axioms SchemaLang.Codec.decEnvelope_wrong_version
 #print axioms SchemaLang.Ty.toSType?_congr
-#print axioms SchemaLang.rank_advances
-#print axioms SchemaLang.rank_advances_tr
+#print axioms SchemaLang.pipeline_rank_advances
+#print axioms SchemaLang.pipeline_rank_advances_tr
+#print axioms SchemaLang.tick_rank_advances
+#print axioms SchemaLang.tick_rank_advances_tr
+#print axioms SchemaLang.orderMachine_rank_advances
+#print axioms SchemaLang.orderMachine_rank_advances_tr
 #print axioms SchemaLang.happy_path
 #print axioms SchemaLang.reject_out_of_order
 #print axioms SchemaLang.reset_from_failed

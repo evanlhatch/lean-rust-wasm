@@ -109,6 +109,8 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   let invty : Term := ⟨stx[7]!⟩
   -- stx[8] = the optional rank/rewind group (a null node when absent:
   -- [rank:, term, rewind:, ident] when present); stx[9] = the events.
+  -- the optional group wraps the NAMED machineRank node (arity 1):
+  -- optRank[0] = machineRank = [rank:, term, rewind:, ident]
   let optRank : Syntax := stx[8]!
   let evs : Array Syntax := stx[9]!.getArgs
   let labelId := mkIdentFrom stx (name.getId ++ `Label)
@@ -162,25 +164,33 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   -- proof mirrors the hand-written originals verbatim (cases over the
   -- enumerated state/label space, then omega over the rank arithmetic).
   if optRank.getNumArgs > 0 then
-    let rankT : Term := ⟨optRank[1]!⟩
-    let rewindId : TSyntax `ident := ⟨optRank[3]!⟩
+    let mr : Syntax := optRank[0]!
+    let rankT : Term := ⟨mr[1]!⟩
+    let rewindId : TSyntax `ident := ⟨mr[3]!⟩
     let advId := mkIdentFrom stx (name.getId ++ `rank_advances)
     let advTrId := mkIdentFrom stx (name.getId ++ `rank_advances_tr)
     let rewindFull : Term :=
       ⟨mkIdentFrom stx (name.getId ++ `Label ++ rewindId.getId)⟩
-    let specLem ← `(term| _root_.Machines.Machine.spec $name)
+    let specLem : Term := ⟨mkIdentFrom stx (name.getId ++ `spec)⟩
     -- elemsAndSeps = the lemmas INTERLEAVED with the separator atoms
     let sep := Syntax.atom .none ","
-    let lem (t : Term) : Syntax := Syntax.node .none ``Lean.Parser.Tactic.simpLemma #[t.raw]
+    -- simpLemma = [prePost-group, ← -group, term] — the first two slots
+    -- null (a plain forward lemma); the TERM at index 2 (elabSimpArg reads
+    -- arg[2] — a node without the null slots silently drops the lemma)
+    let lem (t : Term) : Syntax :=
+      Syntax.node .none ``Lean.Parser.Tactic.simpLemma
+        #[mkNullNode, mkNullNode, t.raw]
     let simpLemmas : Syntax.TSepArray `Lean.Parser.Tactic.simpLemma "," :=
       ⟨#[lem name, sep, lem specLem, sep, lem rankT]⟩
-    elabCommand (← `(command|
+    let cmd1 ← `(command|
       theorem $advId (s : $sty) (l : $labelId)
           (hnr : l ≠ $rewindFull)
           (w : (_root_.Machines.Machine.event $name l).guard s = true) :
           $rankT s < $rankT ((_root_.Machines.Machine.event $name l).action s w) := by
         cases s <;> cases l <;>
-          simp only [$simpLemmas,*] at hnr w ⊢ <;> omega))
+          simp [$simpLemmas,*] at hnr w ⊢ <;> omega)
+    logInfo m!"GEN1: {cmd1.raw}"
+    elabCommand cmd1
     elabCommand (← `(command|
       theorem $advTrId (s s' : $sty) (l : $labelId)
           (htr : _root_.Machines.Machine.tr $name s l s') (hnr : l ≠ $rewindFull) :

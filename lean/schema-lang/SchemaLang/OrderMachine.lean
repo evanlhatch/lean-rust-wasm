@@ -55,9 +55,17 @@ deriving Repr, BEq, DecidableEq, Inhabited
 -- event except `reset` (the recovery edge) — terminality is a THEOREM
 -- below, not a convention. (plain comment: doc comments cannot precede
 -- machine! — the custom command rejects them)
+/-- Lifecycle rank: cart 0 → placed 1 → shipped 2 → delivered/
+    cancelled 3. `cancelled` rides with `delivered` (both terminal);
+    `stray` rides at 0 (unreachable — no transition targets it). -/
+def OrderStatus.rank : OrderStatus → Nat
+  | .cart => 0 | .placed => 1 | .shipped => 2
+  | .delivered => 3 | .cancelled => 3 | .stray => 0
+
 machine! orderMachine where
   State: OrderStatus
   Inv: fun s => s ≠ .stray
+  rank: OrderStatus.rank rewind: reset
   event: place guard: (fun s => s = .cart) action: (fun _ _ => .placed)
   event: ship guard: (fun s => s = .placed) action: (fun _ _ => .shipped)
   event: deliver guard: (fun s => s = .shipped) action: (fun _ _ => .delivered)
@@ -87,33 +95,6 @@ def orderConformance : List (String × TestKit.CheckResult) :=
     orderMachine.labels_complete
 
 /-! ## The proved discipline -/
-
-/-- Lifecycle rank: cart 0 → placed 1 → shipped 2 → delivered/
-    cancelled 3. `cancelled` rides with `delivered` (both terminal);
-    `stray` rides at 0 (unreachable — no transition targets it). -/
-def OrderStatus.rank : OrderStatus → Nat
-  | .cart => 0 | .placed => 1 | .shipped => 2
-  | .delivered => 3 | .cancelled => 3 | .stray => 0
-
-/-- Core acyclicity fact, on the action directly: firing ANY non-`reset`
-    event from ANY state lands strictly higher on the chain (the guard
-    rules out the non-advancing firings). -/
-theorem lifecycle_rank_advances (s : OrderStatus) (l : orderMachine.Label)
-    (hnr : l ≠ .reset) (w : (orderMachine.event l).guard s = true) :
-    s.rank < ((orderMachine.event l).action s w).rank := by
-  cases s <;> cases l <;>
-    simp [orderMachine, orderMachine.spec, OrderStatus.rank] at hnr w ⊢ <;>
-    omega
-
-/-- Every NON-reset transition strictly increases the rank: the
-    lifecycle is a DAG whose only cycles pass through `reset`. -/
-theorem lifecycle_rank_advances_tr (s s' : OrderStatus) (l : orderMachine.Label)
-    (htr : orderMachine.tr s l s') (hnr : l ≠ .reset) :
-    s.rank < s'.rank := by
-  obtain ⟨w, hact⟩ := htr
-  have h := lifecycle_rank_advances s l hnr w
-  rw [hact] at h
-  exact h
 
 /-- Terminal states: only `reset` leaves them. A delivered order cannot
     be re-shipped; a cancelled order cannot be re-placed — silently

@@ -790,7 +790,7 @@ def orderMachineChecks : CheckResult := do
   .ok ()
 
 /-- The happy path executes end-to-end and out-of-order firing is
-    rejected; acyclicity is `rank_advances_tr` (compile-time, above). -/
+    rejected; acyclicity is `pipeline_rank_advances_tr` (compile-time, above). -/
 def pipelineRunChecks : CheckResult := do
   match pipeline.run .idle [.reflect, .check, .emit, .tie] with
   | none => throw "happy path rejected"
