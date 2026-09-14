@@ -127,6 +127,44 @@ def ColPath.get : ColPath n t fs → RowVals fs → Value t
   | .here, .cons v _ => v
   | .there p, .cons _ vs => p.get vs
 
+/-! ## The cast kit (the TorchLean castShape suite, on GADT indices)
+
+The registry's existential wrappers (`SomeUpdate.applyRow`,
+`InvariantItem.checkOn`) transport a row across a DATA-equality of the
+field list with raw `▸`. The named cast + its four lemmas make the
+transport GREPPABLE and the proof-irrelevance usable: two consumers that
+derived the same equality differently share a lemma (the cast does not
+depend on which proof is used), and `▸`-inserted rewrites are the same
+function (the bridge lemma keeps simp firing on elaborator-produced
+goals).
+-/
+
+/-- Transport a row across a field-list equality (data-guarded at the
+    call sites; the cast itself is the raw `▸`). -/
+def RowVals.cast {fs gs : List Field} (h : fs = gs) (r : RowVals fs) : RowVals gs :=
+  h ▸ r
+
+theorem RowVals.cast_rfl {fs : List Field} (r : RowVals fs) : RowVals.cast rfl r = r := rfl
+
+/-- Any proof of the equality casts identically (ProofIrrel) — the
+    lemma two differently-derived consumers share. -/
+theorem RowVals.cast_self {fs : List Field} (r : RowVals fs) (h : fs = fs) :
+    RowVals.cast h r = r := by cases h; rfl
+
+theorem RowVals.cast_trans {fs gs hs : List Field}
+    (h₁ : fs = gs) (h₂ : gs = hs) (r : RowVals fs) :
+    RowVals.cast h₂ (RowVals.cast h₁ r) = RowVals.cast (h₁.trans h₂) r := by
+  cases h₁; cases h₂; rfl
+
+/-- The `▸` bridge: Lean's auto-inserted eqRec IS the named cast — the
+    lemma that keeps `simp`/`grind` firing on goals the elaborator
+    produced by rewriting the field list. -/
+theorem RowVals.eqRec_eq_cast {fs gs : List Field} (h : fs = gs) (r : RowVals fs) :
+    (h ▸ r : RowVals gs) = RowVals.cast h r := rfl
+
+@[simp] theorem RowVals.cast_eq_cast {fs gs : List Field} (h : fs = gs)
+    (r : RowVals fs) : RowVals.cast h r = (h ▸ r : RowVals gs) := rfl
+
 /-! ## The field resolution's ELABORATION half -/
 
 /-- `HasCol` — `HasField`'s companion: the SAME two-parameter-class

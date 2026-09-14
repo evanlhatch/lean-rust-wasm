@@ -189,7 +189,6 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
           $rankT s < $rankT ((_root_.Machines.Machine.event $name l).action s w) := by
         cases s <;> cases l <;>
           simp [$simpLemmas,*] at hnr w ⊢ <;> omega)
-    logInfo m!"GEN1: {cmd1.raw}"
     elabCommand cmd1
     elabCommand (← `(command|
       theorem $advTrId (s s' : $sty) (l : $labelId)

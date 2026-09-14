@@ -103,7 +103,7 @@ instance : Inhabited InvariantItem :=
     another schema executes as `false` (type mismatch = refusal). -/
 def InvariantItem.checkOn {fs : List Field} (it : InvariantItem) (row : RowVals fs) : Bool :=
   if h : fs = it.inv.fields then
-    validates it.inv.expr (h ▸ row)
+    validates it.inv.expr (RowVals.cast h row)
   else false
 
 end SchemaLang

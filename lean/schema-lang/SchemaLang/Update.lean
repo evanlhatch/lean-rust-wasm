@@ -273,7 +273,8 @@ structure SomeUpdate where
 def SomeUpdate.applyRow (u : SomeUpdate) {fs : List Field}
     (row : RowVals fs) : RowVals fs :=
   if h : fs = u.fields then
-    (h ▸ u.update.applyRow (h ▸ row) : RowVals fs)
+    -- the named cast (Validate's kit): greppable, proof-irrelevant
+    RowVals.cast h.symm (u.update.applyRow (RowVals.cast h row))
   else row
 
 /-! ## The tick — the four phases as a machine (SPEC §7, v1) -/
