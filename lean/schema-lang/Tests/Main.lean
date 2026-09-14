@@ -2599,17 +2599,36 @@ def subId : Subschema [⟨"id", .u64⟩] subUserOld := by repeat constructor
 def subIdName : Subschema [⟨"id", .u64⟩, ⟨"name", .string⟩] subUserOld :=
   by repeat constructor
 
-/-- Transitivity, term-level: the chained evidence composes. -/
+/-- Transitivity, term-level: the chained evidence composes — the
+    THREE-rung chain [id] ⊆ [id, name] ⊆ subUserOld (the §7.3
+    `trans` shape over concrete schemas). -/
+def subStep : Subschema [⟨"id", .u64⟩] [⟨"id", .u64⟩, ⟨"name", .string⟩] :=
+  by repeat constructor
+
 def subChain : Subschema [⟨"id", .u64⟩] subUserOld :=
-  Subschema.trans subId subIdName
+  Subschema.trans subStep subIdName
 
 /-- The safe-change lemma, executed as a term: the old record embeds
     into the nickname-augmented one (`addColumn_sub` generalizes —
     here built by the book's ergonomics). -/
 def subFullEmbed : Subschema subUserOld subUserNew := by repeat constructor
 
-/-- A FULL new-schema row. -/
-def subRow (n : UInt64) : RowVals subUserNew :=
+/-- concrete-index accessors (the nested-GADT patterns need the
+    schema fixed by the SIGNATURE, not by the match) -/
+def subHeadU64 : RowVals ({ name := n, ty := .u64 } :: fs) → UInt64
+  | .cons (.u64 v) _ => v
+
+def subHead2U64String :
+    RowVals ({ name := "id", ty := .u64 } ::
+             { name := nm, ty := .string } :: fs) → UInt64 × String
+  | .cons (.u64 v) (.cons (.string s) _) => (v, s)
+
+/-- A full OLD-schema row (the valRow shape plus a filled email). -/
+def subRowOld (n : UInt64) : RowVals subUserOld :=
+  .cons (.u64 n) (.cons (.string "Evan") (.cons (.string "e@x") .nil))
+
+/-- A full NEW-schema row (the nickname field filled). -/
+def subRowNew (n : UInt64) : RowVals subUserNew :=
   .cons (.u64 n) (.cons (.string "Evan") (.cons (.string "e@x")
     (.cons (.string "ev") .nil)))
 
@@ -2617,22 +2636,21 @@ def subschemaChecks : CheckResult := do
   -- §7.3 demo, executed: the projections read the RIGHT columns —
   -- and CANNOT fail (no failure value exists to return)
   _ ← assertEq "project id-only"
-    (match subRow 42 |>.project subId with | .cons (.u64 n) _ => n | _ => 0) 42
+    (subHeadU64 (subRowOld 42 |>.project subId)) 42
   _ ← assertEq "project id,name"
-    (match subRow 42 |>.project subIdName with
-      | .cons (.u64 n) (.cons (.string s) _) => (n, s) | _ => (0, ""))
+    (subHead2U64String (subRowOld 42 |>.project subIdName))
     (42, "Evan")
   -- trans, executed: the chained evidence projects identically
   _ ← assertEq "trans chain projects the same"
-    (match subRow 42 |>.project subChain with | .cons (.u64 n) _ => n | _ => 0) 42
+    (subHeadU64 (subRowOld 42 |>.project subChain)) 42
   -- THE MIGRATION RUNNER, executed: the OLD validator (`id > 0`,
   -- valPositive over valUserFields = subUserOld) runs UNCHANGED on
   -- the NEW rows through the projection — the embedding evidence IS
   -- the backward-compat certificate, `RowVals.project` is its runner.
   _ ← assertEq "old validator on new rows (id=42)"
-    (validates valPositive (subRow 42 |>.project subFullEmbed)) true
+    (validates valPositive (subRowNew 42 |>.project subFullEmbed)) true
   _ ← assertEq "old validator refuses bad new row (id=0)"
-    (validates valPositive (subRow 0 |>.project subFullEmbed)) false
+    (validates valPositive (subRowNew 0 |>.project subFullEmbed)) false
   -- the constructive migration search, executed: additions construct
   -- the evidence; a retype or a removal is `none` = breaking
   _ ← assert (subschemaOfItem? subItemV1 subItemV2).isSome

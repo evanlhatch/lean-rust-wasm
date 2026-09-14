@@ -129,102 +129,40 @@ class UpdatePure (fs : List Field) (f : Field)
   /-- The stored volatile-ref set is empty (the scan's decided fact). -/
   volatileFree : u.volatileRefs = []
 
-/-- The non-interference fold over the DERIVED reads/writes: for every
-column written by EITHER update — it is read by the other update's
-terms (guard or value), and the write columns differ. One fold, the
-`cascade_two_commute` hypothesis set as one Bool. Concrete updates
-decide at registration (`by decide` over the derived lists — the fold
-runs over data, never hand-lists). -/
-def UpdateItem.disjointWith {fs : List Field} {f₁ f₂ : Field}
-    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂) : Bool :=
-  (u₁.writes ++ u₂.writes).all
-    (fun c =>
-      !(u₁.writes.contains c && u₂.reads.contains c)
-        && !(u₂.writes.contains c && u₁.reads.contains c)
-        && !(u₁.writes.contains c && u₂.writes.contains c))
-
-/-- THE NON-INTERFERENCE LOCK: neither update reads the other's written
-column, and the write columns differ. The class of
-`cascade_two_commute`'s four non-membership hypotheses + the distinct-
-write-columns fact (the same legality, COMPOSABLE). -/
+/-- THE NON-INTERFERENCE LOCK — literally `cascade_two_commute`'s
+hypothesis set as ONE class: neither update's TERMS (guard or value)
+read the other's written column, and the write columns differ. Every
+fact rides the DERIVED reads (never hand-listed); concrete updates
+decide at registration (`by decide` — decidable membership over the
+derived lists). -/
 class NonInterfering (fs : List Field) (f₁ f₂ : Field)
     (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂) : Prop where
-  /-- The fold: the decidable non-interference of the derived lists. -/
-  noOverlap : u₁.disjointWith u₂ = true
+  /-- The four non-membership facts + the distinct write columns. -/
+  noOverlap :
+    f₂.name ∉ u₁.guard.reads ∧ f₂.name ∉ u₁.value.reads
+      ∧ f₁.name ∉ u₂.guard.reads ∧ f₁.name ∉ u₂.value.reads
+      ∧ f₁.name ≠ f₂.name
 
-/-- The reads-fold extraction: a column absent from the deduped read
-    set is absent from BOTH raw term reads (the `eraseDups` split —
-    membership, not position, is what the fold decides). -/
-theorem UpdateItem.notMem_of_reads_notContains {fs : List Field} {f : Field}
-    (u : UpdateItem fs f) {c : String}
-    (h : u.reads.contains c = false) :
-    c ∉ u.guard.reads ∧ c ∉ u.value.reads := by
-  have hr := h
-  simp only [UpdateItem.reads, List.contains_eq_mem, List.mem_eraseDups,
-    List.mem_append, decide_eq_false_iff_not] at hr
-  exact ⟨fun hm => hr (Or.inl hm), fun hm => hr (Or.inr hm)⟩
-
-/-- The pointwise non-interference predicate is symmetric (pure Bool
-    algebra over four atoms — a free-Bool lemma, so `cases` is safe). -/
-theorem UpdateItem.disjointAt_symm (w₁ w₂ r₁ r₂ : Bool) :
-    (!(w₁ && r₂) && (!(w₂ && r₁) && !(w₁ && w₂))) = true →
-    (!(w₂ && r₁) && (!(w₁ && r₂) && !(w₂ && w₁))) = true := by
-  intro h
-  revert h
-  cases w₁ <;> cases w₂ <;> cases r₁ <;> cases r₂ <;> simp
-
-/-- Composition (pair level): non-interference is symmetric — the fold
-runs over BOTH write lists, and the pointwise predicate is
-Bool-commutative (`disjointAt_symm`). -/
-instance NonInterfering.symm {fs : List Field} {f₁ f₂ : Field}
-    {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
-    [h : NonInterfering fs f₁ f₂ u₁ u₂] :
-    NonInterfering fs f₂ f₁ u₂ u₁ where
-  noOverlap := by
-    have hall := h.noOverlap
-    simp only [UpdateItem.disjointWith, List.all_eq_true] at hall ⊢
-    intro c hc
-    exact UpdateItem.disjointAt_symm _ _ _ _ (hall c (Or.symm hc))
-
-/-- The class → `cascade_two_commute`'s hypotheses: the four
-non-membership facts + the distinct write columns, ALL derived from the
-fold (the derived lists earn the conversion — no hand-listing). -/
+/-- The class → `cascade_two_commute`'s hypotheses: the class IS the
+hypothesis set — the extraction is the identity (the derived reads earn
+the composition: no hand-listing, no re-derivation). -/
 theorem NonInterfering.cascadeHyps {fs : List Field} {f₁ f₂ : Field}
     {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
     (h : NonInterfering fs f₁ f₂ u₁ u₂) :
     f₂.name ∉ u₁.guard.reads ∧ f₂.name ∉ u₁.value.reads
       ∧ f₁.name ∉ u₂.guard.reads ∧ f₁.name ∉ u₂.value.reads
-      ∧ f₁.name ≠ f₂.name := by
-  have hall := h.noOverlap
-  simp only [UpdateItem.disjointWith, List.all_eq_true] at hall
-  -- the singleton write sets are definitional (`[f.name]`)
-  have m₁ : u₁.writes.contains f₁.name = true := by
-    simp [UpdateItem.writes]
-  have m₂ : u₂.writes.contains f₂.name = true := by
-    simp [UpdateItem.writes]
-  -- the pointwise facts at each update's own write column
-  have hp₂ := hall f₂.name (Or.inr (by simp [UpdateItem.writes]))
-  simp only [Bool.and_eq_true] at hp₂
-  have hp₁ := hall f₁.name (Or.inl (by simp [UpdateItem.writes]))
-  simp only [Bool.and_eq_true] at hp₁
-  obtain ⟨_, q₂, _⟩ := hp₂
-  obtain ⟨p₁, _, p₃⟩ := hp₁
-  -- u₂'s write column is unread by u₁ (guard + value), and conversely
-  have r₁ : u₁.reads.contains f₂.name = false := by
-    rw [m₂] at q₂
-    simpa using q₂
-  have r₂ : u₂.reads.contains f₁.name = false := by
-    rw [m₁] at p₁
-    simpa using p₁
-  obtain ⟨ng₁, nv₁⟩ := u₁.notMem_of_reads_notContains r₁
-  obtain ⟨ng₂, nv₂⟩ := u₂.notMem_of_reads_notContains r₂
-  -- and the write columns differ (the writes-disjoint conjunct)
-  have hne : f₁.name ≠ f₂.name := by
-    rw [m₁] at p₃
-    have h5 : u₂.writes.contains f₁.name = false := by simpa using p₃
-    simp [UpdateItem.writes] at h5
-    exact fun hh => h5 (by rw [hh]; simp)
-  exact ⟨ng₁, nv₁, ng₂, nv₂, hne⟩
+      ∧ f₁.name ≠ f₂.name :=
+  h.noOverlap
+
+/-- Composition (pair level): non-interference is symmetric — the SAME
+five facts, permuted (no new data, pure rearrangement). -/
+instance NonInterfering.symm {fs : List Field} {f₁ f₂ : Field}
+    {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
+    [h : NonInterfering fs f₁ f₂ u₁ u₂] :
+    NonInterfering fs f₂ f₁ u₂ u₁ where
+  noOverlap :=
+    ⟨h.noOverlap.2.2.1, h.noOverlap.2.2.2.1, h.noOverlap.1, h.noOverlap.2.1,
+      Ne.symm h.noOverlap.2.2.2.2⟩
 
 /-! ## The write: `ColPath.set` -/
 
@@ -266,14 +204,14 @@ def UpdateItem.cascade2 {fs : List Field} {f₁ f₂ : Field}
     (rows : List (RowVals fs)) : List (RowVals fs) :=
   (rows.map u₂.applyRow).map u₁.applyRow
 
-/-- The composite's ORDER-FREEDOM (the law over the locked composite):
-`cascade_two_commute` recovered STRUCTURALLY — its four
-non-interference hypotheses come from the class field alone, via
-`cascadeHyps` (the swap needs only the `symm` composition instance).
-Stated in `Tests` — `cascade_two_commute` lives in `TickCascade`, which
-imports THIS module (a theorem here would be an import cycle); the
-Tests pin is the composition-level witness until the law moves next to
-its consumer. -/
+-- The composite's ORDER-FREEDOM (the law over the locked composite):
+-- `cascade_two_commute` recovered STRUCTURALLY — its four
+-- non-interference hypotheses come from the class field alone, via
+-- `cascadeHyps` (the swap needs only the `symm` composition instance).
+-- Stated in `Tests` — `cascade_two_commute` lives in `TickCascade`,
+-- which imports THIS module (a theorem here would be an import cycle);
+-- the Tests pin is the composition-level witness until the law moves
+-- next to its consumer.
 
 /-! ## The two-channel duality, pinned (SPEC §4) -/
 
