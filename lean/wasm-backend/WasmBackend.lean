@@ -689,7 +689,7 @@ def flatTyOf : SchemaLang.Ty → List String
   | .f32 => ["f32"]
   | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 => ["i32"]
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
-  | .stream _ | .ty _ => ["i32", "i32"]
+  | .stream _ | .tensor _ _ | .ty _ => ["i32", "i32"]
 
 def userFlatTys (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List String :=
   (userFieldTys cert).flatMap flatTyOf

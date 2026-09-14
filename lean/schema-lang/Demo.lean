@@ -17,6 +17,12 @@ referenced type before the referencing one — v1 limitation).
 import SchemaLang.Meta.Reflect
 import SchemaLang.Migration
 
+-- The registration-emitted instances (`instUpdatePure.<name>`) park in
+-- the FRAMEWORK's namespace by construction (Reflect's command emits
+-- into SchemaLang) — the packageNamespace lint's helper rule does not
+-- apply to framework-emitted decls (no source-site attribute exists).
+set_option linter.guestlang.packageNamespace false -- because the framework's registration command emits the instances into SchemaLang by construction; no source-site attribute exists
+
 /-! ## Records -/
 
 @[schema]

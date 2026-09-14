@@ -155,15 +155,18 @@ fn engine_duel_wasmi_matches_the_lean_authority() {
         if !SCALAR_DUEL.contains(&f.as_str()) {
             continue;
         }
+        // the boundary rows are U64 (the oracle's full-range inputs) —
+        // parse as u64, bit-cast for the i64 core ABI
         let iargs: Vec<i64> = args
             .iter()
-            .map(|a| a.parse().expect("scalar row arg"))
+            .map(|a| a.parse::<u64>().expect("scalar row arg") as i64)
             .collect();
         let got = invoke_core(&wasm, &f, &iargs, 1_000_000)
             .unwrap_or_else(|e| panic!("{f} {iargs:?} trapped under wasmi: {e}"));
-        let want: Vec<i64> = vec![expected.parse().expect("scalar row result")];
+        let want: Vec<u64> = vec![expected.parse().expect("scalar row result")];
         assert_eq!(
-            got, want,
+            got.iter().map(|g| *g as u64).collect::<Vec<u64>>(),
+            want,
             "{f} {iargs:?}: wasmi disagrees with the Lean oracle"
         );
         ran += 1;

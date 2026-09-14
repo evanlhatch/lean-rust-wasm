@@ -39,12 +39,14 @@ open SchemaLang
 namespace WasmBackend.Layout
 
 /-- The byte width of one canonical-ABI flat field. A string/bytes/
-    list/option/result/future/stream/reference field is a (ptr, len)
-    PAIR — 8 bytes; the 64-bit scalars are 8; the rest are 4. -/
+    list/option/result/future/stream/tensor/reference field is a
+    (ptr, len) PAIR — 8 bytes (the tensor's flat wire form: the dims
+    list + the element array — the schema-lang codec's encoding);
+    the 64-bit scalars are 8; the rest are 4. -/
 def width : Ty → Nat
   | .u64 | .i64 | .f64 => 8
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
-      | .stream _ | .ty _ => 8
+      | .stream _ | .tensor _ _ | .ty _ => 8
   | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 | .f32 => 4
 
 theorem width_pos (t : Ty) : 0 < width t := by cases t <;> simp [width] <;> omega

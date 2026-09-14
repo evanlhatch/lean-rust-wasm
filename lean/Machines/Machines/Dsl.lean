@@ -15,9 +15,9 @@ machine! counter where
 ```
 
 Acyclicity clause (optional): `rank: <stateRankFn> rewind: <labelCtor>` —
-when present, `machine!` additionally generates `counter_rank_advances`
+when present, `machine!` additionally generates `counter.rank_advances`
 (every non-rewind event strictly increases the rank) and
-`counter_rank_advances_tr` (the same, over `counter.tr`) — the acyclicity
+`counter.rank_advances_tr` (the same, over `counter.tr`) — the acyclicity
 pair three machines (schema-lang's pipeline/tick/orderMachine) used to
 carry by hand, byte-identical modulo names.
 

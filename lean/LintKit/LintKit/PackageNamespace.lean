@@ -61,6 +61,7 @@ package library root (the `lean_pkgs` mirror, plus this package and the
 demo/oracle roots). -/
 def packagePrefixes : List (Name × List Name) := [
   (`Substrait,    [`Substrait]),
+  (`QLang,        [`QLang]),
   (`CodegenCore,  [`CodegenCore]),
   (`TestKit,      [`TestKit]),
   (`Dbsp,         [`Dbsp]),

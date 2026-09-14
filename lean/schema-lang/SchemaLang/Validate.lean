@@ -95,6 +95,12 @@ import SchemaLang.Field
 import CodegenCore.GuestGate
 import LintKit
 
+-- the `[inv| …]` DSL's syntax category parks in Lean's namespace BY
+-- DESIGN (`declare_syntax_cat vexpr` — a syntax cat cannot live in a
+-- library namespace; the `prefix`-trap ledger covers token pollution,
+-- this is the namespace side)
+set_option linter.guestlang.packageNamespace false -- because declare_syntax_cat parks the vexpr category in Lean's namespace by design (syntax cats cannot live in a library namespace)
+
 namespace SchemaLang
 
 /-! ## The value-aligned row -/

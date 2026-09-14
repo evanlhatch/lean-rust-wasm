@@ -154,7 +154,7 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend ledger feature-flags"
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang schema-lang faults dbsp std wasm-backend ledger feature-flags"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -209,6 +209,7 @@ lean-lint: lean-build
 	run Machines Machines Tests.Main
 	run codegen-core CodegenCore Tests.Main
 	run substrait Substrait Tests.Main
+	run qlang QLang Tests.Main
 	run schema-lang SchemaLang Demo Tests.Main
 	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
 	run dbsp Dbsp Tests.Main

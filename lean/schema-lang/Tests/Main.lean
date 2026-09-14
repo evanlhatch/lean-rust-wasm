@@ -14,6 +14,10 @@ import Demo
 import SchemaLang.Trace
 import TestKit
 
+-- the Tests' own `schema_update` probe (updPureCall) emits its instance
+-- into SchemaLang by the framework's construction — same as Demo
+set_option linter.guestlang.packageNamespace false -- because the framework's registration command emits the instance into SchemaLang by construction; no source-site attribute exists
+
 open SchemaLang TestKit
 open SchemaLang.Session (toWire tdual gatewayTyped)
 
@@ -1894,6 +1898,7 @@ abbrev invUserFields : List Field :=
 
 /-- A User row: id + name controllable, the rest default (the
     valRowName style — one Value per field, in schema order). -/
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror: the hand spelling vs the [inv| ...] spelling — the alpha-equality IS the test (the rfl pin below each pair)"]
 def invRow (id : UInt64) (nm : String) : RowVals invUserFields :=
   .cons (.u64 id) (.cons (.string nm)
     (.cons (.string "e") (.cons (.list .nil) .nil)))
@@ -2840,10 +2845,12 @@ abbrev dslUserSchema : List Field :=
 
 /-- THE DEMO: `userCompleteCheck`'s spelling through the syntax — the
     id gate AND the name-length gate in ONE `[inv| … ]` term. -/
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror: the hand spelling vs the [inv| ...] spelling — the alpha-equality IS the test (the rfl pin below each pair)"]
 def userCompleteCheckDsl : VExpr dslUserSchema .bool :=
   [inv| id > 0 && strlen(name) > 3]
 
 /-- The hand-spelled SAME tree (the pin's oracle). -/
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror: the hand spelling vs the [inv| ...] spelling — the alpha-equality IS the test (the rfl pin below each pair)"]
 def userCompleteCheckHand : VExpr dslUserSchema .bool :=
   VExpr.and
     (VExpr.gt (VExpr.colOf "id") (VExpr.lit 0))
@@ -2853,7 +2860,9 @@ def userCompleteCheckHand : VExpr dslUserSchema .bool :=
 -- constructor tree (definitional, not just eval-equal).
 example : userCompleteCheckDsl = userCompleteCheckHand := rfl
 
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror: the hand spelling vs the [inv| ...] spelling — the alpha-equality IS the test (the rfl pin below each pair)"]
 def dslPositive : VExpr dslUserSchema .bool := [inv| id > 0]
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror: the hand spelling vs the [inv| ...] spelling — the alpha-equality IS the test (the rfl pin below each pair)"]
 def dslPositiveHand : VExpr dslUserSchema .bool :=
   VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
 def dslEq : VExpr dslUserSchema .bool := [inv| id == 7]
@@ -2867,6 +2876,7 @@ def dslAndTight : VExpr dslUserSchema .bool :=
 
 /-- The full 4-field row (the tags list rides empty — the check does
     not read it). -/
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror: the hand spelling vs the [inv| ...] spelling — the alpha-equality IS the test (the rfl pin below each pair)"]
 def dslRow (id : UInt64) (nm : String) : RowVals dslUserSchema :=
   .cons (.u64 id) (.cons (.string nm)
     (.cons (.string "e") (.cons (.list .nil) .nil)))
