@@ -13,12 +13,32 @@ Proved layer so far:
   recovers escape text (pairs never misread as the closing quote).
 - `scanIdent_of_identifier`, `scanName_quoted`, `scanName_name`: the name
   inversion (`Emit.Text.name` scans back to the name, both branches).
+- the TYPED wire decode: `decodeExpr`/`decodeArgs` + `decodeExpr_reEnc`/
+  `decodeArgs_reEnc` (decode → lower recovers the wire term), and
+  `decodeRel` + `decodeRel_reEnc` (the full `Typed.Rel` grammar: read /
+  filter / project / aggregate / sort / fetch / join / set / write /
+  extensionSingle; wire-side rejections for cross/extensionLeaf/
+  extensionMulti).  `Rel.okS` is the hypothesis predicate (per-node
+  recursion plus the decoded-schema pins the GADT demands — see its
+  comment).
 
 The full-plan round trip is executable-witnessed in Tests (decode-emit = id
-on the golden plan; emit-decode byte-identical on the golden text). The
-type/expression/relation inversion layers are the next chunk — the pattern
-is the name layer's: equation-lemma discipline over the fuel-bounded
-scanners (fuel monotonicity + per-production observer lemmas).
+on the golden plan; emit-decode byte-identical on the golden text).
+
+Wire-decode notes (the rel layer):
+- the mutual-block `Proto.Rel` defeats structural recursion, its derived
+  `sizeOf` simproc disagrees with the instance funs, and `sizeOf` in a
+  definition body hits an LCNF codegen failure — `decodeRel` is therefore
+  well-founded on the actual `sizeOf` instance with hand-proved decreasing
+  goals (`wf*_size`, from the instance funs, simproc-free);
+- schema equality for the square/set checks is a hand-rolled
+  `DecidableEq SType` (mutual inductives are refused by the deriving
+  handlers; `Schema.lean` ships none by design);
+- the master theorem compares at the WIRE level (decode → `relLower` = id):
+  the decoded rel's projection names are placeholders (`""`) and its
+  `FunctionSig.deterministic`/`sessionDependent` are re-derived defaults —
+  both are erased by the wire, so the wire-level statement is the honest
+  strongest form (the same convention as `decodeExpr_reEnc`).
 
 Documented lossiness (the format, not the decoder): `RelCommon.direct` vs
 absent emit kinds print identically (canonicalized to `none` on parse);
@@ -4145,4 +4165,1419 @@ theorem decodeExpr_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
 
 end
 
+-- ── the typed rel decode: Proto.Rel → Typed.Rel ────────────────────────────
+
+/-!
+
+The wire relation `Proto.Rel` decoded back into the schema-indexed
+`Substrait.Typed.Rel` GADT — the inverse of `Typed.Rel.toProtoWith`, the same
+`decode → re-lower = id` discipline as the expression layer above.
+
+Deliberate exclusions / canonicalizations (the typed grammar has no syntax
+for them):
+- `cross`, `extensionLeaf`, `extensionMulti`: no `Typed.Rel` constructor —
+  `none`.
+- `ReadRel.readType = virtualTable`: the typed layer has only named-table
+  reads — `none`; a named-table path longer than one element is rejected too
+  (`Typed.Rel.read` carries a single table name).
+- `RelCommon.emit = direct` decodes to the typed `emit := none` — the same
+  canonicalization the text decoder documents (direct vs absent emit kinds
+  are indistinguishable in the typed grammar).
+- `ProjectRel` carries no column names: decoded projections get placeholder
+  names `""` (the wire never sees them; `projectOut` positions are the
+  contract).  Sort keys keep only the ordinal + direction the wire carries;
+  the name is re-derived from the decoded input schema.
+- Square-input nodes (`filter`/`aggregate`/`sort`/`fetch`) demand the decoded
+  input's input/output schemas to agree — a wire filter over a width-changing
+  child is valid Substrait but outside the typed grammar, so it decodes to
+  `none` (the typed `filter` literally takes `Rel s s`).
+- `WriteRel.tableSchema` present but undecodable → `none`; absent → typed
+  `none`.
+- `ExtensionSingleRel.detail = none` → `none` (the typed ctor requires a
+  detail string; the lowering always writes one).
+
+Schema equality checks use a hand-rolled `DecidableEq SType` (this module —
+`Schema.lean` deliberately ships none, and Lean's deriving handlers refuse
+mutual inductives).
+
+Termination note: the mutual-block `Proto.Rel` defeats Lean's structural
+recursion, its derived `sizeOf` simproc disagrees with the instance funs, and
+`sizeOf` in a definition body hits an LCNF codegen failure — so the recursion
+is well-founded on the ACTUAL `sizeOf` instance, with the decreasing goals
+discharged by the `wf*_size` lemmas (proved from the instance funs,
+simproc-free).
+
+-/
+
+-- `DecidableEq` for the schema component type — the decode-side square/set
+-- schema checks need a decidable equality; hand-rolled (mutual inductives
+-- are refused by the deriving handlers).
+mutual
+def decEqListSType : (xs ys : List SType) → Decidable (xs = ys)
+  | [], [] => isTrue rfl
+  | x :: xs', y :: ys' =>
+      match SType.decEq? x y with
+      | isTrue hx =>
+          match decEqListSType xs' ys' with
+          | isTrue hxs => isTrue (by rw [hx, hxs])
+          | isFalse hxs => isFalse (by intro hyp; injection hyp with _ h; exact hxs h)
+      | isFalse hx => isFalse (by intro hyp; injection hyp with h _; exact hx h)
+  | [], _ :: _ => isFalse (by intro hyp; cases hyp)
+  | _ :: _, [] => isFalse (by intro hyp; cases hyp)
+
+def decEqListSParam : (xs ys : List SParam) → Decidable (xs = ys)
+  | [], [] => isTrue rfl
+  | x :: xs', y :: ys' =>
+      match SParam.decEq? x y with
+      | isTrue hx =>
+          match decEqListSParam xs' ys' with
+          | isTrue hxs => isTrue (by rw [hx, hxs])
+          | isFalse hxs => isFalse (by intro hyp; injection hyp with _ h; exact hxs h)
+      | isFalse hx => isFalse (by intro hyp; injection hyp with h _; exact hx h)
+  | [], _ :: _ => isFalse (by intro hyp; cases hyp)
+  | _ :: _, [] => isFalse (by intro hyp; cases hyp)
+
+def SType.decEq? : (a b : SType) → Decidable (a = b)
+  | .bool, .bool => isTrue rfl
+  | .i8, .i8 => isTrue rfl
+  | .i16, .i16 => isTrue rfl
+  | .i32, .i32 => isTrue rfl
+  | .i64, .i64 => isTrue rfl
+  | .fp32, .fp32 => isTrue rfl
+  | .fp64, .fp64 => isTrue rfl
+  | .string, .string => isTrue rfl
+  | .binary, .binary => isTrue rfl
+  | .decimal p s, .decimal p' s' =>
+      if h1 : p = p' then
+        if h2 : s = s' then isTrue (by rw [h1, h2])
+        else isFalse (by intro hyp; injection hyp with _ h; exact h2 h)
+      else isFalse (by intro hyp; injection hyp with h _; exact h1 h)
+  | .list e, .list e' =>
+      match SType.decEq? e e' with
+      | isTrue h => isTrue (by rw [h])
+      | isFalse h => isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .map k v, .map k' v' =>
+      match SType.decEq? k k' with
+      | isTrue hk =>
+          match SType.decEq? v v' with
+          | isTrue hv => isTrue (by rw [hk, hv])
+          | isFalse hv => isFalse (by intro hyp; injection hyp with _ h; exact hv h)
+      | isFalse hk => isFalse (by intro hyp; injection hyp with h _; exact hk h)
+  | .struct fs, .struct fs' =>
+      match decEqListSType fs fs' with
+      | isTrue h => isTrue (by rw [h])
+      | isFalse h => isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .userDefined u n p, .userDefined u' n' p' =>
+      if hu : u = u' then
+        if hn : n = n' then
+          match decEqListSParam p p' with
+          | isTrue hp => isTrue (by rw [hu, hn, hp])
+          | isFalse hp => isFalse (by intro hyp; injection hyp with _ _ h; exact hp h)
+        else isFalse (by intro hyp; injection hyp with _ h _; exact hn h)
+      else isFalse (by intro hyp; injection hyp with h _ _; exact hu h)
+  | .bool, .i8 => isFalse (by intro hyp; cases hyp)
+  | .bool, .i16 => isFalse (by intro hyp; cases hyp)
+  | .bool, .i32 => isFalse (by intro hyp; cases hyp)
+  | .bool, .i64 => isFalse (by intro hyp; cases hyp)
+  | .bool, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .bool, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .bool, .string => isFalse (by intro hyp; cases hyp)
+  | .bool, .binary => isFalse (by intro hyp; cases hyp)
+  | .bool, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .bool, .list _ => isFalse (by intro hyp; cases hyp)
+  | .bool, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .bool, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .bool, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .i8, .bool => isFalse (by intro hyp; cases hyp)
+  | .i8, .i16 => isFalse (by intro hyp; cases hyp)
+  | .i8, .i32 => isFalse (by intro hyp; cases hyp)
+  | .i8, .i64 => isFalse (by intro hyp; cases hyp)
+  | .i8, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .i8, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .i8, .string => isFalse (by intro hyp; cases hyp)
+  | .i8, .binary => isFalse (by intro hyp; cases hyp)
+  | .i8, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .i8, .list _ => isFalse (by intro hyp; cases hyp)
+  | .i8, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .i8, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .i8, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .i16, .bool => isFalse (by intro hyp; cases hyp)
+  | .i16, .i8 => isFalse (by intro hyp; cases hyp)
+  | .i16, .i32 => isFalse (by intro hyp; cases hyp)
+  | .i16, .i64 => isFalse (by intro hyp; cases hyp)
+  | .i16, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .i16, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .i16, .string => isFalse (by intro hyp; cases hyp)
+  | .i16, .binary => isFalse (by intro hyp; cases hyp)
+  | .i16, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .i16, .list _ => isFalse (by intro hyp; cases hyp)
+  | .i16, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .i16, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .i16, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .i32, .bool => isFalse (by intro hyp; cases hyp)
+  | .i32, .i8 => isFalse (by intro hyp; cases hyp)
+  | .i32, .i16 => isFalse (by intro hyp; cases hyp)
+  | .i32, .i64 => isFalse (by intro hyp; cases hyp)
+  | .i32, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .i32, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .i32, .string => isFalse (by intro hyp; cases hyp)
+  | .i32, .binary => isFalse (by intro hyp; cases hyp)
+  | .i32, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .i32, .list _ => isFalse (by intro hyp; cases hyp)
+  | .i32, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .i32, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .i32, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .i64, .bool => isFalse (by intro hyp; cases hyp)
+  | .i64, .i8 => isFalse (by intro hyp; cases hyp)
+  | .i64, .i16 => isFalse (by intro hyp; cases hyp)
+  | .i64, .i32 => isFalse (by intro hyp; cases hyp)
+  | .i64, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .i64, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .i64, .string => isFalse (by intro hyp; cases hyp)
+  | .i64, .binary => isFalse (by intro hyp; cases hyp)
+  | .i64, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .i64, .list _ => isFalse (by intro hyp; cases hyp)
+  | .i64, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .i64, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .i64, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .fp32, .bool => isFalse (by intro hyp; cases hyp)
+  | .fp32, .i8 => isFalse (by intro hyp; cases hyp)
+  | .fp32, .i16 => isFalse (by intro hyp; cases hyp)
+  | .fp32, .i32 => isFalse (by intro hyp; cases hyp)
+  | .fp32, .i64 => isFalse (by intro hyp; cases hyp)
+  | .fp32, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .fp32, .string => isFalse (by intro hyp; cases hyp)
+  | .fp32, .binary => isFalse (by intro hyp; cases hyp)
+  | .fp32, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .fp32, .list _ => isFalse (by intro hyp; cases hyp)
+  | .fp32, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .fp32, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .fp32, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .fp64, .bool => isFalse (by intro hyp; cases hyp)
+  | .fp64, .i8 => isFalse (by intro hyp; cases hyp)
+  | .fp64, .i16 => isFalse (by intro hyp; cases hyp)
+  | .fp64, .i32 => isFalse (by intro hyp; cases hyp)
+  | .fp64, .i64 => isFalse (by intro hyp; cases hyp)
+  | .fp64, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .fp64, .string => isFalse (by intro hyp; cases hyp)
+  | .fp64, .binary => isFalse (by intro hyp; cases hyp)
+  | .fp64, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .fp64, .list _ => isFalse (by intro hyp; cases hyp)
+  | .fp64, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .fp64, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .fp64, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .string, .bool => isFalse (by intro hyp; cases hyp)
+  | .string, .i8 => isFalse (by intro hyp; cases hyp)
+  | .string, .i16 => isFalse (by intro hyp; cases hyp)
+  | .string, .i32 => isFalse (by intro hyp; cases hyp)
+  | .string, .i64 => isFalse (by intro hyp; cases hyp)
+  | .string, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .string, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .string, .binary => isFalse (by intro hyp; cases hyp)
+  | .string, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .string, .list _ => isFalse (by intro hyp; cases hyp)
+  | .string, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .string, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .string, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .binary, .bool => isFalse (by intro hyp; cases hyp)
+  | .binary, .i8 => isFalse (by intro hyp; cases hyp)
+  | .binary, .i16 => isFalse (by intro hyp; cases hyp)
+  | .binary, .i32 => isFalse (by intro hyp; cases hyp)
+  | .binary, .i64 => isFalse (by intro hyp; cases hyp)
+  | .binary, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .binary, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .binary, .string => isFalse (by intro hyp; cases hyp)
+  | .binary, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .binary, .list _ => isFalse (by intro hyp; cases hyp)
+  | .binary, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .binary, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .binary, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .bool => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .i8 => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .i16 => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .i32 => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .i64 => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .string => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .binary => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .list _ => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .decimal _ _, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .list _, .bool => isFalse (by intro hyp; cases hyp)
+  | .list _, .i8 => isFalse (by intro hyp; cases hyp)
+  | .list _, .i16 => isFalse (by intro hyp; cases hyp)
+  | .list _, .i32 => isFalse (by intro hyp; cases hyp)
+  | .list _, .i64 => isFalse (by intro hyp; cases hyp)
+  | .list _, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .list _, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .list _, .string => isFalse (by intro hyp; cases hyp)
+  | .list _, .binary => isFalse (by intro hyp; cases hyp)
+  | .list _, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .list _, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .list _, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .list _, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .bool => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .i8 => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .i16 => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .i32 => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .i64 => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .string => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .binary => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .list _ => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .struct _ => isFalse (by intro hyp; cases hyp)
+  | .map _ _, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .struct _, .bool => isFalse (by intro hyp; cases hyp)
+  | .struct _, .i8 => isFalse (by intro hyp; cases hyp)
+  | .struct _, .i16 => isFalse (by intro hyp; cases hyp)
+  | .struct _, .i32 => isFalse (by intro hyp; cases hyp)
+  | .struct _, .i64 => isFalse (by intro hyp; cases hyp)
+  | .struct _, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .struct _, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .struct _, .string => isFalse (by intro hyp; cases hyp)
+  | .struct _, .binary => isFalse (by intro hyp; cases hyp)
+  | .struct _, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .struct _, .list _ => isFalse (by intro hyp; cases hyp)
+  | .struct _, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .struct _, .userDefined _ _ _ => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .bool => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .i8 => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .i16 => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .i32 => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .i64 => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .fp32 => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .fp64 => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .string => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .binary => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .decimal _ _ => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .list _ => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .map _ _ => isFalse (by intro hyp; cases hyp)
+  | .userDefined _ _ _, .struct _ => isFalse (by intro hyp; cases hyp)
+def SParam.decEq? : (a b : SParam) → Decidable (a = b)
+  | .boolean b, .boolean b' =>
+      if h : b = b' then isTrue (by rw [h])
+      else isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .integer i, .integer i' =>
+      if h : i = i' then isTrue (by rw [h])
+      else isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .string s, .string s' =>
+      if h : s = s' then isTrue (by rw [h])
+      else isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .enum e, .enum e' =>
+      if h : e = e' then isTrue (by rw [h])
+      else isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .null t, .null t' =>
+      match SType.decEq? t t' with
+      | isTrue h => isTrue (by rw [h])
+      | isFalse h => isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .dataType t, .dataType t' =>
+      match SType.decEq? t t' with
+      | isTrue h => isTrue (by rw [h])
+      | isFalse h => isFalse (by intro hyp; injection hyp with h'; exact h h')
+  | .boolean _, .integer _ => isFalse (by intro hyp; cases hyp)
+  | .boolean _, .string _ => isFalse (by intro hyp; cases hyp)
+  | .boolean _, .enum _ => isFalse (by intro hyp; cases hyp)
+  | .boolean _, .null _ => isFalse (by intro hyp; cases hyp)
+  | .boolean _, .dataType _ => isFalse (by intro hyp; cases hyp)
+  | .integer _, .boolean _ => isFalse (by intro hyp; cases hyp)
+  | .integer _, .string _ => isFalse (by intro hyp; cases hyp)
+  | .integer _, .enum _ => isFalse (by intro hyp; cases hyp)
+  | .integer _, .null _ => isFalse (by intro hyp; cases hyp)
+  | .integer _, .dataType _ => isFalse (by intro hyp; cases hyp)
+  | .string _, .boolean _ => isFalse (by intro hyp; cases hyp)
+  | .string _, .integer _ => isFalse (by intro hyp; cases hyp)
+  | .string _, .enum _ => isFalse (by intro hyp; cases hyp)
+  | .string _, .null _ => isFalse (by intro hyp; cases hyp)
+  | .string _, .dataType _ => isFalse (by intro hyp; cases hyp)
+  | .enum _, .boolean _ => isFalse (by intro hyp; cases hyp)
+  | .enum _, .integer _ => isFalse (by intro hyp; cases hyp)
+  | .enum _, .string _ => isFalse (by intro hyp; cases hyp)
+  | .enum _, .null _ => isFalse (by intro hyp; cases hyp)
+  | .enum _, .dataType _ => isFalse (by intro hyp; cases hyp)
+  | .null _, .boolean _ => isFalse (by intro hyp; cases hyp)
+  | .null _, .integer _ => isFalse (by intro hyp; cases hyp)
+  | .null _, .string _ => isFalse (by intro hyp; cases hyp)
+  | .null _, .enum _ => isFalse (by intro hyp; cases hyp)
+  | .null _, .dataType _ => isFalse (by intro hyp; cases hyp)
+  | .dataType _, .boolean _ => isFalse (by intro hyp; cases hyp)
+  | .dataType _, .integer _ => isFalse (by intro hyp; cases hyp)
+  | .dataType _, .string _ => isFalse (by intro hyp; cases hyp)
+  | .dataType _, .enum _ => isFalse (by intro hyp; cases hyp)
+  | .dataType _, .null _ => isFalse (by intro hyp; cases hyp)
+end
+
+instance : DecidableEq SType := SType.decEq?
+instance : DecidableEq SParam := SParam.decEq?
+
+/-- The type-erased relation package (the `AnyExpr` pattern at the rel
+    level): `Rel` is indexed by input/output schemas, heterogeneous decode
+    results erase both indices. -/
+inductive AnyRel : Type where
+  | mk (inS outS : Schema) (r : Rel inS outS)
+
+/-- Re-lowering a decoded rel (the wire-level comparison point). -/
+def relLower (a : AnyRel) (ctx : ExtCtx) : Proto.Rel :=
+  match a with
+  | .mk _ _ r => r.toProtoWith ctx
+
+/-- Cast a rel to its square form (`s = s'` pinned). -/
+def Rel.castSq {s s' : Schema} (h : s = s') (r : Rel s s') : Rel s s :=
+  match h with | rfl => r
+
+/-- Cast a rel across two schema equalities (the `set` shape). -/
+def Rel.cast2 {s1 s1' s2 s2' : Schema} (h1 : s1 = s2) (h2 : s1' = s2')
+    (r : Rel s2 s2') : Rel s1 s1' :=
+  match h1, h2 with | rfl, rfl => r
+
+/-- The cast is invisible to lowering (used by the master theorem). -/
+theorem Rel.castSq_toProtoWith {s s' : Schema} (h : s = s') (r : Rel s s') (ctx : ExtCtx) :
+    (Rel.castSq h r).toProtoWith ctx = r.toProtoWith ctx := by
+  cases h; rfl
+
+/-- The two-schema cast is invisible to lowering. -/
+theorem Rel.cast2_toProtoWith {s1 s1' s2 s2' : Schema} (h1 : s1 = s2) (h2 : s1' = s2')
+    (r : Rel s2 s2') (ctx : ExtCtx) :
+    (Rel.cast2 h1 h2 r).toProtoWith ctx = r.toProtoWith ctx := by
+  cases h1; cases h2; rfl
+
+/-- A decoded rel packaged with its (proven-equal) input/output schema — the
+    shape the square-input nodes (`filter`/`aggregate`/`sort`/`fetch`) demand.
+    (Lean patterns cannot bind one variable twice, so the square package —
+    not a repeated-variable pattern — carries the equality.) -/
+structure SqRel where
+  schema : Schema
+  rel : Rel schema schema
+
+def squareOf : AnyRel → Option SqRel
+  | .mk s s' r => if h : s = s' then some ⟨s, Rel.castSq h r⟩ else none
+
+/-- Decode a wire `NamedStruct` back into a schema: names and field types
+    must have the same length, every field type must decode (`stOfPType`),
+    nullability from the wire marker. -/
+def schemaOfFields : List String → List Proto.PType → Option Schema
+  | [], [] => some []
+  | name :: names, t :: ts =>
+      match stOfPType t with
+      | none => none
+      | some t' =>
+          match schemaOfFields names ts with
+          | none => none
+          | some rest => some ((name, t', pTypeNullable t) :: rest)
+  | _, _ => none
+
+/-- Read-schema well-formedness: every column's lowered wire type decodes
+    back to it.  The read branch's re-encode hypothesis. -/
+def schemaOk (ctx : ExtCtx) (sc : Schema) : Prop :=
+  ∀ c ∈ sc, stOfPType (toProtoColType ctx c) = some c.2.1
+
+/-- The schema inversion: a well-formed schema's lowering decodes back to it. -/
+theorem schemaOfFields_of_toProto (ctx : ExtCtx) :
+    ∀ (sc : Schema), schemaOk ctx sc →
+      schemaOfFields sc.names (sc.map (toProtoColType ctx)) = some sc := by
+  intro sc
+  induction sc with
+  | nil => intro _; rfl
+  | cons c sc ih =>
+      intro hok
+      obtain ⟨nm, t, n⟩ := c
+      have hc : stOfPType (toProtoColType ctx (nm, t, n)) = some t := hok _ (by simp)
+      have hnull : pTypeNullable (toProtoColType ctx (nm, t, n)) = n := by
+        show pTypeNullable (withNullable (toProtoType ctx t) n) = n
+        rw [pTypeNullable_withNullable]
+      simp only [List.map_cons, Schema.names, schemaOfFields, hc, hnull,
+        ih (fun c2 hc2 => hok c2 (by simp [hc2]))]
+
+/-- The wire emit kind back to the typed mapping (`.direct` canonicalized to
+    `none` — the documented lossiness; the lowering never writes `.direct`). -/
+def emitOf : Option Proto.RelCommon → Option (List Nat)
+  | some { emit := some (.emit m), advancedExtension := _ } => some m
+  | _ => none
+
+/-- Re-pack a decoded argument spine into the type-erased list (the
+    `Measure.args` shape). -/
+def argsPack {s : Schema} : {ts : List (SType × Bool)} → Args s ts → List (AnyExpr s)
+  | _, .nil => []
+  | _, .cons t n e rest => AnyExpr.mk t n e :: argsPack rest
+
+/-- The wire argument list of a type-erased expression list. -/
+def anyExprsLower {s : Schema} (xs : List (AnyExpr s)) (ctx : ExtCtx) :
+    List Proto.Expression :=
+  xs.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+
+/-- The cons step of `anyExprsLower` (the helpers' iota-exposing rewrite). -/
+theorem anyExprsLower_cons {s : Schema} (x : AnyExpr s) (xs : List (AnyExpr s))
+    (ctx : ExtCtx) :
+    anyExprsLower (x :: xs) ctx =
+      (match x with | .mk _ _ e => e.toProto ctx) :: anyExprsLower xs ctx := rfl
+
+/-- Decode a projection list (placeholder names — the wire carries none). -/
+def decodeProjections (s : Schema) (inv : FnInv) :
+    List Proto.Expression → Option (List (Projection s))
+  | [] => some []
+  | e :: rest =>
+      match decodeExpr s inv e with
+      | some (AnyExpr.mk t n ex) =>
+          match decodeProjections s inv rest with
+          | some ps => some ({ name := "", dtype := t, nullable := n, expr := ex } :: ps)
+          | none => none
+      | none => none
+
+/-- Decode a grouping-key list. -/
+def decodeAnyExprs (s : Schema) (inv : FnInv) :
+    List Proto.Expression → Option (List (AnyExpr s))
+  | [] => some []
+  | e :: rest =>
+      match decodeExpr s inv e with
+      | some x =>
+          match decodeAnyExprs s inv rest with
+          | some xs => some (x :: xs)
+          | none => none
+      | none => none
+
+/-- Lower a measure to its wire shape (the `ToProto` aggregate arm's
+    per-measure slice, factored for the round-trip theorem). -/
+def measureLower {s : Schema} (ctx : ExtCtx) (m : Measure s) : Proto.AggregateMeasure :=
+  { measure := { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+                 args := anyExprsLower m.args ctx
+                 outputType := withNullable (toProtoType ctx m.sig.ret) m.sig.retNullable } }
+
+/-- The `ToProto` grouping arm's map IS `anyExprsLower` (the wire-eq bridge). -/
+theorem groupings_wire_eq {s : Schema} (ctx : ExtCtx) (xs : List (AnyExpr s)) :
+    xs.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+      anyExprsLower xs ctx := rfl
+
+/-- The `ToProto` measures arm's map IS `measureLower`-mapped (the wire-eq
+    bridge). -/
+theorem measures_wire_eq {s : Schema} (ctx : ExtCtx) (ms : List (Measure s)) :
+    ms.map (fun m =>
+      { measure :=
+          { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+            args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+            outputType := withNullable (toProtoType ctx m.sig.ret) m.sig.retNullable } }) =
+      ms.map (measureLower ctx) := rfl
+
+/-- Decode a measure list: anchor lookup + argument decode + output type
+    decode per measure. -/
+def decodeMeasures (s : Schema) (inv : FnInv) :
+    List Proto.AggregateMeasure → Option (List (Measure s))
+  | [] => some []
+  | ⟨am⟩ :: rest =>
+      match fnOf inv am.functionReference with
+      | none => none
+      | some (urn, name) =>
+          match decodeArgs s inv am.args with
+          | some (AnyArgs.mk ts spine) =>
+              match stOfPType am.outputType with
+              | some ret =>
+                  match decodeMeasures s inv rest with
+                  | some ms =>
+                      some ({ sig := FunctionSig.mkSig name urn ts ret
+                                (pTypeNullable am.outputType) true
+                              args := argsPack spine } :: ms)
+                  | none => none
+              | none => none
+          | none => none
+
+/-- Lower a sort key to its wire shape (the `ToProto` sort arm's per-key
+    slice). -/
+def sortFieldLower {s : Schema} (k : SortKey s) : Proto.SortField :=
+  ⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none }, k.direction⟩
+
+/-- Decode a sort-key list: every sort expression must be a plain field
+    reference with its ordinal inside the decoded input schema (the typed
+    `SortKey` has no expression support). -/
+def decodeSortKeys (s : Schema) : List Proto.SortField → Option (List (SortKey s))
+  | [] => some []
+  | ⟨.field { ordinal := i, segment := none }, dir⟩ :: rest =>
+      match s.get? i with
+      | some (nm, _, _) =>
+          match decodeSortKeys s rest with
+          | some ks => some ({ col := { name := nm, ordinal := i }, direction := dir } :: ks)
+          | none => none
+      | none => none
+  | _ :: _ => none
+
+/-! ## the size facts the decode's well-founded recursion needs -/
+
+/-- A wire rel's children are strictly smaller in the actual `sizeOf`
+    instance (proved from the instance funs — the derived `sizeOf` simproc
+    disagrees with itself on this mutual block, so no `simp [sizeOf]`). -/
+theorem wf_filter_size (fr : Proto.FilterRel) :
+    sizeOf fr.input < sizeOf (Proto.Rel.filter fr) := by
+  cases fr with
+  | mk c i cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_project_size (pr : Proto.ProjectRel) :
+    sizeOf pr.input < sizeOf (Proto.Rel.project pr) := by
+  cases pr with
+  | mk e i cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_aggregate_size (ar : Proto.AggregateRel) :
+    sizeOf ar.input < sizeOf (Proto.Rel.aggregate ar) := by
+  cases ar with
+  | mk g m i cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_sort_size (sr : Proto.SortRel) :
+    sizeOf sr.input < sizeOf (Proto.Rel.sort sr) := by
+  cases sr with
+  | mk k i cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_fetch_size (fr : Proto.FetchRel) :
+    sizeOf fr.input < sizeOf (Proto.Rel.fetch fr) := by
+  cases fr with
+  | mk l o i cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_join_size (jr : Proto.JoinRel) :
+    sizeOf jr.left < sizeOf (Proto.Rel.join jr) ∧
+      sizeOf jr.right < sizeOf (Proto.Rel.join jr) := by
+  cases jr with
+  | mk jt l r c pf cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_write_size (wr : Proto.WriteRel) :
+    sizeOf wr.input < sizeOf (Proto.Rel.write wr) := by
+  cases wr with
+  | mk tn op ts i cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_extensionSingle_size (er : Proto.ExtensionSingleRel) :
+    sizeOf er.input < sizeOf (Proto.Rel.extensionSingle er) := by
+  cases er with
+  | mk i d cm =>
+      unfold sizeOf
+      simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24]
+      omega
+
+theorem wf_set_size (sr : Proto.SetRel) (l r : Proto.Rel) (hI : sr.inputs = [l, r]) :
+    sizeOf l < sizeOf (Proto.Rel.set sr) ∧ sizeOf r < sizeOf (Proto.Rel.set sr) := by
+  cases sr with
+  | mk op inputs cm =>
+      subst hI
+      cases op <;>
+        unfold sizeOf <;>
+        simp only [Proto.Rel._sizeOf_inst, Proto.EmitKind._sizeOf_24,
+          Proto.SetRel._sizeOf_inst, Proto.EmitKind._sizeOf_6] <;>
+        omega
+
+/-- **The typed rel decode**: a wire `Proto.Rel` decoded back into the packed
+    typed relation (or `none` outside the typed grammar — see the exclusions
+    above).  The child schemas come from the decode; every node that indexes
+    an expression over its input schema uses the decoded child schema. -/
+def decodeRel (inv : FnInv) : Proto.Rel → Option AnyRel
+  | .read r =>
+      match r.readType with
+      | .namedTable [table] =>
+          match r.baseSchema with
+          | some ns =>
+              match schemaOfFields ns.names ns.fields with
+              | some sc => some (AnyRel.mk sc sc (Rel.read table sc))
+              | none => none
+          | none => none
+      | _ => none
+  | .filter fr =>
+      match decodeRel inv fr.input with
+      | some pkgIn =>
+          match squareOf pkgIn with
+          | some ⟨s, ri⟩ =>
+              match decodeExpr s inv fr.condition with
+              | some (AnyExpr.mk .bool n ce) =>
+                  some (AnyRel.mk s s (Rel.filter ri ce))
+              | _ => none
+          | none => none
+      | none => none
+  | .project pr =>
+      match decodeRel inv pr.input with
+      | some (AnyRel.mk s p ri) =>
+          match decodeProjections p inv pr.expressions with
+          | some outs =>
+              some (AnyRel.mk s (projectOut p outs)
+                (Rel.project ri outs (emitOf pr.common)))
+          | none => none
+      | none => none
+  | .aggregate ar =>
+      match decodeRel inv ar.input with
+      | some pkgIn =>
+          match squareOf pkgIn with
+          | some ⟨s, ri⟩ =>
+              match decodeAnyExprs s inv ar.groupingExpressions with
+              | some grouping =>
+                  match decodeMeasures s inv ar.measures with
+                  | some measures =>
+                      some (AnyRel.mk s (aggregateOut s grouping measures)
+                        (Rel.aggregate ri grouping measures))
+                  | none => none
+              | none => none
+          | none => none
+      | none => none
+  | .sort sr =>
+      match decodeRel inv sr.input with
+      | some pkgIn =>
+          match squareOf pkgIn with
+          | some ⟨s, ri⟩ =>
+              match decodeSortKeys s sr.sorts with
+              | some ks => some (AnyRel.mk s s (Rel.sort ri ks))
+              | none => none
+          | none => none
+      | none => none
+  | .fetch fr =>
+      match decodeRel inv fr.input with
+      | some pkgIn =>
+          match squareOf pkgIn with
+          | some ⟨s, ri⟩ =>
+              some (AnyRel.mk s s (Rel.fetch ri fr.limit fr.offset))
+          | none => none
+      | none => none
+  | .join jr =>
+      match decodeRel inv jr.left with
+      | some (AnyRel.mk sl sl' rl) =>
+          match decodeRel inv jr.right with
+          | some (AnyRel.mk sr sr' rr) =>
+              match decodeExpr (sl' ++ sr') inv jr.condition with
+              | some (AnyExpr.mk .bool n ce) =>
+                  some (AnyRel.mk (sl ++ sr) (sl' ++ sr')
+                    (Rel.join rl rr ce jr.joinType))
+              | _ => none
+          | none => none
+      | none => none
+  | .cross _ => none
+  | .set { op := op, inputs := [l, r], common := _ } =>
+      match decodeRel inv l with
+      | some (AnyRel.mk s1 s1' rl) =>
+          match decodeRel inv r with
+          | some (AnyRel.mk s2 s2' rr) =>
+              if h1 : s1 = s2 then
+                if h2 : s1' = s2' then
+                  some (AnyRel.mk s1 s1' (Rel.set op rl (Rel.cast2 h1 h2 rr)))
+                else none
+              else none
+          | none => none
+      | none => none
+  | .set _ => none
+  | .write wr =>
+      match decodeRel inv wr.input with
+      | some (AnyRel.mk s s' ri) =>
+          match wr.tableSchema with
+          | none => some (AnyRel.mk s s' (Rel.write wr.op wr.tableName none ri))
+          | some ns =>
+              match schemaOfFields ns.names ns.fields with
+              | some sc =>
+                  some (AnyRel.mk s s' (Rel.write wr.op wr.tableName (some sc) ri))
+              | none => none
+      | none => none
+  | .extensionLeaf _ => none
+  | .extensionSingle er =>
+      match er.detail with
+      | some d =>
+          match decodeRel inv er.input with
+          | some (AnyRel.mk s s' ri) =>
+              some (AnyRel.mk s s' (Rel.extensionSingle d ri))
+          | none => none
+      | none => none
+  | .extensionMulti _ => none
+termination_by w => sizeOf w
+decreasing_by
+  all_goals (
+    first
+      | exact wf_filter_size _
+      | exact wf_project_size _
+      | exact wf_aggregate_size _
+      | exact wf_sort_size _
+      | exact wf_fetch_size _
+      | exact (wf_join_size _).1
+      | exact (wf_join_size _).2
+      | exact (wf_set_size _ _ _ rfl).1
+      | exact (wf_set_size _ _ _ rfl).2
+      | exact wf_write_size _
+      | exact wf_extensionSingle_size _)
+
+/-- The (input, output) schema pair of a decoded rel. -/
+def AnyRel.schemaPair : AnyRel → Schema × Schema
+  | .mk i o _ => (i, o)
+
+/-- The REL-level expression well-formedness: like `Expr.okS` but the field
+    case pins the column DECODE exactly (`s.get? c.ordinal` resolves to the
+    field's own `(name, t, n)`) — what `decodeExpr_shape`'s exact-index claim
+    needs (the GADT leaves `c.ordinal` and the `HasCol` instance independent;
+    the authoring surface `col` ties them). -/
+def Expr.okSR (ctx : ExtCtx) (s : Schema) : {t : SType} → {n : Bool} → Expr s t n → Prop
+  | _, _, .literal .. => True
+  | _, _, @Expr.field _ c t n _ => s.get? c.ordinal = some (c.name, t, n)
+  | _, _, .call sig args =>
+      Args.okS ctx s args ∧ stOfPType (toProtoType ctx sig.ret) = some sig.ret
+
+/-- `okSR` is strictly stronger than `okS` (the bridge the re-encode helpers
+    use: their wire-level conclusions only need `okS`). -/
+theorem Expr.okSR_to_okS (ctx : ExtCtx) (s : Schema) :
+    ∀ {t : SType} {n : Bool} (e : Expr s t n), Expr.okSR ctx s e → Expr.okS ctx s e := by
+  intro t n e hok
+  match e with
+  | .literal .. => exact trivial
+  | @Expr.field _ c _ _ _ =>
+      intro hcontra
+      rw [hok] at hcontra
+      simp at hcontra
+  | .call sig args => exact hok
+
+/-- The expression-level well-formedness of a packaged expr (unwraps the
+    package; `Expr.okSR` does the work). -/
+def AnyExpr.okSR (ctx : ExtCtx) (s : Schema) (ae : AnyExpr s) : Prop :=
+  match ae with
+  | .mk _ _ e => Expr.okSR ctx s e
+
+/-- The measure-level well-formedness: the output type decodes and every
+    argument expression is well-formed. -/
+def Measure.okS (ctx : ExtCtx) (s : Schema) (m : Measure s) : Prop :=
+  stOfPType (withNullable (toProtoType ctx m.sig.ret) m.sig.retNullable) = some m.sig.ret ∧
+  ∀ ae ∈ m.args, AnyExpr.okSR ctx s ae
+
+/-- Square-schema pinning: EVERY successful decode of `w` yields a rel whose
+    input/output schemas are both `s`.  The wire erases schemas, so the typed
+    GADT's square-input demand is a property of the decode, recorded here
+    where the authoring surface guarantees it. -/
+def SqPred (inv : FnInv) (w : Proto.Rel) (s : Schema) : Prop :=
+  ∀ pkg, decodeRel inv w = some pkg → ∃ r1, pkg = AnyRel.mk s s r1
+
+/-- Pair-schema pinning (the `project`/`join` shape). -/
+def PairPred (inv : FnInv) (w : Proto.Rel) (p : Schema × Schema) : Prop :=
+  ∀ pkg, decodeRel inv w = some pkg → ∃ r1, pkg = AnyRel.mk p.1 p.2 r1
+
+/-! The rel-level well-formedness predicate — the `decodeRel_reEnc`
+hypothesis, mirroring `Expr.okS`.  Beyond the per-node recursion it pins the
+DECODED schemas of the children (`SqPred` / `PairPred`): the wire erases
+schemas, so the typed GADT's index demands (square inputs, join condition
+over the concatenated schema, set's same-schema inputs) are properties of the
+decode, not of the typed term — the predicate records them where the
+authoring surface guarantees them. -/
+def Rel.okS (ctx : ExtCtx) (inv : FnInv) : {inS outS : Schema} → Rel inS outS → Prop
+  | _, _, .read _ sc => schemaOk ctx sc
+  | _, _, @Rel.filter s _ input cond =>
+      Rel.okS ctx inv input ∧ SqPred inv (input.toProtoWith ctx) s ∧
+      Expr.okSR ctx s cond
+  | _, _, @Rel.project s p input outs _ =>
+      Rel.okS ctx inv input ∧ PairPred inv (input.toProtoWith ctx) (s, p) ∧
+      ∀ pr ∈ outs, Expr.okSR ctx p pr.expr
+  | _, _, @Rel.aggregate s input grouping measures =>
+      Rel.okS ctx inv input ∧ SqPred inv (input.toProtoWith ctx) s ∧
+      (∀ ae ∈ grouping, AnyExpr.okSR ctx s ae) ∧ (∀ m ∈ measures, Measure.okS ctx s m)
+  | _, _, @Rel.sort s input orderBy =>
+      Rel.okS ctx inv input ∧ SqPred inv (input.toProtoWith ctx) s ∧
+      ∀ k ∈ orderBy, s.get? k.col.ordinal ≠ none
+  | _, _, @Rel.fetch s input _ _ =>
+      Rel.okS ctx inv input ∧ SqPred inv (input.toProtoWith ctx) s
+  | _, _, @Rel.join sl sl' sr sr' _ left right cond _ =>
+      Rel.okS ctx inv left ∧ Rel.okS ctx inv right ∧
+      PairPred inv (left.toProtoWith ctx) (sl, sl') ∧
+      PairPred inv (right.toProtoWith ctx) (sr, sr') ∧
+      Expr.okSR ctx (sl' ++ sr') cond
+  | _, _, @Rel.set _ _ _ left right =>
+      Rel.okS ctx inv left ∧ Rel.okS ctx inv right ∧
+      ∀ pkgL pkgR,
+        decodeRel inv (left.toProtoWith ctx) = some pkgL →
+        decodeRel inv (right.toProtoWith ctx) = some pkgR →
+        pkgL.schemaPair = pkgR.schemaPair
+  | _, _, @Rel.write _ _ _ _ ts input =>
+      Rel.okS ctx inv input ∧
+      (match ts with | none => True | some sc => schemaOk ctx sc)
+  | _, _, @Rel.extensionSingle _ _ _ input => Rel.okS ctx inv input
+
+/-! ## the rel re-encode: the decode-shape lemma and the helpers -/
+
+/-- The decode-shape lemma (the rel-level workhorse): a well-formed typed
+    expression decodes back to a package with its EXACT `(t, n)` indices —
+    what the rel GADT's constructors demand. -/
+theorem decodeExpr_shape (s : Schema) (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name)) :
+    ∀ {t : SType} {n : Bool} (e : Expr s t n), Expr.okSR ctx s e →
+      ∃ e', decodeExpr s inv (e.toProto ctx) = some (AnyExpr.mk t n e') := by
+  intro t n e
+  match e with
+  | .literal t' nv v =>
+      intro _
+      show ∃ e', decodeExpr s inv (Proto.Expression.literal
+        { literalType := toProtoLiteralValue v, nullable := nv }) = some (AnyExpr.mk t' nv e')
+      exact ⟨Expr.literal t' nv v, decodeLiteral_of_toProto v nv s⟩
+  | @Expr.field _ c _ _ _ =>
+      intro hok
+      exact ⟨_, decodeExpr_field_of_get s c.ordinal c.name t n hok⟩
+  | .call sig args =>
+      intro hok
+      have hargs : Args.okS ctx s args := hok.1
+      have hret : stOfPType (toProtoType ctx sig.ret) = some sig.ret := hok.2
+      have hfn' := hfn sig
+      show ∃ e', decodeExpr s inv (Proto.Expression.scalarFunction
+        (ctx.functionAnchor sig.urn sig.name) (args.toProto ctx)
+        (withNullable (toProtoType ctx sig.ret) sig.retNullable)) =
+        some (AnyExpr.mk sig.ret sig.retNullable e')
+      simp only [decodeExpr, hfn']
+      cases hd : decodeArgs s inv (args.toProto ctx) with
+      | none =>
+          have hinv := decodeArgs_reEnc s inv ctx hfn args hargs
+          rw [hd] at hinv
+          simp at hinv
+      | some q =>
+          cases q with
+          | mk ts' spine =>
+              have hret' : stOfPType (withNullable (toProtoType ctx sig.ret) sig.retNullable) =
+                  some sig.ret := by
+                rw [stOfPType_withNullable]
+                exact hret
+              rw [hret', pTypeNullable_withNullable]
+              exact ⟨Expr.call (FunctionSig.mkSig sig.name sig.urn ts' sig.ret
+                sig.retNullable true) spine, rfl⟩
+
+/-- Projection-list inversion: the lowered projections decode (with
+    placeholder names) and re-lower to the same wire expressions. -/
+theorem decodeProjections_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name))
+    (ps : List (Projection s)) (hok : ∀ pr ∈ ps, Expr.okSR ctx s pr.expr) :
+    ∃ ps', decodeProjections s inv (ps.map (fun pr => pr.expr.toProto ctx)) = some ps' ∧
+      ps'.map (fun pr => pr.expr.toProto ctx) = ps.map (fun pr => pr.expr.toProto ctx) := by
+  induction ps with
+  | nil => exact ⟨[], rfl, rfl⟩
+  | cons pr rest ih =>
+      have hpr : Expr.okS ctx s pr.expr := Expr.okSR_to_okS ctx s _ (hok pr (by simp))
+      have hrest : ∀ pr' ∈ rest, Expr.okSR ctx s pr'.expr := fun q hq => hok q (by simp [hq])
+      obtain ⟨ps', h1, h2⟩ := ih hrest
+      have hdec := decodeExpr_reEnc s inv ctx hfn pr.expr hpr
+      cases hd : decodeExpr s inv (pr.expr.toProto ctx) with
+      | none => rw [hd] at hdec; simp at hdec
+      | some pkg =>
+          cases pkg with
+          | mk t n ex =>
+              rw [hd] at hdec
+              simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
+              refine ⟨{ name := "", dtype := t, nullable := n, expr := ex } :: ps', ?_, ?_⟩
+              · simp only [List.map_cons, decodeProjections, hd, h1]
+              · show ({ name := "", dtype := t, nullable := n, expr := ex } :: ps').map
+                    (fun pr => pr.expr.toProto ctx) =
+                  (pr :: rest).map (fun pr => pr.expr.toProto ctx)
+                show ex.toProto ctx :: ps'.map (fun pr => pr.expr.toProto ctx) =
+                  pr.expr.toProto ctx :: rest.map (fun pr => pr.expr.toProto ctx)
+                rw [hdec, h2]
+
+/-- Grouping-list inversion (grouping keys; the `AnyExpr` list shape). -/
+theorem decodeAnyExprs_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name))
+    (xs : List (AnyExpr s)) (hok : ∀ ae ∈ xs, AnyExpr.okSR ctx s ae) :
+    ∃ xs', decodeAnyExprs s inv (anyExprsLower xs ctx) = some xs' ∧
+      xs'.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+        xs.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) := by
+  induction xs with
+  | nil => exact ⟨[], rfl, rfl⟩
+  | cons ae rest ih =>
+      obtain ⟨t, n, e⟩ := ae
+      have hae : Expr.okS ctx s e := Expr.okSR_to_okS ctx s _ (hok (AnyExpr.mk t n e) (by simp))
+      have hrest : ∀ x ∈ rest, AnyExpr.okSR ctx s x := fun y hy => hok y (by simp [hy])
+      obtain ⟨xs', h1, h2⟩ := ih hrest
+      have hdec := decodeExpr_reEnc s inv ctx hfn e hae
+      cases hd : decodeExpr s inv (e.toProto ctx) with
+      | none => rw [hd] at hdec; simp at hdec
+      | some pkg =>
+          cases pkg with
+          | mk t' n' ex =>
+              rw [hd] at hdec
+              simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
+              refine ⟨AnyExpr.mk t' n' ex :: xs', ?_, ?_⟩
+              · rw [anyExprsLower_cons]
+                simp only [decodeAnyExprs, hd, h1]
+              · show (AnyExpr.mk t' n' ex :: xs').map
+                    (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+                  (AnyExpr.mk t n e :: rest).map
+                    (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+                show ex.toProto ctx ::
+                    xs'.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+                  e.toProto ctx ::
+                    rest.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+                rw [hdec, h2]
+
+/-- Argument-spine inversion over a plain type-erased list: the lowered list
+    decodes to a spine, and re-packing + re-lowering recovers the wire list. -/
+theorem decodeArgs_anyExprs (s : Schema) (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name))
+    (xs : List (AnyExpr s)) (hok : ∀ ae ∈ xs, AnyExpr.okSR ctx s ae) :
+    ∃ ts spine, decodeArgs s inv (anyExprsLower xs ctx) = some (AnyArgs.mk ts spine) ∧
+      anyExprsLower (argsPack spine) ctx = anyExprsLower xs ctx := by
+  induction xs with
+  | nil => exact ⟨[], Args.nil, rfl, rfl⟩
+  | cons ae rest ih =>
+      obtain ⟨t, n, e⟩ := ae
+      have hae : Expr.okS ctx s e := Expr.okSR_to_okS ctx s _ (hok (AnyExpr.mk t n e) (by simp))
+      have hrest : ∀ x ∈ rest, AnyExpr.okSR ctx s x := fun y hy => hok y (by simp [hy])
+      obtain ⟨ts', spine', h1, h2⟩ := ih hrest
+      have hdec := decodeExpr_reEnc s inv ctx hfn e hae
+      cases hd : decodeExpr s inv (e.toProto ctx) with
+      | none => rw [hd] at hdec; simp at hdec
+      | some pkg =>
+          cases pkg with
+          | mk t' n' ex =>
+              rw [hd] at hdec
+              simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
+              refine ⟨(t', n') :: ts', Args.cons t' n' ex spine', ?_, ?_⟩
+              · rw [anyExprsLower_cons]
+                simp only [decodeArgs, hd, h1]
+              · rw [show argsPack (Args.cons t' n' ex spine') =
+                  AnyExpr.mk t' n' ex :: argsPack spine' from rfl,
+                  anyExprsLower_cons, anyExprsLower_cons]
+                show ex.toProto ctx :: anyExprsLower (argsPack spine') ctx =
+                  e.toProto ctx :: anyExprsLower rest ctx
+                rw [hdec, h2]
+
+/-- Measure-list inversion: the lowered measures decode and re-lower to the
+    same wire measures. -/
+theorem decodeMeasures_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name))
+    (ms : List (Measure s)) (hok : ∀ m ∈ ms, Measure.okS ctx s m) :
+    ∃ ms', decodeMeasures s inv (ms.map (measureLower ctx)) = some ms' ∧
+      ms'.map (fun m =>
+        ({ measure :=
+            { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+              args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+              outputType := withNullable (toProtoType ctx m.sig.ret) m.sig.retNullable } } :
+          Proto.AggregateMeasure)) =
+      ms.map (fun m =>
+        ({ measure :=
+            { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+              args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+              outputType := withNullable (toProtoType ctx m.sig.ret) m.sig.retNullable } } :
+          Proto.AggregateMeasure)) := by
+  induction ms with
+  | nil => exact ⟨[], rfl, rfl⟩
+  | cons m rest ih =>
+      obtain ⟨sig, marg⟩ := m
+      have hm : Measure.okS ctx s { sig := sig, args := marg } := hok _ (by simp)
+      obtain ⟨hret, hargs⟩ := hm
+      rw [stOfPType_withNullable] at hret
+      have hrest : ∀ m' ∈ rest, Measure.okS ctx s m' := fun q hq => hok q (by simp [hq])
+      obtain ⟨ms', h1, h2⟩ := ih hrest
+      have hfn' : fnOf inv (ctx.functionAnchor sig.urn sig.name) =
+          some (sig.urn, sig.name) := hfn sig
+      obtain ⟨ts, spine, hda⟩ := decodeArgs_anyExprs s inv ctx hfn marg hargs
+      refine ⟨{ sig := FunctionSig.mkSig sig.name sig.urn ts sig.ret sig.retNullable true,
+                args := argsPack spine } :: ms', ?_, ?_⟩
+      · show decodeMeasures s inv
+          (measureLower ctx { sig := sig, args := marg } ::
+            rest.map (measureLower ctx)) =
+          some ({ sig := FunctionSig.mkSig sig.name sig.urn ts sig.ret sig.retNullable true,
+                  args := argsPack spine } :: ms')
+        simp only [measureLower, decodeMeasures, hfn', hda, stOfPType_withNullable, hret,
+          pTypeNullable_withNullable, h1, FunctionSig.mkSig]
+      · have hurm : (argsPack spine).map
+            (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+          marg.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) := hda.2
+        show ({ sig := FunctionSig.mkSig sig.name sig.urn ts sig.ret sig.retNullable true,
+                args := argsPack spine } :: ms').map
+            (fun m =>
+              ({ measure :=
+                  { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+                    args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+                    outputType := withNullable (toProtoType ctx m.sig.ret)
+                      m.sig.retNullable } } : Proto.AggregateMeasure)) =
+          ({ sig := sig, args := marg } :: rest).map
+            (fun m =>
+              ({ measure :=
+                  { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+                    args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+                    outputType := withNullable (toProtoType ctx m.sig.ret)
+                      m.sig.retNullable } } : Proto.AggregateMeasure))
+        simp only [FunctionSig.mkSig, List.map_cons, hurm, h2]
+
+/-- Sort-key-list inversion: the lowered keys decode (names re-derived from
+    the schema) and re-lower to the same wire sort fields. -/
+theorem decodeSortKeys_reEnc (s : Schema) (ks : List (SortKey s))
+    (hok : ∀ k ∈ ks, s.get? k.col.ordinal ≠ none) :
+    ∃ ks', decodeSortKeys s (ks.map sortFieldLower) = some ks' ∧
+      ks'.map (fun k =>
+        (⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none },
+          k.direction⟩ : Proto.SortField)) =
+      ks.map (fun k =>
+        (⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none },
+          k.direction⟩ : Proto.SortField)) := by
+  induction ks with
+  | nil => exact ⟨[], rfl, rfl⟩
+  | cons k rest ih =>
+      obtain ⟨col, dir⟩ := k
+      have hk : s.get? col.ordinal ≠ none :=
+        hok { col := col, direction := dir } (by simp)
+      have hrest : ∀ k2 ∈ rest, s.get? k2.col.ordinal ≠ none := fun k2 h2 =>
+        hok k2 (by simp [h2])
+      obtain ⟨ks', h1, h2⟩ := ih hrest
+      cases hg : s.get? col.ordinal with
+      | none => exact absurd hg hk
+      | some col3 =>
+          obtain ⟨nm, t3, n3⟩ := col3
+          refine ⟨{ col := { name := nm, ordinal := col.ordinal }, direction := dir } :: ks',
+            ?_, ?_⟩
+          · simp only [List.map_cons, sortFieldLower, decodeSortKeys, hg, h1]
+          · show ({ col := { name := nm, ordinal := col.ordinal }, direction := dir } :: ks').map
+                (fun k =>
+                  (⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none },
+                    k.direction⟩ : Proto.SortField)) =
+              ({ col := col, direction := dir } :: rest).map
+                (fun k =>
+                  (⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none },
+                    k.direction⟩ : Proto.SortField))
+            show ⟨Proto.Expression.field { ordinal := col.ordinal, segment := none },
+                dir⟩ :: ks'.map (fun k =>
+                  (⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none },
+                    k.direction⟩ : Proto.SortField)) =
+              ⟨Proto.Expression.field { ordinal := col.ordinal, segment := none },
+                dir⟩ :: rest.map (fun k =>
+                  (⟨Proto.Expression.field { ordinal := k.col.ordinal, segment := none },
+                    k.direction⟩ : Proto.SortField))
+            rw [h2]
+
+/-! ## the master rel re-encode theorem -/
+
+/- The wire-level round trip: for EVERY typed rel `r` satisfying `Rel.okS`,
+   decoding `r`'s lowered form and re-lowering the decode recovers the SAME
+   wire term.  This is the composition the wire consumes: anchors, ordinals,
+   and schemas round-trip; names (erased by the wire) are re-derived from the
+   decode. -/
+
+/-- `squareOf` on an already-square package. -/
+theorem squareOf_mk (s : Schema) (r : Rel s s) :
+    squareOf (AnyRel.mk s s r) = some ⟨s, r⟩ := by
+  show (if h : s = s then some (SqRel.mk s (Rel.castSq h r)) else none) = some ⟨s, r⟩
+  rw [dif_pos rfl]
+  rfl
+
+/-- **THE rel re-encode theorem**: for every typed rel `r` (with its
+    `Rel.okS` well-formedness — ordinal-safe columns, decodable call output
+    types, decodable read schemas, and the decoded-schema pins the GADT
+    demands), decoding `r`'s lowered form and re-lowering the result recovers
+    the SAME wire term. -/
+theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name)) :
+    ∀ {inS outS : Schema} (r : Rel inS outS), Rel.okS ctx inv r →
+      (decodeRel inv (r.toProtoWith ctx)).map (fun a => relLower a ctx) =
+        some (r.toProtoWith ctx) := by
+  intro inS outS r
+  induction r with
+  | read table sc =>
+      intro hok
+      show (decodeRel inv (Proto.Rel.read
+        { readType := .namedTable [table]
+          baseSchema := some { fields := sc.map (toProtoColType ctx), names := sc.names }
+          common := none })).map (fun a => relLower a ctx) =
+        some (Proto.Rel.read
+        { readType := .namedTable [table]
+          baseSchema := some { fields := sc.map (toProtoColType ctx), names := sc.names }
+          common := none })
+      simp only [decodeRel]
+      rw [schemaOfFields_of_toProto ctx sc hok]
+      simp [relLower, Rel.toProtoWith]
+  | @filter s _ input cond ih =>
+      intro hok
+      obtain ⟨hin, hsq, hcond⟩ := hok
+      have ihc := ih hin
+      show (decodeRel inv (Proto.Rel.filter
+        { condition := cond.toProto ctx, input := input.toProtoWith ctx,
+          common := none })).map (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          simp only [SqPred, hx] at hsq
+          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
+          rw [hpkg] at ihc
+          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+            simpa [relLower] using ihc
+          rw [hpkg]
+          simp only [squareOf_mk]
+          obtain ⟨ce, hce'⟩ := decodeExpr_shape s inv ctx hfn cond hcond
+          rw [hce']
+          have hlowce : ce.toProto ctx = cond.toProto ctx := by
+            have h2 := decodeExpr_reEnc s inv ctx hfn cond (Expr.okSR_to_okS ctx s _ hcond)
+            rw [hce'] at h2
+            simpa [anyLower] using h2
+          simp [relLower, Rel.toProtoWith, hlowce, hlow]
+  | @project s p input outs emit ih =>
+      intro hok
+      obtain ⟨hin, hpr, houts⟩ := hok
+      have ihc := ih hin
+      show (decodeRel inv (Proto.Rel.project
+        { expressions := outs.map (fun pr => pr.expr.toProto ctx),
+          input := input.toProtoWith ctx,
+          common := emit.map (fun m => { emit := some (.emit m), advancedExtension := none }) })).map
+        (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          simp only [PairPred, hx] at hpr
+          obtain ⟨r1, hpkg⟩ := hpr pkg rfl
+          rw [hpkg] at ihc
+          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+            simpa [relLower] using ihc
+          rw [hpkg]
+          obtain ⟨ps', hp1, hp2⟩ := decodeProjections_reEnc p inv ctx hfn outs houts
+          simp only [hp1]
+          cases emit with
+          | none => simp [relLower, Rel.toProtoWith, Option.map_none, emitOf, hlow, hp2]
+          | some m => simp [relLower, Rel.toProtoWith, Option.map_some, emitOf, hlow, hp2]
+  | @aggregate s input grouping measures ih =>
+      intro hok
+      obtain ⟨hin, hsq, hg, hm⟩ := hok
+      have ihc := ih hin
+      show (decodeRel inv (Proto.Rel.aggregate
+        { groupingExpressions := anyExprsLower grouping ctx,
+          measures := measures.map (measureLower ctx),
+          input := input.toProtoWith ctx, common := none })).map
+        (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          simp only [SqPred, hx] at hsq
+          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
+          rw [hpkg] at ihc
+          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+            simpa [relLower] using ihc
+          rw [hpkg]
+          simp only [squareOf_mk]
+          obtain ⟨gxs, hg1, hg2⟩ := decodeAnyExprs_reEnc s inv ctx hfn grouping hg
+          obtain ⟨mxs, hm1, hm2⟩ := decodeMeasures_reEnc s inv ctx hfn measures hm
+          simp only [hg1, hm1]
+          simp only [Option.map_some, relLower, Rel.toProtoWith]
+          show some (Proto.Rel.aggregate
+            { groupingExpressions :=
+                gxs.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx),
+              measures :=
+                mxs.map (fun m =>
+                  ({ measure :=
+                      { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+                        args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+                        outputType := withNullable (toProtoType ctx m.sig.ret)
+                          m.sig.retNullable } } : Proto.AggregateMeasure)),
+              input := r1.toProtoWith ctx, common := none }) =
+            some (Proto.Rel.aggregate
+              { groupingExpressions :=
+                  grouping.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx),
+                measures :=
+                  measures.map (fun m =>
+                    ({ measure :=
+                        { functionReference := ctx.functionAnchor m.sig.urn m.sig.name
+                          args := m.args.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+                          outputType := withNullable (toProtoType ctx m.sig.ret)
+                            m.sig.retNullable } } : Proto.AggregateMeasure)),
+                input := input.toProtoWith ctx, common := none })
+          rw [hg2, hm2, hlow]
+  | @sort s input orderBy ih =>
+      intro hok
+      obtain ⟨hin, hsq, hk⟩ := hok
+      have ihc := ih hin
+      show (decodeRel inv (Proto.Rel.sort
+        { sorts := orderBy.map sortFieldLower, input := input.toProtoWith ctx,
+          common := none })).map (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          simp only [SqPred, hx] at hsq
+          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
+          rw [hpkg] at ihc
+          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+            simpa [relLower] using ihc
+          rw [hpkg]
+          simp only [squareOf_mk]
+          obtain ⟨ks', hk1', hk2'⟩ := decodeSortKeys_reEnc s orderBy hk
+          simp only [hk1']
+          simp [relLower, Rel.toProtoWith, hk2', hlow]
+  | @fetch s input limit offset ih =>
+      intro hok
+      obtain ⟨hin, hsq⟩ := hok
+      have ihc := ih hin
+      show (decodeRel inv (Proto.Rel.fetch
+        { limit := limit, offset := offset, input := input.toProtoWith ctx,
+          common := none })).map (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          simp only [SqPred, hx] at hsq
+          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
+          rw [hpkg] at ihc
+          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+            simpa [relLower] using ihc
+          rw [hpkg]
+          simp only [squareOf_mk]
+          simp [relLower, Rel.toProtoWith, hlow]
+  | @join sl sl' sr sr' _ left right cond jt ihl ihr =>
+      intro hok
+      obtain ⟨hl, hr, hpl, hpr, hcond⟩ := hok
+      have ihcL := ihl hl
+      have ihcR := ihr hr
+      show (decodeRel inv (Proto.Rel.join
+        { joinType := jt, left := left.toProtoWith ctx, right := right.toProtoWith ctx,
+          condition := cond.toProto ctx, postJoinFilter := none, common := none })).map
+        (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx1 : decodeRel inv (left.toProtoWith ctx) with
+      | none => rw [hx1] at ihcL; simp at ihcL
+      | some pkgL =>
+          cases hx2 : decodeRel inv (right.toProtoWith ctx) with
+          | none => rw [hx2] at ihcR; simp at ihcR
+          | some pkgR =>
+              rw [hx1] at ihcL
+              rw [hx2] at ihcR
+              simp only [PairPred, hx1] at hpl
+              simp only [PairPred, hx2] at hpr
+              obtain ⟨rl, hpkgL⟩ := hpl pkgL rfl
+              obtain ⟨rr, hpkgR⟩ := hpr pkgR rfl
+              rw [hpkgL] at ihcL
+              rw [hpkgR] at ihcR
+              have hlowL : rl.toProtoWith ctx = left.toProtoWith ctx := by
+                simpa [relLower] using ihcL
+              have hlowR : rr.toProtoWith ctx = right.toProtoWith ctx := by
+                simpa [relLower] using ihcR
+              rw [hpkgL, hpkgR]
+              show Option.map (fun a => relLower a ctx)
+                  (match decodeExpr (sl' ++ sr') inv (cond.toProto ctx) with
+                  | some (AnyExpr.mk .bool n ce) =>
+                      some (AnyRel.mk (sl ++ sr) (sl' ++ sr') (Rel.join rl rr ce jt))
+                  | _ => none) =
+                some (Proto.Rel.join
+                  { joinType := jt, left := left.toProtoWith ctx,
+                    right := right.toProtoWith ctx, condition := cond.toProto ctx,
+                    postJoinFilter := none, common := none })
+              obtain ⟨ce, hce'⟩ := decodeExpr_shape (sl' ++ sr') inv ctx hfn cond hcond
+              rw [hce']
+              have hlowce : ce.toProto ctx = cond.toProto ctx := by
+                have h2 := decodeExpr_reEnc (sl' ++ sr') inv ctx hfn cond (Expr.okSR_to_okS ctx (sl' ++ sr') _ hcond)
+                rw [hce'] at h2
+                simpa [anyLower] using h2
+              simp [relLower, Rel.toProtoWith, hlowL, hlowR, hlowce]
+  | @set s s' op left right ihl ihr =>
+      intro hok
+      obtain ⟨hl, hr, hpair⟩ := hok
+      have ihcL := ihl hl
+      have ihcR := ihr hr
+      show (decodeRel inv (Proto.Rel.set
+        { op := op, inputs := [left.toProtoWith ctx, right.toProtoWith ctx],
+          common := none })).map (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx1 : decodeRel inv (left.toProtoWith ctx) with
+      | none => rw [hx1] at ihcL; simp at ihcL
+      | some pkgL =>
+          cases hx2 : decodeRel inv (right.toProtoWith ctx) with
+          | none => rw [hx2] at ihcR; simp at ihcR
+          | some pkgR =>
+              rw [hx1] at ihcL
+              rw [hx2] at ihcR
+              cases pkgL with
+              | mk s1 s1' rl =>
+                  cases pkgR with
+                  | mk s2 s2' rr =>
+                      have hlowL : rl.toProtoWith ctx = left.toProtoWith ctx := by
+                        simpa [relLower] using ihcL
+                      have hlowR : rr.toProtoWith ctx = right.toProtoWith ctx := by
+                        simpa [relLower] using ihcR
+                      rw [hx1, hx2] at hpair
+                      have heq : (s1, s1') = (s2, s2') := by
+                        have hp := hpair (AnyRel.mk s1 s1' rl) (AnyRel.mk s2 s2' rr) rfl rfl
+                        simpa [AnyRel.schemaPair] using hp
+                      have h1 : s1 = s2 := congrArg Prod.fst heq
+                      have h2 : s1' = s2' := congrArg Prod.snd heq
+                      simp only [Option.map_some, relLower]
+                      rw [dif_pos h1, dif_pos h2]
+                      show some (Proto.Rel.set
+                        { op := op,
+                          inputs := [rl.toProtoWith ctx,
+                            (Rel.cast2 h1 h2 rr).toProtoWith ctx],
+                          common := none }) =
+                        some (Proto.Rel.set
+                          { op := op,
+                            inputs := [left.toProtoWith ctx, right.toProtoWith ctx],
+                            common := none })
+                      rw [Rel.cast2_toProtoWith, hlowL, hlowR]
+  | @write s s' op table ts input ih =>
+      intro hok
+      obtain ⟨hin, hts⟩ := hok
+      have ihc := ih hin
+      show (decodeRel inv (Proto.Rel.write
+        { tableName := table, op := op,
+          tableSchema := ts.map (fun sc =>
+            { fields := sc.map (toProtoColType ctx), names := sc.names }),
+          input := input.toProtoWith ctx, common := none })).map
+        (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          cases pkg with
+          | mk t t' r1 =>
+              have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+                simpa [relLower] using ihc
+              cases ts with
+              | none =>
+                  show (match some (AnyRel.mk t t' r1) with
+                    | some (AnyRel.mk u u' ri) =>
+                        some (AnyRel.mk u u' (Rel.write op table none ri))
+                    | none => none).map (fun a => relLower a ctx) = _
+                  simp [relLower, Rel.toProtoWith, hlow]
+              | some sc =>
+                  have hsco := hts
+                  show (match some (AnyRel.mk t t' r1) with
+                    | some (AnyRel.mk u u' ri) =>
+                        match schemaOfFields sc.names (sc.map (toProtoColType ctx)) with
+                        | some sc' =>
+                            some (AnyRel.mk u u' (Rel.write op table (some sc') ri))
+                        | none => none
+                    | none => none).map (fun a => relLower a ctx) = _
+                  rw [schemaOfFields_of_toProto ctx sc hsco]
+                  simp [relLower, Rel.toProtoWith, hlow]
+  | @extensionSingle s s' detail input ih =>
+      intro hok
+      have ihc := ih hok
+      show (decodeRel inv (Proto.Rel.extensionSingle
+        { input := input.toProtoWith ctx, detail := some detail, common := none })).map
+        (fun a => relLower a ctx) = some _
+      simp only [decodeRel]
+      cases hx : decodeRel inv (input.toProtoWith ctx) with
+      | none => rw [hx] at ihc; simp at ihc
+      | some pkg =>
+          rw [hx] at ihc
+          cases pkg with
+          | mk t t' r1 =>
+              have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
+                simpa [relLower] using ihc
+              show (match some detail with
+                | some d => some (AnyRel.mk t t' (Rel.extensionSingle d r1))
+                | none => none).map (fun a => relLower a ctx) = _
+              simp [relLower, Rel.toProtoWith, hlow]
 end Substrait.Decode

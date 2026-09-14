@@ -332,6 +332,216 @@ def exprSpecCast : TestKit.PropSpec :=
 
 end PropSweep
 
+/- ── The typed-rel decode sweep ──────────────────────────────────────────
+
+`decodeRel` ∘ `toProtoWith` = id over GENERATED rels (the proved
+`decodeRel_reEnc`, evaluated).  The generator covers every `Typed.Rel`
+constructor over the fixed schemas (`units`, `joinLeft`/`joinRight`); the
+`Rel.okS` predicate holds by construction (the generator only builds
+authoring-surface rels: ordinal-safe columns, decodable call types,
+decodable read schemas). -/
+
+/- The measure signatures a rel uses (the `toCtx` gap: the aggregate arm
+    folds only the measures' ARGUMENT expressions, never `m.sig` — so the
+    measure anchors lower to 0 = undeclared).  Test-side collection; the
+    round-trip contexts extend `toCtx` with these.  Top-level (outside the
+    sweep namespace) so the dot-notation `i.measureSigs` resolves against
+    `Substrait.Typed.Rel`. -/
+def Rel.measureSigs : {i o : Schema} → Rel i o → List (String × String)
+  | _, _, .read _ _ => []
+  | _, _, .filter i _ => measureSigs i
+  | _, _, .project i _ _ => measureSigs i
+  | _, _, .aggregate _ _ ms => ms.map (fun m => (m.sig.urn, m.sig.name))
+  | _, _, .sort i _ => measureSigs i
+  | _, _, .fetch i _ _ => measureSigs i
+  | _, _, .join l r _ _ => measureSigs l ++ measureSigs r
+  | _, _, .set _ l r => measureSigs l ++ measureSigs r
+  | _, _, .write _ _ _ i => measureSigs i
+  | _, _, .extensionSingle _ i => measureSigs i
+
+/-- The round-trip context: `toCtx` plus every measure signature (the
+    `decodeRel_reEnc` hypothesis `hfn` needs every used sig declared). -/
+def relCtx {i o : Schema} (rel : Rel i o) : ExtCtx :=
+  (Rel.measureSigs rel).foldl (fun c p => c.addFunction p.1 p.2) rel.toCtx
+
+namespace RelSweep
+
+open Plausible
+open Substrait.Decode
+
+def relRoundtripOk (a : AnyRel) : Bool :=
+  match a with
+  | .mk _ _ rel =>
+      let ctx := relCtx rel
+      let inv := fnInvOf ctx
+      match decodeRel inv (rel.toProtoWith ctx) with
+      | some pkg => relLower pkg ctx == rel.toProtoWith ctx
+      | none => false
+
+/-- The sabotaged sibling: claims EVERY rel is rejected (caught iff the
+    sampler reaches any decodable rel — it reaches reads immediately). -/
+def relRejectOk (a : AnyRel) : Bool :=
+  match a with
+  | .mk _ _ rel =>
+      (decodeRel (fnInvOf (relCtx rel)) (rel.toProtoWith (relCtx rel))).isNone
+
+/-- An i32-typed expression over `units` (all columns nullable i32). -/
+def genI32Ex : Nat → Gen (Expr units .i32 true)
+  | 0 => do
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then
+        pure (col "health" .i32 true)
+      else
+        pure (col "regen" .i32 true)
+  | fuel + 1 => do
+      let b ← Gen.chooseNat
+      match b % 3 with
+      | 0 => pure (Expr.literal .i32 true (LiteralValue.i32 (b % 97)))
+      | 1 => do
+        let x ← genI32Ex fuel
+        pure (x +. col "health" .i32 true)
+      | _ => do
+        let x ← genI32Ex fuel
+        pure (x *. col "regen" .i32 true)
+
+/-- A bool-typed expression over `units`. -/
+def genBoolEx : Nat → Gen (Expr units .bool true)
+  | 0 => pure (col "health" .i32 true >. col "regen" .i32 true)
+  | fuel + 1 => do
+      let b ← Gen.chooseNat
+      match b % 3 with
+      | 0 => do
+        let x ← genI32Ex fuel
+        pure (x >. col "regen" .i32 true)
+      | 1 => do
+        let x ← genI32Ex fuel
+        pure (x ==. col "health" .i32 true)
+      | _ => do
+        let x ← genBoolEx fuel
+        let y ← genBoolEx fuel
+        pure (x &&. y)
+
+/-- The count/sum measure list over `units`. -/
+def genMeasures : Nat → Gen (List (Measure units))
+  | 0 => pure []
+  | fuel + 1 => do
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then
+        let ex ← genI32Ex fuel
+        pure [{ sig := FunctionSig.mkSig "sum" "extension:io.substrait:functions_aggregate"
+                  [(.i32, true)] .i32 true true, args := [AnyExpr.mk .i32 true ex] }]
+      else
+        pure [{ sig := FunctionSig.mkSig "count" "extension:io.substrait:functions_aggregate"
+                  [] .i64 true true, args := [] }]
+
+/-- A square rel over `units` (input schema = output schema = `units`),
+    typed (the GADT-refinement flows through the typed return). -/
+def genRelUs : Nat → Gen (Rel units units)
+  | 0 => do
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then
+        pure (Rel.read "units" units)
+      else
+        pure (Rel.fetch (Rel.read "units" units) (some (b % 7)) none)
+  | fuel + 1 => do
+      let b ← Gen.chooseNat
+      match b % 6 with
+      | 0 => pure (Rel.read "units" units)
+      | 1 => do
+        let cex ← genBoolEx fuel
+        let ri ← genRelUs fuel
+        pure (Rel.filter ri cex)
+      | 2 => do
+        let ri ← genRelUs fuel
+        pure (Rel.sort ri [sortKey "health" .i32 true .ascNullsFirst])
+      | 3 => do
+        let li ← genRelUs fuel
+        let ri ← genRelUs fuel
+        pure (Rel.set .unionDistinct li ri)
+      | _ => do
+        let ri ← genRelUs fuel
+        pure (Rel.write "INSERT" "t" (some units) ri)
+
+/-- Any rel: square-over-units, a project, or a join. -/
+def genAnyRel : Nat → Gen AnyRel
+  | 0 => do
+      let ri ← genRelUs 0
+      pure (AnyRel.mk units units ri)
+  | fuel + 1 => do
+      let b ← Gen.chooseNat
+      match b % 3 with
+      | 0 => do
+        let ri ← genRelUs (fuel + 1)
+        pure (AnyRel.mk units units ri)
+      | 1 => do
+        let ex ← genI32Ex fuel
+        pure (AnyRel.mk units (projectOut units [⟨"c0", .i32, true, ex⟩])
+          (Rel.project (Rel.read "units" units) [⟨"c0", .i32, true, ex⟩] none))
+      | 2 => do
+        let gex ← genI32Ex fuel
+        let ms ← genMeasures fuel
+        let ri ← genRelUs fuel
+        pure (AnyRel.mk units (aggregateOut units [AnyExpr.mk .i32 true gex] ms)
+          (Rel.aggregate ri [AnyExpr.mk .i32 true gex] ms))
+      | _ => do
+        let eq : Expr joinS .bool true := col "lk" .i32 true ==. col "rk" .i32 true
+        pure (AnyRel.mk joinS joinS
+          (Rel.join (Rel.read "L" joinLeft) (Rel.read "R" joinRight) eq .inner))
+
+def genAnyRelSized : Nat → Gen AnyRel := fun size => genAnyRel (size % 4 + 1)
+
+partial def shrinkAnyRel : AnyRel → List AnyRel
+  | .mk _ _ r =>
+      match r with
+      | .read _ _ => []
+      | @Rel.filter s _ i _ => [AnyRel.mk s s i]
+      | @Rel.project s p i _ _ => [AnyRel.mk s p i]
+      | @Rel.aggregate s i _ _ => [AnyRel.mk s s i]
+      | @Rel.sort s i _ => [AnyRel.mk s s i]
+      | @Rel.fetch s i _ _ => [AnyRel.mk s s i]
+      | @Rel.join sl sl' _ _ _ l _ _ _ => [AnyRel.mk sl sl' l]
+      | @Rel.set s s' _ l _ => [AnyRel.mk s s' l]
+      | @Rel.write s s' _ _ _ i => [AnyRel.mk s s' i]
+      | @Rel.extensionSingle s s' _ i => [AnyRel.mk s s' i]
+
+instance : ArbitraryFueled AnyRel where
+  arbitraryFueled := genAnyRelSized
+
+instance : Arbitrary AnyRel where
+  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
+
+instance : Shrinkable AnyRel where
+  shrink := shrinkAnyRel
+
+/-- The sweep's display form: the typed GADT has no Repr (a GADT cannot
+    derive one), so display the LOWERED wire rel (Proto.Rel derives Repr;
+    this is what `SampleableExt.selfContained` needs for failure traces). -/
+instance : Repr AnyRel := ⟨fun a _ =>
+  (match a with
+  | .mk _ _ r => repr (r.toProtoWith r.toCtx))⟩
+
+/-- The suite: 400 rels, pinned seed. -/
+def relSuite : TestSeq :=
+  checkPlausibleIO "decodeRel∘toProtoWith = id (generated rels)"
+    (∀ a : AnyRel, relRoundtripOk a = true)
+    .done { numInst := 400, randomSeed := some 20260910 }
+
+/-- The mandatory negative control: the sabotaged claim (every rel rejected)
+    must be caught. -/
+def relControl : TestSeq :=
+  checkPlausibleIO "sabotaged: rel decode rejects everything (must be caught)"
+    (∀ a : AnyRel, relRejectOk a = true)
+    .done { numInst := 400, randomSeed := some 20260910 }
+
+/-- The property spec: sweep + mandatory negative control. -/
+def relSpec : TestKit.PropSpec :=
+  { name := "rel decode∘lower round-trip"
+  , suite := relSuite
+  , control := relControl
+  , controlName := "reject-all-rels" }
+
+end RelSweep
+
 /-- Run the check suite via TestKit.CheckM: named checks accumulate;
     hard errors on intermediate IO (eval failures feeding later checks)
     `errorAbort` — the remaining sections are skipped with the error
@@ -533,7 +743,143 @@ def runChecks : TestKit.CheckM Unit := do
     TestKit.check s!"expr parses: {txt}" (TestKit.assert
       ((Decode.parseExpr (txt.length + 1) fnCtx txt.toList).isSome) "")
 
-  -- 10. Wire round-trip (D12): SKIPPED — ProtoGen/protobuf excluded from v1.
+  -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers
+  --    the wire term, for every typed constructor (the proved
+  --    `decodeRel_reEnc`, evaluated on golden rels).
+  -- The relRoundtrip helper lowers with `rel.toCtx` — which declares the
+  -- SIGNATURES of expression CALLS but NOT of aggregate MEASURES (the
+  -- `toCtx` aggregate arm folds only the measures' argument expressions;
+  -- pre-existing `ToProto.lean` gap, outside this file's lock).  The
+  -- aggregate check therefore passes a context that declares the measure
+  -- sigs — the `hfn` hypothesis of `decodeRel_reEnc` needs exactly that.
+  let relRoundtripWith (name : String) (ctx : ExtCtx) (r : Decode.AnyRel) :
+      TestKit.CheckM Unit := do
+    match r with
+    | .mk _ _ rel =>
+        let inv := Decode.fnInvOf ctx
+        TestKit.check s!"rel decode re-enc: {name}" (TestKit.assert
+          (match Decode.decodeRel inv (rel.toProtoWith ctx) with
+           | some pkg => Decode.relLower pkg ctx == rel.toProtoWith ctx
+           | none => false) "")
+  let relRoundtrip (name : String) (r : Decode.AnyRel) : TestKit.CheckM Unit := do
+    match r with
+    | .mk _ _ rel => relRoundtripWith name rel.toCtx r
+  relRoundtrip "read" (Decode.AnyRel.mk units units (Rel.read "units" units))
+  relRoundtrip "filter"
+    (Decode.AnyRel.mk units units
+      (Builder.read "units" units |> Builder.filter (col "health" .i32 true >. litI32 0)).rel)
+  relRoundtrip "project" (Decode.AnyRel.mk units (projectOut units goldenOut) goldenPlan)
+  let countM : Measure aggS :=
+    { sig := FunctionSig.mkSig "count" "extension:io.substrait:functions_aggregate" [] .i64 true true,
+      args := [] }
+  let sumM : Measure aggS :=
+    { sig := FunctionSig.mkSig "sum" "extension:io.substrait:functions_aggregate" [(.i32, true)] .i32 true true,
+      args := [pack (col "v" .i32 true)] }
+  let aggUrn := "extension:io.substrait:functions_aggregate"
+  let aggCtx : ExtCtx := { urns := [], functions := [(aggUrn, "count"), (aggUrn, "sum")], types := [] }
+  relRoundtripWith "aggregate" aggCtx
+    (Decode.AnyRel.mk aggS (aggregateOut aggS [pack (col "v" .i32 true)] [countM, sumM])
+      (Rel.aggregate (Rel.read "agg" aggS) [pack (col "v" .i32 true)] [countM, sumM]))
+  relRoundtrip "sort"
+    (Decode.AnyRel.mk units units
+      (Rel.sort (Rel.read "units" units)
+        [sortKey "health" .i32 true .ascNullsFirst]))
+  relRoundtrip "fetch"
+    (Decode.AnyRel.mk units units (Rel.fetch (Rel.read "units" units) (some 10) (some 5)))
+  relRoundtrip "join inner"
+    (Decode.AnyRel.mk joinS joinS
+      (Rel.join (Rel.read "L" joinLeft) (Rel.read "R" joinRight)
+        ((col "lk" .i32 true ==. col "rk" .i32 true : Expr joinS .bool true)) .inner))
+  relRoundtrip "set union"
+    (Decode.AnyRel.mk units units
+      (Rel.set .unionDistinct (Rel.read "a" units) (Rel.read "b" units)))
+  relRoundtrip "write"
+    (Decode.AnyRel.mk units units
+      (Rel.write "INSERT" "target" (some units) (Rel.read "units" units)))
+  relRoundtrip "extensionSingle"
+    (Decode.AnyRel.mk units units (Rel.extensionSingle "custom" (Rel.read "units" units)))
+
+  -- 10b. Negative controls: corrupted wire rels must be REJECTED (with the
+  --    check name carrying the corruption context).
+  let relRejected (name : String) (w : Proto.Rel) : TestKit.CheckM Unit := do
+    TestKit.check s!"rel decode rejects: {name}" (TestKit.assert
+      ((Decode.decodeRel (Decode.fnInvOf ExtCtx.empty) w).isNone) "")
+  -- read: no base schema
+  relRejected "read without baseSchema"
+    (Proto.Rel.read { readType := .namedTable ["units"], baseSchema := none, common := none })
+  -- read: names/fields length mismatch
+  relRejected "read with ragged schema"
+    (Proto.Rel.read { readType := .namedTable ["units"],
+                      baseSchema := some { fields := [.i32 .nullable],
+                                           names := ["health", "regen"] },
+                      common := none })
+  -- read: userDefined field type (no decode-side registry)
+  relRejected "read with userDefined field"
+    (Proto.Rel.read { readType := .namedTable ["units"],
+                      baseSchema := some { fields := [.userDefined 1 [] .nullable],
+                                           names := ["health"] },
+                      common := none })
+  -- filter: condition is an i32 literal, not a boolean
+  relRejected "filter with non-bool condition"
+    (Proto.Rel.filter { condition := .literal { literalType := .i32 0, nullable := false },
+                        input := .read { readType := .namedTable ["units"],
+                                         baseSchema := some { fields := [.i32 .nullable, .i32 .nullable],
+                                                              names := ["health", "regen"] },
+                                         common := none },
+                        common := none })
+  -- sort: ordinal out of range
+  relRejected "sort with out-of-range ordinal"
+    (Proto.Rel.sort { sorts := [⟨.field { ordinal := 9, segment := none }, .ascNullsFirst⟩],
+                      input := .read { readType := .namedTable ["units"],
+                                       baseSchema := some { fields := [.i32 .nullable, .i32 .nullable],
+                                                            names := ["health", "regen"] },
+                                       common := none },
+                      common := none })
+  -- aggregate: measure anchor undeclared
+  relRejected "aggregate with unknown anchor"
+    (Proto.Rel.aggregate { groupingExpressions := [],
+                           measures := [⟨{ functionReference := 99, args := [],
+                                           outputType := .i64 .required }⟩],
+                           input := .read { readType := .namedTable ["agg"],
+                                            baseSchema := some { fields := [.i32 .nullable],
+                                                                 names := ["v"] },
+                                            common := none },
+                           common := none })
+  -- cross: no typed constructor
+  relRejected "cross rel"
+    (Proto.Rel.cross { left := .read { readType := .namedTable ["a"], baseSchema := none, common := none },
+                       right := .read { readType := .namedTable ["b"], baseSchema := none, common := none },
+                       common := none })
+  -- set: the two inputs decode to different schemas
+  relRejected "set with mismatched schemas"
+    (Proto.Rel.set { op := .unionDistinct,
+                     inputs := [ .read { readType := .namedTable ["a"],
+                                         baseSchema := some { fields := [.i32 .nullable],
+                                                              names := ["v"] },
+                                         common := none },
+                                 .read { readType := .namedTable ["b"],
+                                         baseSchema := some { fields := [.i64 .nullable],
+                                                              names := ["w"] },
+                                         common := none } ],
+                     common := none })
+  -- extensionSingle: detail absent (the typed ctor requires one)
+  relRejected "extensionSingle without detail"
+    (Proto.Rel.extensionSingle { input := .read { readType := .namedTable ["units"],
+                                                  baseSchema := none, common := none },
+                                 detail := none, common := none })
+  -- emit .direct canonicalizes to the typed `none` (decode accepts; the
+  -- re-lowered wire drops the direct marker — the documented lossiness)
+  TestKit.check "rel decode accepts emit .direct (canonicalized)" (TestKit.assert
+    (match Decode.decodeRel (Decode.fnInvOf ExtCtx.empty)
+        (Proto.Rel.project { expressions := [],
+                             input := .read { readType := .namedTable ["units"],
+                                              baseSchema := some { fields := [.i32 .nullable, .i32 .nullable],
+                                                                   names := ["health", "regen"] },
+                                              common := none },
+                             common := some { emit := some .direct, advancedExtension := none } }) with
+     | some _ => true | none => false) "")
+
+  -- 11. Wire round-trip (D12): SKIPPED — ProtoGen/protobuf excluded from v1.
   --    Re-add with the protobuf dep when binary Substrait interchange is needed.
   pure ()
 
@@ -564,4 +910,4 @@ def main (args : List String) : IO UInt32 := do
         -- must be caught — a sweep whose generator never reaches the failing
         -- fragment is flagged as vacuous)
         TestKit.runSpecs [PropSweep.spec, PropSweep.exprSpecCalls,
-          PropSweep.exprSpecIfThen, PropSweep.exprSpecCast]
+          PropSweep.exprSpecIfThen, PropSweep.exprSpecCast, RelSweep.relSpec]
