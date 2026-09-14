@@ -7,6 +7,8 @@ mean the same thing in Lean elaboration errors and fast-observe traces.
 -/
 
 import Faults.Registry
+import Demo
+import SchemaLang.Meta.Derive
 
 namespace Faults.Spec
 
@@ -26,12 +28,13 @@ def apiFaults : List FailureModeItem :=
     , category := .invariant, advice := "file a bug with the report id"
     , payload := [] } ]
 
-/-- The known schema type names — the schema-lang demo universe's
-    `Item.typeNames` (records + variants, registry-name form: the same
-    names `Ty.check`/`universeCheck` resolve `.ty` refs against).
-    Hand-mirrored here because the registry lives in an env extension;
-    the Tests tie-check loads the demo registry and asserts this list
-    IS `Item.typeNames` of it (drift = red suite). -/
-def knownTypes : List String := ["User", "OrderItem", "Order", "Role", "OrderError"]
+-- DERIVED at elaboration from the schema registry
+-- (`SchemaLang.Meta.derive_schema_type_names`): the demo universe's
+-- type-position names (records + variants), snapshotted from the env
+-- extension at THIS module's elaboration. Not a hand mirror: editing
+-- Demo.lean's universe re-derives this list automatically; the Tests'
+-- tie-check (registry reload) stays as the independent regression
+-- control, and its stale-list negative control still fails.
+derive_schema_type_names knownTypes
 
 end Faults.Spec

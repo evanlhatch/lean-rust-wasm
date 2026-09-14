@@ -25,6 +25,7 @@ Registration is attribute-first (`@[schema]`/`@[schema_fn]`/
 
 import SchemaLang.DidYouMean
 import SchemaLang.Ty
+import CodegenCore.Emit.Core
 
 namespace SchemaLang
 
@@ -34,7 +35,7 @@ namespace SchemaLang
 structure Field where
   name : String
   ty : Ty
-deriving Repr, BEq, Inhabited
+deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- Nullability semantics of a func item, AS DATA (refactor-guide
     6.5.1; flatland SPEC-core §2): how the fn treats null (`option`)
@@ -200,8 +201,43 @@ inductive SchemaDiag where
   | noCtor (name : String)
   | binderMismatch (name : String)
   | multiPayload (name : String)
+  | reservedWord (name context : String)
   | volatileInPureContext (fn context : String)
 deriving Repr, BEq, Inhabited
+
+/-! ## Reserved words — the identifier gate (elab-time, via the
+    registration handlers in `Meta.Reflect`; also enforced by the pure
+    `Item.check` for hand-built universes)
+
+A field/case named `u8` would emit INVALID WIT (`record user { u8: ... }`)
+and invalid Rust; the collision is caught HERE — at registration —
+not downstream at wit-parser time. The identifier is checked in its
+EMITTED spellings (kebab for WIT, snake for Rust).
+-/
+
+/-- WIT's keyword set (wit-parser rejects these as identifiers). -/
+def witReserved : List String :=
+  ["any", "bool", "char", "enum", "f32", "f64", "flags", "float32", "float64",
+   "future", "handle", "i8", "i16", "i32", "i64", "interface", "list",
+   "option", "package", "record", "resource", "result", "s8", "s16", "s32",
+   "s64", "service", "static", "stream", "string", "tuple", "type", "u8",
+   "u16", "u32", "u64", "unit", "use", "variant", "world", "async"]
+
+/-- Rust's reserved set (strict + reserved-suffix keywords). -/
+def rustReserved : List String :=
+  ["as", "async", "await", "become", "box", "break", "const", "continue",
+   "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn",
+   "for", "if", "impl", "in", "let", "loop", "macro", "match", "mod",
+   "move", "mut", "override", "priv", "pub", "ref", "return", "self",
+   "static", "struct", "super", "trait", "true", "try", "type", "typeof",
+   "union", "unsafe", "unsized", "use", "virtual", "where", "while", "yield"]
+
+/-- One schema identifier (field/case/param name), checked in BOTH
+    target spellings. Empty diagnostic list = usable. -/
+def checkSchemaIdent (context : String) (name : String) : List SchemaDiag :=
+  let witHit := witReserved.contains (CodegenCore.Emit.kebab name)
+  let rustHit := rustReserved.contains (CodegenCore.Emit.snake name)
+  if witHit || rustHit then [.reservedWord name context] else []
 
 /-- The boundary fragment, enumerated (the error IS the documentation).
     The reifier's `nonBoundaryType` render appends this. -/
@@ -231,6 +267,9 @@ def render : SchemaDiag → String
       s!"`{n}`: field/binder count mismatch — flat structures without typeclass fields only (v1)"
   | .multiPayload n =>
       s!"`{n}`: variant cases carry at most one payload type (v1 — WIT case shape)"
+  | .reservedWord name context =>
+      s!"`{name}` is a reserved word in {context} — rename it (WIT/Rust "
+        ++ "would reject the emitted identifier)"
   | .volatileInPureContext fn ctx =>
       s!"func `{fn}` is volatile but `{ctx}` requires purity — valid "
         ++ "determinisms in a pure context: pure, stable"
@@ -267,13 +306,16 @@ def Item.check (known : List String) : Item → List SchemaDiag
   | .record n fields =>
       fields.flatMap fun f =>
         (if f.ty.banAsync then [] else [.asyncField n f.name])
+          ++ checkSchemaIdent (s!"field of `{n}`") f.name
           ++ f.ty.check known
   | .variant n cases =>
       cases.flatMap fun (c, payload) =>
         match payload with
         | some t =>
-            (if t.banAsync then [] else [.asyncField n c]) ++ t.check known
-        | none => []
+            (if t.banAsync then [] else [.asyncField n c])
+              ++ checkSchemaIdent (s!"case of `{n}`") c
+              ++ t.check known
+        | none => checkSchemaIdent (s!"case of `{n}`") c
   | .func s =>
       s.params.flatMap fun (_, t) => t.check known
         ++ s.ret.check known

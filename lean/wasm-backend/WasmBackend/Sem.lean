@@ -19,8 +19,10 @@ THE FRAGMENT vs REAL WEBASSEMBLY (the honesty ledger):
   `goAlts` emits on the scalar scrutinee — the branch template's
   condition), drop,
   br/br_if with STRUCTURED targets (block/loop/if frames), if/else,
-  unreachable, and a one-byte bounded store (`i32store8`) as the
-  memory-ops representative.
+  unreachable, and a one-byte bounded store AND load (`i32store8` /
+  `i32load8u offset` — the load added by the tag-read lane: the
+  object-scrutinee's tag byte, zero-extended) as the memory-ops
+  representatives.
 * NOT MODELED (documented exclusions, not oversights): floats, SIMD,
   threads, tables/call_indirect (the funcref-table dispatch — the
   follow-up; DIRECT calls are modeled since the calls layer: the
@@ -29,7 +31,7 @@ THE FRAGMENT vs REAL WEBASSEMBLY (the honesty ledger):
   trap),
   multi-value blocks (frames are no-result: a frame body must END at
   the frame's entry type — `checkFrame`), memory beyond one byte per
-  store, data segments, globals, static branch-DEPTH validation (a
+  access, data segments, globals, static branch-DEPTH validation (a
   `br n` deeper than the label stack surfaces as a top-level return
   signal here; wasm's validator rejects it statically).
 * CONSERVATIVE TYPING (sound, weaker than wasm's validator): `br`/
@@ -153,6 +155,10 @@ inductive Instr where
   | if_ (thenI : List Instr) (elseI : List Instr)
   | unreach
   | i32store8
+  /-- One-byte zero-extend load at a byte offset from the base
+      address on the stack (`i32.load8_u offset=N`: pops the base
+      `a`, reads `mem[a + N]`, pushes it zero-extended as i32). -/
+  | i32load8u (offset : Nat)
   deriving BEq
 
 /-! ## step — the flat small-step semantics -/
@@ -206,6 +212,17 @@ def step : State → Instr → Except Err State
           if a.toNat < s.memSize
           then .ok { s with mem := fun i => if i = a.toNat then v.toUInt8 else s.mem i
                            , stack := rest }
+          else .error .trap
+      | _ => .error .underflow
+  | s, .i32load8u off =>
+      -- the tag read (`i32.load8_u offset=N`): pops the base address,
+      -- reads the ONE byte at addr + offset, zero-extends to i32.
+      -- Out-of-bounds = a RUNTIME trap, never corruption (the store's
+      -- `storeInBounds` discipline, mirrored for loads).
+      match s.stack with
+      | .i32 a :: rest =>
+          if a.toNat + off < s.memSize
+          then .ok { s with stack := .i32 (s.mem (a.toNat + off)).toUInt32 :: rest }
           else .error .trap
       | _ => .error .underflow
 
@@ -324,6 +341,10 @@ def checkStack (locals : Nat → Ty) : List Ty → List Instr → Except String 
   | base, .i32store8 :: is =>
       match base with
       | .i32 :: .i32 :: ts => checkStack locals ts is
+      | _ => .error "operand type mismatch"
+  | base, .i32load8u _ :: is =>
+      match base with
+      | .i32 :: ts => checkStack locals (.i32 :: ts) is
       | _ => .error "operand type mismatch"
 
 /-- Check a frame body against its entry type: the body must END at the
@@ -862,6 +883,38 @@ theorem exec_typed (locals : Nat → Ty) :
                             · intro h; cases h
                             · intro s' h; cases h
                             · intro n' ls hEq; cases hEq
+        | i32load8u off =>
+          -- the tag-read lane: the i32store8 mirror with ONE popped
+          -- operand (the base address); the checker case is net-zero
+          -- (pop i32, push i32) so the tail check keeps the `.i32 ::`
+          -- — the loaded byte's VALUE is irrelevant for typing.
+          cases base with
+          | nil => simp [checkStack] at hcheck
+          | cons t1 ts1 =>
+            cases t1 with
+            | i64 => simp [checkStack] at hcheck
+            | i32 =>
+              have hcheck' : checkStack locals (.i32 :: ts1) is = .ok final := by
+                simp only [checkStack] at hcheck; exact hcheck
+              cases stk with
+              | nil => simp [stackTys] at hstack
+              | cons v1 vs1 =>
+                cases v1 with
+                | i64 _ => simp [stackTys] at hstack
+                | i32 a =>
+                  have hts : stackTys vs1 = ts1 := by
+                    simp [stackTys] at hstack
+                    exact hstack
+                  by_cases hlt : a.toNat + off < msz
+                  . simp only [execList, step, if_pos hlt]
+                    exact ih.1 is (.i32 :: ts1) final
+                      ⟨loc, .i32 (mem (a.toNat + off)).toUInt32 :: vs1, mem, msz⟩
+                      hcheck' (by simp [stackTys, hts]) hloc'
+                  . simp only [execList, step, if_neg hlt]
+                    refine ⟨?_, ?_, ?_⟩
+                    · intro h; cases h
+                    · intro s' h; cases h
+                    · intro n' ls hEq; cases hEq
     . intro is body base final s hfr hcheck hstack hloc
       obtain ⟨loc, stk, mem, msz⟩ := s
       have hloc' : ∀ m, tyOf (loc m) = locals m := fun m => hloc m
@@ -1055,6 +1108,31 @@ def progOOB : List Instr := [.i32const 100, .i32const 1, .i32store8]
         | .ok _ => false | .error _ => true) = true
 #guard (match exec initState [.drop] with
         | .error .underflow => true | _ => false) = true
+
+-- 12. LOAD: `i32load8u 0` reads back the stored byte, zero-extended.
+def progLoad : List Instr := [.i32const 3, .i32const 7, .i32store8,
+                             .i32const 3, .i32load8u 0]
+#guard (match checkStack localsI32 [] progLoad with
+        | .ok [Ty.i32] => true | _ => false) = true
+#guard (match finalStack initState progLoad with
+        | .ok [.i32 7] => true | _ => false) = true
+
+-- 13. LOAD at an offset: base 8 + offset 4 = address 12 — the
+--     `i32.load8_u offset=4` shape the emitter's tag read uses.
+def progLoadOff : List Instr := [.i32const 12, .i32const 7, .i32store8,
+                                 .i32const 8, .i32load8u 4]
+#guard (match finalStack initState progLoadOff with
+        | .ok [.i32 7] => true | _ => false) = true
+
+-- 14. NEGATIVE CONTROL (typing): a load on an empty stack (no base
+--     address) is REJECTED by the checker.
+#guard (match checkStack localsI32 [] [.i32load8u 0] with
+        | .ok _ => false | .error _ => true) = true
+
+-- 15. NEGATIVE CONTROL (memory): an out-of-bounds load TRAPS and
+--     never reads — the store's OOB discipline, mirrored.
+#guard (match exec initState [.i32const 100, .i32load8u 0] with
+        | .error .trap => true | _ => false) = true
 
 end Tests
 

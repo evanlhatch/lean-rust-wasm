@@ -41,9 +41,15 @@ THE FRAGMENT (the honesty ledger):
   (`trampoline_convention1/2` — the golden's `pap_curried._boxed_1`
   shape), the run-paps 5 = 8 inner-call demo (two convention hops + the
   adder bodies, composed), and the arg-order-swapped negative control.
-* NOT COVERED (documented exclusions, not oversights): the tag LOAD
-  (`i32load8u` — the object-scrutinee's tag read; Sem models one-byte
-  STORES only, so the branch spec starts AFTER the read), N > 2 alt
+* COVERED (the TAG-READ slice, this file's fourth branch addition): the
+  tag LOAD — the object-scrutinee's `i32load8u` read is now part of the
+  spec: the composed template `specCasesLoad` starts BEFORE the read
+  (`local.get base; i32.load8u offset; local.set 0` + the chain),
+  `specCasesLoad_ok` covers the composed load+branch, and the
+  wrong-offset negative control (`loadCases_buggy_disagrees`) pins the
+  bug class. (The OLD post-read `specCases_ok` is unchanged — the
+  composed template's tail.)
+* NOT COVERED (documented exclusions, not oversights): N > 2 alt
   chains (the template generalizes; the theorem pins 2), alt bodies
   containing branches/calls (the nested-case/call seams), the
   comparison op producing the Bool (`i64ltu` — the straight-line
@@ -125,6 +131,7 @@ def lowerI : Wat.Instr → Option (List Sem.Instr)
   | .localset n => localIdx? n |>.map fun i => [.localset i]
   | .op .i64add => some [.i64add]
   | .op .i32eq => some [.i32eq]  -- the branch comparison (the cases lane)
+  | .mem .i32load8u off _ => some [.i32load8u off]  -- the tag read (the tag-read lane)
   | .unreach => some [.unreach]  -- goAlts's exhausted-chain filler
   | .ret => some []
   | _ => none
@@ -365,11 +372,13 @@ THE FRAGMENT (the branch ledger):
   ctor index = the alt's POSITION (the demo's scrutinee is Bool:
   false = 0, true = 1 — Lean's ctor order, which `goAltsRaw`'s
   `info.cidx` carries).
-* THE SPEC'S ENTRY CONTRACT: the tag VALUE sits in local `disc` — the
-  tag READ (`i32load8u`, the object path) is outside the modeled
-  memory fragment (one-byte STORES only), so the spec starts AFTER the
-  read; the scalar path (`goAltsRaw`) reads no tag, and the theorem's
-  `local 0 = tag` hypothesis is exactly its entry state.
+* THE SPEC'S ENTRY CONTRACT: the tag VALUE sits in local `disc` — for
+  the SCALAR path (`goAltsRaw`) the theorem's `local 0 = tag`
+  hypothesis is exactly its entry state. For the OBJECT path the read
+  is no longer outside the spec: `specCasesLoad` below composes the
+  `i32load8u` read (the tag-read lane; Sem's one-byte load) with the
+  chain — the entry contract there is the OBJECT POINTER in local
+  `base` and the tag byte IN MEMORY.
 * THE TYPING GAP (honest): the emitter's branch join carries a RESULT
   (`if_ (some resTy) …`); Sem's frames are NO-RESULT (`checkFrame`) —
   the checker therefore REJECTS the (correct!) branch program (pinned
@@ -399,6 +408,43 @@ def specCasesFrom (disc : Nat) (cidx : UInt32) :
     positions. -/
 def specCases (disc : Nat) (alts : List (List Sem.Instr)) : List Sem.Instr :=
   specCasesFrom disc 0 alts
+
+/-- THE COMPOSED CASES TEMPLATE (the tag-read lane — closes the
+    documented exclusion): the object-scrutinee's TAG READ is part of
+    the spec. `emitCases`'s object path emits
+    `local.get disc; i32.load8u offset=4; local.set tag` BEFORE
+    `goAlts`; the template composes exactly that prefix (the byte read
+    at `off` from the object pointer in local `base`, zero-extended,
+    stashed in local 0) with the post-read chain `specCases 0 alts` —
+    the OLD post-read template is the tail, unchanged. -/
+def specCasesLoad (base off : Nat) (alts : List (List Sem.Instr)) :
+    List Sem.Instr :=
+  [.localget base, .i32load8u off, .localset 0] ++ specCases 0 alts
+
+/-- THE COMPOSED BRANCH THEOREM (the tag-read lane's tractable leg,
+    tag byte = 0): the load+branch template executes the CHOSEN alt
+    with the tag read IN the spec — the object pointer in local `base`,
+    the tag byte 0 AT `ptr + off` in memory, in bounds. The result =
+    alt 0's value; the initial local 0 (overwritten by the read's
+    `local.set`) is irrelevant. Arbitrary initial state, fuel ≥ 15 (the
+    read's 3 steps + the dispatch's 12). Kernel-checked. -/
+theorem specCasesLoad_ok (fuel : Nat) (z o : UInt64) (lz lo : Nat)
+    (base off : Nat) (ptr : UInt32) (s : Sem.State)
+    (hptr : s.locals base = .i32 ptr)
+    (hmem : s.mem (ptr.toNat + off) = 0)
+    (hbound : ptr.toNat + off < s.memSize)
+    (hs : s.stack = []) (hf : 15 ≤ fuel) :
+    ∃ s', Sem.execList fuel s
+        (specCasesLoad base off
+          [[.i64const z, .localset lz, .localget lz],
+           [.i64const o, .localset lo, .localget lo]])
+      = .ok s'
+    ∧ s'.stack = [.i64 z] := by
+  obtain ⟨m, rfl⟩ : ∃ m',
+      fuel = m'.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ :=
+    ⟨fuel - 15, by omega⟩
+  simp [Sem.execList, Sem.step, hptr, hmem, hs, hbound, specCasesLoad,
+    specCases, specCasesFrom]
 
 /-- THE BRANCH THEOREM (the tractable version, the tag = 0 leg): the
     2-alt cases template with STRAIGHT-LINE alt bodies executes the
@@ -570,6 +616,73 @@ theorem isBig_42 :
 #guard (match Sem.checkStack (fun _ => Sem.Ty.i64) []
           [.i32const 1, .if_ [.block [.i64const 7, .drop, .br 0]] []] with
         | .ok [] => true | _ => false) = true
+
+/-! ## THE TAG-READ SLICE — the composed load+branch (the exclusion,
+closed) -/
+
+/-- The demo's OBJECT state (the composed template's inputs): the
+    object pointer 4 in local 1, the tag byte 0 (false's ctor index)
+    AT `4 + 4 = 8` — the emitter's `i32.load8_u offset=4` shape — and
+    a decoy byte 1 at address 9 (the wrong-offset control's target).
+    64 zeroed bytes otherwise. -/
+def tagObj : Sem.State :=
+  ⟨fun n => match n with | 1 => .i32 4 | _ => .i64 0,
+   [], fun i => if i = 9 then (1 : UInt8) else (0 : UInt8), 64⟩
+
+-- The read PREFIX is well-typed (pops the i32 ptr, pushes the i32
+-- tag — the load's checker case; the tag stash local 0 is a fresh
+-- i32, as the emitter's `bindFresh` makes it). Interpreter-checked.
+#guard (match Sem.checkStack
+          (fun n => match n with | 0 | 1 => Sem.Ty.i32 | _ => Sem.Ty.i64) []
+          [.localget 1, .i32load8u 4, .localset 0] with
+        | .ok [] => true | _ => false) = true
+
+-- The COMPOSED load+branch template inherits the documented typing
+-- gap (the emitter's branch join carries a result; Sem's frames are
+-- no-result) — same rejection as the post-read `specCases`. The
+-- theorems are direct exec computations. Interpreter-checked.
+#guard (match Sem.checkStack
+          (fun n => match n with | 0 | 1 => Sem.Ty.i32 | _ => Sem.Ty.i64) []
+          (specCasesLoad 1 4 isBigAlts) with
+        | .ok _ => false | .error _ => true) = true
+
+-- THE COMPOSED POSITIVE (kernel-checked): with the tag read IN the
+-- spec, the correct offset (4) reads the tag byte at 4+4 = 8 = 0 →
+-- the false-alt (= 0). Same verdict as the post-read `isBig_42`.
+theorem loadCases_correct :
+    (match Sem.exec tagObj (specCasesLoad 1 4 isBigAlts) with
+     | .ok s' => s'.stack | .error _ => []) = [.i64 0] := by
+  decide
+
+/-- THE BUGGY VARIANT (the wrong-offset bug class): the tag read at
+    offset 5 hits the decoy byte (1 = true's index) — the dispatch
+    runs the WRONG alt. The checker cannot catch it (same shape —
+    `checkStack` is shape-only, by design); the disagreement is
+    caught by EXECUTION (the theorems below). -/
+def specCasesLoadBuggy (base off : Nat) (alts : List (List Sem.Instr)) :
+    List Sem.Instr :=
+  [.localget base, .i32load8u (off + 1), .localset 0] ++ specCases 0 alts
+
+-- The buggy offset's verdict: the decoy byte 1 → the TRUE-alt's value
+-- comes out — NOT the false-alt's the correct template picks.
+theorem loadCases_buggy_wrong_alt :
+    (match Sem.exec tagObj (specCasesLoadBuggy 1 4 isBigAlts) with
+     | .ok s' => s'.stack | .error _ => []) = [.i64 1] := by
+  decide
+
+-- THE NEGATIVE INSTANCE: the wrong-offset load DISAGREES with the
+-- correct composed template (same object state, different alt). If a
+-- regression re-offset the tag read, this theorem's shape is what the
+-- differential duel's sabotage control checks empirically.
+theorem loadCases_buggy_disagrees :
+    (match Sem.exec tagObj (specCasesLoadBuggy 1 4 isBigAlts) with
+     | .ok s' => s'.stack | .error _ => [])
+      ≠
+    (match Sem.exec tagObj (specCasesLoad 1 4 isBigAlts) with
+     | .ok s' => s'.stack | .error _ => []) := by
+  intro h
+  rw [loadCases_buggy_wrong_alt, loadCases_correct] at h
+  simp at h
 
 /-! ## THE NEGATIVE CONTROL — the tag-INVERTED branch template -/
 

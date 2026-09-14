@@ -19,6 +19,7 @@ flattens string results through the canonical ABI (greet: done).
 import CodegenCore.GuestGate
 import Demo
 import SchemaLang.Meta.Reflect
+import SchemaLang.Meta.Derive
 import SchemaLang.Validate
 import GuestlangStd.StrOps
 import LintKit.Basic
@@ -207,13 +208,12 @@ def orderErrorValid (e : OrderError) : Bool :=
   | .invalidItem id => id > 0
   | .insufficientFunds _ => true
 
-/-- OrderError's cases, as the variant-VALIDATOR sees them (abbrev —
-    the reducibility rule; mirror of the Demo `@[schema] inductive
-    OrderError`: emptyCart / invalidItem u64 / insufficientFunds f64,
-    kebab-cased as the schema spells them). -/
-abbrev orderErrorCases : List SchemaLang.VariantCase :=
-  [("empty-cart", none), ("invalid-item", some .u64),
-    ("insufficient-funds", some .f64)]
+-- DERIVED at elaboration from the registry (`SchemaLang.Meta.derive_variant_cases`):
+-- the Demo `@[schema] inductive OrderError`'s cases, kebab-cased — the
+-- emitted spelling. Not a hand mirror: renaming a ctor in Demo.lean
+-- fails THIS module's elaboration (the derivation throws, did-you-mean
+-- included); the list cannot drift because it is not written.
+derive_variant_cases orderErrorCases from OrderError
 
 /-- The variant-row builder: the adapter's re-box — the canonical ABI's
     [i32 discr, i64 joined-payload] flattening turned back into the

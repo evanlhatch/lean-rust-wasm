@@ -36,6 +36,8 @@ environment, and the emitters see exactly what was registered.
 import Lean
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Invariant
+import SchemaLang.Update
 
 namespace SchemaLang.Meta
 
@@ -158,9 +160,11 @@ def checkStruct (env : Environment) (declName : Name) :
           match acc with
           | .inl ds => .inl ds
           | .inr fields =>
-            match tyOfExpr? env tE with
-            | some t => .inr (fields ++ [{ name := f.toString, ty := t }])
-            | none => .inl [SchemaDiag.nonBoundaryType f.toString (toString tE)]
+            match checkSchemaIdent (s!"field of `{declName}`") f.toString with
+            | ds@(_ :: _) => .inl ds
+            | [] => match tyOfExpr? env tE with
+              | some t => .inr (fields ++ [{ name := f.toString, ty := t }])
+              | none => .inl [SchemaDiag.nonBoundaryType f.toString (toString tE)]
         let acc := (fieldNames.toList.zip tys).foldl step (.inr [])
         match acc with
         | .inl ds => .inl ds
@@ -197,17 +201,20 @@ def checkInductive (env : Environment) (declName : Name) :
           match acc with
           | .inl ds => .inl ds
           | .inr cases =>
-            match env.find? ctor with
-            | none => .inl [SchemaDiag.noCtor caseName]
-            | some (.ctorInfo ci) =>
-                match ctorArgTypes ci.type with
-                | [] => .inr (cases ++ [(caseName, none)])
-                | [t] =>
-                    match tyOfExpr? env t with
-                    | some ty => .inr (cases ++ [(caseName, some ty)])
-                    | none => .inl [SchemaDiag.nonBoundaryType caseName (toString t)]
-                | _ => .inl [SchemaDiag.multiPayload caseName]
-            | _ => .inl [SchemaDiag.noCtor caseName]
+            match checkSchemaIdent (s!"case of `{declName}`") caseName with
+            | ds@(_ :: _) => .inl ds
+            | [] =>
+              match env.find? ctor with
+              | none => .inl [SchemaDiag.noCtor caseName]
+              | some (.ctorInfo ci) =>
+                  match ctorArgTypes ci.type with
+                  | [] => .inr (cases ++ [(caseName, none)])
+                  | [t] =>
+                      match tyOfExpr? env t with
+                      | some ty => .inr (cases ++ [(caseName, some ty)])
+                      | none => .inl [SchemaDiag.nonBoundaryType caseName (toString t)]
+                  | _ => .inl [SchemaDiag.multiPayload caseName]
+              | _ => .inl [SchemaDiag.noCtor caseName]
         let acc := ii.ctors.foldl step (.inr [])
         match acc with
         | .inl ds => .inl ds
@@ -373,5 +380,285 @@ initialize registerBuiltinAttribute {
   applicationTime := .afterCompilation
   add := fun decl _stx _kind => (registerSchemaResource decl : CoreM Unit)
 }
+
+/-! ## Invariants — `schema_invariant <name> for <Record> := <term>`
+
+The invariant registry is a SEPARATE extension (`invariantItemExt`) —
+`Item` is the closed boundary universe and cannot carry the VExpr
+family. The command elaborates the author's term against
+`VExpr <the record's real fields> .bool` — the fields looked up from
+`schemaItemExt` at elab time, so an unknown record is a did-you-mean
+error and a misspelled COLUMN is the `HasCol` instance failure (the
+same gate the validator tests pin). The tier is COMPUTED here: an
+executable term alone registers `boundaryCheck`; the optional `proved
+<thm>` clause cites a theorem name (stored — resolving the citation is
+CI's job later).
+-/
+
+/-- The invariant registry: append-only, replayed from oleans at import
+    (the `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
+    because `Item` is the closed boundary universe and cannot carry the
+    VExpr family). -/
+initialize invariantItemExt :
+    SimplePersistentEnvExtension InvariantItem (List InvariantItem) ←
+  CodegenCore.mkRegistryExt `invariantItemExt
+
+/-- The registered invariant rows (the emission entry point). -/
+def registeredInvariants (env : Environment) : List InvariantItem :=
+  invariantItemExt.getState env
+
+/-- Registered invariant names (dup detection). -/
+def registeredInvariantNames (env : Environment) : List String :=
+  (registeredInvariants env).map (·.name)
+
+/-- `Ty` → its constructor tree as an `Expr` (the expected-type
+    builder: the command elaborates the author's term against
+    `VExpr <the record's real fields> .bool`). -/
+def tyToExpr : Ty → Expr
+  | .bool => .const ``Ty.bool []
+  | .u8 => .const ``Ty.u8 []
+  | .u16 => .const ``Ty.u16 []
+  | .u32 => .const ``Ty.u32 []
+  | .u64 => .const ``Ty.u64 []
+  | .i8 => .const ``Ty.i8 []
+  | .i16 => .const ``Ty.i16 []
+  | .i32 => .const ``Ty.i32 []
+  | .i64 => .const ``Ty.i64 []
+  | .f32 => .const ``Ty.f32 []
+  | .f64 => .const ``Ty.f64 []
+  | .string => .const ``Ty.string []
+  | .bytes => .const ``Ty.bytes []
+  | .option a => .app (.const ``Ty.option []) (tyToExpr a)
+  | .result ok err =>
+      .app (.app (.const ``Ty.result []) (tyToExpr ok)) (tyToExpr err)
+  | .list a => .app (.const ``Ty.list []) (tyToExpr a)
+  | .future a => .app (.const ``Ty.future []) (tyToExpr a)
+  | .stream a => .app (.const ``Ty.stream []) (tyToExpr a)
+  | .ty n => .app (.const ``Ty.ty []) (.lit (.strVal n))
+
+/-- One field → the `Field.mk` application (the GADT's index term). -/
+def fieldToExpr (f : Field) : Expr :=
+  .app (.app (.const ``Field.mk []) (.lit (.strVal f.name))) (tyToExpr f.ty)
+
+/-- The record's fields as a `List Field` literal term — the index the
+    expected type carries, so the `HasCol` instance search walks the
+    REAL schema (a misspelled column fails instance search). -/
+def fieldsToExpr (fields : List Field) : MetaM Expr :=
+  Meta.mkListLit (.const ``Field []) (fields.map fieldToExpr)
+
+/-- `schema_invariant <name> for <Record> (proved <thm>)? := <term>` —
+    elaborate the predicate against the registered record's fields,
+    register the `InvariantItem` (tier computed per `tierOf`). -/
+syntax (name := schemaInvariant) "schema_invariant " ident " for " ident
+  (" proved " ident)? " := " term : command
+
+open Lean Elab Command Term in
+@[command_elab SchemaLang.Meta.schemaInvariant]
+unsafe def elabSchemaInvariant : CommandElab := fun (stx : Syntax) => do
+  let invName := stx[1]!.getId.toString
+  let recId := stx[3]!.getId
+  let proofName? : Option Name :=
+    let opt : Syntax := stx[4]!
+    if opt.isNone then none else some opt[1]!.getId
+  let env ← getEnv
+  -- the record: a registered `Item.record`, or a did-you-mean error
+  -- over the registered RECORD names (variants/resources cannot take
+  -- field-indexed invariants)
+  let recordNames := (schemaItemExt.getState env).filterMap
+    (fun (_, it) => match it with | .record n _ => some n | _ => none)
+  let found? : Option (Name × Item) :=
+    (schemaItemExt.getState env).find? (fun (ln, _) => ln == recId)
+  let (recordName, fields) : String × List Field ←
+    match found? with
+    | some (_, .record n fields) => pure (n, fields)
+    | _ =>
+        let cands := didYouMean recId.toString recordNames
+        let hint := if cands.isEmpty then ""
+          else s!" — did you mean: {String.intercalate ", " cands}?"
+        throwError s!"schema_invariant `{invName}`: `{recId}` is not a registered record{hint}"
+  if (registeredInvariantNames env).contains invName then
+    throwError s!"schema_invariant `{invName}`: duplicate invariant name"
+  -- the predicate: elaborated against `VExpr <fields> .bool`, then
+  -- evaluated to the GADT value (the emitter compiles the VALUE)
+  let (exprTerm, inv) : Expr × SchemaInvariant ← liftTermElabM do
+    let fsList ← fieldsToExpr fields
+    let expectedFs ← Meta.inferType fsList
+    let expected := mkApp2 (mkConst ``SchemaLang.VExpr) fsList
+      (mkConst ``SchemaLang.Ty.bool)
+    let e ← elabTerm stx[6]! (some expected)
+    Term.synthesizeSyntheticMVarsNoPostponing
+    let e ← instantiateMVars e
+    if e.hasExprMVar then
+      throwError s!"schema_invariant `{invName}`: unresolved metavariables in the predicate"
+    let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
+    let ev : VExpr fsVal .bool ← Meta.evalExpr (VExpr fsVal .bool) expected e
+    pure (e, { fields := fsVal, expr := ev })
+  modifyEnv fun env =>
+    invariantItemExt.addEntry env
+      { name := invName, schemaRef := recordName, tier := tierOf proofName?
+      , proofName := proofName?, inv := inv, exprTerm := exprTerm }
+
+/-! ## Updates — `schema_update <name> for <Record> set <col> := <value> where <guard>`
+
+The update registry is a SEPARATE extension (`updateItemExt`) over
+`SomeUpdate` (SchemaLang.Update — imported above, NOT moved: the core is
+owned elsewhere; importing keeps one definition). `Item` is the closed
+boundary universe and cannot carry the `VExpr` family — the same reason
+invariants got their own extension.
+
+The `where` clause is REQUIRED: `VExpr .bool` has no literal-true node,
+so there is no honest default — an unconditional update is written
+`where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)` (the always-true idiom;
+the demo's self-reading row pins it).
+
+Gates at elaboration (the invariant lane's pattern):
+- the record must be a registered `Item.record` (did-you-mean over the
+  registered record names),
+- the written column must be one of the record's fields — looked up BY
+  NAME here, so a misspelled column is a did-you-mean error (not a bare
+  `HasCol` instance failure),
+- the value term elaborates against `VExpr <the record's real fields>
+  <the FIELD's OWN TYPE>` — a u64 expression on a string column FAILS
+  HERE (the type gate; the GADT index),
+- the guard term elaborates against `VExpr <fields> .bool`,
+- the write path is resolved by elaborating `VExpr.colOf <col>` and
+  extracting its `.col` constructor path (data, the `ColPath` doctrine).
+-/
+
+/-- The registry-state inhabitant (the `InvariantItem` default's
+    pattern): SOME GADT shape must witness the type; the empty-schema
+    shape is unreachable for a `ColPath`, so the witness is the
+    one-field u64 schema. No registered row takes this shape. Defined
+    BEFORE the extension (the `mkRegistryExt` seed). -/
+instance : Inhabited SomeUpdate :=
+  ⟨{ fields := [{ name := "", ty := .u64 }]
+   , field := { name := "", ty := .u64 }
+   , update := { name := "", guard := .gt (.lit 0) (.lit 0)
+               , value := .lit 0, writePath := .here } }⟩
+
+/-- The update registry: append-only, replayed from oleans at import
+    (the `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
+    because `Item` cannot carry the VExpr family). -/
+initialize updateItemExt :
+    SimplePersistentEnvExtension SomeUpdate (List SomeUpdate) ←
+  CodegenCore.mkRegistryExt `updateItemExt
+
+/-- The registered update rows (the emission entry point). -/
+def registeredUpdates (env : Environment) : List SomeUpdate :=
+  updateItemExt.getState env
+
+/-- Registered update names (dup detection). -/
+def registeredUpdateNames (env : Environment) : List String :=
+  (registeredUpdates env).map (fun u => u.update.name)
+
+-- `schema_update <name> for <Record> <col> := <valueTerm>
+--    where <guardTerm>` — the `where` clause is REQUIRED (no
+-- literal-true in `VExpr .bool`; see the section header). The `set`
+-- position is marked by `:=` alone — NOT by a `set` token: declaring
+-- `" set "` in a syntax RESERVES the word globally (the lexer makes it
+-- a keyword everywhere — identifiers named `set` stop parsing; the
+-- WasmBackend do-block casualty that taught this trap, the `prefix`
+-- lesson's class). Never declare common words as syntax tokens.
+syntax (name := schemaUpdate) "schema_update " ident " for " ident
+  ident " := " term " where " term : command
+
+open Lean Elab Command Term in
+@[command_elab SchemaLang.Meta.schemaUpdate]
+unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
+  let uname := stx[1]!.getId.toString
+  let recId := stx[3]!.getId
+  -- the syntax layout ("set" dropped — the reserved-word trap): [4]=col,
+  -- [5]=":=", [6]=value, [7]="where", [8]=guard
+  let colId := stx[4]!.getId.toString
+  let valueStx := stx[6]!
+  let guardStx := stx[8]!
+  let env ← getEnv
+  -- the record: a registered `Item.record`, or a did-you-mean error
+  -- (the invariant lane's pattern)
+  let recordNames := (schemaItemExt.getState env).filterMap
+    (fun (_, it) => match it with | .record n _ => some n | _ => none)
+  let found? : Option (Name × Item) :=
+    (schemaItemExt.getState env).find? (fun (ln, _) => ln == recId)
+  let (recordName, fields) : String × List Field ←
+    match found? with
+    | some (_, .record n fields) => pure (n, fields)
+    | _ =>
+        let cands := didYouMean recId.toString recordNames
+        let hint := if cands.isEmpty then ""
+          else s!" — did you mean: {String.intercalate ", " cands}?"
+        throwError s!"schema_update `{uname}`: `{recId}` is not a registered record{hint}"
+  -- the written FIELD, looked up by NAME: a misspelled column is a
+  -- did-you-mean error (louder than the bare `HasCol` instance miss)
+  let fieldNames := fields.map (·.name)
+  let fVal : Field ←
+    match fields.find? (fun fl => fl.name == colId) with
+    | some f => pure f
+    | none =>
+        let cands := didYouMean colId fieldNames
+        let hint := if cands.isEmpty then ""
+          else s!" — did you mean: {String.intercalate ", " cands}?"
+        throwError s!"schema_update `{uname}`: `{colId}` is not a column of `{recordName}`{hint}"
+  if (registeredUpdateNames env).contains uname then
+    throwError s!"schema_update `{uname}`: duplicate update name"
+  -- elaborate guard + value against the REAL fields, evaluate the GADT
+  -- values, resolve the write path (the `VExpr.colOf` route, its `.col`
+  -- path extracted) — all data by the time it registers
+  let row : SomeUpdate ← liftTermElabM do
+    let fsList ← fieldsToExpr fields
+    let expectedFs ← Meta.inferType fsList
+    let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
+    -- the value: against `VExpr <fields> f.ty` — the FIELD's OWN TYPE
+    -- is the type gate (a u64 expr on a string column fails here)
+    let expectedValue := mkApp2 (mkConst ``SchemaLang.VExpr) fsList (tyToExpr fVal.ty)
+    let e ← elabTerm valueStx (some expectedValue)
+    Term.synthesizeSyntheticMVarsNoPostponing
+    let e ← instantiateMVars e
+    -- the TYPE GATE, stated loud: the value expression's `Ty` index must
+    -- BE the written field's own type (a u64 expr on a string column
+    -- fails HERE, with the two types named — the did-you-mean grade)
+    let eT ← Meta.whnf (← Meta.inferType e)
+    let tGot : Ty ←
+      if eT.isAppOf ``SchemaLang.VExpr && eT.getAppNumArgs == 2 then
+        Meta.evalExpr Ty (mkConst ``SchemaLang.Ty) eT.getAppArgs[1]!
+      else
+        throwError s!"schema_update `{uname}`: the value is not a `VExpr`"
+    unless tGot == fVal.ty do
+      throwError s!"schema_update `{uname}`: the value expression has type {repr tGot} — "
+        ++ s!"the written column `{colId}` is {repr fVal.ty} — the value expression "
+        ++ "must have the COLUMN'S OWN TYPE (the GADT gate)"
+    if e.hasExprMVar then
+      throwError s!"schema_update `{uname}`: unresolved metavariables in the value"
+    let valueVal : VExpr fsVal fVal.ty ← Meta.evalExpr (VExpr fsVal fVal.ty) expectedValue e
+    -- the guard: against `VExpr <fields> .bool`
+    let expectedGuard := mkApp2 (mkConst ``SchemaLang.VExpr) fsList
+      (mkConst ``SchemaLang.Ty.bool)
+    let g ← elabTerm guardStx (some expectedGuard)
+    Term.synthesizeSyntheticMVarsNoPostponing
+    let g ← instantiateMVars g
+    if g.hasExprMVar then
+      throwError s!"schema_update `{uname}`: unresolved metavariables in the guard"
+    let guardVal : VExpr fsVal .bool ← Meta.evalExpr (VExpr fsVal .bool) expectedGuard g
+    -- the write path: elaborate `VExpr.colOf <col>`, extract the
+    -- `.col` constructor path (data — the `ColPath` doctrine)
+    let colLit : Term ← Lean.Elab.Term.exprToSyntax (mkStrLit colId)
+    let colStx ← `(SchemaLang.VExpr.colOf $colLit)
+    let pe ← elabTerm colStx (some expectedValue)
+    Term.synthesizeSyntheticMVarsNoPostponing
+    let pe ← instantiateMVars pe
+    if pe.hasExprMVar then
+      throwError s!"schema_update `{uname}`: column `{colId}` is not on `{recordName}`"
+    let peCtor ← Meta.whnf pe
+    unless peCtor.getAppFn.isConstOf ``SchemaLang.VExpr.col do
+      throwError s!"schema_update `{uname}`: internal: `colOf` did not reduce to the .col ctor"
+    let pathE := peCtor.getAppArgs[peCtor.getAppArgs.size - 1]!
+    let pathTyE := mkApp3 (mkConst ``SchemaLang.ColPath)
+      (mkStrLit fVal.name) (tyToExpr fVal.ty) fsList
+    let pathVal : ColPath fVal.name fVal.ty fsVal ←
+      Meta.evalExpr (ColPath fVal.name fVal.ty fsVal) pathTyE pathE
+    pure { fields := fsVal, field := fVal
+         , update := { name := uname, guard := guardVal
+                     , value := valueVal, writePath := pathVal } }
+  modifyEnv fun env =>
+    updateItemExt.addEntry env row
 
 end SchemaLang.Meta

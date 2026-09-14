@@ -1,0 +1,214 @@
+/-
+# SchemaLang.Emit.Invariant — invariants → Rust check functions
+
+The invariant registry (SchemaLang.Meta.Reflect's `invariantItemExt`,
+authoring surface `schema_invariant`) is EMITTED here:
+`../../src/invariants_generated.rs` — one `pub fn check_<name>(v:
+&<Record>) -> bool` per invariant, compiled from the VExpr value (the
+`evalB` discipline: raw u64 ops over the struct's fields; strlen =
+`.len()` on strings), plus one `validate_<record>` folding that
+record's invariants with AND, plus a `#[cfg(test)]` module whose test
+per invariant pins the LEAN-COMPUTED verdict on the all-default row
+(a failing row must fail — the Rust CI replays it).
+
+The Item-AST discipline (Emit/Rust.lean): item shape goes through the
+`CodegenCore.Emit.Rust.Item` nodes; string interpolation appears only
+in leaf payloads (fn bodies — the audited concession). Names are
+pre-mangled via `Emit.snake`/`rustIdent`/`pascal` — the AST never
+case-converts.
+
+The replay concession (v1): emitters are pure `List Item → List
+GeneratedFile` — no environment reaches `run`, and `Item` (the closed
+boundary universe) cannot carry the VExpr family, so the emitter's
+input is `demoInvariants` — the committed row list below, whose
+entries mirror exactly what `schema_invariant` registers (the
+Tests' `invariantChecks` pin the registration's data AND verdicts;
+when the driver gains an env-replay hook, `run` switches to
+`registeredInvariants` with no other change).
+
+Deliberate exclusions: `proved` rows still emit their check fn (the
+tier is enforcement INTENT — recorded in the comment; the emitted fn
+is the boundary half of the ladder either way); `oracleCovered` rows
+do not exist in the demo registry yet (the ctor is closed for when
+they do).
+-/
+
+import CodegenCore
+import SchemaLang.Item
+import SchemaLang.Invariant
+import SchemaLang.Meta.Reflect
+
+namespace SchemaLang.Emit.Invariant
+
+open CodegenCore.Emit (pascal snake rustIdent)
+
+/-! ## The VExpr → Rust lowering (the evalB discipline) -/
+
+/-- The u64 operand's Rust text. `ref` renders a field ref (the
+    record's struct field — `rustIdent`-mangled). -/
+def u64Rust (ref : String → String) : {fs : List Field} → VExpr fs .u64 → String
+  | _, .lit v => s!"{v}u64"
+  | _, .col n _ => ref n
+  | _, .strlen e =>
+      -- typing: the operand is a field ref (the only `.string` shape)
+      match e with
+      | .col n _ => s!"({ref n}).len() as u64"
+
+/-- The boolean's Rust text. -/
+def boolRust (ref : String → String) : {fs : List Field} → VExpr fs .bool → String
+  | _, .col n _ => s!"({ref n}) as u64 == 1"
+  | _, .gt a b => s!"({u64Rust ref a} > {u64Rust ref b})"
+  | _, .eq a b => s!"({u64Rust ref a} == {u64Rust ref b})"
+  | _, .and a b => s!"({boolRust ref a} && {boolRust ref b})"
+
+/-! ## The default row — the Lean-computed test verdict -/
+
+/-- The default value per Ty (`none` = no literal: `.ty` refs have no
+    `Value` ctor — a record with such a field gets no emitted test). -/
+def defaultValue? : (t : Ty) → Option (Value t)
+  | .bool => some (.bool false)
+  | .u8 => some (.u8 0) | .u16 => some (.u16 0)
+  | .u32 => some (.u32 0) | .u64 => some (.u64 0)
+  | .i8 => some (.i8 0) | .i16 => some (.i16 0)
+  | .i32 => some (.i32 0) | .i64 => some (.i64 0)
+  | .f32 => some (.f32 0) | .f64 => some (.f64 0)
+  | .string => some (.string "")
+  | .bytes => some (.bytes [])
+  | .option _ => some .none
+  | .list _ => some (.list .nil)
+  | .result ok _ => do let v ← defaultValue? ok; some (.ok v)
+  | .future a => do let v ← defaultValue? a; some (.future v)
+  | .stream _ => some (.stream .nil)
+  | .ty _ => none
+
+/-- The all-default row for a field list (`none` = a field without a
+    literal default). -/
+def defaultRow? : (fs : List Field) → Option (RowVals fs)
+  | [] => some .nil
+  | f :: rest => do
+      let v ← defaultValue? f.ty
+      let rest' ← defaultRow? rest
+      some (.cons v rest')
+
+/-- The invariant's verdict on the all-default row — the verdict the
+    emitted `#[test]` pins (a false verdict = the failing row that must
+    fail). -/
+def defaultVerdict (it : InvariantItem) : Option Bool := do
+  let row ← defaultRow? it.inv.fields
+  pure (validates it.inv.expr row)
+
+/-! ## The Rust literal defaults (the test row's construction) -/
+
+def rustDefault? : Ty → Option String
+  | .bool => some "false"
+  | .u8 => some "0u8" | .u16 => some "0u16"
+  | .u32 => some "0u32" | .u64 => some "0u64"
+  | .i8 => some "0i8" | .i16 => some "0i16"
+  | .i32 => some "0i32" | .i64 => some "0i64"
+  | .f32 => some "0.0f32" | .f64 => some "0.0f64"
+  | .string => some "String::new()"
+  | .bytes => some "Vec::new()"
+  | .option _ => some "None"
+  | .list _ => some "Vec::new()"
+  | .result _ _ | .future _ | .stream _ | .ty _ => none
+
+/-! ## The module assembly -/
+
+/-- The check fn's Rust name (snake — Rust identifiers cannot carry the
+    registry name's kebab; the mission's `check_<name>` shape). -/
+def checkFnName (it : InvariantItem) : String := s!"check_{snake it.name}"
+
+/-- The record's folding validator's Rust name. -/
+def validateFnName (rec : String) : String := s!"validate_{snake rec}"
+
+/-- One invariant → the tier comment + the check fn. -/
+def checkFn (it : InvariantItem) : List CodegenCore.Emit.Rust.Item :=
+  let proofLine := match it.proofName with
+    | some thm => s!" — proved via `{thm}` (citation resolved in CI)"
+    | none => ""
+  [ .comment s!"invariant `{it.name}` on {it.schemaRef} — tier: {it.tier.render}{proofLine}"
+  , .fn s!"fn {checkFnName it}(v: &{pascal it.schemaRef}) -> bool"
+      (boolRust (fun n => s!"v.{rustIdent n}") it.inv.expr) ]
+
+/-- One record → the folding validator (AND over its invariants). -/
+def validateFn (invs : List InvariantItem) (rec : String) :
+    CodegenCore.Emit.Rust.Item :=
+  let ref : String → String := fun n => s!"v.{rustIdent n}"
+  let body := String.intercalate " && "
+    (invs.map fun it => s!"({boolRust ref it.inv.expr})")
+  .fn s!"fn {validateFnName rec}(v: &{pascal rec}) -> bool"
+    (if invs.isEmpty then "true" else body)
+
+/-- One invariant → the `#[test]` pair (the Lean-computed default-row
+    verdict, replayed in Rust CI). Skipped when any field lacks a
+    literal default (`.ty` refs et al). -/
+def testFn (it : InvariantItem) : Option (List CodegenCore.Emit.Rust.Item) := do
+  let verdict ← defaultVerdict it
+  let fields ← it.inv.fields.mapM fun f =>
+    (rustDefault? f.ty).map fun d => s!"{rustIdent f.name}: {d}"
+  let fieldsTxt := String.intercalate ", " fields
+  let body := s!"let v = {pascal it.schemaRef} \{ {fieldsTxt} }; "
+    ++ s!"assert_eq!({checkFnName it}(&v), {verdict});"
+  some [ .raw "#[test]"
+       , .fn s!"fn {checkFnName it}_default_row()" body ]
+
+/-- The full module items (deterministic: registry order throughout). -/
+def moduleItems (invs : List InvariantItem) : List CodegenCore.Emit.Rust.Item :=
+  let records := (invs.map (·.schemaRef)).eraseDups
+  [.comment "GENERATED from the schema_invariant registry (SchemaLang.Meta.invariantItemExt) —"
+  , .comment "do not edit — regenerate (just gen). One check fn per invariant (the evalB"
+  , .comment "discipline: raw u64 ops over the struct's fields; strlen = .len() on strings)."
+  , .raw "" ]
+  ++ records.map (fun rec => .use_ s!"crate::schema_generated::{pascal rec}")
+  ++ [.raw "" ]
+  ++ invs.flatMap checkFn
+  ++ [.raw "" ]
+  ++ records.map (fun rec => validateFn (invs.filter (·.schemaRef == rec)) rec)
+  ++ [.raw "" ]
+  ++ [ .raw "#[cfg(test)]"
+     , .mod_ "invariant_tests"
+         ([.raw "use super::*;"] ++ (invs.filterMap testFn).flatten) ]
+
+/-- The emitter's pure fold (the compile logic, fully testable). -/
+def invariantFiles (invs : List InvariantItem) : List CodegenCore.Emit.GeneratedFile :=
+  [ { path := "../../src/invariants_generated.rs"
+      contents := CodegenCore.Emit.Rust.renderModule (moduleItems invs) } ]
+
+/-! ## The registered rows (the v1 replay concession — see the header) -/
+
+/-- The User record, as the invariant tests see it (the mirror of
+    Demo's `@[schema] structure User` — the registered fields the
+    `schema_invariant` command elaborated against). `abbrev` — the
+    reducibility rule: the `HasCol` instance search must see through
+    the list. -/
+abbrev userFields : List Field :=
+  [ { name := "id", ty := .u64 }
+  , { name := "name", ty := .string }
+  , { name := "email", ty := .string }
+  , { name := "tags", ty := .list .string } ]
+
+/-- The demo registry's invariant rows: the executable `id > 0`
+    boundary check, and the name-length rule registered as `proved`
+    (the citation is stored; resolving it is CI's job later). -/
+def demoInvariants : List InvariantItem :=
+  [ { name := "id-positive", schemaRef := "User", tier := tierOf none
+    , proofName := none
+    , inv := { fields := userFields
+             , expr := .gt (.colOf "id") (.lit 0) } }
+  , { name := "name-min-length", schemaRef := "User"
+    , tier := tierOf (some `userNameLenProved)
+    , proofName := some `userNameLenProved
+    , inv := { fields := userFields
+             , expr := .gt (.strlen (.colOf "name")) (.lit 3) } } ]
+
+/-- The invariant emitter: buf-plugin shape (name/style/specSource/
+    declared outputs/pure run). The parent registry wires it into
+    `SchemaLang.Emit.coreEmitters`. -/
+def invariantEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+  name := "invariant"
+  style := .doubleSlash
+  specSource := "SchemaLang.Meta.Reflect (invariantItemExt) — schema_invariant"
+  outputs := ["../../src/invariants_generated.rs"]
+  run _ := invariantFiles demoInvariants
+
+end SchemaLang.Emit.Invariant

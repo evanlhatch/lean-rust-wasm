@@ -264,6 +264,48 @@ def fuzzRows : Nat → UInt64 → List (String × List String)
         | _ => (\"pick\", [if s2 % 2 == 0 then \"1\" else \"0\", toString (s3 % 100), toString (s4 % 100)])
       row :: fuzzRows n s4
 
+-- THE BOUNDARY SWEEP: the u64 fns at 0, 1, 2, 2^k and 2^k±1 (k = 31,
+-- 32, 63) — the grid's mod-1000 and the LCG's small residues never
+-- visit the wrap/limit surface. The adder/pick args are COMPLEMENTS
+-- (a + (2^64-1-a) = 2^64-1; a=0 pins max, wrap = 0 at 2^64-1+1).
+def bounds : List UInt64 :=
+  [0, 1, 2, 2147483648, 4294967295, 4294967296, 9223372036854775807,
+   9223372036854775808, 18446744073709551615]
+
+def boundaryRows : List (String × List String) :=
+  let maxU : UInt64 := 18446744073709551615
+  (bounds.map fun a => (\"double\", [toString a]))
+  ++ (bounds.map fun a => (\"is-big\", [toString a]))
+  ++ (bounds.map fun a => (\"adder\", [toString a, toString (maxU - a)]))
+  ++ (bounds.map fun a => (\"double-area\", [toString a]))
+  ++ (bounds.map fun a => (\"run-paps\", [toString a]))
+  ++ (bounds.map fun a => (\"str-len-demo\", [toString a]))
+  ++ (bounds.map fun a =>
+    (\"pick\", [if a % 2 == 0 then \"1\" else \"0\", toString a, toString (maxU - a)]))
+  ++ (bounds.map fun a => (\"total\", [toString a, toString a, toString a]))
+
+-- THE SWEEP SUPPLEMENT: a second LCG (splitmix-style — seed, then two
+-- advances per row) over the fns the first fuzz skips (str-len-demo,
+-- watch-counts) plus the scalar surface — 120 rows, seed = a CONSTANT
+-- (same seed → same manifest, that's what makes it a gate).
+def sweepRows : Nat → UInt64 → List (String × List String)
+  | 0, _ => []
+  | n+1, seed =>
+      let s1 := lcg seed
+      let s2 := lcg s1
+      let s3 := lcg s2
+      let row := match s1 % 9 with
+        | 0 => (\"double\", [toString (s2 % 1000)])
+        | 1 => (\"is-big\", [toString (s2 % 1000)])
+        | 2 => (\"adder\", [toString (s2 % 1000), toString (s3 % 1000)])
+        | 3 => (\"double-area\", [toString (s2 % 100)])
+        | 4 => (\"run-paps\", [toString (s2 % 1000)])
+        | 5 => (\"total\", [toString (s2 % 100), toString (s3 % 100), toString (s2 % 1000)])
+        | 6 => (\"pick\", [if s2 % 2 == 0 then \"1\" else \"0\", toString (s3 % 100), toString (s2 % 1000)])
+        | 7 => (\"str-len-demo\", [toString (s2 % 1000)])
+        | _ => (\"watch-counts\", [toString (s2 % 1000)])
+      row :: sweepRows n s3
+
 def rows : List (String × List String) :=
   (u64s.map fun a => (\"double\", [toString a]))
   ++ (u64s.map fun a => (\"is-big\", [toString a]))
@@ -362,7 +404,11 @@ def jsonRow (fn : String) (args : List String) (expected : String) : String :=
 def main : IO Unit := do
   let mut out := \"[\"
   let mut first := true
-  for (fn, args) in (rows ++ fuzzRows 200 0x5EED) do
+  -- the row universe: the PINNED grid (the regression surface) + the
+  -- two LCG sweeps + the u64 boundary sweep — appended, never spliced
+  -- (the existing rows' bytes are the byte-tie invariant).
+  for (fn, args) in
+      (rows ++ fuzzRows 200 0x5EED ++ boundaryRows ++ sweepRows 120 0xA11CE) do
     let expected := resultOf fn args
     if !first then out := out ++ \",\"
     first := false

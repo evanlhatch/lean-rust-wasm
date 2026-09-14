@@ -1,0 +1,31 @@
+// GENERATED from the schema_invariant registry (SchemaLang.Meta.invariantItemExt) —
+// do not edit — regenerate (just gen). One check fn per invariant (the evalB
+// discipline: raw u64 ops over the struct's fields; strlen = .len() on strings).
+
+use crate::schema_generated::User;
+
+// invariant `id-positive` on User — tier: boundary-check
+pub fn check_id_positive(v: &User) -> bool {
+  (v.id > 0u64)
+}
+// invariant `name-min-length` on User — tier: proved — proved via `userNameLenProved` (citation resolved in CI)
+pub fn check_name_min_length(v: &User) -> bool {
+  ((v.name).len() as u64 > 3u64)
+}
+
+pub fn validate_user(v: &User) -> bool {
+  ((v.id > 0u64)) && (((v.name).len() as u64 > 3u64))
+}
+
+#[cfg(test)]
+pub mod invariant_tests {
+  use super::*;
+  #[test]
+  pub fn check_id_positive_default_row() {
+    let v = User { id: 0u64, name: String::new(), email: String::new(), tags: Vec::new() }; assert_eq!(check_id_positive(&v), false);
+  }
+  #[test]
+  pub fn check_name_min_length_default_row() {
+    let v = User { id: 0u64, name: String::new(), email: String::new(), tags: Vec::new() }; assert_eq!(check_name_min_length(&v), false);
+  }
+}

@@ -6,6 +6,8 @@ WIT golden emission.
 -/
 import Lean
 import SchemaLang
+import SchemaLang.Emit.Invariant
+import SchemaLang.Emit.Update
 import SchemaLang.Bridge
 import Demo
 import TestKit
@@ -719,6 +721,31 @@ def pipelineGuardControl : CheckResult :=
   | .error _ => .ok ()
   | .ok () => .error "dead event not caught — the battery is vacuous"
 
+-- The order lifecycle machine (the FIRST DOMAIN machine): the
+-- conformance battery sweeps its state space; the replay theorems
+-- (`lifecycle_happy_path`, `terminal_only_reset`, ...) are
+-- compile-time; the emitted Rust is replay-tested host-side
+-- (steel-host's order_machine.rs).
+def orderMachineChecks : CheckResult := do
+  let rs := orderConformance
+  for (name, r) in rs do
+    match r with
+    | .ok () => pure ()
+    | .error msg => throw s!"order-machine conformance {name}: {msg}"
+  _ ← assert (rs.any (·.1 == "deadlock-freedom")) "deadlock-freedom ran"
+  _ ← assert (rs.any (·.1 == "guard-coverage")) "guard-coverage ran"
+  -- the executable discipline (the theorems' run-level shadows)
+  match orderMachine.run .cart [.place, .ship, .deliver] with
+  | some (_, .delivered) => pure ()
+  | _ => throw "order happy path rejected"
+  match orderMachine.run .cart [.ship] with
+  | none => pure ()
+  | some _ => throw "ship-before-place accepted"
+  match orderMachine.step? .delivered .ship with
+  | none => pure ()
+  | some _ => throw "delivered reopened"
+  .ok ()
+
 /-- The happy path executes end-to-end and out-of-order firing is
     rejected; acyclicity is `rank_advances_tr` (compile-time, above). -/
 def pipelineRunChecks : CheckResult := do
@@ -1010,6 +1037,320 @@ def propCoverageChecks : CheckResult := do
   .ok ()
 
 end PropSweep
+
+/-! ## Value codec (CodecValue): the schema-typed wire round trip
+
+`encodeValue`/`decodeValue` connect the `Value t` GADT to the wire. The
+sweep generates `(Ty, Value t)` packs from the PROVED sub-universe
+(`CodecClosed`) and checks the executable image of the kernel theorem
+`decode_encodeValue`. The negative control corrupts bool/u8 payloads —
+`decodeValue (encodeValue (corrupt v))` can never equal v at those
+leaves, so any sample of them bites. -/
+
+namespace CodecValueSweep
+
+open Plausible
+
+/-- A sample: a codec-closed type, its proof, and a value at it. -/
+structure Pack where
+  t : Ty
+  h : CodecClosed t
+  val : Value t
+
+/-! ### the executable equality on `Value t` (the theorem's witness) -/
+
+-- Size measure for the mutual structural recursion.
+mutual
+
+def sizeV : (t : Ty) → Value t → Nat
+  | .bool, _ => 1
+  | .u8, _ => 1
+  | .u16, _ => 1
+  | .u32, _ => 1
+  | .u64, _ => 1
+  | .i8, _ => 1
+  | .i16, _ => 1
+  | .i32, _ => 1
+  | .i64, _ => 1
+  | .f32, _ => 1
+  | .f64, _ => 1
+  | .string, _ => 1
+  | .bytes, _ => 1
+  | .option _, .none => 1
+  | .option a, .some x => sizeV a x + 1
+  | .result ok _, .ok x => sizeV ok x + 1
+  | .result _ err, .err x => sizeV err x + 1
+  | .future a, .future x => sizeV a x + 1
+  | .list a, .list vl => sizeL a vl + 1
+  | .stream a, .stream vl => sizeL a vl + 1
+
+def sizeL : (t : Ty) → VList t → Nat
+  | _, .nil => 0
+  | t, .cons v vl => sizeV t v + sizeL t vl + 1
+
+end
+
+-- Structural equality on `Value t` (Bool-valued — the sweep and the
+-- checks compare decoded against encoded through it).
+-- (plain comment: `mutual` cannot follow a doc comment)
+
+-- Structural equality on `Value t`, THROUGH the codec: two values are
+-- equal iff their encodings are byte-equal. NOT a GADT match — the
+-- three-arg GADT match's unfold equations are underivable (the
+-- catch-all-vs-refined splitter limit); the codec route is total,
+-- reflexive (byte equality), and faithful on the codec-closed universe
+-- (the round-trip theorem: equal bytes decode equal). The sweep and
+-- the checks consume this.
+def valueEq (t : Ty) (a b : Value t) : Bool :=
+  encodeValue t a == encodeValue t b
+
+-- the refl pin, kernel-checked (the sweep's equality is not vacuous):
+theorem valueEq_refl (t : Ty) (v : Value t) : valueEq t v v = true :=
+  beq_self_eq_true _
+
+-- Debug rendering of a `Value t` (Plausible counterexample output).
+mutual
+
+def valueReprStr : (t : Ty) → Value t → String
+  | .bool, .bool b => s!"bool {b}"
+  | .u8, .u8 x => s!"u8 {x}"
+  | .u16, .u16 x => s!"u16 {x}"
+  | .u32, .u32 x => s!"u32 {x}"
+  | .u64, .u64 x => s!"u64 {x}"
+  | .i8, .i8 x => s!"i8 {x.toInt}"
+  | .i16, .i16 x => s!"i16 {x.toInt}"
+  | .i32, .i32 x => s!"i32 {x.toInt}"
+  | .i64, .i64 x => s!"i64 {x.toInt}"
+  | .f32, .f32 x => s!"f32 {x}"
+  | .f64, .f64 x => s!"f64 {x}"
+  | .string, .string s => s!"string \"{s}\""
+  | .bytes, .bytes bs => s!"bytes {bs}"
+  | .option _, .none => "none"
+  | .option t, .some x => s!"some ({valueReprStr t x})"
+  | .result ok _, .ok x => s!"ok ({valueReprStr ok x})"
+  | .result _ err, .err x => s!"err ({valueReprStr err x})"
+  | .future t, .future x => s!"future ({valueReprStr t x})"
+  | .list t, .list vl => s!"list [{vListReprStr t vl}]"
+  | .stream t, .stream vl => s!"stream [{vListReprStr t vl}]"
+  termination_by t v => sizeV t v
+decreasing_by all_goals (simp [sizeV, sizeL] <;> omega)
+
+def vListReprStr : (t : Ty) → VList t → String
+  | _, .nil => ""
+  | t, .cons v vl =>
+      let rest := vListReprStr t vl
+      if rest == "" then valueReprStr t v else s!"{valueReprStr t v}, {rest}"
+  termination_by t vl => sizeL t vl
+decreasing_by all_goals (simp [sizeV, sizeL] <;> omega)
+
+end
+
+-- (the checks consuming these renderings follow)
+
+instance : Repr Pack where
+  reprPrec p _ := s!"⟨{repr p.t}, {valueReprStr p.t p.val}⟩"
+
+instance : Shrinkable Pack where
+  shrink p :=
+    if valueEq p.t p.val (defaultValue p.t p.h) then []
+    else [⟨p.t, p.h, defaultValue p.t p.h⟩]
+
+/-! ### the generators -/
+
+/-- Short bounded list. -/
+def genShortList (g : Gen α) (maxLen : Nat) : Gen (List α) := do
+  let len ← Gen.chooseNat
+  let rec go : Nat → Gen (List α)
+    | 0 => pure []
+    | k + 1 => do pure ((← g) :: (← go k))
+  go (len % (maxLen + 1))
+
+def genChar : Gen Char := do
+  let n ← Gen.chooseNat
+  pure (Char.ofNat ('a'.toNat + n % 3))
+
+def genU8 : Gen UInt8 := do
+  pure ((← Gen.chooseNat) % 256).toUInt8
+
+/-- One value of type `t` (must be codec-closed), size-bounded by fuel. -/
+def genVal : (t : Ty) → CodecClosed t → Nat → Gen (Value t)
+  | .bool, _, _ => do pure (.bool ((← Gen.chooseNat) % 2 == 0))
+  | .u8, _, _ => do pure (.u8 (← genU8))
+  | .u16, _, _ => do pure (.u16 ((← Gen.chooseNat) % 65536).toUInt16)
+  | .u32, _, _ => do pure (.u32 ((← Gen.chooseNat) % 4294967296).toUInt32)
+  | .u64, _, _ => do
+      pure (.u64 ((← Gen.chooseNat) % 18446744073709551616).toUInt64)
+  | .i8, _, _ => do pure (.i8 (Int8.ofInt (unzigzag ((← Gen.chooseNat) % 200))))
+  | .i16, _, _ => do
+      pure (.i16 (Int16.ofInt (unzigzag ((← Gen.chooseNat) % 40000))))
+  | .i32, _, _ => do
+      pure (.i32 (Int32.ofInt (unzigzag ((← Gen.chooseNat) % 4000000000))))
+  | .i64, _, _ => do
+      pure (.i64 (Int64.ofInt (unzigzag ((← Gen.chooseNat) % 1000000000000000000))))
+  | .string, _, _ => do pure (.string (String.ofList (← genShortList genChar 4)))
+  | .bytes, _, _ => do pure (.bytes (← genShortList genU8 4))
+  | .option t, .option h, fuel + 1 => do
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then pure .none else pure (.some (← genVal t h fuel))
+  | .result ok err, .result hok herr, fuel + 1 => do
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then pure (.ok (← genVal ok hok fuel))
+      else pure (.err (← genVal err herr fuel))
+  | .list t, .list h, fuel + 1 => do
+      pure (.list (listToVList (← genShortList (genVal t h fuel) 3)))
+  | .future t, .future h, fuel + 1 => do pure (.future (← genVal t h fuel))
+  | .stream t, .stream h, fuel + 1 => do
+      pure (.stream (listToVList (← genShortList (genVal t h fuel) 3)))
+  -- fuel 0: composites fall back to the default value (u8 is the
+  -- oneOfWithDefault default leaf below, so the control still bites)
+  | t, h, 0 => pure (defaultValue t h)
+  termination_by _ _ fuel => fuel
+
+def genLeafPack : Gen Pack :=
+  Gen.oneOfWithDefault
+    (do pure ⟨.u8, .u8, .u8 (← genU8)⟩)
+    [ do pure ⟨.bool, .bool, .bool ((← Gen.chooseNat) % 2 == 0)⟩
+    , do pure ⟨.u16, .u16, .u16 ((← Gen.chooseNat) % 65536).toUInt16⟩
+    , do pure ⟨.u32, .u32, .u32 ((← Gen.chooseNat) % 4294967296).toUInt32⟩
+    , do
+        pure ⟨.u64, .u64, .u64 ((← Gen.chooseNat) % 18446744073709551616).toUInt64⟩
+    , do pure ⟨.i8, .i8, .i8 (Int8.ofInt (unzigzag ((← Gen.chooseNat) % 200)))⟩
+    , do
+        pure ⟨.i16, .i16, .i16 (Int16.ofInt (unzigzag ((← Gen.chooseNat) % 40000)))⟩
+    , do
+        pure ⟨.i32, .i32,
+          .i32 (Int32.ofInt (unzigzag ((← Gen.chooseNat) % 4000000000)))⟩
+    , do
+        pure ⟨.i64, .i64,
+          .i64 (Int64.ofInt (unzigzag ((← Gen.chooseNat) % 1000000000000000000)))⟩
+    , do pure ⟨.string, .string, .string (String.ofList (← genShortList genChar 3))⟩
+    , do pure ⟨.bytes, .bytes, .bytes (← genShortList genU8 3)⟩ ]
+
+def genPack : Nat → Gen Pack
+  | 0 => genLeafPack
+  | fuel + 1 => do
+    let branch ← Gen.chooseNat
+    match branch % 6 with
+    | 0 => genLeafPack
+    | 1 => do
+      let p ← genPack fuel
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then pure ⟨.option p.t, .option p.h, .none⟩
+      else pure ⟨.option p.t, .option p.h, .some p.val⟩
+    | 2 => do
+      let p ← genPack fuel
+      let q ← genPack fuel
+      let b ← Gen.chooseNat
+      if b % 2 == 0 then pure ⟨.result p.t q.t, .result p.h q.h, .ok p.val⟩
+      else pure ⟨.result p.t q.t, .result p.h q.h, .err q.val⟩
+    | 3 => do
+      let p ← genPack fuel
+      let vs ← genShortList (genVal p.t p.h fuel) 3
+      pure ⟨.list p.t, .list p.h, .list (listToVList vs)⟩
+    | 4 => do
+      let p ← genPack fuel
+      pure ⟨.future p.t, .future p.h, .future p.val⟩
+    | _ => do
+      let p ← genPack fuel
+      let vs ← genShortList (genVal p.t p.h fuel) 3
+      pure ⟨.stream p.t, .stream p.h, .stream (listToVList vs)⟩
+  termination_by fuel => fuel
+
+instance : ArbitraryFueled Pack where
+  arbitraryFueled := genPack
+
+instance : Arbitrary Pack where
+  arbitrary := Gen.sized genPack
+
+/-! ### the property, its control, and the coverage pins -/
+
+/-- The executable image of `decode_encodeValue`: decode (encode p) = p. -/
+def valueRoundtrip (p : Pack) : Bool :=
+  match decodeValue p.t (encodeValue p.t p.val) with
+  | some v => valueEq p.t v p.val
+  | none => false
+
+/-- Negative-control corruption: flip bool payloads, bump u8 payloads. -/
+def corrupt : (t : Ty) → Value t → Value t
+  | .bool, .bool b => .bool (!b)
+  | .u8, .u8 x => .u8 (x + 1)
+  | _, v => v
+
+/-- The corrupted sibling: round-trips the corrupted value but checks it
+    against the ORIGINAL — a bool/u8 sample can never pass. -/
+def controlRoundtrip (p : Pack) : Bool :=
+  match decodeValue p.t (encodeValue p.t (corrupt p.t p.val)) with
+  | some v => valueEq p.t v p.val
+  | none => false
+
+/-- The suite: 1000 instances, pinned seed. -/
+def suite : TestSeq :=
+  checkPlausibleIO "Value codec: decodeValue ∘ encodeValue = some over generated packs"
+    (∀ p : Pack, valueRoundtrip p = true)
+    .done { numInst := 1000, randomSeed := some 20261105 }
+
+/-- The negative control: corrupted bool/u8 payloads MUST be caught. If
+    this suite passes, `valueRoundtrip` is vacuous and proves nothing. -/
+def controlSuite : TestSeq :=
+  checkPlausibleIO "sabotaged: bool/u8 payload corruption (must be caught)"
+    (∀ p : Pack, controlRoundtrip p = true)
+    .done { numInst := 1000, randomSeed := some 20261105 }
+
+/-- The property spec: sweep + its mandatory negative control. -/
+def spec : TestKit.PropSpec :=
+  { name := "decode_encodeValue: Value round trip over the CodecClosed universe"
+  , suite := suite
+  , control := controlSuite
+  , controlName := "corrupt-bool-u8" }
+
+/-- Deterministic pins: every covered `Ty` shape round-trips by hand-built
+    value (the theorem, executed), and malformed wire is rejected. -/
+def coverageChecks : CheckResult := do
+  let packs : List Pack :=
+    [ ⟨.bool, .bool, .bool true⟩
+    , ⟨.u8, .u8, .u8 42⟩
+    , ⟨.u16, .u16, .u16 65535⟩
+    , ⟨.u32, .u32, .u32 4000000000⟩
+    , ⟨.u64, .u64, .u64 18000000000000000000⟩
+    , ⟨.i8, .i8, .i8 (Int8.ofInt (-128))⟩
+    , ⟨.i16, .i16, .i16 (Int16.ofInt (-30000))⟩
+    , ⟨.i32, .i32, .i32 (Int32.ofInt (-2000000000))⟩
+    , ⟨.i64, .i64, .i64 (Int64.ofInt (-9000000000000000000))⟩
+    , ⟨.string, .string, .string "hello"⟩
+    , ⟨.bytes, .bytes, .bytes [1, 2, 3]⟩
+    , ⟨.option .u8, .option .u8, .none⟩
+    , ⟨.option .u8, .option .u8, .some (.u8 7)⟩
+    , ⟨.result .u8 .string, .result .u8 .string, .ok (.u8 1)⟩
+    , ⟨.result .u8 .string, .result .u8 .string, .err (.string "no")⟩
+    , ⟨.list .u8, .list .u8, .list (listToVList [.u8 1, .u8 2, .u8 3])⟩
+    , ⟨.future .u8, .future .u8, .future (.u8 9)⟩
+    , ⟨.stream .u8, .stream .u8, .stream (listToVList [.u8 4])⟩
+    , ⟨.option (.list .u8), .option (.list .u8),
+        .some (.list (listToVList [.u8 1, .u8 2]))⟩ ]
+  for p in packs do
+    _ ← assert (valueRoundtrip p) s!"roundtrip {valueReprStr p.t p.val}"
+  -- the refl pin: the sweep's equality is reflexive (kernel-checked
+  -- `valueEqRefl`, executed on a composite)
+  _ ← assertEq "valueEq refl (composite)"
+    (valueEq (.list .u8) (.list (listToVList [.u8 1, .u8 2]))
+      (.list (listToVList [.u8 1, .u8 2]))) true
+  -- rejection: truncation and empty wire (no BEq on GADT Options —
+  -- the isNone projection is the Bool reading)
+  _ ← assert (decodeValue .u8 []).isNone "u8 truncation rejected"
+  _ ← assert (decodeValue (.option .u8) []).isNone "option truncation rejected"
+  _ ← assert (decodeValue (.list .u8) [2]).isNone "list truncation rejected"
+  -- ([1, 2] is NOT malformed: one element + remainder — decodeValue
+  -- discards the remainder; [2] = length-2 prefix with no elements IS)
+  -- the theorem's object, EXECUTED: decode ∘ encode lands the value
+  -- (GADT pattern match, not BEq — there is no decidable-eq on Value)
+  let pin : Bool :=
+    match decodeValue .u8 (encodeValue .u8 (.u8 42)) with
+    | some (.u8 42) => true
+    | _ => false
+  _ ← assert pin "theorem pin: decode ∘ encode lands the value"
+  .ok ()
+
+end CodecValueSweep
 
 /-! ## Typed session choreography (SchemaLang.Session) -/
 
@@ -1314,19 +1655,18 @@ def strlenChecks : CheckResult := do
   _ ← assertEq "spec verdict false (ab)" (evalVBool valNameLong (valRowName 5 "ab")) false
   _ ← assertEq "spec verdict boundary (abc... exactly 3 fails)"
     (evalVBool valNameLong (valRowName 5 "abc")) false
-  -- the COMPILED-BOUNDARY pin: `validates` rides the RAW evaluator,
-  -- which has no string level — the strlen operand evaluates 0, so the
-  -- raw verdict is FALSE even on a row the spec accepts. This pin is
-  -- the divergence DOCUMENTED in Validate.lean's Phase 2, made
-  -- non-vacuous by the line above (the two readings DIFFER on the same
-  -- row). If the backend wires the `len@+8` load and the raw evaluators
-  -- gain a string level, THIS assertion must flip to true.
-  _ ← assertEq "compiled boundary: raw verdict false (abcd)"
-    (validates valNameLong (valRowName 5 "abcd")) false
-  -- non-vacuity: the pin is a real divergence, not a dead check
-  _ ← assert (evalVBool valNameLong (valRowName 5 "abcd") !=
-      validates valNameLong (valRowName 5 "abcd"))
-    "spec and raw readings genuinely differ on strlen"
+  -- the COMPILED-BOUNDARY pin, FLIPPED (the flip condition the old pin
+  -- named arrived): the backend wired the `len@+8` load and evalU's
+  -- `.strlen` arm now reads the row's boxed string — the RAW verdict
+  -- agrees with the spec verdict (the divergence is closed; the
+  -- readings were PROVEN different when the raw level had no strings,
+  -- and the proof updated with the lane that wired the load).
+  _ ← assertEq "compiled boundary: raw verdict true (abcd)"
+    (validates valNameLong (valRowName 5 "abcd")) true
+  -- both readings still refuse the short name (the validator itself
+  -- is not vacuous on either level)
+  _ ← assertEq "raw verdict false (ab)"
+    (validates valNameLong (valRowName 5 "ab")) false
   .ok ()
 
 -- The TYPING's negative control: the MISSPELLED field-ref (`"iid"`)
@@ -1463,6 +1803,169 @@ Hint: Type class instance resolution failures can be inspected with the `set_opt
 #check (SchemaLang.VCase.payload "empty-cart" :
   SchemaLang.VCase valOrderErrorCases .u64)
 
+/-! ## Invariants (SPEC-core §5): the schema_invariant lane
+
+The happy registrations below run the `schema_invariant` command
+against the REFLECTED Demo registry (the elaboration-time gate: a
+misspelled column fails the `HasCol` search, an unknown record is a
+did-you-mean error). The run_cmd pin checks the registered rows' DATA
+and evaluates the STORED term end-to-end; the runtime group pins the
+verdicts on demo rows and the emitter's discipline; the golden
+group byte-ties the emitted Rust.
+-/
+
+/-- The User schema, as the invariant lane sees it (the registered
+    record's fields — abbrev, the reducibility rule). -/
+abbrev invUserFields : List Field :=
+  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
+  , ⟨"tags", .list .string⟩ ]
+
+/-- A User row: id + name controllable, the rest default (the
+    valRowName style — one Value per field, in schema order). -/
+def invRow (id : UInt64) (nm : String) : RowVals invUserFields :=
+  .cons (.u64 id) (.cons (.string nm)
+    (.cons (.string "e") (.cons (.list .nil) .nil)))
+
+/-- Rows the end-to-end pin evaluates (constants, so the run_cmd can
+    name them). -/
+def invRowHappy : RowVals invUserFields := invRow 5 "abcd"
+def invRowZero : RowVals invUserFields := invRow 0 "abcd"
+
+-- Happy registration: the executable boundary check.
+schema_invariant invIdPositive for User := VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
+
+-- The proved registration: the tier is `proved` via the CITED theorem
+-- name (stored — resolution is CI's job later).
+schema_invariant invNameMinLength for User proved userNameLenProved :=
+  VExpr.gt (VExpr.strlen (VExpr.colOf "name")) (VExpr.lit 3)
+
+-- The registration pins: row data + tier computation + the stored
+-- term's end-to-end verdicts.
+open Lean Elab Command in
+run_cmd do
+  let items := SchemaLang.Meta.registeredInvariants (← getEnv)
+  let fetch (n : String) : CommandElabM SchemaLang.InvariantItem :=
+    match items.find? (·.name == n) with
+    | some it => pure it
+    | none => throwError s!"invariant `{n}` not registered"
+  let pos ← fetch "invIdPositive"
+  unless pos.schemaRef == "User" do throwError "invIdPositive: wrong schemaRef"
+  unless pos.tier == (SchemaLang.tierOf none : SchemaLang.Tier) do
+    throwError "invIdPositive: tier not computed (boundaryCheck)"
+  unless pos.inv.fields.length == 4 do
+    throwError "invIdPositive: fields are not the User schema"
+  let minl ← fetch "invNameMinLength"
+  unless minl.tier == (SchemaLang.tierOf (some `userNameLenProved) : SchemaLang.Tier) do
+    throwError "invNameMinLength: proved tier not computed"
+  unless minl.proofName == (some `userNameLenProved) do
+    throwError "invNameMinLength: citation not stored"
+  -- the stored term IS the predicate (head = the .gt ctor), and its
+  -- registered value executes END-TO-END: printed back to syntax,
+  -- re-elaborated against the registered fields, composed with
+  -- `validates`, evaluated on the demo rows (happy passes, zero refuses)
+  unless pos.exprTerm.getAppFn.isConstOf `SchemaLang.VExpr.gt do
+    throwError "invIdPositive: the stored term is not the predicate"
+  let verdict (it : SchemaLang.InvariantItem) (row : Name) : CommandElabM Bool :=
+    liftTermElabM do
+      let fsList ← SchemaLang.Meta.fieldsToExpr it.inv.fields
+      let expected := mkApp2 (mkConst `SchemaLang.VExpr) fsList
+        (mkConst `SchemaLang.Ty.bool)
+      let stx ← Lean.Elab.Term.exprToSyntax it.exprTerm
+      let term ← Lean.Elab.Term.elabTerm stx (some expected)
+      Term.synthesizeSyntheticMVarsNoPostponing
+      let e := Lean.mkApp3 (Lean.mkConst `SchemaLang.validates) fsList term
+        (Lean.mkConst row)
+      Lean.Meta.evalExpr Bool (Lean.mkConst `Bool) e
+  let happyVerdict ← verdict pos `invRowHappy
+  unless happyVerdict do
+    throwError "invIdPositive: the happy row must pass"
+  let zeroVerdict ← verdict pos `invRowZero
+  unless !zeroVerdict do
+    throwError "invIdPositive: the zero row must FAIL"
+
+-- The NEGATIVE controls (the command's gates): a misspelled column
+-- fails the term's `HasCol` instance search, and an unknown record is
+-- a did-you-mean error. Both fail THIS module's build if they stop
+-- failing (the gate's non-vacuity).
+/-- error: failed to synthesize instance of type class
+  HasCol
+    [{ name := "id", ty := Ty.u64 }, { name := "name", ty := Ty.string }, { name := "email", ty := Ty.string },
+      { name := "tags", ty := Ty.string.list }]
+    "iid" Ty.u64
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
+---
+error: cannot evaluate code because 'sorryAx' uses 'sorry' and/or contains errors -/
+#guard_msgs in
+schema_invariant invTypo for User := VExpr.gt (VExpr.colOf "iid") (VExpr.lit 0)
+
+/-- error: schema_invariant `invBogus`: `Usr` is not a registered record — did you mean: User? -/
+#guard_msgs in
+schema_invariant invBogus for Usr := VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
+
+/-- The hand mirrors of the registered predicates (the runtime verdict
+    pins evaluate THESE — the same terms the command elaborated). -/
+def invIdPositiveMirror : VExpr invUserFields .bool := .gt (.colOf "id") (.lit 0)
+def invNameMinLengthMirror : VExpr invUserFields .bool :=
+  .gt (.strlen (.colOf "name")) (.lit 3)
+
+def invariantChecks : CheckResult := do
+  -- the tier computation (the enforcement ladder's v1 rungs)
+  _ ← assertEq "tierOf none = boundaryCheck" (SchemaLang.tierOf none) .boundaryCheck
+  _ ← assertEq "tierOf some = proved" (SchemaLang.tierOf (some `t)) .proved
+  _ ← assertEq "tier render" (SchemaLang.Tier.render .boundaryCheck) "boundary-check"
+  -- the happy registration's verdicts, on demo rows (the hand mirrors)
+  _ ← assertEq "inv-id-positive: happy row passes"
+    (validates invIdPositiveMirror (invRow 5 "abcd")) true
+  _ ← assertEq "inv-id-positive: zero row REFUSED"
+    (validates invIdPositiveMirror (invRow 0 "abcd")) false
+  _ ← assertEq "inv-name-min-length: long name passes"
+    (validates invNameMinLengthMirror (invRow 5 "abcd")) true
+  _ ← assertEq "inv-name-min-length: short name REFUSED"
+    (validates invNameMinLengthMirror (invRow 5 "ab")) false
+  -- non-vacuity: the verdicts distinguish the rows
+  _ ← assert (validates invIdPositiveMirror (invRow 0 "") !=
+      validates invIdPositiveMirror (invRow 1 ""))
+    "the verdict distinguishes the rows"
+  -- the emitter: declared path + determinism (the emitter discipline)
+  let files := SchemaLang.Emit.Invariant.invariantEmitter.run []
+  _ ← assertEq "invariant path" (files.head?.map (·.path))
+    (some "../../src/invariants_generated.rs")
+  _ ← assertEq "invariant deterministic" (files.map (·.contents))
+    ((SchemaLang.Emit.Invariant.invariantEmitter.run []).map (·.contents))
+  let out := files.head?.map (·.contents) |>.getD ""
+  _ ← assert (out.contains "pub fn check_id_positive(v: &User) -> bool")
+    "check fn emitted (snake — Rust identifiers cannot carry kebab)"
+  _ ← assert (out.contains "pub fn validate_user(v: &User) -> bool")
+    "the record's folding validator emitted"
+  _ ← assert (out.contains "(v.id > 0u64)") "the evalB discipline: raw u64 ops"
+  _ ← assert (out.contains ".len() as u64") "strlen = .len() on strings"
+  _ ← assert (out.contains "#[cfg(test)]") "the test module emitted"
+  -- the Lean-computed default-row verdicts, replayed as Rust asserts:
+  -- a FAILING row must fail (id=0 and the empty name both refuse)
+  _ ← assertEq "default-row verdicts (both refuse)"
+    (SchemaLang.Emit.Invariant.demoInvariants.map SchemaLang.Emit.Invariant.defaultVerdict)
+    [some false, some false]
+  _ ← assert (out.contains "assert_eq!(check_id_positive(&v), false);")
+    "the failing row's assert is pinned"
+  -- the emitter self-audit (the banned-construct sweep)
+  _ ← assert
+    (files.all fun f =>
+      GateKit.auditFindings SchemaLang.Emit.emitterAuditRules f.contents |>.isEmpty)
+    "invariant emitter self-audit (banned constructs)"
+  .ok ()
+
+/-- The golden byte-tie for the invariant lane (the same contract as
+    `goldenChecks` — which covers this emitter automatically once it
+    joins the registry; this pin stands independent of the wiring). -/
+unsafe def invariantGoldenChecks (update : Bool) : IO (String × CheckResult) := do
+  let files := SchemaLang.Emit.Invariant.invariantEmitter.run []
+  let out := files.head?.map (·.contents) |>.getD ""
+  let golden : System.FilePath := "goldens/invariants/invariants_generated.rs"
+  CodegenCore.Emit.createParentDirs golden
+  let r ← TestKit.Golden.checkAgainstGolden "invariant" out golden update
+  pure ("invariantGolden", r)
+
 /-! ## Docs emitter (DOCS-SITE lane): the markdown API page -/
 
 def docsChecks : CheckResult := do
@@ -1503,10 +2006,211 @@ def docsChecks : CheckResult := do
     "docs emitter registered"
   .ok ()
 
+/-! ## Updates (SPEC-core §3, demoted): the schema_update lane
+
+The happy registrations below run the `schema_update` command against
+the REFLECTED Demo registry. The `where` clause is REQUIRED — `VExpr
+.bool` has no literal-true; the unconditional idiom is `VExpr.eq
+(VExpr.lit 0) (VExpr.lit 0)` (pinned by `updSelfBumpMirror`). The run_cmd
+pin checks the registered rows' DERIVED data (reads/writes/selfReading —
+never hand-listed) AND the emitter's demo-row mirror; the runtime group
+pins `applyRow` semantics on demo rows; the golden group byte-ties the
+emitted Rust.
+-/
+
+/-- The User schema, as the update lane sees it (abbrev — the
+    reducibility rule; the same list the invariant lane mirrors). -/
+abbrev updUserFields : List Field :=
+  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
+  , ⟨"tags", .list .string⟩ ]
+
+-- The row builder is the invariant lane's `invRow` REUSED (same schema
+-- shape — the dupDefBodies lint enforces the dedup); the extractors are
+-- the update lane's own (the evalU / boxed-eval routes — no hand path).
+
+/-- The row's id (the `evalU` route — no hand path). -/
+def updRowId (row : RowVals updUserFields) : UInt64 :=
+  evalU (.colOf "id") row
+
+/-- The row's email (the boxed eval — no hand path). -/
+def updRowEmail (row : RowVals updUserFields) : String :=
+  match evalV (.colOf "email") row with | .string s => s | _ => ""
+
+-- Registration 1: linear u64 write — guard on the ORIGINAL id, write a
+-- constant. reads = ["id"] (guard only), writes = ["id"], selfReading =
+-- FALSE (the value reads nothing). The name is the emitted fn's suffix
+-- (`apply_reset_id`) — kebab at the registry, snake in Rust.
+schema_update reset_id for User id := VExpr.lit 0
+  where VExpr.gt (VExpr.colOf "id") (VExpr.lit 100)
+
+-- Registration 2: linear STRING write (a column copy — VExpr has no
+-- string literal, so string writes are copies). reads = ["name"]
+-- (guard + value agree), writes = ["email"], selfReading = FALSE.
+schema_update echo_email for User email := VExpr.colOf "name"
+  where VExpr.gt (VExpr.strlen (VExpr.colOf "name")) (VExpr.lit 3)
+
+-- Registration 3: the SELF-READING classification (the enforcement
+-- ladder's input): the value reads the WRITTEN column → nonlinear
+-- (the journal carries S0). The guard is the always-true idiom — the
+-- `where`-required escape hatch, pinned here.
+schema_update self_bump for User id := VExpr.colOf "id"
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+-- The registration pins: row data + the DERIVED reads/writes/
+-- selfReading (EXACT lists) + the emitter's demo-row mirror.
+open Lean Elab Command in
+run_cmd do
+  let ups := SchemaLang.Meta.registeredUpdates (← getEnv)
+  unless ups.length == 3 do
+    throwError s!"expected 3 registered updates, got {ups.length}"
+  let fetch (n : String) : CommandElabM SchemaLang.SomeUpdate :=
+    match ups.find? (·.update.name == n) with
+    | some u => pure u
+    | none => throwError s!"update `{n}` not registered"
+  let rid ← fetch "reset_id"
+  unless rid.update.reads == ["id"] do
+    throwError s!"updResetId: reads not derived (got {rid.update.reads})"
+  unless rid.update.writes == ["id"] do throwError "updResetId: wrong writes"
+  unless rid.update.selfReading == false do
+    throwError "updResetId: misclassified as self-reading"
+  let echo ← fetch "echo_email"
+  unless echo.update.reads == ["name"] do
+    throwError s!"updEchoEmail: reads not derived (got {echo.update.reads})"
+  unless echo.update.writes == ["email"] do throwError "updEchoEmail: wrong writes"
+  unless echo.update.selfReading == false do
+    throwError "updEchoEmail: misclassified as self-reading"
+  let sb ← fetch "self_bump"
+  unless sb.update.reads == ["id"] do
+    throwError s!"updSelfBump: reads not derived (got {sb.update.reads})"
+  unless sb.update.selfReading == true do
+    throwError "updSelfBump: the self-reading classification missed"
+  -- the emitter's demo rows MIRROR the registrations (the
+  -- demoInvariants discipline — derived data, both sides)
+  let em := SchemaLang.Emit.Update.demoUpdates
+  unless (em.map (·.u.update.name)) == (ups.map (·.update.name)) do
+    throwError "Emit.Update.demoUpdates: names out of sync with the registry"
+  unless (em.map (fun u => u.u.update.reads)) == (ups.map (fun u => u.update.reads)) do
+    throwError "Emit.Update.demoUpdates: reads out of sync with the registry"
+  unless (em.map (fun u => u.u.update.writes)) == (ups.map (fun u => u.update.writes)) do
+    throwError "Emit.Update.demoUpdates: writes out of sync with the registry"
+  unless (em.map (fun u => u.u.update.selfReading))
+      == (ups.map (fun u => u.update.selfReading)) do
+    throwError "Emit.Update.demoUpdates: selfReading out of sync with the registry"
+  unless (em.map (·.recName)) == ["User", "User", "User"] do
+    throwError "Emit.Update.demoUpdates: record refs out of sync"
+
+-- The NEGATIVE controls (the command's gates): a value expr of the
+-- WRONG TYPE for the column fails the GADT-index gate (a u64 literal
+-- on the string `name` column); a misspelled column is the did-you-mean
+-- error from the command's own field lookup. Both fail THIS module's
+-- build if they stop failing (the gate's non-vacuity).
+/-- error: schema_update `updWrongType`: the value expression has type SchemaLang.Ty.u64 — the written column `name` is SchemaLang.Ty.string — the value expression must have the COLUMN'S OWN TYPE (the GADT gate) -/
+#guard_msgs in
+schema_update updWrongType for User name := VExpr.lit 0
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `updTypo`: `iid` is not a column of `User` — did you mean: id? -/
+#guard_msgs in
+schema_update updTypo for User iid := VExpr.lit 0
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- The hand mirrors of the registered updates (the runtime pins
+    evaluate THESE — the same data the command registered; the run_cmd
+    above pins the mirror). -/
+def updResetIdMirror : UpdateItem updUserFields ⟨"id", .u64⟩ :=
+  { name := "reset-id", guard := .gt (.colOf "id") (.lit 100)
+  , value := .lit 0, writePath := .here }
+
+def updEchoEmailMirror : UpdateItem updUserFields ⟨"email", .string⟩ :=
+  { name := "echo-email", guard := .gt (.strlen (.colOf "name")) (.lit 3)
+  , value := .colOf "name", writePath := .there (.there .here) }
+
+def updSelfBumpMirror : UpdateItem updUserFields ⟨"id", .u64⟩ :=
+  { name := "self-bump", guard := .eq (.lit 0) (.lit 0)
+  , value := .colOf "id", writePath := .here }
+
+def updateChecks : CheckResult := do
+  -- the DERIVED read/write sets + the linearity classification
+  _ ← assertEq "reset-id: reads derived" updResetIdMirror.reads ["id"]
+  _ ← assertEq "reset-id: writes derived" updResetIdMirror.writes ["id"]
+  _ ← assertEq "reset-id: linear" updResetIdMirror.selfReading false
+  _ ← assertEq "echo-email: reads derived" updEchoEmailMirror.reads ["name"]
+  _ ← assertEq "echo-email: writes derived" updEchoEmailMirror.writes ["email"]
+  _ ← assertEq "echo-email: linear" updEchoEmailMirror.selfReading false
+  _ ← assertEq "self-bump: reads derived" updSelfBumpMirror.reads ["id"]
+  _ ← assertEq "self-bump: SELF-READING" updSelfBumpMirror.selfReading true
+  -- applyRow semantics on demo rows: a GUARDED row changes
+  _ ← assertEq "reset-id: guarded row (id=150) resets"
+    (updRowId (updResetIdMirror.applyRow (invRow 150 "abcd"))) 0
+  -- ... a REFUSED row passes through untouched
+  _ ← assertEq "reset-id: refused row (id=50) unchanged"
+    (updRowId (updResetIdMirror.applyRow (invRow 50 "abcd"))) 50
+  -- the GUARD reads the ORIGINAL row: on [150, 50], the 150-row's guard
+  -- saw 150 (> 100) BEFORE the write → [0, 50]. A guard re-read after
+  -- the write would see 0 ≤ 100 and leave [150, 50].
+  _ ← assertEq "reset-id: guard reads the original row (batch)"
+    ((updResetIdMirror.apply [invRow 150 "a", invRow 50 "b"]).map updRowId)
+    [0, 50]
+  -- the VALUE reads the ORIGINAL row too: self-bump writes the id it
+  -- read pre-write (7 → 7); a post-write read would differ once the
+  -- write landed first
+  _ ← assertEq "self-bump: value reads the original row"
+    (updRowId (updSelfBumpMirror.applyRow (invRow 7 "x"))) 7
+  -- the string write: the guarded row's email BECOMES the row's name
+  _ ← assertEq "echo-email: guarded row copies name into email"
+    (updRowEmail (updEchoEmailMirror.applyRow (invRow 5 "abcd"))) "abcd"
+  _ ← assertEq "echo-email: refused row keeps its email"
+    (updRowEmail (updEchoEmailMirror.applyRow (invRow 5 "ab"))) "e"
+  -- the SomeUpdate cast discipline: a row whose field list MATCHES the
+  -- registered fields executes; a foreign row refuses (passes through)
+  let su : SomeUpdate :=
+    { fields := updUserFields, field := ⟨"id", .u64⟩, update := updResetIdMirror }
+  _ ← assertEq "SomeUpdate.applyRow: matching row executes"
+    (updRowId (su.applyRow (invRow 150 "abcd"))) 0
+  _ ← assert
+    (match su.applyRow RowVals.nil with | .nil => true)
+    "SomeUpdate.applyRow: foreign row passes through"
+  -- the emitter: declared path + determinism (the emitter discipline)
+  let files := SchemaLang.Emit.Update.updateEmitter.run []
+  _ ← assertEq "update path" (files.head?.map (·.path))
+    (some "../../src/updates_generated.rs")
+  _ ← assertEq "update deterministic" (files.map (·.contents))
+    ((SchemaLang.Emit.Update.updateEmitter.run []).map (·.contents))
+  let out := files.head?.map (·.contents) |>.getD ""
+  _ ← assert (out.contains "pub fn apply_reset_id(rows: &mut Vec<User>)")
+    "apply fn emitted (snake — Rust identifiers cannot carry kebab)"
+  _ ← assert (out.contains "r.id = 0u64;") "the constant u64 write lowered"
+  _ ← assert (out.contains "r.email = (r.name).clone();")
+    "the string write: .col-of-string → .clone()"
+  _ ← assert (out.contains "pub fn tick_user(rows: &mut Vec<User>)")
+    "the record's folding tick emitted"
+  _ ← assert (out.contains "apply_reset_id(rows); apply_echo_email(rows); apply_self_bump(rows);")
+    "the tick folds the record's updates in registration order"
+  -- the emitter self-audit (the banned-construct sweep)
+  _ ← assert
+    (files.all fun f =>
+      GateKit.auditFindings SchemaLang.Emit.emitterAuditRules f.contents |>.isEmpty)
+    "update emitter self-audit (banned constructs)"
+  .ok ()
+
+/-- The golden byte-tie for the update lane (the same contract as
+    `invariantGoldenChecks` — the Registry wiring will fold this
+    emitter into `goldenChecks` automatically; this pin stands
+    independent of the wiring). -/
+unsafe def updateGoldenChecks (update : Bool) : IO (String × CheckResult) := do
+  let files := SchemaLang.Emit.Update.updateEmitter.run []
+  let out := files.head?.map (·.contents) |>.getD ""
+  let golden : System.FilePath := "goldens/update/updates_generated.rs"
+  CodegenCore.Emit.createParentDirs golden
+  let r ← TestKit.Golden.checkAgainstGolden "update" out golden update
+  pure ("updateGolden", r)
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
   let reflect ← reflectChecks
+  let invGolden ← invariantGoldenChecks update
+  let updGolden ← updateGoldenChecks update
   let vortexWf ← vortexWellFormedChecks
   let snapGate ← snapshotGateChecks
   let funcSemReflect ← funcSemReflectChecks
@@ -1516,13 +2220,16 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("codec", codecChecks)
      , ("codecCombinators", codecCombinatorChecks)
      , ("envelope", envelopeChecks)
+     , ("codecValue", CodecValueSweep.coverageChecks)
      , ("eqAns", eqAnsChecks)
      , ("diff", diffChecks)
      , ("ptype", ptypeChecks)
      , ("eqAnsRouting", eqAnsRoutingChecks)
      , ("snapshot", snapshotChecks)
      ] ++ goldens ++
-     [ ("lower", lowerChecks)
+     [ invGolden
+     , updGolden
+     , ("lower", lowerChecks)
      , ("derives", derivesChecks)
      , reflect
      , vortexWf
@@ -1534,6 +2241,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("pipelineConformance", pipelineConformanceChecks)
      , ("pipelineGuardControl", pipelineGuardControl)
      , ("pipelineRun", pipelineRunChecks)
+     , ("orderMachine", orderMachineChecks)
      , ("emitterAudit", emitterAuditChecks)
      , ("typedSession", typedSessionChecks)
      , ("propCoverage", PropSweep.propCoverageChecks)
@@ -1542,6 +2250,8 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("validate", validateChecks)
      , ("strlen", strlenChecks)
      , ("variant", variantChecks)
+     , ("invariantChecks", invariantChecks)
+     , ("updateChecks", updateChecks)
      , ("migration", migrationChecks)
      , ("docs", docsChecks)
      ])
@@ -1549,4 +2259,4 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- the property sweep WITH its mandatory negative control
   -- (TestKit.PropSpec: the property must pass AND the sabotaged sibling
   -- must be caught — a vacuous sweep fails the gate)
-  TestKit.runSpecs [PropSweep.spec]
+  TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec]

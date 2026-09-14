@@ -26,6 +26,9 @@ import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
 import SchemaLang.Emit.WitFixture
+import SchemaLang.Emit.Invariant
+import SchemaLang.Emit.Update
+import SchemaLang.Emit.Machine
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
 import SchemaLang.Docs
@@ -73,30 +76,24 @@ def pipelineStateRust : PipelineState → String
   | .emitted => "Emitted" | .tied => "Tied"
   | .failed _ _ => "Failed { .. }"
 
-/-- The `step` match arms, folded from the PROVED `pipelineTrans` table
-    (not a hand copy of it): one arm per non-`reset` row, and — when the
-    `reset` rows send EVERY concrete (non-`failed`) state to the same
-    target, which is also the structural `failed` arm's target
-    (`tableStep?`: only `reset` recovers from `failed`) — a single
-    wildcard arm. The wildcard collapse is checked against the table,
-    so the emitted Rust stays a function of the proved data. -/
+/-- The pipeline machine's Rust renderings: state names as-is, event
+    ctors QUALIFIED (`PipelineEvent::Check`) — the emitted `match`
+    disambiguates against the bare stage names. -/
+def pipelineRenderings : Machine.Renderings PipelineState pipeline.Label where
+  state := pipelineStateRust
+  event := fun e => "PipelineEvent::" ++ pipelineEventRust e
+
+/-- The `step` match arms, folded by the GENERIC fold (`Machine.matchArms`)
+    from the PROVED `pipelineTrans` table (not a hand copy of it): one
+    arm per non-`reset` row, and — when the `reset` rows send EVERY
+    concrete (non-`failed`) state to the same target, which is also the
+    structural `failed` arm's target (`tableStep?`: only `reset`
+    recovers from `failed`) — a single wildcard arm. The wildcard
+    collapse is checked against the table by `matchArms` itself, so the
+    emitted Rust stays a function of the proved data. -/
 def pipelineArms : List String :=
-  let isReset := fun (e : pipeline.Label) => decide (e = .reset)
-  let specific := pipelineTrans.filter (fun (e, _, _) => !isReset e)
-  let resets := pipelineTrans.filter (fun (e, _, _) => isReset e)
-  let armOf := fun (e : pipeline.Label) (f t : PipelineState) =>
-    s!"        ({pipelineStateRust f}, PipelineEvent::{pipelineEventRust e}) => Some({pipelineStateRust t}),"
-  let concrete : List PipelineState :=
+  Machine.matchArms pipelineRenderings pipelineTrans (some .reset)
     [.idle, .reflecting, .checked, .emitted, .tied]
-  let resetTos := (resets.map fun (_, _, t) => t).eraseDups
-  let resetFroms := resets.map fun (_, f, _) => f
-  let wildcardOk :=
-    match resetTos with
-    | [t] => t == PipelineState.idle && concrete.all (resetFroms.contains ·)
-    | _ => false
-  specific.map (fun (e, f, t) => armOf e f t)
-    ++ if wildcardOk then ["        (_, PipelineEvent::Reset) => Some(Idle),"]
-       else resets.map fun (_, f, t) => armOf .reset f t
 
 /-- The pipeline stage machine as Rust: the `PipelineStage` enum + the
     `step` fn, mirroring `Pipeline.pipelineTrans` (+ the structural
@@ -155,29 +152,38 @@ def pipelineEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
     [{ path := "../../src/pipeline_generated.rs"
        contents := pipelineRust }]
 
-/-- The forge job rows for THIS package: (exe, outputs). A LITERAL copy
-    of the registry's outputs, grouped under the driver exe — the cycle
-    (rows → registry → manifest emitter → rows) is broken by the copy,
-    and `jobsCoverEmitters` makes the copy's drift a TEST FAILURE: add an
-    emitter without a job row and the suite goes red. -/
+/-- The core emitters (everything but the forge-jobs manifest emitter
+    itself — the manifest is derived FROM this list, so the manifest
+    emitter cannot be in it). Order = write order. -/
+def coreEmitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
+  [ witEmitter
+  , rustEmitter
+  , SchemaLang.Vortex.Emit.vortexEmitter
+  , SchemaLang.Vortex.Emit.extVortexEmitter
+  , deltaEmitter
+  , deltaWitEmitter
+  , changeSpecEmitter
+  , SchemaLang.Emit.Invariant.invariantEmitter
+  , SchemaLang.Emit.Update.updateEmitter
+  , SchemaLang.Emit.Machine.orderMachineEmitter
+  , pipelineEmitter
+  , WitFixture.fixtureEmitter
+  , WitFixture.manifestEmitter
+  , SchemaLang.Docs.docsEmitter
+  ]
+
+/-- The manifest's OWN output path — the one output no core emitter
+    declares (breaking the rows → registry → manifest cycle). -/
+def forgeJobsOutputPath : String :=
+  "../../crates/forge/src/jobs_generated.json"
+
+/-- The forge job rows for THIS package: (exe, outputs). DERIVED from
+    the core emitter registry — no hand copy. Adding an emitter to
+    `coreEmitters` automatically joins byte-tie; `jobsCoverEmitters_true`
+    PROVES the coverage (the old literal copy needed a TEST to catch
+    drift — the derivation cannot drift). -/
 def forgeJobs : List (String × List String) :=
-  [("schema-gen",
-    [ "../../wit/gateway.wit"
-    , "../../src/schema_generated.rs"
-    , "../../src/vortex_generated.rs"
-    , "../../src/ext_dtypes_generated.rs"
-    , "../../src/delta_generated.rs"
-    , "../../wit/delta.wit"
-    , "../../src/dbsp_change_generated.rs"
-    , "../../src/pipeline_generated.rs"
-    , "../../crates/forge/src/jobs_generated.json"
-    , "../../crates/steel-host/tests/fixtures/wit_fixture_scalars.wit"
-    , "../../crates/steel-host/tests/fixtures/wit_fixture_nested.wit"
-    , "../../crates/steel-host/tests/fixtures/wit_fixture_variants.wit"
-    , "../../crates/steel-host/tests/fixtures/wit_fixture_async.wit"
-    , "../../crates/steel-host/tests/fixtures/wit_manifest.json"
-    , "../../docs/api.md"
-    ])]
+  [("schema-gen", (coreEmitters.flatMap (·.outputs)) ++ [forgeJobsOutputPath])]
 
 /-- The manifest CONTENT for this package's rows (no header — the driver
     prepends; no brackets — forge unions rows across packages). -/
@@ -196,28 +202,20 @@ def forgeJobsEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
 /-- The registry. Order = write order. Declared AFTER every emitter it
     names (forward references don't elaborate). -/
 def emitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
-  [ witEmitter
-  , rustEmitter
-  , SchemaLang.Vortex.Emit.vortexEmitter
-  , SchemaLang.Vortex.Emit.extVortexEmitter
-  , deltaEmitter
-  , deltaWitEmitter
-  , changeSpecEmitter
-  , pipelineEmitter
-  , forgeJobsEmitter
-  , WitFixture.fixtureEmitter
-  , WitFixture.manifestEmitter
-  , SchemaLang.Docs.docsEmitter
-  ]
+  coreEmitters ++ [forgeJobsEmitter]
 
 /-- Audit: no two emitters claim the same output path. -/
 def pathsUnique : Bool :=
   (emitters.flatMap (·.outputs)).Nodup
 
 /-- Consistency: the job rows cover EXACTLY the registered emitters'
-    outputs (no emitter silently outside byte-tie). -/
+    outputs (no emitter silently outside byte-tie). PROVED: the
+    derivation makes this `rfl` — the coverage is no longer a test
+    claim but a theorem. -/
 def jobsCoverEmitters : Bool :=
   (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2)
+
+theorem jobsCoverEmitters_true : jobsCoverEmitters = true := rfl
 
 /-- 6.5.3 — the emitter self-audit rule-set: constructs NO generated
 artifact may contain (checked over raw `run` output; the GENERATED banner
