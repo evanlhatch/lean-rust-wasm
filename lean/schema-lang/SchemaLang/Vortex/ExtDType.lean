@@ -22,6 +22,7 @@ but NOT emitted — the fork provides their impls.
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
 import SchemaLang.Vortex.Emit
@@ -194,12 +195,12 @@ def extDTypes : List ExtDTypeItem :=
 /-- The ext-dtype emitter: does NOT consume schema items (ext dtypes
     are registered separately, as the `extDTypes` constant above); the
     `List SchemaLang.Item` parameter is ignored. -/
-def extVortexEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def extVortexEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "ext-vortex"
   style := .doubleSlash
   specSource := "SchemaLang/Vortex/ExtDType.lean (extDTypes)"
   outputs := ["../../src/ext_dtypes_generated.rs"]
-  run _ :=
+  run _ctx :=
     [ { path := "../../src/ext_dtypes_generated.rs"
         contents :=
           CodegenCore.Emit.Rust.renderModule (extDTypeModule extDTypes) }

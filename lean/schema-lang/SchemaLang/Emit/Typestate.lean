@@ -33,6 +33,7 @@ Driving decisions (deliberate exclusions):
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 import SchemaLang.OrderMachine
 
 namespace SchemaLang.Emit.Typestate
@@ -167,12 +168,12 @@ def typestateRust : String := renderModule typestateItems
 /-- The typestate emitter: the machine's states as consuming newtypes,
     its non-reset rows as methods. Same discipline as
     `Emit.Machine.orderMachineEmitter` — pure over the proved table. -/
-def typestateEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def typestateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "typestate"
   style := .doubleSlash
   specSource := "SchemaLang.OrderMachine (orderTrans + orderTableStep?_eq_step?)"
   outputs := ["../../src/order_typestate_generated.rs"]
-  run _ :=
+  run _ctx :=
     [{ path := "../../src/order_typestate_generated.rs"
        contents := typestateRust }]
 

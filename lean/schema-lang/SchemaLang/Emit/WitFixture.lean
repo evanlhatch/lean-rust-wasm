@@ -16,6 +16,7 @@ the fixtures are emitted, never hand-edited.
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.Wit
 
 namespace SchemaLang.Emit.WitFixture
@@ -102,23 +103,23 @@ def manifestJson : String :=
 
 /-! ## The emitters -/
 
-def manifestEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def manifestEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "wit-fixture-manifest"
   style := .doubleSlash
   specSource := "SchemaLang.Emit.WitFixture (fixtures)"
   outputs := ["../../crates/steel-host/tests/fixtures/wit_manifest.json"]
-  run _ :=
+  run _ctx :=
     [{ path := "../../crates/steel-host/tests/fixtures/wit_manifest.json"
        contents := manifestJson }]
 
 /-- One emitter outputting ALL fixture WIT files (one emitter, many
     files — the outputs list is the one-writer claim). -/
-def fixtureEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def fixtureEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "wit-fixtures"
   style := .doubleSlash
   specSource := "SchemaLang.Emit.WitFixture (fixtures)"
   outputs := fixtures.map fun (n, _) => "../../crates/steel-host/tests/fixtures/wit_fixture_" ++ n ++ ".wit"
-  run _ :=
+  run _ctx :=
     fixtures.map fun (n, items) =>
       { path := "../../crates/steel-host/tests/fixtures/wit_fixture_" ++ n ++ ".wit"
       , contents := SchemaLang.Emit.Wit.worldOf ("demo:fixture-" ++ n) ("fixture-" ++ n) items }

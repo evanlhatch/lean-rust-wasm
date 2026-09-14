@@ -2,10 +2,12 @@
 # SchemaLang.Emit.Registry — the emitter registry (the buf plugin model)
 
 buf's architecture: ONE parsed schema, MANY emitters, each a plugin
-that consumes the descriptor and produces files. Here: the universe
-(`List Item`, kernel-checked) is the descriptor; an `Emitter` is a
-plugin with a name, a comment style, DECLARED output paths (the
-one-writer audit surface), and a pure `run` from items to files.
+that consumes the descriptor and produces files. Here: the descriptor
+is `GenCtx` — the project's FULL registry state (the `List Item`
+universe kernel-checked, plus the invariant/update lanes — the v2
+env-hook contract); an `Emitter` is a plugin with a name, a comment
+style, DECLARED output paths (the one-writer audit surface), and a
+pure `run` from the ctx to files.
 
 Adding a language = one module defining an `Emitter` + one line in
 `emitters`. No driver changes, no GenMain changes (the driver iterates
@@ -22,6 +24,7 @@ instead of a hand-copied stale table.
 import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Pipeline
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 import SchemaLang.Delta
@@ -144,20 +147,21 @@ def pipelineRust : String :=
     , .raw "}"
     ])
 
-def pipelineEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def pipelineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "pipeline"
   style := .doubleSlash
   specSource := "SchemaLang.Pipeline (pipelineTrans + tableStep?_eq_step?)"
   outputs := ["../../src/pipeline_generated.rs"]
-  run _ :=
+  run _ctx :=
     [{ path := "../../src/pipeline_generated.rs"
        contents := pipelineRust }]
 
 /-- The core emitters (everything but the forge-jobs manifest emitter
     itself — the manifest is derived FROM this list, so the manifest
     emitter cannot be in it). Order = write order. -/
-def coreEmitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
+def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   [ witEmitter
+  , flagsWitEmitter
   , rustEmitter
   , SchemaLang.Vortex.Emit.vortexEmitter
   , SchemaLang.Vortex.Emit.extVortexEmitter
@@ -192,18 +196,18 @@ def forgeJobs : List (String × List String) :=
 def forgeJobsLines : List String :=
   forgeJobs.map fun (exe, outputs) => jobJson "schema-lang" exe outputs
 
-def forgeJobsEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def forgeJobsEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "forge-jobs"
   style := .hash
   specSource := "SchemaLang.Emit.Registry (forgeJobs)"
   outputs := ["../../crates/forge/src/jobs_generated.json"]
-  run _ :=
+  run _ctx :=
     [{ path := "../../crates/forge/src/jobs_generated.json"
        contents := "[\n" ++ String.intercalate ",\n" forgeJobsLines ++ "\n]\n" }]
 
 /-- The registry. Order = write order. Declared AFTER every emitter it
     names (forward references don't elaborate). -/
-def emitters : List (CodegenCore.Emit.Emitter (List SchemaLang.Item)) :=
+def emitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   coreEmitters ++ [forgeJobsEmitter]
 
 /-- Audit: no two emitters claim the same output path. -/

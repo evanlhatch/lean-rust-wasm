@@ -16,6 +16,7 @@ wildcard the table does not justify.
 -/
 
 import CodegenCore
+import SchemaLang.Emit.GenCtx
 import Machines.Core
 import SchemaLang.Pipeline
 import SchemaLang.OrderMachine
@@ -133,12 +134,12 @@ def orderMachineRust : String :=
     , ("a cancelled order cannot be re-placed (terminal_only_reset)", .cancelled, .place)
     , ("out-of-order firing is rejected (reject_ship_before_place)", .cart, .ship) ]
 
-def orderMachineEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def orderMachineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "order-machine"
   style := .doubleSlash
   specSource := "SchemaLang.OrderMachine (orderTrans + orderTableStep?_eq_step?)"
   outputs := ["../../src/order_machine_generated.rs"]
-  run _ :=
+  run _ctx :=
     [{ path := "../../src/order_machine_generated.rs"
        contents := orderMachineRust }]
 

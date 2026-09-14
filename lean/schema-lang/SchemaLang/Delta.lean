@@ -35,6 +35,7 @@ artifact its own one-writer claim.
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
 
@@ -189,14 +190,14 @@ end SchemaLang
 open SchemaLang (Item)
 
 /-- The Rust delta emitter: all change enums + ChangeSpec impls, one file. -/
-def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def deltaEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "delta"
   style := .doubleSlash
   specSource := "Demo.lean"
   outputs := ["../../src/delta_generated.rs"]
-  run items :=
+  run ctx :=
     let recordUses :=
-      items.filterMap fun it =>
+      ctx.items.filterMap fun it =>
         match it with
         | .record n _ => some (CodegenCore.Emit.Rust.Item.use_ s!"crate::schema_generated::{CodegenCore.Emit.pascal n}")
         | _ => none
@@ -205,21 +206,21 @@ def deltaEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
          CodegenCore.Emit.Rust.renderModule
            ([ .use_ "crate::dbsp" ]
             ++ recordUses
-            ++ items.flatMap (Item.changeRustItems items)
-            ++ Item.changeTestModule items) }]
+            ++ ctx.items.flatMap (Item.changeRustItems ctx.items)
+            ++ Item.changeTestModule ctx.items) }]
 
 /-- The WIT delta emitter: all change variants, one file (see the module
     header for why this is separate from `witEmitter`). Repo-root-relative
     path like the other emitters — the forge byte-tie covers it. -/
-def deltaWitEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def deltaWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "delta-wit"
   style := .doubleSlash
   specSource := "Demo.lean"
   outputs := ["../../wit/delta.wit"]
-  run items :=
+  run ctx :=
     [{ path := "../../wit/delta.wit"
        contents :=
-         String.join ((items.flatMap Item.changeWitDecl).map (· ++ "\n")) }]
+         String.join ((ctx.items.flatMap Item.changeWitDecl).map (· ++ "\n")) }]
 
 /-! ## The ChangeSpec trait — GENERATED from the Lean class
 
@@ -232,12 +233,12 @@ specSource cites the class, the method names are the class field names
 `src/dbsp.rs` re-exports the generated trait; the hand-written copy is
 gone. -/
 
-def changeSpecEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def changeSpecEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "change-spec"
   style := .doubleSlash
   specSource := "Dbsp.ChangeSpec (lean/dbsp) — the kernel-checked Change class"
   outputs := ["../../src/dbsp_change_generated.rs"]
-  run _ :=
+  run _ctx :=
     [{ path := "../../src/dbsp_change_generated.rs"
        contents := CodegenCore.Emit.Rust.renderModule
          [ .comment "The guestlang change algebra — the Rust mirror of"

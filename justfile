@@ -154,7 +154,7 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend ledger"
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait schema-lang faults dbsp std wasm-backend ledger feature-flags"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -214,6 +214,7 @@ lean-lint: lean-build
 	run dbsp Dbsp Tests.Main
 	run std GuestlangStd
 	run ledger Ledger LedgerFn
+	run feature-flags FeatureFlags FeatureFlagsFn
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
 
 # Codegen pipeline shim — all logic lives in the forge crate.
@@ -525,10 +526,19 @@ new-project name:
 	if re.search(r"\n\]\n\n/-- Parse the comma-separated", s) is None:
 	    sys.exit("new-project: packagePrefixes anchor not found in LintKit")
 	if ("(`" + camel + ",") not in s:
+	    # the LAST row before the anchor may lack a trailing comma (the
+	    # hand-written list's style) — add it, else the insertion is a
+	    # parse error (the dogfood finding: `LedgerFn` row + the
+	    # missing comma = LintKit red). The comma-carrying insert keeps
+	    # the idempotence check (`(` + camel + `,` not in s) intact.
 	    rows = (f"  (`{camel},       [`{camel}]),\n"
 	            f"  (`{camel}Fn,     [`{camel}Fn])\n")
-	    s = s.replace("\n]\n\n/-- Parse the comma-separated",
-	                  "\n" + rows + "]\n\n/-- Parse the comma-separated", 1)
+	    # simpler + robust: split at the anchor, comma-join
+	    anchor = "\n]\n\n/-- Parse the comma-separated"
+	    head, tail = s.rsplit(anchor, 1)
+	    if not head.rstrip().endswith(","):
+	        head = head.rstrip() + ","
+	    s = head + "\n" + rows + anchor[1:] + tail
 	open(pf, "w").write(s)
 	# AUTO-registration 3: seed the git-dep checkouts. gonzalgo resolves
 	# from the vendored bundle (vendor/gonzalgo.bundle — the pinned rev was
@@ -619,3 +629,155 @@ scaffold-test:
 	grep -E '^lean_pkgs := ".*demo-scaffold-test' justfile >/dev/null && { echo "FAIL: lean_pkgs not reverted"; exit 1; } || true
 	grep -q "DemoScaffoldTest" lean/LintKit/LintKit/PackageNamespace.lean && { echo "FAIL: packagePrefixes not reverted"; exit 1; } || true
 	echo "scaffold-test: round-trip green (scaffold → inventory → build → axiom gate → clean)"
+
+
+# ── The mutation battery (test-the-tests — on-demand, NOT in gates) ──
+# The gates claim to CATCH drift; this battery PROVES the teeth: for
+# each gate, ONE engineered mutation that the gate MUST fail (red),
+# then a hash-verified revert. A gate that stays green under its
+# mutation is ceremony — the battery reports MUTATION NOT CAUGHT and
+# exits 1. Run: `just mutation-proof` (expect several minutes; the
+# oracle mutation rebuilds DemoFn + the steel-host replay).
+mutation-proof:
+	#!/usr/bin/env bash
+	set -uo pipefail
+	TC="{{lean_tc}}"
+	ROOT="{{justfile_directory()}}"
+	cd "$ROOT"
+	PCC="$ROOT/.devenv/profiles/wasm/profile/bin/cc"
+	BAK=target/mutation-bak
+	mkdir -p "$BAK"
+	fail=0
+
+	save() { cp "$1" "$BAK/$(echo "$1" | tr '/' '_')"; }
+	# Revert ONE mutated file: jj restore (the working copy IS a commit)
+	# when tracked in the parent; a backup copy when the file is NEW in
+	# the working copy (jj restore would delete it). Either way the
+	# restoration is hash-verified — a mutated tree never survives.
+	unmutate() {
+	  local f="$1" key have want
+	  key=$(echo "$f" | tr '/' '_')
+	  if jj file list -r @- 2>/dev/null | grep -Fxq "$f"; then
+	    jj restore "$f"
+	    want=$(jj file show -r @- "$f" | sha256sum | cut -d' ' -f1)
+	    have=$(sha256sum "$f" | cut -d' ' -f1)
+	    [ "$want" = "$have" ] || { echo "FAIL: $f NOT restored"; exit 1; }
+	    echo "reverted: $f (jj restore, hash-verified vs @-)"
+	  else
+	    cp "$BAK/$key" "$f"
+	    have=$(sha256sum "$f" | cut -d' ' -f1)
+	    [ "$have" = "$(sha256sum "$BAK/$key" | cut -d' ' -f1)" ] || { echo "FAIL: $f NOT restored"; exit 1; }
+	    echo "reverted: $f (backup copy, hash-verified — file is new in the working copy)"
+	  fi
+	}
+	# The mutation MUST fail its gate: gate exiting 0 = NOT CAUGHT.
+	must_fail() {
+	  local name="$1"; shift
+	  if "$@"; then
+	    echo "MUTATION NOT CAUGHT: $name"; fail=1
+	  else
+	    echo "caught: $name (gate went red as required)"
+	  fi
+	}
+
+	# ── (a) BYTE-TIE vs `just gen-check` ──────────────────────────────
+	# Corrupt a COMMITTED generated artifact: the byte-tie must reject.
+	echo "── (a) byte-tie: append a byte to src/schema_generated.rs ──"
+	f=src/schema_generated.rs
+	save "$f"
+	printf 'X' >> "$f"
+	must_fail "byte-tie (gen-check)" \
+	  devenv shell --profile wasm -- bash -c "export CC=$PCC; cargo run -p forge -- gen --check"
+	unmutate "$f"
+	grep -q "X$" "$f" && { echo "FAIL: $f still mutated (grep)"; exit 1; } || true
+
+	# ── (b) ELAB GATE vs the flags build ─────────────────────────────
+	# Misspell the key-nonempty invariant's column: the HasCol instance
+	# search finds nothing — the module must FAIL TO BUILD.
+	echo "── (b) elab gate: key → kye in the key-nonempty invariant ──"
+	f=lean/feature-flags/FeatureFlags.lean
+	save "$f"
+	<<-'PYEOF' python3 - "$f" || { echo "FAIL: apply failed"; exit 1; }
+	import sys
+	p = sys.argv[1]
+	s = open(p).read()
+	old = 'schema_invariant "key-nonempty" for Flag :=\n  SchemaLang.VExpr.gt (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "key"))'
+	assert s.count(old) == 1, "anchor not found exactly once"
+	open(p, "w").write(s.replace(old, old.replace('"key"', '"kye"')))
+	PYEOF
+	must_fail "elab gate (HasCol miss)" \
+	  bash -c "cd lean/feature-flags && PATH='$TC:'$PATH '$TC/lake' build"
+	unmutate "$f"
+	grep -q '"kye"' "$f" && { echo "FAIL: $f still mutated (grep)"; exit 1; } || true
+
+	# ── (c) AXIOM GATE vs the lean-axioms loop body ──────────────────
+	# Inject a sorry theorem: the axiom check must flag sorryAx. Runs
+	# the lean-axioms BODY for one package (feature-flags), not the loop.
+	echo "── (c) axiom gate: inject theorem bad : True := by sorry ──"
+	f=lean/feature-flags/Tests/Axioms.lean
+	save "$f"
+	printf '\ntheorem bad : True := by sorry\n' >> "$f"
+	out=$(cd lean/feature-flags && PATH="$TC:$PATH" "$TC/lake" env lean Tests/Axioms.lean 2>&1 || true)
+	if echo "$out" | grep -q "sorryAx"; then
+	  echo "caught: axiom gate (sorryAx flagged)"
+	else
+	  echo "MUTATION NOT CAUGHT: axiom gate"; fail=1
+	fi
+	unmutate "$f"
+	grep -q "by sorry" "$f" && { echo "FAIL: $f still mutated (grep)"; exit 1; } || true
+
+	# ── (d) THE ORACLE vs the differential duel ──────────────────────
+	# Corrupt the demo impl's strlen semantics (+1): Lean's evals seed the
+	# regenerated manifest; the wasm side still computes the real length —
+	# the differential replay MUST diverge. (The manifest itself is
+	# generated scratch — target/oracle.lean — so the IMPLEMENTATION is
+	# the mutation surface; the manifest can never go stale.) Scratch
+	# note: diff.json is regenerated UNDER the mutation — rerun `just
+	# wasm-compile` clean before the next steel-host replay.
+	echo "── (d) the oracle: strlen +1 in GuestlangStd.StrOps ──"
+	f=lean/std/GuestlangStd/StrOps.lean
+	save "$f"
+	<<-'PYEOF' python3 - "$f" || { echo "FAIL: apply failed"; exit 1; }
+	import sys
+	p = sys.argv[1]
+	s = open(p).read()
+	old = "def strlen (s : String) : UInt64 := s.length.toUInt64"
+	assert s.count(old) == 1, "anchor not found exactly once"
+	open(p, "w").write(s.replace(old, old + " + 1"))
+	PYEOF
+	must_fail "differential duel (wasm_diff)" \
+	  devenv shell --profile wasm -- bash -c "export CC=$PCC; just wasm-compile && cargo test -p steel-host --test wasm_diff"
+	unmutate "$f"
+	# wasm-compile's regen rewrote the observability surface's volatile
+	# header (wall-clock) — restore the committed bytes.
+	jj restore src/observability_generated.rs 2>/dev/null || true
+	grep -q "s.length.toUInt64 + 1" "$f" && { echo "FAIL: $f still mutated (grep)"; exit 1; } || true
+
+	# ── (e) THE COMPAT GATE vs `just breaking` ───────────────────────
+	# Add a field to the demo's User record: the snapshot diff must
+	# classify it as a shaped change (BREAKING, unremedied) → exit 1.
+	echo "── (e) compat gate: User gains extra : UInt64 ──"
+	f=lean/schema-lang/Demo.lean
+	save "$f"
+	<<-'PYEOF' python3 - "$f" || { echo "FAIL: apply failed"; exit 1; }
+	import sys
+	p = sys.argv[1]
+	s = open(p).read()
+	old = """structure User where
+	  id : UInt64
+	  name : String
+	  email : String
+	  tags : List String"""
+	assert s.count(old) == 1, "anchor not found exactly once"
+	open(p, "w").write(s.replace(old, old + "\n  extra : UInt64"))
+	PYEOF
+	must_fail "compat gate (breaking)" just breaking
+	unmutate "$f"
+	grep -q "extra : UInt64" "$f" && { echo "FAIL: $f still mutated (grep)"; exit 1; } || true
+
+	echo
+	if [ "$fail" != 0 ]; then
+	  echo "mutation-proof: RED — a gate missed its mutation (ceremony)"
+	  exit 1
+	fi
+	echo "mutation-proof: 5/5 gates caught their engineered mutations"

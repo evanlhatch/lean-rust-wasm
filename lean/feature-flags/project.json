@@ -1,0 +1,4 @@
+{
+  "spec-modules": ["FeatureFlags"],
+  "impl-modules": ["FeatureFlags", "FeatureFlagsFn"]
+}

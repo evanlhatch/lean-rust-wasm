@@ -51,6 +51,7 @@ def VExpr.reads {fs : List Field} : {t : Ty} → VExpr fs t → List String
   | _, .eq a b => a.reads ++ b.reads
   | _, .and a b => a.reads ++ b.reads
   | _, .strlen e => e.reads
+  | _, .not e => e.reads
 
 /-! ## The update item -/
 
@@ -71,6 +72,15 @@ structure UpdateItem (fs : List Field) (f : Field) where
   /-- The structural write path (the elaboration-checked extraction
       route — data, not a dictionary). -/
   writePath : ColPath f.name f.ty fs
+  /-- The volatile func references, as the registration's scan STORED
+      them (`volatileSchemaFns` in `SchemaLang.Meta.Reflect` — the ONLY
+      legitimate writer of this field; like `reads`, never hand-listed
+      in spec data). The scan is the registration's first-line gate: a
+      nonempty scan FAILS elaboration, so a registered row always
+      carries `[]` — the field is the scan's decided fact, and
+      `UpdatePure.volatileFree` reads it. Hand-constructed items (test
+      mirrors, the registry default) default `[]` — pure by data. -/
+  volatileRefs : List String := []
 
 /-- The DERIVED read set (guard + value, deduped, registration order). -/
 def UpdateItem.reads {fs : List Field} {f : Field} (u : UpdateItem fs f) :
@@ -89,6 +99,132 @@ def UpdateItem.writes {fs : List Field} {f : Field} (_u : UpdateItem fs f) :
 def UpdateItem.selfReading {fs : List Field} {f : Field}
     (u : UpdateItem fs f) : Bool :=
   u.value.reads.contains f.name
+
+/-! ## The law classes — the COMPOSABLE purity/non-interference locks
+
+Flatland TOOLKIT 4.1 doctrine: instance search IS proof assembly. The
+registration's syntactic scan (`volatileSchemaFns`) stays the FIRST
+line of defense — a `volatile` fn in a `schema_update` term fails at
+the command. The classes are the COMPOSITION-level lock: `schema_update`
+EMITS the `UpdatePure` instance at registration (the scan's decided
+fact, discharged `rfl` against the stored `volatileRefs` — if the gate
+ever stored a nonempty scan, the emitted proof FAILS to elaborate), and
+consumers (`cascade2`) take legality as INSTANCE BINDERS — a composite
+assembled from a volatile or interfering part is UNCONSTRUCTIBLE, no
+re-scan at the firing site.
+
+Scope (v1, honest): updates compose only through the CASCADE, so the
+composition laws live at the cascade level — `cascade2`'s instance
+binders ARE the `Pure g → Pure f → Pure (g ∘ f)` shape (legality of the
+composite = the conjunction of the steps' instances, assembled by
+search), and `NonInterfering.symm` is the pair-level composition law.
+-/
+
+/-- THE PURE LOCK: the update's terms reference only pure (non-volatile)
+schema fns. The registration command constructs the instance (the scan
+runs there); hand-written instances are `⟨rfl⟩` against the stored
+data. -/
+class UpdatePure (fs : List Field) (f : Field)
+    (u : UpdateItem fs f) : Prop where
+  /-- The stored volatile-ref set is empty (the scan's decided fact). -/
+  volatileFree : u.volatileRefs = []
+
+/-- The non-interference fold over the DERIVED reads/writes: for every
+column written by EITHER update — it is read by the other update's
+terms (guard or value), and the write columns differ. One fold, the
+`cascade_two_commute` hypothesis set as one Bool. Concrete updates
+decide at registration (`by decide` over the derived lists — the fold
+runs over data, never hand-lists). -/
+def UpdateItem.disjointWith {fs : List Field} {f₁ f₂ : Field}
+    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂) : Bool :=
+  (u₁.writes ++ u₂.writes).all
+    (fun c =>
+      !(u₁.writes.contains c && u₂.reads.contains c)
+        && !(u₂.writes.contains c && u₁.reads.contains c)
+        && !(u₁.writes.contains c && u₂.writes.contains c))
+
+/-- THE NON-INTERFERENCE LOCK: neither update reads the other's written
+column, and the write columns differ. The class of
+`cascade_two_commute`'s four non-membership hypotheses + the distinct-
+write-columns fact (the same legality, COMPOSABLE). -/
+class NonInterfering (fs : List Field) (f₁ f₂ : Field)
+    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂) : Prop where
+  /-- The fold: the decidable non-interference of the derived lists. -/
+  noOverlap : u₁.disjointWith u₂ = true
+
+/-- The reads-fold extraction: a column absent from the deduped read
+    set is absent from BOTH raw term reads (the `eraseDups` split —
+    membership, not position, is what the fold decides). -/
+theorem UpdateItem.notMem_of_reads_notContains {fs : List Field} {f : Field}
+    (u : UpdateItem fs f) {c : String}
+    (h : u.reads.contains c = false) :
+    c ∉ u.guard.reads ∧ c ∉ u.value.reads := by
+  have hr := h
+  simp only [UpdateItem.reads, List.contains_eq_mem, List.mem_eraseDups,
+    List.mem_append, decide_eq_false_iff_not] at hr
+  exact ⟨fun hm => hr (Or.inl hm), fun hm => hr (Or.inr hm)⟩
+
+/-- The pointwise non-interference predicate is symmetric (pure Bool
+    algebra over four atoms — a free-Bool lemma, so `cases` is safe). -/
+theorem UpdateItem.disjointAt_symm (w₁ w₂ r₁ r₂ : Bool) :
+    (!(w₁ && r₂) && (!(w₂ && r₁) && !(w₁ && w₂))) = true →
+    (!(w₂ && r₁) && (!(w₁ && r₂) && !(w₂ && w₁))) = true := by
+  intro h
+  revert h
+  cases w₁ <;> cases w₂ <;> cases r₁ <;> cases r₂ <;> simp
+
+/-- Composition (pair level): non-interference is symmetric — the fold
+runs over BOTH write lists, and the pointwise predicate is
+Bool-commutative (`disjointAt_symm`). -/
+instance NonInterfering.symm {fs : List Field} {f₁ f₂ : Field}
+    {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
+    [h : NonInterfering fs f₁ f₂ u₁ u₂] :
+    NonInterfering fs f₂ f₁ u₂ u₁ where
+  noOverlap := by
+    have hall := h.noOverlap
+    simp only [UpdateItem.disjointWith, List.all_eq_true] at hall ⊢
+    intro c hc
+    exact UpdateItem.disjointAt_symm _ _ _ _ (hall c (Or.symm hc))
+
+/-- The class → `cascade_two_commute`'s hypotheses: the four
+non-membership facts + the distinct write columns, ALL derived from the
+fold (the derived lists earn the conversion — no hand-listing). -/
+theorem NonInterfering.cascadeHyps {fs : List Field} {f₁ f₂ : Field}
+    {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
+    (h : NonInterfering fs f₁ f₂ u₁ u₂) :
+    f₂.name ∉ u₁.guard.reads ∧ f₂.name ∉ u₁.value.reads
+      ∧ f₁.name ∉ u₂.guard.reads ∧ f₁.name ∉ u₂.value.reads
+      ∧ f₁.name ≠ f₂.name := by
+  have hall := h.noOverlap
+  simp only [UpdateItem.disjointWith, List.all_eq_true] at hall
+  -- the singleton write sets are definitional (`[f.name]`)
+  have m₁ : u₁.writes.contains f₁.name = true := by
+    simp [UpdateItem.writes]
+  have m₂ : u₂.writes.contains f₂.name = true := by
+    simp [UpdateItem.writes]
+  -- the pointwise facts at each update's own write column
+  have hp₂ := hall f₂.name (Or.inr (by simp [UpdateItem.writes]))
+  simp only [Bool.and_eq_true] at hp₂
+  have hp₁ := hall f₁.name (Or.inl (by simp [UpdateItem.writes]))
+  simp only [Bool.and_eq_true] at hp₁
+  obtain ⟨_, q₂, _⟩ := hp₂
+  obtain ⟨p₁, _, p₃⟩ := hp₁
+  -- u₂'s write column is unread by u₁ (guard + value), and conversely
+  have r₁ : u₁.reads.contains f₂.name = false := by
+    rw [m₂] at q₂
+    simpa using q₂
+  have r₂ : u₂.reads.contains f₁.name = false := by
+    rw [m₁] at p₁
+    simpa using p₁
+  obtain ⟨ng₁, nv₁⟩ := u₁.notMem_of_reads_notContains r₁
+  obtain ⟨ng₂, nv₂⟩ := u₂.notMem_of_reads_notContains r₂
+  -- and the write columns differ (the writes-disjoint conjunct)
+  have hne : f₁.name ≠ f₂.name := by
+    rw [m₁] at p₃
+    have h5 : u₂.writes.contains f₁.name = false := by simpa using p₃
+    simp [UpdateItem.writes] at h5
+    exact fun hh => h5 (by rw [hh]; simp)
+  exact ⟨ng₁, nv₁, ng₂, nv₂, hne⟩
 
 /-! ## The write: `ColPath.set` -/
 
@@ -115,6 +251,29 @@ def UpdateItem.applyRow {fs : List Field} {f : Field}
 def UpdateItem.apply {fs : List Field} {f : Field}
     (u : UpdateItem fs f) (rows : List (RowVals fs)) : List (RowVals fs) :=
   rows.map u.applyRow
+
+/-- THE FIRING SITE (the consumer the classes were built for): the
+two-update cascade step, legality-locked. The instances are not
+decorations — a cascade step assembled from a VOLATILE update or an
+INTERFERING pair has no instance and CANNOT be constructed (instance
+search fails; the syntactic scan's composition-level upgrade). The
+instance binders are the composite purity law: legality of the whole =
+the conjunction of the steps' instances, assembled by search. -/
+def UpdateItem.cascade2 {fs : List Field} {f₁ f₂ : Field}
+    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂)
+    [_hP₁ : UpdatePure fs f₁ u₁] [_hP₂ : UpdatePure fs f₂ u₂]
+    [_hNI : NonInterfering fs f₁ f₂ u₁ u₂]
+    (rows : List (RowVals fs)) : List (RowVals fs) :=
+  (rows.map u₂.applyRow).map u₁.applyRow
+
+/-- The composite's ORDER-FREEDOM (the law over the locked composite):
+`cascade_two_commute` recovered STRUCTURALLY — its four
+non-interference hypotheses come from the class field alone, via
+`cascadeHyps` (the swap needs only the `symm` composition instance).
+Stated in `Tests` — `cascade_two_commute` lives in `TickCascade`, which
+imports THIS module (a theorem here would be an import cycle); the
+Tests pin is the composition-level witness until the law moves next to
+its consumer. -/
 
 /-! ## The two-channel duality, pinned (SPEC §4) -/
 

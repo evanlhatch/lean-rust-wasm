@@ -33,6 +33,7 @@ Driving decisions:
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.Wit
 
 namespace SchemaLang.Docs
@@ -110,13 +111,13 @@ def docsOf (items : List Item) : String :=
 /-- The docs emitter plugin: ONE page at the repo root's `docs/`.
     Header style `.hash` — see the module header for the choice (the
     driver-prepended banner renders as markdown headings). -/
-def docsEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def docsEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "docs"
   style := .hash
   specSource := "Demo.lean"
   outputs := ["../../docs/api.md"]
-  run items :=
+  run ctx :=
     [{ path := "../../docs/api.md"
-       contents := docsOf items }]
+       contents := docsOf ctx.items }]
 
 end SchemaLang.Docs

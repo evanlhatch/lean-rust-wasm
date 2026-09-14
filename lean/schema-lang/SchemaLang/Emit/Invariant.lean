@@ -17,14 +17,12 @@ in leaf payloads (fn bodies — the audited concession). Names are
 pre-mangled via `Emit.snake`/`rustIdent`/`pascal` — the AST never
 case-converts.
 
-The replay concession (v1): emitters are pure `List Item → List
-GeneratedFile` — no environment reaches `run`, and `Item` (the closed
-boundary universe) cannot carry the VExpr family, so the emitter's
-input is `demoInvariants` — the committed row list below, whose
-entries mirror exactly what `schema_invariant` registers (the
-Tests' `invariantChecks` pin the registration's data AND verdicts;
-when the driver gains an env-replay hook, `run` switches to
-`registeredInvariants` with no other change).
+The emitter contract (v2): `run` takes the FULL registry state
+(`Emit.GenCtx`) — the invariant lane reads `ctx.invariants`, the
+ext-replayed `schema_invariant` rows (the driver replays them from the
+spec module's oleans; the spec of record is the byte-tied generated
+artifact, and the demo's registrations live IN `Demo.lean` — spec data
+belongs to the spec).
 
 Deliberate exclusions: `proved` rows still emit their check fn (the
 tier is enforcement INTENT — recorded in the comment; the emitted fn
@@ -36,6 +34,7 @@ they do).
 import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Invariant
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Meta.Reflect
 
 namespace SchemaLang.Emit.Invariant
@@ -60,6 +59,7 @@ def boolRust (ref : String → String) : {fs : List Field} → VExpr fs .bool �
   | _, .gt a b => s!"({u64Rust ref a} > {u64Rust ref b})"
   | _, .eq a b => s!"({u64Rust ref a} == {u64Rust ref b})"
   | _, .and a b => s!"({boolRust ref a} && {boolRust ref b})"
+  | _, .not a => s!"(!({boolRust ref a}))"
 
 /-! ## The default row — the Lean-computed test verdict -/
 
@@ -174,41 +174,17 @@ def invariantFiles (invs : List InvariantItem) : List CodegenCore.Emit.Generated
   [ { path := "../../src/invariants_generated.rs"
       contents := CodegenCore.Emit.Rust.renderModule (moduleItems invs) } ]
 
-/-! ## The registered rows (the v1 replay concession — see the header) -/
-
-/-- The User record, as the invariant tests see it (the mirror of
-    Demo's `@[schema] structure User` — the registered fields the
-    `schema_invariant` command elaborated against). `abbrev` — the
-    reducibility rule: the `HasCol` instance search must see through
-    the list. -/
-abbrev userFields : List Field :=
-  [ { name := "id", ty := .u64 }
-  , { name := "name", ty := .string }
-  , { name := "email", ty := .string }
-  , { name := "tags", ty := .list .string } ]
-
-/-- The demo registry's invariant rows: the executable `id > 0`
-    boundary check, and the name-length rule registered as `proved`
-    (the citation is stored; resolving it is CI's job later). -/
-def demoInvariants : List InvariantItem :=
-  [ { name := "id-positive", schemaRef := "User", tier := tierOf none
-    , proofName := none
-    , inv := { fields := userFields
-             , expr := .gt (.colOf "id") (.lit 0) } }
-  , { name := "name-min-length", schemaRef := "User"
-    , tier := tierOf (some `userNameLenProved)
-    , proofName := some `userNameLenProved
-    , inv := { fields := userFields
-             , expr := .gt (.strlen (.colOf "name")) (.lit 3) } } ]
+/-! ## The emitter -/
 
 /-- The invariant emitter: buf-plugin shape (name/style/specSource/
     declared outputs/pure run). The parent registry wires it into
-    `SchemaLang.Emit.coreEmitters`. -/
-def invariantEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+    `SchemaLang.Emit.coreEmitters`. The lane reads `ctx.invariants` —
+    the replayed registry, no committed mirror (the v2 contract). -/
+def invariantEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "invariant"
   style := .doubleSlash
   specSource := "SchemaLang.Meta.Reflect (invariantItemExt) — schema_invariant"
   outputs := ["../../src/invariants_generated.rs"]
-  run _ := invariantFiles demoInvariants
+  run ctx := invariantFiles ctx.invariants
 
 end SchemaLang.Emit.Invariant

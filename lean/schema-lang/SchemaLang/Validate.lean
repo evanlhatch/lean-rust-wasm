@@ -90,6 +90,7 @@ GADT = the scalar-condition story (Phase 3's family = the SPEC-side
 story, the strlen precedent).
 -/
 
+import Lean
 import SchemaLang.Field
 import CodegenCore.GuestGate
 import LintKit
@@ -177,6 +178,9 @@ inductive VExpr (s : List Field) : Ty → Type where
       COMPILED too: `evalU`'s arm reads the same box's length via the
       raw `string_len` (the header's Phase 2 — the wire-up). -/
   | strlen (e : VExpr s .string) : VExpr s .u64
+  /-- Negation (the ≤-shaped invariants: `not (gt x y)` = x ≤ y —
+      the dogfood's rollout ≤ 100 gate demanded it). -/
+  | not (e : VExpr s .bool) : VExpr s .bool
 
 /-- The field-ref BUILDER — where the `HasCol` instance search happens.
     Misspell the name and THIS call fails to elaborate. `@[inline]`: the
@@ -215,6 +219,10 @@ def evalV : VExpr s t → RowVals s → Value t
       match evalV e row with
       | .string s => .u64 s.length.toUInt64
       | _ => .u64 0
+  | .not e, row =>
+      match evalV e row with
+      | .bool b => .bool (!b)
+      | _ => .bool false
 
 /-- The RAW string length: the (ptr,len) pair's SECOND half. The Lean
     body (`String.length` → chars) is the oracle ONLY — the decl is
@@ -279,6 +287,8 @@ def evalB : VExpr s .bool → RowVals s → UInt64
   | .gt a b, row => boolToU64 (evalU a row > evalU b row)
   | .eq a b, row => boolToU64 (evalU a row == evalU b row)
   | .and a b, row => evalB a row * evalB b row
+  -- the negation on the 0/1 raw reading: 1-x wraps safely on {0,1}
+  | .not e, row => 1 - evalB e row
   | _, _ => 0
 
 /-- The registered validator's body: a `.bool`-shaped expression over a
@@ -509,6 +519,268 @@ theorem evalCase_here_sound (n : String) (cs : List VariantCase)
   · show Value.bool (n == n) = Value.bool true
     rw [beq_self_eq_true]
   · rfl
+
+/-! ## The `[inv| …]` surface syntax — the DSL embedding (the ch. 8 pattern)
+
+The Metaprogramming-in-Lean book's chapter 8 ("Embedding DSLs by
+Elaboration"), IMP shape: a `declare_syntax_cat` for the invariant
+language + a RECURSIVE elaborator into the `VExpr` constructors + a
+`term`-level quoter. ADDITIVE: the `VExpr` ctors and the evaluators
+above are untouched — this section only SPELLS them.
+
+- The field-ref leaf rides `VExpr.colOf` — the `HasCol` instance
+  search happens at the elaboration site, so the MISSPELLED field is a
+  BUILD error (the same gate the hand spelling has, now through the
+  syntax).
+- Precedence: the book's `:50/:40` shape — `&&` binds tighter than
+  `||`, the comparisons (`>`, `==`) tighter than both; the right
+  operand parses at prec+1 (left associativity, the `infixl` recipe).
+- `||` has NO VExpr constructor — it elaborates to the De Morgan form
+  `not (and (not a) (not b))` (exact on Bool; no ctor added, the
+  universe stays closed). `!` is the `not` node's spelling — it exists
+  so the unexpanders (below) can round-trip EVERY tree the syntax can
+  build.
+- The unexpanders are the book's Pretty Printing pattern: per-ctor
+  `@[app_unexpander]`, each matching the delaborated form INSIDE the
+  pattern (the children arrive already unexpanded to `[inv| … ]`
+  terms — the inner syntax is unwrapped and re-spliced, parenthesized
+  when the child's top node binds looser than the operand position
+  demands — the tree parses back to the SAME constructor tree).
+
+No `set_option hygiene false`: the book's `myid` case is about a macro
+EXPOSING a local name through hygiene marks; the unexpanders here run
+at pp-time and construct RAW syntax (no marks), and every other name
+is a global constant (resolved through marks).
+-/
+
+open Lean in
+/-- The invariant language's syntax category (the book's `arith`/
+`boolean` shape, one cat). -/
+declare_syntax_cat vexpr
+
+-- the atoms (atom-like rules default to `maxPrec` — parseable at any
+-- operand position)
+syntax ident : vexpr
+syntax num : vexpr
+syntax "strlen" noWs "(" ident ")" : vexpr
+syntax "(" vexpr ")" : vexpr
+syntax "!" vexpr:65 : vexpr
+-- the operators: the book's `:50/:40` precedence pattern (higher
+-- number = tighter); the right operand at prec+1 = left assoc
+syntax:60 vexpr " > " vexpr:61 : vexpr
+syntax:60 vexpr " == " vexpr:61 : vexpr
+syntax:50 vexpr " && " vexpr:51 : vexpr
+syntax:40 vexpr " || " vexpr:41 : vexpr
+
+/-- The term-level embedding: `def myCheck : VExpr s .bool :=
+[inv| id > 0 && strlen(name) > 3]`. -/
+syntax "[inv| " vexpr " ]" : term
+
+open Lean in
+/-- The string literal as a `Term` (the colOf argument). -/
+private def strLitTerm (s : String) : Term := ⟨Syntax.mkStrLit s⟩
+
+open Lean in
+/-- The schema index out of an operand's type (`VExpr s t` → `s`). -/
+private def vexprSchemaOf? (ty : Expr) : Option Expr :=
+  match ty with
+  | .app (.app _ s) _ => some s
+  | _ => none
+
+open Lean Elab Meta Term in
+/-- Force the operand's type INDEX (the ctor's requirement — this pins
+the field-ref's type BEFORE the postponed instance synth runs, so the
+misspelling error renders the CONCRETE type, never a raw mvar). -/
+private def forceIndex (s : Expr) (t : Expr) (e : Expr) : TermElabM Unit := do
+  let te ← inferType e
+  let want := mkAppN (mkConst ``SchemaLang.VExpr) #[s, t]
+  unless (← isDefEq te want) do
+    throwError "[inv| … ]: operand index mismatch (expected {t})"
+
+open Lean Elab Meta Term in
+/-- Unify the operands' types (this THREADS the schema mvar through the
+node — the `mkAppM` role) and return the schema. -/
+private def unifyOperands (a b : Expr) : TermElabM Expr := do
+  let ta ← inferType a
+  let tb ← inferType b
+  unless (← isDefEq ta tb) do
+    throwError "[inv| … ]: operand type mismatch ({ta} vs {tb})"
+  match vexprSchemaOf? ta with
+  | some s => return s
+  | none => throwError "[inv| … ]: operand is not a VExpr"
+
+open Lean Elab Term in
+/-- The field-ref leaf, shared by the ident and `strlen` arms: the
+REAL term elaborator on quoted `colOf` syntax (see `elabVExpr`'s doc
+for why the leaf cannot ride `mkAppM`). -/
+private def elabFieldLeaf (n : TSyntax `ident) : TermElabM Expr := do
+  Term.elabTerm (← `(SchemaLang.VExpr.colOf $(strLitTerm n.getId.toString))) none
+
+open Lean Elab Meta Term in
+/-- The recursive elaborator (the book's `elabIMPExpr` mirror):
+`vexpr` syntax → the `VExpr` constructor tree via `mkAppM`. One
+deliberate deviation from the naive `MetaM` shape: the field-ref leaf
+is elaborated by the REAL term elaborator on quoted `colOf` syntax —
+`mkAppM` synthesizes instance arguments EAGERLY (`mkAppMFinal`), which
+fails against the still-open schema metavariable even for CORRECT
+spellings; the real elaborator POSTPONES the instance search until the
+expected type names the schema. The gate is unchanged: a misspelled
+field fails to synthesize `HasCol` HERE. -/
+partial def elabVExpr : TSyntax `vexpr → TermElabM Expr
+  | `(vexpr| $n:ident) => elabFieldLeaf n
+  | `(vexpr| $v:num) => do
+      let e ← Term.elabTerm v (some (mkConst ``UInt64))
+      -- the literal's schema is a fresh mvar — the PARENT's operand
+      -- unification (or the expected type at the root) assigns it
+      let s ← mkFreshExprMVar none
+      return mkAppN (mkConst ``SchemaLang.VExpr.lit) #[s, e]
+  | `(vexpr| strlen($n:ident)) => do
+      let e ← elabFieldLeaf n
+      let te ← inferType e
+      let some s := vexprSchemaOf? te |
+        throwError "[inv| … ]: strlen operand is not a VExpr"
+      forceIndex s (mkConst ``SchemaLang.Ty.string) e
+      return mkAppN (mkConst ``SchemaLang.VExpr.strlen) #[s, e]
+  | `(vexpr| $a > $b) => do
+      let a ← elabVExpr a
+      let b ← elabVExpr b
+      let s ← unifyOperands a b
+      forceIndex s (mkConst ``SchemaLang.Ty.u64) a
+      forceIndex s (mkConst ``SchemaLang.Ty.u64) b
+      return mkAppN (mkConst ``SchemaLang.VExpr.gt) #[s, a, b]
+  | `(vexpr| $a == $b) => do
+      let a ← elabVExpr a
+      let b ← elabVExpr b
+      let s ← unifyOperands a b
+      forceIndex s (mkConst ``SchemaLang.Ty.u64) a
+      forceIndex s (mkConst ``SchemaLang.Ty.u64) b
+      return mkAppN (mkConst ``SchemaLang.VExpr.eq) #[s, a, b]
+  | `(vexpr| $a && $b) => do
+      let a ← elabVExpr a
+      let b ← elabVExpr b
+      let s ← unifyOperands a b
+      forceIndex s (mkConst ``SchemaLang.Ty.bool) a
+      forceIndex s (mkConst ``SchemaLang.Ty.bool) b
+      return mkAppN (mkConst ``SchemaLang.VExpr.and) #[s, a, b]
+  -- no `or` ctor: the De Morgan form (exact on Bool)
+  | `(vexpr| $a || $b) => do
+      let a ← elabVExpr a
+      let b ← elabVExpr b
+      let s ← unifyOperands a b
+      let na := mkAppN (mkConst ``SchemaLang.VExpr.not) #[s, a]
+      let nb := mkAppN (mkConst ``SchemaLang.VExpr.not) #[s, b]
+      let conj := mkAppN (mkConst ``SchemaLang.VExpr.and) #[s, na, nb]
+      return mkAppN (mkConst ``SchemaLang.VExpr.not) #[s, conj]
+  | `(vexpr| !$a) => do
+      let a ← elabVExpr a
+      let ta ← inferType a
+      let some s := vexprSchemaOf? ta |
+        throwError "[inv| … ]: ! operand is not a VExpr"
+      forceIndex s (mkConst ``SchemaLang.Ty.bool) a
+      return mkAppN (mkConst ``SchemaLang.VExpr.not) #[s, a]
+  | `(vexpr| ($a)) => elabVExpr a
+  | _ => throwUnsupportedSyntax
+
+open Lean Elab Term in
+elab "[inv| " e:vexpr " ]" : term => elabVExpr e
+
+/-! ### The unexpanders — a VExpr pretty-prints back to `[inv| … ]` -/
+
+open Lean in
+/-- A node's precedence, from its delaborated syntax (the splice
+decision's input; unknown shapes count as atoms — conservative). -/
+private def vexprPrec? : TSyntax `vexpr → Option Nat
+  | `(vexpr| $_ > $_) => some 60
+  | `(vexpr| $_ == $_) => some 60
+  | `(vexpr| $_ && $_) => some 50
+  | `(vexpr| $_ || $_) => some 40
+  | `(vexpr| !$_) => some 65
+  | _ => some 100
+
+open Lean in
+/-- Splice a child's inner syntax into an operand position: parenthesize
+when the child's top node binds looser than the position demands (the
+right-nested-chain rule — the re-parsed tree must be the SAME tree;
+left splices at the parent's own precedence flatten safely). -/
+private def vexprSplice (min : Nat) (e : TSyntax `vexpr) :
+    Lean.PrettyPrinter.UnexpandM (TSyntax `vexpr) :=
+  if (vexprPrec? e).getD 100 >= min then pure e else `(vexpr| ($e))
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.colOf]
+private def unexpVExprColOf : Lean.PrettyPrinter.Unexpander
+  | `($(_) $s:str) => do
+      let t ← (`([inv| $(mkIdent s.getString.toName):ident ]) :
+        Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.lit]
+private def unexpVExprLit : Lean.PrettyPrinter.Unexpander
+  | `($(_) $n:num) => do
+      let t ← (`([inv| $n:num ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | `($(_) ($n:num : $_)) => do
+      let t ← (`([inv| $n:num ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.strlen]
+private def unexpVExprStrlen : Lean.PrettyPrinter.Unexpander
+  | `($(_) [inv| $n:ident ]) => do
+      let t ← (`([inv| strlen($n:ident) ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.gt]
+private def unexpVExprGt : Lean.PrettyPrinter.Unexpander
+  | `($(_) [inv| $a:vexpr ] [inv| $b:vexpr ]) => do
+      let a' ← vexprSplice 60 a
+      let b' ← vexprSplice 61 b
+      let t ← (`([inv| $a' > $b' ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.eq]
+private def unexpVExprEq : Lean.PrettyPrinter.Unexpander
+  | `($(_) [inv| $a:vexpr ] [inv| $b:vexpr ]) => do
+      let a' ← vexprSplice 60 a
+      let b' ← vexprSplice 61 b
+      let t ← (`([inv| $a' == $b' ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.and]
+private def unexpVExprAnd : Lean.PrettyPrinter.Unexpander
+  | `($(_) [inv| $a:vexpr ] [inv| $b:vexpr ]) => do
+      let a' ← vexprSplice 50 a
+      let b' ← vexprSplice 51 b
+      let t ← (`([inv| $a' && $b' ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
+
+open Lean in
+@[app_unexpander SchemaLang.VExpr.not]
+private def unexpVExprNot : Lean.PrettyPrinter.Unexpander
+  -- the De Morgan shape (`||`'s elaboration) renders back as `||`:
+  -- the `!`s are stripped and the operands re-spliced at `||`'s
+  -- operand positions
+  | `($(_) [inv| !$x && !$y ]) => do
+      let x' ← vexprSplice 41 x
+      let y' ← vexprSplice 40 y
+      let t ← (`([inv| $x' || $y' ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  -- a plain `not` renders as `!`
+  | `($(_) [inv| $e:vexpr ]) => do
+      let e' ← vexprSplice 65 e
+      let t ← (`([inv| !$e' ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
+      return t.raw
+  | _ => throw ()
 
 -- The namespace CLOSES here: the raw-length decl below must be a ROOT
 -- name (the compiled `call $string_len` contract — see its doc).

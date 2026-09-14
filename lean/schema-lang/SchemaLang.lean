@@ -16,6 +16,7 @@ import SchemaLang.Codec
 import SchemaLang.CodecValue
 import SchemaLang.Field
 import SchemaLang.Validate
+import SchemaLang.Subschema
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
 import SchemaLang.Vortex.Emit
@@ -32,3 +33,4 @@ import SchemaLang.Emit.Update
 import SchemaLang.Emit.Typestate
 import SchemaLang.Trace
 import SchemaLang.Session
+import SchemaLang.Debug

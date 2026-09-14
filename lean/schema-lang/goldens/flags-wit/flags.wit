@@ -1,0 +1,11 @@
+package guestlang:flags;
+
+interface flags-types {
+}
+
+interface flags-exports {
+}
+
+world flags {
+  export flags-exports;
+}

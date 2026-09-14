@@ -31,6 +31,7 @@ interfaces are the wasmtron rule — split when a real consumer needs it).
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 
 namespace SchemaLang.Emit.Wit
 
@@ -148,13 +149,35 @@ end SchemaLang.Emit.Wit
 
 /-- The WIT emitter plugin. Repo-root-relative path (the `../../` prefix)
     matches the Rust/vortex emitters — the forge byte-tie checks the SAME
-    file the emitter writes. -/
-def witEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+    file the emitter writes. The world folds the ctx's DEMO partition
+    (`GenCtx.rootItems` — the driver-derived root-namespace split): with a
+    second project's registry replayed, the gateway world stays exactly
+    the Demo universe (byte-identical output, same fold, same order). -/
+def witEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "wit"
   style := .doubleSlash
   specSource := "Demo.lean"
   outputs := ["../../wit/gateway.wit"]
-  run items := [
+  run ctx := [
     { path := "../../wit/gateway.wit"
-      contents := SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway" items }
+      contents := SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway"
+        (ctx.rootItems `Demo) }
+  ]
+
+/-- The flags world's WIT emitter (the second project's wire lane): the
+    FEATUREFLAGS partition of the same ctx, rendered by the SAME `worldOf`
+    fold — one lowering, two worlds. The partition is DERIVED (the
+driver's `GenCtx.rootPartitionOf` over the replayed registry — no
+    hand-listed item names): a new `@[schema]` in FeatureFlags.lean joins
+    `wit/flags.wit` without touching this emitter. Demo-only replays
+    (the test goldens) see the empty partition = the bare world. -/
+def flagsWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
+  name := "flags-wit"
+  style := .doubleSlash
+  specSource := "FeatureFlags.lean (via GenCtx.rootPartitionOf)"
+  outputs := ["../../wit/flags.wit"]
+  run ctx := [
+    { path := "../../wit/flags.wit"
+      contents := SchemaLang.Emit.Wit.worldOf "guestlang:flags" "flags"
+        (ctx.rootItems `FeatureFlags) }
   ]

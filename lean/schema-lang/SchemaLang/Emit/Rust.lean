@@ -22,6 +22,7 @@ bon, serde land with the faults/tabular packages). Names pre-mangled via
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 
 namespace SchemaLang.Emit.Rust
 
@@ -125,12 +126,12 @@ def schemaItems (items : List Item) :
 end SchemaLang.Emit.Rust
 
 /-- The Rust emitter plugin: rich domain types. -/
-def rustEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def rustEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "rust"
   style := .doubleSlash
   specSource := "Demo.lean"
   outputs := ["../../src/schema_generated.rs"]
-  run items := [
+  run ctx := [
     { path := "../../src/schema_generated.rs"
-      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems items) }
+      contents := CodegenCore.Emit.Rust.renderModule (SchemaLang.Emit.Rust.schemaItems ctx.items) }
   ]

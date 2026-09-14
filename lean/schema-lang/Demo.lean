@@ -87,6 +87,48 @@ def watchOrders (_into : OrderError) : Async.Future (List User) :=
 @[schema_resource]
 def Db : Type := Empty
 
+/-! ## Registered invariants + updates (the spec data — the emission
+    lanes' registry rows)
+
+The demo's `schema_invariant` / `schema_update` registrations live HERE
+(not in Tests): they ARE spec data — the emitters read the replayed
+registry (`Emit.GenCtx`), so a registration in the spec module is what
+the byte-tied `invariants_generated.rs` / `updates_generated.rs`
+reflect. Names are STRINGS where the registry name is kebab (`
+id-positive`) — the emitted Rust carries it verbatim; a kebab word is
+not a Lean ident (the string-form name is Meta.Reflect's authoring
+surface for exactly this). `proved` cites a theorem name, STORED only —
+the theorem (`userNameLenProved`) lives in Tests and the citation is
+resolved there (the CI half of the ladder). The `where` clause is
+REQUIRED (`VExpr .bool` has no literal-true — the always-true idiom for
+`self_bump`). -/
+
+-- The executable boundary check (tier: boundary-check).
+schema_invariant "id-positive" for User :=
+  SchemaLang.VExpr.gt (SchemaLang.VExpr.colOf "id") (SchemaLang.VExpr.lit 0)
+
+-- The proved registration: the tier is `proved` via the CITED theorem
+-- name (stored — resolution is CI's job later).
+schema_invariant "name-min-length" for User proved userNameLenProved :=
+  SchemaLang.VExpr.gt (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "name")) (SchemaLang.VExpr.lit 3)
+
+-- Linear u64 write — guard on the ORIGINAL id, write a constant.
+-- reads = ["id"] (guard only), writes = ["id"], selfReading = false.
+schema_update reset_id for User id := SchemaLang.VExpr.lit 0
+  where SchemaLang.VExpr.gt (SchemaLang.VExpr.colOf "id") (SchemaLang.VExpr.lit 100)
+
+-- Linear STRING write (a column copy — VExpr has no string literal, so
+-- string writes are copies). reads = ["name"], writes = ["email"].
+schema_update echo_email for User email := SchemaLang.VExpr.colOf "name"
+  where SchemaLang.VExpr.gt (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "name")) (SchemaLang.VExpr.lit 3)
+
+-- The SELF-READING classification (the enforcement ladder's input): the
+-- value reads the WRITTEN column → nonlinear (the journal carries S0).
+-- The guard is the always-true idiom — the `where`-required escape
+-- hatch, pinned here.
+schema_update self_bump for User id := SchemaLang.VExpr.colOf "id"
+  where SchemaLang.VExpr.eq (SchemaLang.VExpr.lit 0) (SchemaLang.VExpr.lit 0)
+
 /-! ## Registered migrations (6.5.2 authoring surface) -/
 
 /-- The remedy evidence `just breaking` consumes (one row per available

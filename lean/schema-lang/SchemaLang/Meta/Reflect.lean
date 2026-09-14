@@ -446,16 +446,27 @@ def fieldToExpr (f : Field) : Expr :=
 def fieldsToExpr (fields : List Field) : MetaM Expr :=
   Meta.mkListLit (.const ``Field []) (fields.map fieldToExpr)
 
-/-- `schema_invariant <name> for <Record> (proved <thm>)? := <term>` —
+/-- The invariant's NAME may be an ident OR a string literal: the registry
+names are kebab (`id-positive`) — the emitted Rust's fn suffix and the
+emitted comment carry them verbatim — but a kebab word is not a Lean
+ident. The string form is the authoring surface for those; the ident
+form stays for Lean-friendly names.
+
+`schema_invariant <name> for <Record> (proved <thm>)? := <term>` —
     elaborate the predicate against the registered record's fields,
     register the `InvariantItem` (tier computed per `tierOf`). -/
-syntax (name := schemaInvariant) "schema_invariant " ident " for " ident
-  (" proved " ident)? " := " term : command
+syntax (name := schemaInvariant) "schema_invariant " (ident <|> str)
+  " for " ident (" proved " ident)? " := " term : command
 
 open Lean Elab Command Term in
 @[command_elab SchemaLang.Meta.schemaInvariant]
 unsafe def elabSchemaInvariant : CommandElab := fun (stx : Syntax) => do
-  let invName := stx[1]!.getId.toString
+  -- the name: ident OR string literal (the kebab registry names are
+  -- not Lean idents — see the syntax note above)
+  let invName : String :=
+    match stx[1]!.isStrLit? with
+    | some s => s
+    | none => stx[1]!.getId.toString
   let recId := stx[3]!.getId
   let proofName? : Option Name :=
     let opt : Syntax := stx[4]!
@@ -629,7 +640,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
   -- elaborate guard + value against the REAL fields, evaluate the GADT
   -- values, resolve the write path (the `VExpr.colOf` route, its `.col`
   -- path extracted) — all data by the time it registers
-  let row : SomeUpdate ← liftTermElabM do
+  let (row, instName, instTy, instVal) ← liftTermElabM do
     let fsList ← fieldsToExpr fields
     let expectedFs ← Meta.inferType fsList
     let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
@@ -692,10 +703,39 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
       (mkStrLit fVal.name) (tyToExpr fVal.ty) fsList
     let pathVal : ColPath fVal.name fVal.ty fsVal ←
       Meta.evalExpr (ColPath fVal.name fVal.ty fsVal) pathTyE pathE
-    pure { fields := fsVal, field := fVal
-         , update := { name := uname, guard := guardVal
-                     , value := valueVal, writePath := pathVal } }
+    -- THE COMPOSABLE LOCK (the second layer — the scan above stays
+    -- the first): the scan's decided fact is discharged as a PROOF.
+    -- The command EMITS the `UpdatePure` instance for the registered
+    -- update; its proof is `rfl` against the STORED `volatileRefs`
+    -- data — if the gate ever stored a nonempty scan, this `rfl`
+    -- FAILS to elaborate (the proof checks the gate). Downstream,
+    -- `UpdateItem.cascade2` assembles legality by instance search —
+    -- no re-scan at the consumer.
+    let instTy : Expr :=
+      mkApp3 (mkConst ``SchemaLang.UpdatePure) fsList (fieldToExpr fVal)
+        (mkAppN (mkConst ``SchemaLang.UpdateItem.mk)
+          #[fsList, fieldToExpr fVal, mkStrLit uname, g, e, pathE,
+            mkApp (mkConst ``List.nil [Lean.Level.zero]) (mkConst ``String)])
+    let pf ← elabTerm (← `(⟨rfl⟩)) (some instTy)
+    let pf ← instantiateMVars pf
+    if pf.hasExprMVar then
+      throwError s!"schema_update `{uname}`: internal: unresolved "
+        ++ "metavariables in the UpdatePure instance"
+    pure ({ fields := fsVal, field := fVal
+          , update := { name := uname, guard := guardVal
+                      , value := valueVal, writePath := pathVal
+                      , volatileRefs := volatileHits } : SomeUpdate },
+      ((`SchemaLang).str "instUpdatePure").str uname, instTy, pf)
   modifyEnv fun env =>
     updateItemExt.addEntry env row
+  -- the instance: a def with the instance attribute (4.33's `Declaration`
+  -- has no `instanceDecl` constructor — the `instance` command's own
+  -- route is defn + addInstance)
+  liftTermElabM do
+    Lean.addDecl (Declaration.defnDecl {
+      name := instName, levelParams := [], type := instTy
+      , value := instVal, hints := Lean.ReducibilityHints.abbrev
+      , safety := Lean.DefinitionSafety.safe })
+    Lean.Meta.addInstance instName .global 1000
 
 end SchemaLang.Meta

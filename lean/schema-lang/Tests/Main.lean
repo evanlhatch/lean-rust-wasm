@@ -6,6 +6,7 @@ WIT golden emission.
 -/
 import Lean
 import SchemaLang
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.Invariant
 import SchemaLang.Emit.Update
 import SchemaLang.Bridge
@@ -310,15 +311,26 @@ open SchemaLang.Meta in
 unsafe def loadDemoItems : IO (List SchemaLang.Item) := do
   pure ((registeredItems (← loadDemoEnv)).map (·.2))
 
+open SchemaLang.Meta SchemaLang.Emit in
+/-- The FULL demo GenCtx — all three registry lanes (items +
+    invariants + updates), replayed from Demo's oleans (GenMain's
+    pattern, v2 contract). -/
+unsafe def loadDemoCtx : IO SchemaLang.Emit.GenCtx := do
+  let env ← loadDemoEnv
+  pure { items := (registeredItems env).map (·.2)
+       , roots := SchemaLang.Emit.rootPartitionOf env (registeredItems env)
+       , invariants := registeredInvariants env
+       , updates := registeredUpdates env }
+
 /-- Run every registry emitter over the CURRENT reflected Demo registry
     and byte-compare each output (header prepended, matching `schema-gen`'s
     write) against the committed golden under `goldens/<emitter>/`.
     `update = true` regenerates (the deliberate-change path). -/
 unsafe def goldenChecks (update : Bool) : IO (List (String × CheckResult)) := do
-  let items ← loadDemoItems
+  let ctx ← loadDemoCtx
   let mut results : List (String × CheckResult) := []
   for e in SchemaLang.Emit.emitters do
-    for f in e.run items do
+    for f in e.run ctx do
       let file := ((f.path : String).splitOn "/").getLast!
       let golden : System.FilePath := s!"goldens/{e.name}/{file}"
       CodegenCore.Emit.createParentDirs golden
@@ -330,6 +342,35 @@ unsafe def goldenChecks (update : Bool) : IO (List (String × CheckResult)) := d
       let r ← TestKit.Golden.checkAgainstGolden e.name out golden update
       results := results ++ [(s!"{e.name}/{file}", r)]
   return results
+
+/-! ## The root-namespace partition (the multi-world lane) -/
+
+/-- The provenance partition pins: a demo-only ctx partitions under the
+    ONE root (`Demo`, the declaring module — both packages declare at
+    Lean's TRUE root, so the driver's module resolution is the provenance
+    adapter); the gateway emitter folds the Demo partition (the same list
+    the pre-partition fold saw — byte-identical gateway.wit), and the
+    flags emitter over a demo-only replay renders the BARE flags world. -/
+def partitionChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
+  _ ← assertEq "demo ctx: one root" ctx.roots.length 1
+  _ ← assertEq "demo ctx: Demo root" (ctx.roots.head?.map (·.1)) (some `Demo)
+  _ ← assert ((ctx.roots.head?.map (·.2)) == some ctx.items)
+    "demo ctx: Demo partition = the items"
+  -- the gateway emitter's fold input = the Demo partition (unchanged bytes)
+  _ ← assert ((witEmitter.run ctx).head?.map (·.contents) ==
+    some (SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway" ctx.items))
+    "gateway folds the Demo partition"
+  -- the flags emitter: declared path + the empty-partition world
+  let some ff := SchemaLang.Emit.emitters.find? fun e => e.name == "flags-wit" |
+    throw "flags-wit emitter not registered"
+  let files := ff.run ctx
+  _ ← assertEq "flags path" (files.head?.map (·.path)) (some "../../wit/flags.wit")
+  _ ← assert ((files.head?.map (·.contents) |>.getD "").contains "world flags {")
+    "flags world rendered (empty partition = the bare world)"
+  -- the lookup is total over the roots the ctx names
+  _ ← assert (ctx.rootItems `NoSuchRoot == [])
+    "rootItems misses are empty"
+  .ok ()
 
 /-! ## Vortex lowering pins (0.1) -/
 
@@ -482,15 +523,15 @@ def deltaChecks : CheckResult := do
   _ ← assert (out.contains "Remove(u64),") "remove payload"
   _ ← assert (out.contains "impl dbsp::Change<User> for UserChange") "ChangeSpec impl"
   -- the emitters: declared paths, determinism
-  let files := deltaEmitter.run demoItems
+  let files := deltaEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)
   _ ← assertEq "delta path" (files.head?.map (·.path)) (some "../../src/delta_generated.rs")
   _ ← assertEq "delta deterministic" (files.map (·.contents))
-    ((deltaEmitter.run demoItems).map (·.contents))
-  let wfiles := deltaWitEmitter.run demoItems
+    ((deltaEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)).map (·.contents))
+  let wfiles := deltaWitEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)
   _ ← assertEq "deltaWit path" (wfiles.head?.map (·.path)) (some "../../wit/delta.wit")
   let wout := wfiles.head?.map (·.contents) |>.getD ""
   _ ← assertEq "deltaWit deterministic" wout
-    ((deltaWitEmitter.run demoItems).head?.map (·.contents) |>.getD "")
+    ((deltaWitEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)).head?.map (·.contents) |>.getD "")
   _ ← assert (wout.contains "insert(user)") "deltaWit insert pin"
   _ ← assert (wout.contains "remove(u64)") "deltaWit remove pin"
   .ok ()
@@ -528,7 +569,8 @@ def extDTypeChecks : CheckResult := do
     (CodegenCore.Emit.Rust.renderModule
       (SchemaLang.Vortex.Emit.extDTypeModule SchemaLang.Vortex.Emit.extDTypes))
   -- the emitter: declared path + zero-input (ignores schema items)
-  let files := SchemaLang.Vortex.Emit.extVortexEmitter.run []
+  let files := SchemaLang.Vortex.Emit.extVortexEmitter.run
+    (SchemaLang.Emit.GenCtx.itemsOnly [])
   _ ← assertEq "ext path" (files.head?.map (·.path))
     (some "../../src/ext_dtypes_generated.rs")
   .ok ()
@@ -768,7 +810,7 @@ def pipelineRunChecks : CheckResult := do
 /-- The one-writer audit: no two emitters claim the same output path.
     The advertised discipline (`Emit.Registry.pathsUnique`) is ASSERTED
     here, not just stated in a header. -/
-def emitterAuditChecks : CheckResult := do
+def emitterAuditChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   _ ← assertEq "emitter paths unique" SchemaLang.Emit.pathsUnique true
   -- the forge-driver audit: every registered emitter's output is in the
   -- job manifest forge consumes — no artifact silently outside byte-tie
@@ -777,7 +819,7 @@ def emitterAuditChecks : CheckResult := do
   -- re-state a path the one-writer audit doesn't know about
   _ ← assertEq "run outputs ⊆ declared outputs"
     (SchemaLang.Emit.emitters.all fun e =>
-      (e.run demoItems).all fun f => e.outputs.contains f.path) true
+      (e.run ctx).all fun f => e.outputs.contains f.path) true
   -- 6.5.3: emitter-output SELF-AUDIT — every registered emitter's output
   -- (raw, pre-driver-header) is swept for banned constructs. GuestGate
   -- bans constructs in guest SOURCE; this audits the EMITTED text, so a
@@ -786,7 +828,7 @@ def emitterAuditChecks : CheckResult := do
   -- headers are the DRIVER's prepend — gen-check's byte-tie owns that.)
   _ ← assert
     (SchemaLang.Emit.emitters.all fun e =>
-      (e.run demoItems).all fun f =>
+      (e.run ctx).all fun f =>
         GateKit.auditFindings SchemaLang.Emit.emitterAuditRules f.contents
           |>.isEmpty)
     "emitter self-audit (banned constructs)"
@@ -794,7 +836,9 @@ def emitterAuditChecks : CheckResult := do
   -- class fields (`patch`/`valid`) — the method names ARE the class
   -- field names, pinned here so the emitter and the Lean class cannot
   -- drift apart (the Rust side re-exports the generated trait)
-  let traitText := (changeSpecEmitter.run []).head?.map (·.contents)
+  let traitText :=
+    (changeSpecEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly [])).head?
+      |>.map (·.contents)
     |>.getD ""
   _ ← assert (traitText.contains "pub trait Change<Row>") "generated Change trait"
   _ ← assert (traitText.contains "fn patch(&self, base: &Row) -> Row;") "trait patch = ChangeSpec field"
@@ -1832,13 +1876,9 @@ def invRow (id : UInt64) (nm : String) : RowVals invUserFields :=
 def invRowHappy : RowVals invUserFields := invRow 5 "abcd"
 def invRowZero : RowVals invUserFields := invRow 0 "abcd"
 
--- Happy registration: the executable boundary check.
-schema_invariant invIdPositive for User := VExpr.gt (VExpr.colOf "id") (VExpr.lit 0)
-
--- The proved registration: the tier is `proved` via the CITED theorem
--- name (stored — resolution is CI's job later).
-schema_invariant invNameMinLength for User proved userNameLenProved :=
-  VExpr.gt (VExpr.strlen (VExpr.colOf "name")) (VExpr.lit 3)
+-- The happy registrations MOVED to Demo.lean (spec data lives in the
+-- spec module — the emitters replay the registry). The pins below read
+-- the Demo-registered rows ("id-positive", "name-min-length").
 
 -- The registration pins: row data + tier computation + the stored
 -- term's end-to-end verdicts.
@@ -1849,23 +1889,23 @@ run_cmd do
     match items.find? (·.name == n) with
     | some it => pure it
     | none => throwError s!"invariant `{n}` not registered"
-  let pos ← fetch "invIdPositive"
-  unless pos.schemaRef == "User" do throwError "invIdPositive: wrong schemaRef"
+  let pos ← fetch "id-positive"
+  unless pos.schemaRef == "User" do throwError "id-positive: wrong schemaRef"
   unless pos.tier == (SchemaLang.tierOf none : SchemaLang.Tier) do
-    throwError "invIdPositive: tier not computed (boundaryCheck)"
+    throwError "id-positive: tier not computed (boundaryCheck)"
   unless pos.inv.fields.length == 4 do
-    throwError "invIdPositive: fields are not the User schema"
-  let minl ← fetch "invNameMinLength"
+    throwError "id-positive: fields are not the User schema"
+  let minl ← fetch "name-min-length"
   unless minl.tier == (SchemaLang.tierOf (some `userNameLenProved) : SchemaLang.Tier) do
-    throwError "invNameMinLength: proved tier not computed"
+    throwError "name-min-length: proved tier not computed"
   unless minl.proofName == (some `userNameLenProved) do
-    throwError "invNameMinLength: citation not stored"
+    throwError "name-min-length: citation not stored"
   -- the stored term IS the predicate (head = the .gt ctor), and its
   -- registered value executes END-TO-END: printed back to syntax,
   -- re-elaborated against the registered fields, composed with
   -- `validates`, evaluated on the demo rows (happy passes, zero refuses)
   unless pos.exprTerm.getAppFn.isConstOf `SchemaLang.VExpr.gt do
-    throwError "invIdPositive: the stored term is not the predicate"
+    throwError "id-positive: the stored term is not the predicate"
   let verdict (it : SchemaLang.InvariantItem) (row : Name) : CommandElabM Bool :=
     liftTermElabM do
       let fsList ← SchemaLang.Meta.fieldsToExpr it.inv.fields
@@ -1879,10 +1919,10 @@ run_cmd do
       Lean.Meta.evalExpr Bool (Lean.mkConst `Bool) e
   let happyVerdict ← verdict pos `invRowHappy
   unless happyVerdict do
-    throwError "invIdPositive: the happy row must pass"
+    throwError "id-positive: the happy row must pass"
   let zeroVerdict ← verdict pos `invRowZero
   unless !zeroVerdict do
-    throwError "invIdPositive: the zero row must FAIL"
+    throwError "id-positive: the zero row must FAIL"
 
 -- The NEGATIVE controls (the command's gates): a misspelled column
 -- fails the term's `HasCol` instance search, and an unknown record is
@@ -1910,7 +1950,7 @@ def invIdPositiveMirror : VExpr invUserFields .bool := .gt (.colOf "id") (.lit 0
 def invNameMinLengthMirror : VExpr invUserFields .bool :=
   .gt (.strlen (.colOf "name")) (.lit 3)
 
-def invariantChecks : CheckResult := do
+def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
   -- the tier computation (the enforcement ladder's v1 rungs)
   _ ← assertEq "tierOf none = boundaryCheck" (SchemaLang.tierOf none) .boundaryCheck
   _ ← assertEq "tierOf some = proved" (SchemaLang.tierOf (some `t)) .proved
@@ -1928,12 +1968,16 @@ def invariantChecks : CheckResult := do
   _ ← assert (validates invIdPositiveMirror (invRow 0 "") !=
       validates invIdPositiveMirror (invRow 1 ""))
     "the verdict distinguishes the rows"
-  -- the emitter: declared path + determinism (the emitter discipline)
-  let files := SchemaLang.Emit.Invariant.invariantEmitter.run []
+  -- the emitter: declared path + determinism (the emitter discipline);
+  -- the lane runs over the EXT-REPLAYED rows (the v2 contract — the
+  -- committed mirror is gone)
+  let files := SchemaLang.Emit.Invariant.invariantEmitter.run
+    { items := [], invariants := invs, updates := [] }
   _ ← assertEq "invariant path" (files.head?.map (·.path))
     (some "../../src/invariants_generated.rs")
   _ ← assertEq "invariant deterministic" (files.map (·.contents))
-    ((SchemaLang.Emit.Invariant.invariantEmitter.run []).map (·.contents))
+    ((SchemaLang.Emit.Invariant.invariantEmitter.run
+        { items := [], invariants := invs, updates := [] }).map (·.contents))
   let out := files.head?.map (·.contents) |>.getD ""
   _ ← assert (out.contains "pub fn check_id_positive(v: &User) -> bool")
     "check fn emitted (snake — Rust identifiers cannot carry kebab)"
@@ -1945,7 +1989,7 @@ def invariantChecks : CheckResult := do
   -- the Lean-computed default-row verdicts, replayed as Rust asserts:
   -- a FAILING row must fail (id=0 and the empty name both refuse)
   _ ← assertEq "default-row verdicts (both refuse)"
-    (SchemaLang.Emit.Invariant.demoInvariants.map SchemaLang.Emit.Invariant.defaultVerdict)
+    (invs.map SchemaLang.Emit.Invariant.defaultVerdict)
     [some false, some false]
   _ ← assert (out.contains "assert_eq!(check_id_positive(&v), false);")
     "the failing row's assert is pinned"
@@ -1960,7 +2004,8 @@ def invariantChecks : CheckResult := do
     `goldenChecks` — which covers this emitter automatically once it
     joins the registry; this pin stands independent of the wiring). -/
 unsafe def invariantGoldenChecks (update : Bool) : IO (String × CheckResult) := do
-  let files := SchemaLang.Emit.Invariant.invariantEmitter.run []
+  let ctx ← loadDemoCtx
+  let files := SchemaLang.Emit.Invariant.invariantEmitter.run ctx
   let out := files.head?.map (·.contents) |>.getD ""
   let golden : System.FilePath := "goldens/invariants/invariants_generated.rs"
   CodegenCore.Emit.createParentDirs golden
@@ -2020,7 +2065,7 @@ run_cmd do
   let env ← getEnv
   let provedRows := (SchemaLang.Meta.registeredInvariants env).filter
     (fun it => it.proofName.isSome)
-  unless provedRows.any (·.name == "invNameMinLength") do
+  unless provedRows.any (·.name == "name-min-length") do
     throwError "citation check: no proved-tier invariant registered"
   for it in provedRows do
     match ← citationDiag? env it with
@@ -2075,7 +2120,7 @@ def docsChecks : CheckResult := do
   _ ← assertEq "docs deterministic" md (SchemaLang.Docs.docsOf demoItems)
   -- the emitter: declared path + registered in the registry (the golden
   -- loop runs it automatically; these pins stand independent of the golden)
-  let files := SchemaLang.Docs.docsEmitter.run demoItems
+  let files := SchemaLang.Docs.docsEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)
   _ ← assertEq "docs path" (files.head?.map (·.path)) (some "../../docs/api.md")
   _ ← assert (SchemaLang.Emit.emitters.any fun e => e.name == "docs")
     "docs emitter registered"
@@ -2083,14 +2128,16 @@ def docsChecks : CheckResult := do
 
 /-! ## Updates (SPEC-core §3, demoted): the schema_update lane
 
-The happy registrations below run the `schema_update` command against
-the REFLECTED Demo registry. The `where` clause is REQUIRED — `VExpr
-.bool` has no literal-true; the unconditional idiom is `VExpr.eq
-(VExpr.lit 0) (VExpr.lit 0)` (pinned by `updSelfBumpMirror`). The run_cmd
-pin checks the registered rows' DERIVED data (reads/writes/selfReading —
-never hand-listed) AND the emitter's demo-row mirror; the runtime group
-pins `applyRow` semantics on demo rows; the golden group byte-ties the
-emitted Rust.
+The happy registrations MOVED to Demo.lean (spec data lives in the
+spec module — the emitters replay the registry; this file keeps the
+negative controls + the `updPureCall` determinism probe). The `where`
+clause is REQUIRED — `VExpr .bool` has no literal-true; the
+unconditional idiom is `VExpr.eq (VExpr.lit 0) (VExpr.lit 0)` (pinned
+by `updSelfBumpMirror`). The run_cmd pin checks the Demo-registered
+rows' DERIVED data (reads/writes/selfReading — never hand-listed) AND
+the emitter's rows (which now READ the registry — the v2 contract); the
+runtime group pins `applyRow` semantics on demo rows; the golden group
+byte-ties the emitted Rust.
 -/
 
 /-- The User schema, as the update lane sees it (abbrev — the
@@ -2111,28 +2158,8 @@ def updRowId (row : RowVals updUserFields) : UInt64 :=
 def updRowEmail (row : RowVals updUserFields) : String :=
   match evalV (.colOf "email") row with | .string s => s | _ => ""
 
--- Registration 1: linear u64 write — guard on the ORIGINAL id, write a
--- constant. reads = ["id"] (guard only), writes = ["id"], selfReading =
--- FALSE (the value reads nothing). The name is the emitted fn's suffix
--- (`apply_reset_id`) — kebab at the registry, snake in Rust.
-schema_update reset_id for User id := VExpr.lit 0
-  where VExpr.gt (VExpr.colOf "id") (VExpr.lit 100)
-
--- Registration 2: linear STRING write (a column copy — VExpr has no
--- string literal, so string writes are copies). reads = ["name"]
--- (guard + value agree), writes = ["email"], selfReading = FALSE.
-schema_update echo_email for User email := VExpr.colOf "name"
-  where VExpr.gt (VExpr.strlen (VExpr.colOf "name")) (VExpr.lit 3)
-
--- Registration 3: the SELF-READING classification (the enforcement
--- ladder's input): the value reads the WRITTEN column → nonlinear
--- (the journal carries S0). The guard is the always-true idiom — the
--- `where`-required escape hatch, pinned here.
-schema_update self_bump for User id := VExpr.colOf "id"
-  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
-
 -- The registration pins: row data + the DERIVED reads/writes/
--- selfReading (EXACT lists) + the emitter's demo-row mirror.
+-- selfReading (EXACT lists) + the emitter's rows (registry-read).
 open Lean Elab Command in
 run_cmd do
   let ups := SchemaLang.Meta.registeredUpdates (← getEnv)
@@ -2159,20 +2186,17 @@ run_cmd do
     throwError s!"updSelfBump: reads not derived (got {sb.update.reads})"
   unless sb.update.selfReading == true do
     throwError "updSelfBump: the self-reading classification missed"
-  -- the emitter's demo rows MIRROR the registrations (the
-  -- demoInvariants discipline — derived data, both sides)
-  let em := SchemaLang.Emit.Update.demoUpdates
-  unless (em.map (·.u.update.name)) == (ups.map (·.update.name)) do
-    throwError "Emit.Update.demoUpdates: names out of sync with the registry"
-  unless (em.map (fun u => u.u.update.reads)) == (ups.map (fun u => u.update.reads)) do
-    throwError "Emit.Update.demoUpdates: reads out of sync with the registry"
-  unless (em.map (fun u => u.u.update.writes)) == (ups.map (fun u => u.update.writes)) do
-    throwError "Emit.Update.demoUpdates: writes out of sync with the registry"
-  unless (em.map (fun u => u.u.update.selfReading))
-      == (ups.map (fun u => u.update.selfReading)) do
-    throwError "Emit.Update.demoUpdates: selfReading out of sync with the registry"
+  -- the emitter's rows ARE the registry now (the v2 contract — the
+  -- two sides converged; the committed mirror is gone). The remaining
+  -- content: the recName re-derivation (`recNameOf?`'s shape match)
+  -- resolves every row's record ref.
+  let em := SchemaLang.Emit.Update.ctxRows
+    { items := (SchemaLang.Meta.registeredItems (← getEnv)).map (·.2)
+    , invariants := [], updates := ups }
+  unless (em.map (fun u => u.u.update.name)) == (ups.map (·.update.name)) do
+    throwError "Emit.Update.ctxRows: names out of sync with the registry"
   unless (em.map (·.recName)) == ["User", "User", "User"] do
-    throwError "Emit.Update.demoUpdates: record refs out of sync"
+    throwError "Emit.Update.ctxRows: record refs out of sync"
 
 -- The NEGATIVE controls (the command's gates): a value expr of the
 -- WRONG TYPE for the column fails the GADT-index gate (a u64 literal
@@ -2245,6 +2269,79 @@ run_cmd do
   if ups.any (·.update.name == "updVolatileGuard") then
     throwError "updVolatileGuard: the volatile update REGISTERED — the gate did not fire"
 
+/-! ### The composable law classes: `UpdatePure` / `NonInterfering`
+
+The second layer: the registration's scan emits an `UpdatePure`
+INSTANCE per registered update (its proof is `rfl` against the STORED
+`volatileRefs` — the scan's decided fact), and the consumers
+(`UpdateItem.cascade2`) take legality as instance binders — a composite
+assembled from a volatile or interfering part is UNCONSTRUCTIBLE.
+Pins here: the emitted instances' presence, ONE composite construction
+(positive), the class-level negative (no instance can exist for a
+dirty update), and the composite's order-freedom law.
+-/
+
+-- the registration-emitted instances: Demo's three + the pure-fn probe
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  for n in ["reset_id", "echo_email", "self_bump", "updPureCall"] do
+    unless env.contains ((`SchemaLang).str "instUpdatePure").str n do
+      throwError s!"instUpdatePure_{n}: the registration-emitted "
+        ++ "UpdatePure instance is missing"
+
+#check @UpdatePure
+#check @NonInterfering
+
+-- THE CLASS-LEVEL NEGATIVE: a hand-built update whose STORED
+-- volatile-ref set is nonempty (the shape the scan would have stored
+-- had the gate not failed it) admits NO `UpdatePure` instance — any
+-- one would contradict the data. The registration never produces this
+-- shape (the scan fires first); this pins the lock's non-vacuity.
+def updDirty : UpdateItem updUserFields ⟨"id", .u64⟩ :=
+  { name := "dirty", guard := .eq (.lit 0) (.lit 0), value := .lit 0
+  , writePath := .here, volatileRefs := ["clock"] }
+
+example : ¬ UpdatePure updUserFields ⟨"id", .u64⟩ updDirty := by
+  intro h
+  have hf := h.volatileFree
+  simp [updDirty] at hf
+
+-- THE COMPOSITE CONSTRUCTION (the positive): two pure, non-interfering
+-- updates over the User schema. The `UpdatePure` instances are `⟨rfl⟩`
+-- against the stored (default-empty) data; `NonInterfering` is decided
+-- over the DERIVED reads/writes (the folds — no hand lists).
+def updCompA : UpdateItem updUserFields ⟨"id", .u64⟩ :=
+  { name := "comp-a", guard := .eq (.lit 0) (.lit 0), value := .lit 0
+  , writePath := .here }
+
+def updCompB : UpdateItem updUserFields ⟨"email", .string⟩ :=
+  { name := "comp-b", guard := .eq (.lit 0) (.lit 0), value := .colOf "name"
+  , writePath := .there (.there .here) }
+
+instance : UpdatePure updUserFields ⟨"id", .u64⟩ updCompA := ⟨rfl⟩
+instance : UpdatePure updUserFields ⟨"email", .string⟩ updCompB := ⟨rfl⟩
+
+instance : NonInterfering updUserFields ⟨"id", .u64⟩ ⟨"email", .string⟩
+    updCompA updCompB := by decide
+
+-- the legal composite CONSTRUCTS (the instances assemble the legality)
+def compCascade : List (RowVals updUserFields) → List (RowVals updUserFields) :=
+  UpdateItem.cascade2 updCompA updCompB
+
+-- the composite's runtime pin: comp-a resets the id, comp-b copies
+-- name → email (both guards unconditional)
+example :
+    (compCascade [invRow 150 "abcd"]).map updRowId = [0] := rfl
+
+-- THE LAW: the legal composite is order-free — `cascade_two_commute`
+-- recovered STRUCTURALLY (the swap needs only the `symm` instance; the
+-- four non-interference hypotheses come from the class field alone).
+example :
+    UpdateItem.cascade2 updCompB updCompA [invRow 150 "abcd"]
+      = UpdateItem.cascade2 updCompA updCompB [invRow 150 "abcd"] :=
+  UpdateItem.cascade2_commute updCompB updCompA [invRow 150 "abcd"]
+
 /-- The hand mirrors of the registered updates (the runtime pins
     evaluate THESE — the same data the command registered; the run_cmd
     above pins the mirror). -/
@@ -2260,7 +2357,8 @@ def updSelfBumpMirror : UpdateItem updUserFields ⟨"id", .u64⟩ :=
   { name := "self-bump", guard := .eq (.lit 0) (.lit 0)
   , value := .colOf "id", writePath := .here }
 
-def updateChecks : CheckResult := do
+def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
+  let ups := ctx.updates
   -- the DERIVED read/write sets + the linearity classification
   _ ← assertEq "reset-id: reads derived" updResetIdMirror.reads ["id"]
   _ ← assertEq "reset-id: writes derived" updResetIdMirror.writes ["id"]
@@ -2301,12 +2399,13 @@ def updateChecks : CheckResult := do
   _ ← assert
     (match su.applyRow RowVals.nil with | .nil => true)
     "SomeUpdate.applyRow: foreign row passes through"
-  -- the emitter: declared path + determinism (the emitter discipline)
-  let files := SchemaLang.Emit.Update.updateEmitter.run []
+  -- the emitter: declared path + determinism (the emitter discipline);
+  -- the lane runs over the EXT-REPLAYED rows (the v2 contract)
+  let files := SchemaLang.Emit.Update.updateEmitter.run ctx
   _ ← assertEq "update path" (files.head?.map (·.path))
     (some "../../src/updates_generated.rs")
   _ ← assertEq "update deterministic" (files.map (·.contents))
-    ((SchemaLang.Emit.Update.updateEmitter.run []).map (·.contents))
+    ((SchemaLang.Emit.Update.updateEmitter.run ctx).map (·.contents))
   let out := files.head?.map (·.contents) |>.getD ""
   _ ← assert (out.contains "pub fn apply_reset_id(rows: &mut Vec<User>)")
     "apply fn emitted (snake — Rust identifiers cannot carry kebab)"
@@ -2329,7 +2428,8 @@ def updateChecks : CheckResult := do
     emitter into `goldenChecks` automatically; this pin stands
     independent of the wiring). -/
 unsafe def updateGoldenChecks (update : Bool) : IO (String × CheckResult) := do
-  let files := SchemaLang.Emit.Update.updateEmitter.run []
+  let ctx ← loadDemoCtx
+  let files := SchemaLang.Emit.Update.updateEmitter.run ctx
   let out := files.head?.map (·.contents) |>.getD ""
   let golden : System.FilePath := "goldens/update/updates_generated.rs"
   CodegenCore.Emit.createParentDirs golden
@@ -2477,8 +2577,305 @@ def diagGoldenChecks : CheckResult := do
     "renderList joins with ;;"
   .ok ()
 
+/-! ## Subschema — the typed-query lane (FP-lean §7.3) -/
+
+/-- The full user record (the validator lane's schema, REUSED — the
+    old consumer's view). -/
+abbrev subUserOld : List Field :=
+  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩ ]
+
+/-- The NEW user record: the old schema plus a nickname (the safe
+    change — additions only). -/
+abbrev subUserNew : List Field :=
+  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
+  , ⟨"nickname", .string⟩ ]
+
+/-- The book's travelDiary-style evidence over OUR schema: the
+    id-only and the (id, name) subschema of the full record — BOTH
+    built by the book's `by repeat constructor` ergonomics (the
+    documented pattern; `by decide` does NOT apply — the family is
+    Type-valued data, see the pinned negative controls below). -/
+def subId : Subschema [⟨"id", .u64⟩] subUserOld := by repeat constructor
+def subIdName : Subschema [⟨"id", .u64⟩, ⟨"name", .string⟩] subUserOld :=
+  by repeat constructor
+
+/-- Transitivity, term-level: the chained evidence composes. -/
+def subChain : Subschema [⟨"id", .u64⟩] subUserOld :=
+  Subschema.trans subId subIdName
+
+/-- The safe-change lemma, executed as a term: the old record embeds
+    into the nickname-augmented one (`addColumn_sub` generalizes —
+    here built by the book's ergonomics). -/
+def subFullEmbed : Subschema subUserOld subUserNew := by repeat constructor
+
+/-- A FULL new-schema row. -/
+def subRow (n : UInt64) : RowVals subUserNew :=
+  .cons (.u64 n) (.cons (.string "Evan") (.cons (.string "e@x")
+    (.cons (.string "ev") .nil)))
+
+def subschemaChecks : CheckResult := do
+  -- §7.3 demo, executed: the projections read the RIGHT columns —
+  -- and CANNOT fail (no failure value exists to return)
+  _ ← assertEq "project id-only"
+    (match subRow 42 |>.project subId with | .cons (.u64 n) _ => n | _ => 0) 42
+  _ ← assertEq "project id,name"
+    (match subRow 42 |>.project subIdName with
+      | .cons (.u64 n) (.cons (.string s) _) => (n, s) | _ => (0, ""))
+    (42, "Evan")
+  -- trans, executed: the chained evidence projects identically
+  _ ← assertEq "trans chain projects the same"
+    (match subRow 42 |>.project subChain with | .cons (.u64 n) _ => n | _ => 0) 42
+  -- THE MIGRATION RUNNER, executed: the OLD validator (`id > 0`,
+  -- valPositive over valUserFields = subUserOld) runs UNCHANGED on
+  -- the NEW rows through the projection — the embedding evidence IS
+  -- the backward-compat certificate, `RowVals.project` is its runner.
+  _ ← assertEq "old validator on new rows (id=42)"
+    (validates valPositive (subRow 42 |>.project subFullEmbed)) true
+  _ ← assertEq "old validator refuses bad new row (id=0)"
+    (validates valPositive (subRow 0 |>.project subFullEmbed)) false
+  -- the constructive migration search, executed: additions construct
+  -- the evidence; a retype or a removal is `none` = breaking
+  _ ← assert (subschemaOfItem? subItemV1 subItemV2).isSome
+    "added field: embedding exists"
+  _ ← assert (subschemaViaDiff? subItemV1 subItemV2).isSome
+    "diff-gated: all-added → evidence"
+  _ ← assert ((subschemaOfItem? subItemV1 subItemRetype).isNone)
+    "retyped field: breaking (no embedding)"
+  _ ← assert ((subschemaOfItem? subItemV1 subItemShrink).isNone)
+    "removed field: breaking (no embedding)"
+  -- the diff gate really says all-added on V1→V2 (the gate's verdict,
+  -- executed — the gate⟹evidence link is test-pinned, see the header)
+  _ ← assert ((fieldDiffsOf subItemV1 subItemV2).all fun
+      | .fieldAdded _ => true | _ => false) "diff verdict: additions only"
+  -- the Vortex tie: the dtype-level field selection (field-mask shape;
+  -- the batch-level read is the Rust executor's)
+  let lowered : List (Vortex.FieldName × Vortex.DType) :=
+    [ ("id", .primitive .u64 .nonNullable)
+    , ("name", .utf8 .nonNullable)
+    , ("email", .utf8 .nonNullable) ]
+  _ ← assertEq "vortexSelect id-only"
+    (subId.vortexSelect lowered)
+    (some [("id", .primitive .u64 .nonNullable)])
+  _ ← assertEq "vortexSelect drifted list = none"
+    (subId.vortexSelect [("only", .null)]) none
+  .ok ()
+
+/-- Record fixtures for the migration-tie checks (V1 → V2 adds an
+    email; the retype and the shrink are the breaking controls). -/
+def subItemV1 : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩]
+def subItemV2 : Item :=
+  .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩]
+def subItemRetype : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .u32⟩]
+def subItemShrink : Item := .record "user" [⟨"id", .u64⟩]
+
+-- THE ERGONOMICS' NEGATIVE CONTROLS (the misspelled-field gate, the
+-- same shape the `HasCol` gate gives VExpr): a NOT-subschema has NO
+-- evidence — `repeat constructor` runs out of constructors and the
+-- residual `ColPath … []` goal fails the build. `by decide` is the
+-- WRONG tool by type: the family is Type-valued data, not a Prop.
+/-- error: unsolved goals
+case a
+⊢ ColPath { name := "iid", ty := Ty.u64 }.name { name := "iid", ty := Ty.u64 }.ty []
+
+case a
+⊢ Subschema [] subUserOld -/
+#guard_msgs in
+example : Subschema [⟨"iid", .u64⟩] subUserOld := by repeat constructor
+
+/-- error: unsolved goals
+case a
+⊢ ColPath { name := "id", ty := Ty.string }.name { name := "id", ty := Ty.string }.ty []
+
+case a
+⊢ Subschema [] subUserOld -/
+#guard_msgs in
+example : Subschema [⟨"id", .string⟩] subUserOld := by repeat constructor
+
+/-- error: Application type mismatch: The argument
+  Subschema [⟨"id", .u64⟩] subUserOld
+has type
+  Type
+of sort `Type 1` but is expected to have type
+  Prop
+of sort `Type` in the application
+  @decide (Subschema [⟨"id", .u64⟩] subUserOld) -/
+#guard_msgs in
+example : Subschema [⟨"id", .u64⟩] subUserOld := by decide
+
+/-! ## The `[inv| …]` DSL — the VExpr surface syntax (the ch. 8 embedding)
+
+The Metaprogramming-in-Lean book's chapter-8 pattern, landed in
+SchemaLang.Validate: `declare_syntax_cat vexpr` + the recursive
+`elabVExpr` into the VExpr constructors + the `[inv| … ]` term quoter.
+This section pins the EMBEDDING: the syntax-elaborated validators eval
+EXACTLY as the hand ones (compile = the same VExpr), the precedence
+parses the right tree, the misspelled field is the elaboration error
+(through the syntax now), and every VExpr pretty-prints BACK to the
+`[inv| … ]` spelling (the unexpanders — the book's Pretty Printing
+mini-project).
+
+GuestlangStd is READ-ONLY in this lane — the `userCompleteCheck`
+MIGRATION is demonstrated on the mirror schema (the std module's
+`VExpr.and userCheck userNameLenCheck` reads like the syntax spelling
+below once it lands). -/
+
+/-- The user schema, as the DSL tests see it — the 4-field mirror of
+    `GuestImpl.userSchema` (abbrev — the reducibility rule). -/
+abbrev dslUserSchema : List Field :=
+  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
+  , ⟨"tags", .list .string⟩ ]
+
+/-- THE DEMO: `userCompleteCheck`'s spelling through the syntax — the
+    id gate AND the name-length gate in ONE `[inv| … ]` term. -/
+def userCompleteCheckDsl : VExpr dslUserSchema .bool :=
+  [inv| id > 0 && strlen(name) > 3]
+
+/-- The hand-spelled SAME tree (the pin's oracle). -/
+def userCompleteCheckHand : VExpr dslUserSchema .bool :=
+  VExpr.and
+    (VExpr.gt (VExpr.colOf "id") (VExpr.lit 0))
+    (VExpr.gt (VExpr.strlen (VExpr.colOf "name")) (VExpr.lit 3))
+
+-- COMPILE = THE SAME VEXPR: the syntax elaborates to exactly the hand
+-- constructor tree (definitional, not just eval-equal).
+example : userCompleteCheckDsl = userCompleteCheckHand := rfl
+
+def dslPositive : VExpr valUserFields .bool := [inv| id > 0]
+def dslEq : VExpr valUserFields .bool := [inv| id == 7]
+def dslAnd : VExpr valUserFields .bool := [inv| id > 0 && id == 7]
+def dslNameLong : VExpr valUserFields .bool := [inv| strlen(name) > 3]
+-- the precedence pins: `&&` parses TIGHTER — `||` is the top node
+def dslOrTop : VExpr valUserFields .bool :=
+  [inv| id == 7 && id == 5 || id == 9]
+def dslAndTight : VExpr valUserFields .bool :=
+  [inv| id == 7 || id == 5 && id == 9]
+
+/-- The full 4-field row (the tags list rides empty — the check does
+    not read it). -/
+def dslRow (id : UInt64) (nm : String) : RowVals dslUserSchema :=
+  .cons (.u64 id) (.cons (.string nm)
+    (.cons (.string "e") (.cons (.list .nil) .nil)))
+
+def dslChecks : CheckResult := do
+  -- the eval pins: the syntax-elaborated validators eval EXACTLY as
+  -- the hand ones (both readings — the SPEC evalVBool and the raw
+  -- `validates`)
+  for n in [0, 1, 5, 7, 9, 42] do
+    let row := dslRow n.toUInt64 "bobby"
+    _ ← assertEq s!"dsl: positive spec≡hand id={n}"
+      (validates dslPositive row) (validates (s := valUserFields)
+        (VExpr.gt (VExpr.colOf "id") (VExpr.lit 0))
+        (.cons (.u64 n.toUInt64) (.cons (.string "n") (.cons (.string "e") .nil))))
+    _ ← assertEq s!"dsl: positive spec≡compiled id={n}"
+      (evalVBool dslPositive row) (validates dslPositive row)
+  -- the driving example's rows
+  _ ← assertEq "dsl: id=5 passes" (validates dslPositive (dslRow 5 "bobby")) true
+  _ ← assertEq "dsl: id=0 refused" (validates dslPositive (dslRow 0 "bobby")) false
+  _ ← assertEq "dsl: eq hit" (validates dslEq (dslRow 7 "bobby")) true
+  _ ← assertEq "dsl: eq miss" (validates dslEq (dslRow 5 "bobby")) false
+  _ ← assertEq "dsl: and both" (validates dslAnd (dslRow 7 "bobby")) true
+  _ ← assertEq "dsl: and half" (validates dslAnd (dslRow 5 "bobby")) false
+  _ ← assertEq "dsl: strlen pass" (validates dslNameLong (dslRow 5 "bobby")) true
+  _ ← assertEq "dsl: strlen short" (validates dslNameLong (dslRow 5 "ab")) false
+  -- the DEMO's verdicts (the userCompleteCheck spelling)
+  _ ← assertEq "dsl: userCompleteCheck complete row"
+    (validates userCompleteCheckDsl (dslRow 5 "bobby")) true
+  _ ← assertEq "dsl: userCompleteCheck zero id"
+    (validates userCompleteCheckDsl (dslRow 0 "bobby")) false
+  _ ← assertEq "dsl: userCompleteCheck short name"
+    (validates userCompleteCheckDsl (dslRow 5 "ab")) false
+  -- PRECEDENCE: `a && b || c` = `(a && b) || c` — the || fires on the
+  -- id=9 row (the C disjunct); the misparse `a && (b || c)` would say
+  -- false there
+  _ ← assertEq "dsl: || is the top node (id=9)"
+    (validates dslOrTop (dslRow 9 "bobby")) true
+  _ ← assertEq "dsl: || top, A-side false (id=7)"
+    (validates dslOrTop (dslRow 7 "bobby")) false
+  -- and the mirror: `a || b && c` = `a || (b && c)` — the A disjunct
+  -- fires on id=7 (the misparse `(a || b) && c` would say false)
+  _ ← assertEq "dsl: && tighter (id=7)"
+    (validates dslAndTight (dslRow 7 "bobby")) true
+  _ ← assertEq "dsl: && tighter, miss (id=9)"
+    (validates dslAndTight (dslRow 9 "bobby")) false
+  .ok ()
+
+-- The MISSPELLING's negative control, THROUGH the syntax: the
+-- field-ref's `HasCol` instance search happens at the elaboration
+-- site, so the typo fails the BUILD (the same gate the hand `colOf`
+-- has — pinned at the syntax's site now). The strlen operand rides
+-- the SAME gate (its index is forced to .string before the postponed
+-- instance synth runs — the error names the CONCRETE type).
+/-- error: failed to synthesize instance of type class
+  HasCol dslUserSchema "iid" Ty.u64
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
+---
+info: [inv| iid > 0 ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| iid > 0] : VExpr dslUserSchema .bool)
+
+/-- error: failed to synthesize instance of type class
+  HasCol dslUserSchema "nane" Ty.string
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
+---
+info: [inv| strlen(nane) > 3 ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| strlen(nane) > 3] : VExpr dslUserSchema .bool)
+
+/-! ### The unexpander pins — a VExpr pretty-prints back to `[inv| … ]`
+
+The book's Pretty Printing pattern: per-ctor `@[app_unexpander]`, the
+match-inside-the-pattern (children arrive already unembedded), and the
+parenthesization that keeps the re-parse tree-exact. `#check` renders
+the elaborated term — the pins ARE the pp output. -/
+
+/-- info: [inv| id > 0 ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| id > 0] : VExpr dslUserSchema .bool)
+
+/-- info: [inv| id > 0 && strlen(name) > 3 ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| id > 0 && strlen(name) > 3] : VExpr dslUserSchema .bool)
+
+-- the numeral literal renders
+/-- info: [inv| 42 > 0 ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| 42 > 0] : VExpr dslUserSchema .bool)
+
+-- the || ROUND TRIP: the syntax → the De Morgan tree → back to the
+-- SAME spelling (the De Morgan unexpander strips the `!`s)
+/-- info: [inv| (id == 7 && id == 5) || (id == 9) ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| id == 7 && id == 5 || id == 9] : VExpr dslUserSchema .bool)
+
+/-- info: [inv| (id > 0 && id == 7) || (id == 9 && id == 1) ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| id > 0 && id == 7 || id == 9 && id == 1] : VExpr dslUserSchema .bool)
+
+-- the plain `not` renders as `!` (the operand parenthesized when
+-- compound — the re-parse is the SAME tree)
+/-- info: [inv| !(id > 0) ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ([inv| !(id > 0)] : VExpr dslUserSchema .bool)
+
+/-- info: [inv| !(id > 0 && id == 7) ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ((VExpr.not (VExpr.and (VExpr.gt (VExpr.colOf "id") (VExpr.lit 0))
+  (VExpr.eq (VExpr.colOf "id") (VExpr.lit 7)))) : VExpr dslUserSchema .bool)
+
+-- the right-nested hand tree: the && splice parenthesizes the RIGHT
+-- child (a left-assoc re-parse would be a DIFFERENT tree)
+/-- info: [inv| id > 0 && (id == 7 && id == 7) ] : VExpr dslUserSchema Ty.bool -/
+#guard_msgs in
+#check ((VExpr.and (VExpr.gt (VExpr.colOf "id") (VExpr.lit 0))
+  (VExpr.and (VExpr.eq (VExpr.colOf "id") (VExpr.lit 7))
+    (VExpr.eq (VExpr.colOf "id") (VExpr.lit 7)))) :
+  VExpr dslUserSchema .bool)
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
+  let ctx ← loadDemoCtx
   let goldens ← goldenChecks update
   let reflect ← reflectChecks
   let invGolden ← invariantGoldenChecks update
@@ -2514,18 +2911,21 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("pipelineGuardControl", pipelineGuardControl)
      , ("pipelineRun", pipelineRunChecks)
      , ("orderMachine", orderMachineChecks)
-     , ("emitterAudit", emitterAuditChecks)
+     , ("emitterAudit", emitterAuditChecks ctx)
+     , ("partition", partitionChecks ctx)
      , ("typedSession", typedSessionChecks)
      , ("propCoverage", PropSweep.propCoverageChecks)
      , ("funcSem", funcSemChecks)
      , funcSemReflect
      , ("validate", validateChecks)
      , ("strlen", strlenChecks)
+     , ("dsl", dslChecks)
      , ("variant", variantChecks)
-     , ("invariantChecks", invariantChecks)
-     , ("updateChecks", updateChecks)
+     , ("invariantChecks", invariantChecks ctx.invariants)
+     , ("updateChecks", updateChecks ctx)
      , ("trace", traceChecks)
      , ("migration", migrationChecks)
+     , ("subschema", subschemaChecks)
      , ("docs", docsChecks)
      , ("diagGolden", diagGoldenChecks)
      ])
@@ -2534,3 +2934,139 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- (TestKit.PropSpec: the property must pass AND the sabotaged sibling
   -- must be caught — a vacuous sweep fails the gate)
   TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec]
+
+/-! ## Debug commands (the author's REPL) — #guard_msgs smokes
+
+The `#assertType` pattern's info-pins: each command's logged output is
+pinned EXACTLY against the elab-time registry (Demo's rows, replayed
+via import). `#guard_msgs (info)` fails elaboration on any drift, and —
+because these commands only LOG — a misspelled-world pin also pins
+GRACEFULNESS: if `#world gatway` ever threw, the build fails here.
+No registry side effects: the pins are deterministic replays.
+-/
+
+/-- info: registered schema items (13):
+  User : record user (4 fields)
+  OrderItem : record order-item (3 fields)
+  Order : record order (3 fields)
+  Role : variant role (3 cases)
+  OrderError : variant order-error (3 cases)
+  getUser : func get-user(id: u64) -> option<user> delivery=once
+  watchOrders : func watch-orders(into: order-error) -> future<list<user>> delivery=once
+  Db : resource db
+  probeVolatileFn : func probe-volatile-fn(x: u32) -> u32 delivery=once
+  probeBothAxesFn : func probe-both-axes-fn(x: option<u32>) -> option<u32> delivery=once
+  probeDefaultFn : func probe-default-fn(x: u32, y: u32) -> u32 delivery=once
+  updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once
+  updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once -/
+#guard_msgs in
+#schema
+
+/-- info: package guestlang;
+
+interface gateway-types {
+record user {
+  id: u64,
+  name: string,
+  email: string,
+  tags: list<string>,
+}
+record order-item {
+  id: u64,
+  qty: u32,
+  price: f64,
+}
+record order {
+  id: u64,
+  items: list<order-item>,
+  total: f64,
+}
+variant role {
+  admin,
+  editor,
+  viewer,
+}
+variant order-error {
+  empty-cart,
+  invalid-item(u64),
+  insufficient-funds(f64),
+}
+resource db;
+}
+
+interface gateway-exports {
+  use gateway-types.{user, order-error};
+    get-user: func(id: u64) -> option<user>;
+    watch-orders: async func(into: order-error) -> list<user>;
+    probe-volatile-fn: func(x: u32) -> u32;
+    probe-both-axes-fn: func(x: option<u32>) -> option<u32>;
+    probe-default-fn: func(x: u32, y: u32) -> u32;
+    upd-clock-fn: func(seed: u64) -> u64;
+    upd-pure-fn: func(x: u64) -> u64;
+}
+
+world gateway {
+  export gateway-exports;
+} -/
+#guard_msgs in
+#world gateway
+
+/-- info: package guestlang;
+
+interface gatway-types {
+record user {
+  id: u64,
+  name: string,
+  email: string,
+  tags: list<string>,
+}
+record order-item {
+  id: u64,
+  qty: u32,
+  price: f64,
+}
+record order {
+  id: u64,
+  items: list<order-item>,
+  total: f64,
+}
+variant role {
+  admin,
+  editor,
+  viewer,
+}
+variant order-error {
+  empty-cart,
+  invalid-item(u64),
+  insufficient-funds(f64),
+}
+resource db;
+}
+
+interface gatway-exports {
+  use gatway-types.{user, order-error};
+    get-user: func(id: u64) -> option<user>;
+    watch-orders: async func(into: order-error) -> list<user>;
+    probe-volatile-fn: func(x: u32) -> u32;
+    probe-both-axes-fn: func(x: option<u32>) -> option<u32>;
+    probe-default-fn: func(x: u32, y: u32) -> u32;
+    upd-clock-fn: func(seed: u64) -> u64;
+    upd-pure-fn: func(x: u64) -> u64;
+}
+
+world gatway {
+  export gatway-exports;
+} -/
+#guard_msgs in
+#world gatway
+
+/-- info: span rows (7):
+  SpanSpec { name: "get-user", delivery: "once", fields: &[("id", "u64")] }
+  SpanSpec { name: "watch-orders", delivery: "once", fields: &[("into", "order-error")] }
+  SpanSpec { name: "probe-volatile-fn", delivery: "once", fields: &[("x", "u32")] }
+  SpanSpec { name: "probe-both-axes-fn", delivery: "once", fields: &[("x", "option<u32>")] }
+  SpanSpec { name: "probe-default-fn", delivery: "once", fields: &[("x", "u32"), ("y", "u32")] }
+  SpanSpec { name: "upd-clock-fn", delivery: "once", fields: &[("seed", "u64")] }
+  SpanSpec { name: "upd-pure-fn", delivery: "once", fields: &[("x", "u64")] } -/
+#guard_msgs in
+#spans

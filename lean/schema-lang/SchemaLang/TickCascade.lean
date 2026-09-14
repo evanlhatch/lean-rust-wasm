@@ -95,6 +95,10 @@ theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
       intro p₁ hne row v
       have he : n₁ ∉ e.reads := hne
       simp [evalV, ih p₁ he row v]
+  | not e ih =>
+      intro p₁ hne row v
+      have he : n₁ ∉ e.reads := hne
+      simp [evalV, ih p₁ he row v]
 
 /-- The RAW u64 evaluator's congruence — the `.u64` slice admits
     lit/col/strlen ONLY (cases, no induction needed: no self-recursion). -/
@@ -159,6 +163,11 @@ def VExpr.evalBNeutral {fs : List Field} {n₁ : String} {t₁ : Ty}
       have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
       simp only [evalB]
       rw [evalBNeutral a p₁ ha row v, evalBNeutral b p₁ hb row v]
+  | not e =>
+      intro row v
+      have he : n₁ ∉ e.reads := hne
+      simp only [evalB]
+      rw [evalBNeutral e p₁ he row v]
 
 /-! ## The cascade -/
 

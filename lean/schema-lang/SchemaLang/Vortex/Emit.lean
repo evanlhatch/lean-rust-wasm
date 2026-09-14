@@ -27,6 +27,7 @@ struct array column-wise via `IntoArray`.
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
 
@@ -177,16 +178,16 @@ def recordItems (rec : String × StructFields) : List CodegenCore.Emit.Rust.Item
   , intoVortexImpl n fs ]
 
 /-- The Vortex emitter plugin: dtype constants + IntoVortex impls. -/
-def vortexEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+def vortexEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "vortex"
   style := .doubleSlash
   specSource := "Demo.lean"
   outputs := ["../../src/vortex_generated.rs"]
-  run items :=
+  run ctx :=
     [ { path := "../../src/vortex_generated.rs"
         contents :=
           CodegenCore.Emit.Rust.renderModule
-            (useItems ++ (recordDTypes items).flatMap recordItems) }
+            (useItems ++ (recordDTypes ctx.items).flatMap recordItems) }
     ]
 
 end SchemaLang.Vortex.Emit

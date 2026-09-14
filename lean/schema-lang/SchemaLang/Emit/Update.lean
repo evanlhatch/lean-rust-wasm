@@ -24,15 +24,15 @@ Lowering (reuses Emit.Invariant — imported, NOT copied):
   assignment). ANY other shape → no emitted fn for that row + a
   comment (the honest-skip discipline).
 
-The replay concession (v1, Emit.Invariant's discipline): emitters are
-pure `List Item → List GeneratedFile` — no environment reaches `run`,
-and `Item` cannot carry the VExpr family, so the emitter's input is
-`demoUpdates` — the committed row list below, whose entries mirror
-exactly what the Tests' `schema_update` registrations contain (the
-Tests' run_cmd pins the mirror: names + derived reads/writes/
-selfReading must equal the registry's). When the driver gains an
-env-replay hook, `run` switches to `registeredUpdates` with no other
-change.
+The emitter contract (v2, Emit.Invariant's discipline): `run` takes
+the FULL registry state (`Emit.GenCtx`) — the update lane reads
+`ctx.updates`, the ext-replayed `schema_update` rows. `SomeUpdate`
+carries the table's FIELDS but not the record REF (the GADT shape),
+so the row's record name is re-derived at emission: the registered
+record whose field list EQUALS the update's (`recNameOf?` — data,
+first match in registry order; the driver's ctx carries the item
+universe alongside). A row with no matching record is skipped
+honestly (no emitted fn for an unnameable target).
 
 Deliberate exclusions: `tick` fns are emitted only for records with at
 least one LOWERABLE update (a record whose updates all skip honestly
@@ -45,6 +45,7 @@ import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Update
 import SchemaLang.Emit.Invariant
+import SchemaLang.Emit.GenCtx
 import SchemaLang.Meta.Reflect
 
 namespace SchemaLang.Emit.Update
@@ -137,53 +138,41 @@ def updateFiles (ups : List DemoUpdate) : List CodegenCore.Emit.GeneratedFile :=
   [ { path := "../../src/updates_generated.rs"
       contents := CodegenCore.Emit.Rust.renderModule (moduleItems ups) } ]
 
-/-! ## The registered rows (the v1 replay concession — see the header) -/
+/-! ## The emitter -/
 
-/-- The User record, as the update lane sees it (the mirror of Demo's
-    `@[schema] structure User` — the registered fields the
-    `schema_update` command elaborated against). `abbrev` — the
-    reducibility rule: the `HasCol` instance search must see through
-    the list. -/
-abbrev userFields : List Field :=
-  [ { name := "id", ty := .u64 }
-  , { name := "name", ty := .string }
-  , { name := "email", ty := .string }
-  , { name := "tags", ty := .list .string } ]
+/-- The record name for a registered update: the registered RECORD
+    whose field list equals the update's (the shape match — the
+    registry's records carry the refs `SomeUpdate` lacks). First match
+    in registry order; `none` = unnameable target, the row is skipped
+    honestly. Two records with identical field lists would collide —
+    the demo registry has no such pair (the dup-name audit keeps the
+    registry's RECORD names unique; identical SHAPES are legal but
+    unnameable for the update lane — resolved by registry order). -/
+def recNameOf? (items : List Item) (u : SomeUpdate) : Option String :=
+  match items with
+  | [] => none
+  | .record n fields :: rest =>
+      if fields == u.fields then some n else recNameOf? rest u
+  | _ :: rest => recNameOf? rest u
 
-/-- The demo registry's update rows — the mirror of the Tests'
-    `schema_update` registrations (the `demoInvariants` discipline; the
-    Tests' run_cmd pins the mirror). `self_bump` is the SELF-READING
-    row (the value reads the written column — nonlinear, the journal
-    carries S0); its guard is the always-true idiom (`where` is
-    required, `VExpr .bool` has no literal-true). -/
-def demoUpdates : List DemoUpdate :=
-  [ { recName := "User"
-    , u := { fields := userFields, field := { name := "id", ty := .u64 }
-           , update := { name := "reset_id"
-                       , guard := .gt (.colOf "id") (.lit 100)
-                       , value := .lit 0
-                       , writePath := .here } } }
-  , { recName := "User"
-    , u := { fields := userFields, field := { name := "email", ty := .string }
-           , update := { name := "echo_email"
-                       , guard := .gt (.strlen (.colOf "name")) (.lit 3)
-                       , value := .colOf "name"
-                       , writePath := .there (.there .here) } } }
-  , { recName := "User"
-    , u := { fields := userFields, field := { name := "id", ty := .u64 }
-           , update := { name := "self_bump"
-                       , guard := .eq (.lit 0) (.lit 0)
-                       , value := .colOf "id"
-                       , writePath := .here } } } ]
+/-- The emitter's rows: the registered updates re-unified with their
+    record's name (the emitter's internal row shape — `applyFn`/
+    `tickFn` need the `Vec<<Record>>` target). Rows with no matching
+    record are dropped (the honest skip). -/
+def ctxRows (ctx : GenCtx) : List DemoUpdate :=
+  ctx.updates.filterMap fun u =>
+    recNameOf? ctx.items u |>.map fun recName => { recName := recName, u := u }
 
 /-- The update emitter: buf-plugin shape (name/style/specSource/
     declared outputs/pure run). The parent registry wires it into
-    `SchemaLang.Emit.coreEmitters` (one line, the Registry lane's). -/
-def updateEmitter : CodegenCore.Emit.Emitter (List SchemaLang.Item) where
+    `SchemaLang.Emit.coreEmitters` (one line, the Registry lane's).
+    The lane reads `ctx.updates` — the replayed registry, no committed
+    mirror (the v2 contract). -/
+def updateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "update"
   style := .doubleSlash
   specSource := "SchemaLang.Meta.Reflect (updateItemExt) — schema_update"
   outputs := ["../../src/updates_generated.rs"]
-  run _ := updateFiles demoUpdates
+  run ctx := updateFiles (ctxRows ctx)
 
 end SchemaLang.Emit.Update
