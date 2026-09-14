@@ -1966,6 +1966,80 @@ unsafe def invariantGoldenChecks (update : Bool) : IO (String × CheckResult) :=
   let r ← TestKit.Golden.checkAgainstGolden "invariant" out golden update
   pure ("invariantGolden", r)
 
+/-! ## Proved-tier citation resolution (the cert pattern, made real)
+
+`Tier.proved` stores a `proofName : Option Name`; the registration
+command leaves it UNRESOLVED ("CI's job later"). This IS that job:
+`citationDiag?` walks the registered invariants, `Environment.find?`
+resolves every cited name, and the resolved decl must be a theorem or
+def whose axiom footprint (Lean's `collectAxioms`) contains no
+`sorryAx` — an axiom-cited (or sorry-cited) invariant fails. The check
+runs at build time (run_cmd): an unresolvable citation fails THIS
+module's build.
+-/
+
+/-- The theorem the proved-tier invariant `invNameMinLength` cites —
+    previously a dangling name ("resolution is CI's job later"), now a
+    resolvable, kernel-checked decl: the executable mirror's verdict on
+    the long name, proved. -/
+theorem userNameLenProved :
+    validates invNameMinLengthMirror (invRow 5 "abcd") = true := by
+  unfold validates invNameMinLengthMirror invRow
+  simp only [evalB, evalU, VExpr.colOf, hasColHead, ColPath.get,
+    _root_.string_len]
+  rfl
+
+/-- Resolve ONE proved-tier citation. `none` = resolved clean; `some`
+    = the diagnostic (unresolvable, not a theorem/def, or `sorryAx`-
+    tainted). `collectAxioms` is Lean's own axiom-checking. -/
+def citationDiag? (env : Lean.Environment)
+    (it : SchemaLang.InvariantItem) : Lean.Elab.Command.CommandElabM (Option String) := do
+  match it.proofName with
+  | none => pure none
+  | some pn =>
+    match env.find? pn with
+    | none =>
+        pure (some s!"invariant `{it.name}`: cited proof `{pn}` does not resolve")
+    | some (.thmInfo _) | some (.defnInfo _) =>
+        let axs ← Lean.collectAxioms pn
+        if axs.contains `sorryAx then
+          pure (some s!"invariant `{it.name}`: cited proof `{pn}` depends on `sorryAx`")
+        else
+          pure none
+    | some _ =>
+        pure (some s!"invariant `{it.name}`: cited proof `{pn}` is not a theorem or def — an axiom citation is rejected")
+
+-- The citation-resolution gate: every registered proved-tier
+-- invariant resolves clean, and the resolver CATCHES a bogus name and
+-- an axiom citation (the negative controls — a resolver that accepts
+-- everything is vacuous). (No doc comment here: run_cmd's parser does
+-- not take one after `open … in`.)
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  let provedRows := (SchemaLang.Meta.registeredInvariants env).filter
+    (fun it => it.proofName.isSome)
+  unless provedRows.any (·.name == "invNameMinLength") do
+    throwError "citation check: no proved-tier invariant registered"
+  for it in provedRows do
+    match ← citationDiag? env it with
+    | some d => throwError d
+    | none => pure ()
+  -- negative control 1: a bogus name does not resolve
+  let bogus : SchemaLang.InvariantItem :=
+    { name := "negctl-bogus", schemaRef := "User", tier := .proved
+    , proofName := some `noSuchTheoremAnywhere, inv := default }
+  match ← citationDiag? env bogus with
+  | some _ => pure ()
+  | none => throwError "citation check: bogus name NOT caught — the resolver is vacuous"
+  -- negative control 2: an AXIOM citation is rejected (kind gate)
+  let axiomCtl : SchemaLang.InvariantItem :=
+    { name := "negctl-axiom", schemaRef := "User", tier := .proved
+    , proofName := some `propext, inv := default }
+  match ← citationDiag? env axiomCtl with
+  | some _ => pure ()
+  | none => throwError "citation check: axiom citation NOT caught — the resolver is vacuous"
+
 /-! ## Docs emitter (DOCS-SITE lane): the markdown API page -/
 
 def docsChecks : CheckResult := do
@@ -2114,6 +2188,62 @@ schema_update updWrongType for User name := VExpr.lit 0
 schema_update updTypo for User iid := VExpr.lit 0
   where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
 
+/-! ### The determinism gate: `volatileInPureContext` FIRES
+
+The update lane is the FIRST pure-context consumer of the armed diag:
+the value/guard VExpr terms may reference REGISTERED `@[schema_fn]`
+constants (the lit operand is a Lean `UInt64` computation), and a
+`volatile` fn referenced there fails elaboration (only `pure` may
+fuse/reorder). The negative controls below fail THIS module's build if
+they stop failing; the positives register through the SAME gates (the
+registrations land after the emitter-sync run_cmd above, which pins the
+first three rows). The schema fns live HERE (Demo.lean is untouched —
+Tests imports the Meta machinery and applies the attributes directly).
+-/
+
+/-- The volatile probe: a clock-reading fn (the volatilities probe
+    above register its SIGNATURE; this one is REFERENCED from an
+    update's value term — the diag's firing condition). -/
+@[schema_fn volatile]
+def updClockFn (seed : UInt64) : UInt64 := seed + 17
+
+/-- The pure probe: same shape, default determinism — registers clean
+    and is REFERENCED from an update's value term. -/
+@[schema_fn]
+def updPureFn (x : UInt64) : UInt64 := x * 2
+
+-- POSITIVE: a `pure` schema fn in the value term registers (the gate
+-- fires on `volatile` only).
+schema_update updPureCall for User id := VExpr.lit (updPureFn 3)
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+-- NEGATIVE: a `volatile` fn in the VALUE term — the armed diag fires,
+-- naming the fn (`updClockFn`) and the update.
+/-- error: schema_update `updVolatileValue`: func `updClockFn` is volatile but `schema_update updVolatileValue` requires purity — valid determinisms in a pure context: pure, stable -/
+#guard_msgs in
+schema_update updVolatileValue for User id := VExpr.lit (updClockFn 5)
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+-- NEGATIVE: a `volatile` fn in the GUARD term — same gate, same diag.
+/-- error: schema_update `updVolatileGuard`: func `updClockFn` is volatile but `schema_update updVolatileGuard` requires purity — valid determinisms in a pure context: pure, stable -/
+#guard_msgs in
+schema_update updVolatileGuard for User id := VExpr.lit 0
+  where VExpr.gt (VExpr.lit (updClockFn 1)) (VExpr.lit 0)
+
+-- The determinism-gate pins: the pure-fn update registered (4 rows
+-- now — after the emitter-sync pin), the volatile updates did NOT.
+open Lean Elab Command in
+run_cmd do
+  let ups := SchemaLang.Meta.registeredUpdates (← getEnv)
+  unless ups.length == 4 do
+    throwError s!"expected 4 registered updates (3 sync-pinned + updPureCall), got {ups.length}"
+  unless ups.any (·.update.name == "updPureCall") do
+    throwError "updPureCall: the pure-fn update did not register"
+  if ups.any (·.update.name == "updVolatileValue") then
+    throwError "updVolatileValue: the volatile update REGISTERED — the gate did not fire"
+  if ups.any (·.update.name == "updVolatileGuard") then
+    throwError "updVolatileGuard: the volatile update REGISTERED — the gate did not fire"
+
 /-- The hand mirrors of the registered updates (the runtime pins
     evaluate THESE — the same data the command registered; the run_cmd
     above pins the mirror). -/
@@ -2205,6 +2335,54 @@ unsafe def updateGoldenChecks (update : Bool) : IO (String × CheckResult) := do
   let r ← TestKit.Golden.checkAgainstGolden "update" out golden update
   pure ("updateGolden", r)
 
+/-! ## Error goldens: the exact `SchemaDiag` renders (the API docs)
+
+The LLM contract (Part 11): the diagnostic renders ARE the agents'
+API documentation — the text is regression-tested. One golden row per
+ctor: the rendered string must equal the pinned text EXACTLY (an
+assertEq per row — a wording drift, a lost did-you-mean, a dropped
+valid-space enumeration all fail the suite). The ctor lists ride
+too: ten ctors, ten goldens.
+-/
+
+/-- The golden inputs: one representative diag per ctor (the ctor
+    names are the golden labels, in ctor-declaration order). -/
+def diagGoldenInputs : List SchemaDiag :=
+  [ .unknownRef "usr" ["user"] ["user", "org"]
+  , .dupName "user"
+  , .asyncField "user" "email"
+  , .nonBoundaryType "count" "Nat"
+  , .notAStructure "X"
+  , .noCtor "X"
+  , .binderMismatch "X"
+  , .multiPayload "X"
+  , .reservedWord "type" "field of `user`"
+  , .volatileInPureContext "clock" "aggregator" ]
+
+/-- The goldens: ctor → the EXACT rendered text (the API docs). -/
+def diagGolden : List (String × String) :=
+  [ ("unknownRef", "unknown type `usr` — valid types: user, org — did you mean: user?")
+  , ("dupName", "duplicate name `user` — names must be unique")
+  , ("asyncField", "field `email` on `user`: future/stream cannot appear in field position (WIT grammar) — move it to a function signature")
+  , ("nonBoundaryType", "`count`: `Nat` is not a boundary type — boundary types are: Bool, UInt8..UInt64, Int8..Int64, Float32, Float, String, ByteArray, List, Option, Sum (as result), Async.Future, Async.Stream, or another `@[schema]` declaration")
+  , ("notAStructure", "`X` is not a structure — v1 reflects structures only")
+  , ("noCtor", "`X`: no constructor found")
+  , ("binderMismatch", "`X`: field/binder count mismatch — flat structures without typeclass fields only (v1)")
+  , ("multiPayload", "`X`: variant cases carry at most one payload type (v1 — WIT case shape)")
+  , ("reservedWord", "`type` is a reserved word in field of `user` — rename it (WIT/Rust would reject the emitted identifier)")
+  , ("volatileInPureContext", "func `clock` is volatile but `aggregator` requires purity — valid determinisms in a pure context: pure, stable") ]
+
+def diagGoldenChecks : CheckResult := do
+  _ ← assertEq "diagGolden covers every ctor" diagGolden.length 10
+  let actual := diagGoldenInputs.map SchemaDiag.render
+  for (a, (label, golden)) in actual.zip diagGolden do
+    _ ← assertEq s!"diagGolden[{label}]" a golden
+  -- the renderList projection renders the SAME text per element
+  let two := SchemaDiag.renderList [.dupName "a", .dupName "b"]
+  _ ← assert (two.contains "duplicate name `a` — names must be unique;; duplicate name `b` — names must be unique")
+    "renderList joins with ;;"
+  .ok ()
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let goldens ← goldenChecks update
@@ -2254,6 +2432,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("updateChecks", updateChecks)
      , ("migration", migrationChecks)
      , ("docs", docsChecks)
+     , ("diagGolden", diagGoldenChecks)
      ])
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control

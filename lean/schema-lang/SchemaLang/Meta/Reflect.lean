@@ -551,6 +551,32 @@ def registeredUpdates (env : Environment) : List SomeUpdate :=
 def registeredUpdateNames (env : Environment) : List String :=
   (registeredUpdates env).map (fun u => u.update.name)
 
+/-- The volatile schema-func names referenced by an elaborated term:
+    the post-elaboration constant walk — collect the `.const` refs and
+    match them against the registry's func bodies (a func item whose
+    `FuncSig.body` names the const) with `sem.determinism == volatile`.
+    THE FIRST PURE-CONTEXT CONSUMER: the armed `volatileInPureContext`
+    diag fires on a hit (a `volatile` fn referenced from a value/guard
+    VExpr would be fused/reordered by a pure consumer — only `pure`
+    may fuse/reorder, so `volatile` and `stable` are the safe
+    determinisms here and the diag enumerates them). -/
+partial def volatileSchemaFns (env : Environment) (e : Expr) : List String :=
+  go e []
+where
+  go : Expr → List String → List String
+    | .const n _, acc =>
+        match (schemaItemExt.getState env).find? (fun (ln, it) => ln == n) with
+        | some (_, .func sig) =>
+            if sig.sem.determinism == .volatile then sig.name :: acc else acc
+        | _ => acc
+    | .app f a, acc => go a (go f acc)
+    | .lam _ _ b _, acc => go b acc
+    | .forallE _ _ b _, acc => go b acc
+    | .letE _ t v b _, acc => go b (go v (go t acc))
+    | .mdata _ b, acc => go b acc
+    | .proj _ _ s, acc => go s acc
+    | _, acc => acc
+
 -- `schema_update <name> for <Record> <col> := <valueTerm>
 --    where <guardTerm>` — the `where` clause is REQUIRED (no
 -- literal-true in `VExpr .bool`; see the section header). The `set`
@@ -638,6 +664,17 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     if g.hasExprMVar then
       throwError s!"schema_update `{uname}`: unresolved metavariables in the guard"
     let guardVal : VExpr fsVal .bool ← Meta.evalExpr (VExpr fsVal .bool) expectedGuard g
+    -- the DETERMINISM GATE (the armed `volatileInPureContext` diag's
+    -- firing site): the value and guard terms may reference REGISTERED
+    -- schema functions; a volatile one in this pure-context lane fails
+    -- elaboration, naming the fn and the update. The scan is the
+    -- post-elaboration constant walk of BOTH terms (`volatileSchemaFns`).
+    let volatileHits :=
+      (volatileSchemaFns env e ++ volatileSchemaFns env g).eraseDups
+    unless volatileHits.isEmpty do
+      throwError s!"schema_update `{uname}`: " ++
+        String.intercalate "; " (volatileHits.map fun fn =>
+          SchemaDiag.render (.volatileInPureContext fn s!"schema_update {uname}"))
     -- the write path: elaborate `VExpr.colOf <col>`, extract the
     -- `.col` constructor path (data — the `ColPath` doctrine)
     let colLit : Term ← Lean.Elab.Term.exprToSyntax (mkStrLit colId)
