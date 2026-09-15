@@ -141,30 +141,15 @@ is a global constant (resolved through marks).
 
 ## Protocols 
 
-## Payload-TYPED steps — generic over the payload universe (the CORE)
-
-The string layer certifies the choreography SHAPE with payloads as wire
-names; the TYPED core abstracts the payload: a `TProtocol P` is a
-conversation whose payloads range over ANY universe `P`. Machines owns
-the MECHANISM (the typed dual and its mirror/liveness certificates)
-ONCE — the string layer below is the INSTANTIATION `P := String` (not a
-second implementation), and the schema-lang layer supplies
-`P := SchemaLang.Ty` (SchemaLang.Session). The two cannot drift.
-
-
-## The string layer — the typed core at `P := String`
-
-`Step = Dir × String = TStep String` and `Protocol = TProtocol String`
-definitionally, so the string theorems ARE the typed ones:
-`dual := tdual`, and every string theorem below delegates to its typed
-twin. The `@[simp]` surface (`dual_nil`/`dual_cons`/`dual_length`) stays
-for the session machine's reasoning. 
+## Payload-TYPED steps — generic over the payload universe (the CORE) 
 
 ## The session machine (Label = the script's indices) 
 
-## Duality — dual peers mirror payloads 
-
 ## The gateway instance — the real WIT world's conversation 
+
+## The string bridge (W4.1c) — `P := String` aliases for
+    SchemaLang.Session + its tests. The generic layer above subsumes
+    them; delete this section when the schema-lang side migrates. 
 
 ### Peer agreement as a TYPE — the elaboration-error property
 

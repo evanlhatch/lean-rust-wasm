@@ -726,7 +726,7 @@ namespace SessTest
 open Machines.Session
 
 /-- The gateway conversation's choreography facts, EXECUTED (the theorems
-    `dual_dual`/`dual_payload_mirror`/`session_mid_deadlockFree` are
+    `tdual_dual`/`tdual_payload_mirror`/`session_mid_deadlockFree` are
     proved for ALL protocols; these check the INSTANCE behaves). -/
 def sessionChecks : CheckResult := do
   -- dual is an involution on the gateway script
@@ -782,9 +782,10 @@ def typedChecks : CheckResult := do
   _ ← assertEq "tdual directions oppose"
       (List.all (List.zip (gatewayProto.map (·.1)) ((tdual gatewayProto).map (·.1)))
         (fun x => x.1 != x.2)) true
-  -- the typed machine walks the real script: mid-protocol liveness
-  let midOk := (List.finRange gatewayProto.length).all (fun i =>
-    (tsession gatewayProto).enabled i.val i)
+  -- the session machine is payload-generic: it walks the Nat-payload
+  -- script directly (mid-protocol liveness at ANY universe)
+  let midOk := (List.finRange natProto.length).all (fun i =>
+    (session natProto).enabled i.val i)
   _ ← assert midOk "typed mid-protocol liveness"
   -- the agreeing peer, derived: it IS the dual
   _ ← assertEq "derived peer is the dual" (peerOf gatewayProto)

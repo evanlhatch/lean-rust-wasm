@@ -289,6 +289,263 @@ def defaultFuel : Nat := 1000
 def exec (s : State) (body : List Instr) : Except Err State :=
   execList defaultFuel s body
 
+/-! ## The Velvet glue — fuel monotonicity of decided results
+
+The machine is deterministic and fuel only TRUNCATES the trace, so any
+result other than `.error .outOfFuel` is upward-fuel-stable: more budget
+never changes a decided answer. This is what makes the fuel-insensitive
+(“if `execList` returns, it is right”) statements below and in
+`WasmBackend.Correct` well-formed: partial correctness quantifies over
+ALL fuel, termination is a separate convergence witness, and the two
+compose to the old fuel-bounded forms via the monotonicity lemmas. -/
+
+/-- THE MONOTONICITY LEMMA: any decided result — `.ok`, `trap`,
+    `underflow`, `structural`, or a `branch` signal — is stable under
+    extra fuel (only `outOfFuel` can flip, to the decided result the
+    budget was starving). Induction on the fuel; every recursive call of
+    `execList` happens at the predecessor, so the IH (generalized over
+    the state, the program, and the result) covers the loop-restart
+    re-entry too. -/
+theorem execList_mono :
+    ∀ (fuel : Nat) (s : State) (p : List Instr) (r : Except Err State),
+      execList fuel s p = r → r ≠ .error .outOfFuel →
+      ∀ (fuel' : Nat), fuel ≤ fuel' → execList fuel' s p = r := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro s p r h hr
+    simp only [execList] at h
+    exact absurd h.symm hr
+  | succ fuel ih =>
+    intro s p r h hr fuel' hle
+    obtain ⟨f', rfl⟩ : ∃ g, fuel' = g + 1 := ⟨fuel' - 1, by omega⟩
+    have hle' : fuel ≤ f' := by omega
+    cases p with
+    | nil =>
+      simp only [execList] at h ⊢
+      exact h
+    | cons i is =>
+      -- case on the flat step FIRST: for the frame instrs `step` is
+      -- `.structural` (contradicting the `ok` branch, unused in the
+      -- `error` branch); for the 13 flat instrs the last `execList`
+      -- arm is `step` then the tail, one fuel unit for the step.
+      cases hst : step s i with
+      | ok s1 =>
+        cases i with
+        | block body => simp [step] at hst
+        | loop body => simp [step] at hst
+        | if_ t e => simp [step] at hst
+        | _ =>
+          simp only [execList, hst] at h
+          simp only [execList, hst]
+          exact ih _ _ _ h hr _ hle'
+      | error e =>
+        cases i with
+        | block body =>
+          cases hb : execList fuel s body with
+          | ok s1 =>
+            have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+            simp only [execList, hb] at h
+            simp only [execList, hb']
+            exact ih _ _ _ h hr _ hle'
+          | error e1 =>
+            cases e1 with
+            | branch n ls =>
+              cases n with
+              | zero =>
+                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                simp only [execList, hb] at h
+                simp only [execList, hb']
+                exact ih _ _ _ h hr _ hle'
+              | succ n' =>
+                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                simp only [execList, hb] at h
+                simp only [execList, hb']
+                exact h
+            | outOfFuel =>
+              simp only [execList, hb] at h
+              exact absurd h.symm hr
+            | trap =>
+              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+              simp only [execList, hb] at h
+              simp only [execList, hb']
+              exact h
+            | underflow =>
+              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+              simp only [execList, hb] at h
+              simp only [execList, hb']
+              exact h
+            | structural =>
+              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+              simp only [execList, hb] at h
+              simp only [execList, hb']
+              exact h
+        | loop body =>
+          cases hb : execList fuel s body with
+          | ok s1 =>
+            have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+            simp only [execList, hb] at h
+            simp only [execList, hb']
+            exact ih _ _ _ h hr _ hle'
+          | error e1 =>
+            cases e1 with
+            | branch n ls =>
+              cases n with
+              | zero =>
+                -- the restart re-enters the SAME list at the predecessor
+                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                simp only [execList, hb] at h
+                simp only [execList, hb']
+                exact ih _ _ _ h hr _ hle'
+              | succ n' =>
+                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                simp only [execList, hb] at h
+                simp only [execList, hb']
+                exact h
+            | outOfFuel =>
+              simp only [execList, hb] at h
+              exact absurd h.symm hr
+            | trap =>
+              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+              simp only [execList, hb] at h
+              simp only [execList, hb']
+              exact h
+            | underflow =>
+              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+              simp only [execList, hb] at h
+              simp only [execList, hb']
+              exact h
+            | structural =>
+              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+              simp only [execList, hb] at h
+              simp only [execList, hb']
+              exact h
+        | if_ t e =>
+          cases hstk : s.stack with
+          | nil =>
+            simp only [execList, hstk] at h ⊢
+            exact h
+          | cons v vs =>
+            cases v with
+            | i64 n =>
+              simp only [execList, hstk] at h ⊢
+              exact h
+            | i32 b =>
+              by_cases hb0 : b != 0
+              . cases hb : execList fuel { s with stack := vs } t with
+                | ok s1 =>
+                  have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                  simp only [execList, hstk, if_pos hb0, hb] at h
+                  simp only [execList, hstk, if_pos hb0, hb']
+                  exact ih _ _ _ h hr _ hle'
+                | error e1 =>
+                  cases e1 with
+                  | branch n ls =>
+                    cases n with
+                    | zero =>
+                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                      simp only [execList, hstk, if_pos hb0, hb] at h
+                      simp only [execList, hstk, if_pos hb0, hb']
+                      exact ih _ _ _ h hr _ hle'
+                    | succ n' =>
+                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                      simp only [execList, hstk, if_pos hb0, hb] at h
+                      simp only [execList, hstk, if_pos hb0, hb']
+                      exact h
+                  | outOfFuel =>
+                    simp only [execList, hstk, if_pos hb0, hb] at h
+                    exact absurd h.symm hr
+                  | trap =>
+                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                    simp only [execList, hstk, if_pos hb0, hb] at h
+                    simp only [execList, hstk, if_pos hb0, hb']
+                    exact h
+                  | underflow =>
+                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                    simp only [execList, hstk, if_pos hb0, hb] at h
+                    simp only [execList, hstk, if_pos hb0, hb']
+                    exact h
+                  | structural =>
+                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                    simp only [execList, hstk, if_pos hb0, hb] at h
+                    simp only [execList, hstk, if_pos hb0, hb']
+                    exact h
+              . cases hb : execList fuel { s with stack := vs } e with
+                | ok s1 =>
+                  have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                  simp only [execList, hstk, if_neg hb0, hb] at h
+                  simp only [execList, hstk, if_neg hb0, hb']
+                  exact ih _ _ _ h hr _ hle'
+                | error e1 =>
+                  cases e1 with
+                  | branch n ls =>
+                    cases n with
+                    | zero =>
+                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                      simp only [execList, hstk, if_neg hb0, hb] at h
+                      simp only [execList, hstk, if_neg hb0, hb']
+                      exact ih _ _ _ h hr _ hle'
+                    | succ n' =>
+                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                      simp only [execList, hstk, if_neg hb0, hb] at h
+                      simp only [execList, hstk, if_neg hb0, hb']
+                      exact h
+                  | outOfFuel =>
+                    simp only [execList, hstk, if_neg hb0, hb] at h
+                    exact absurd h.symm hr
+                  | trap =>
+                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                    simp only [execList, hstk, if_neg hb0, hb] at h
+                    simp only [execList, hstk, if_neg hb0, hb']
+                    exact h
+                  | underflow =>
+                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                    simp only [execList, hstk, if_neg hb0, hb] at h
+                    simp only [execList, hstk, if_neg hb0, hb']
+                    exact h
+                  | structural =>
+                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
+                    simp only [execList, hstk, if_neg hb0, hb] at h
+                    simp only [execList, hstk, if_neg hb0, hb']
+                    exact h
+        | _ =>
+          simp only [execList, hst] at h ⊢
+          exact h
+
+/-- The `.ok` specialization: a completed run's answer is stable under
+    extra fuel. -/
+theorem execList_ok_mono {fuel fuel' : Nat} {s s' : State} {p : List Instr}
+    (h : execList fuel s p = .ok s') (hle : fuel ≤ fuel') :
+    execList fuel' s p = .ok s' :=
+  execList_mono fuel s p (.ok s') h (fun he => by simp at he) fuel' hle
+
+/-- The `.error` specialization: a DECIDED error (anything but
+    `outOfFuel`) is stable under extra fuel. -/
+theorem execList_error_mono {fuel fuel' : Nat} {s : State} {p : List Instr}
+    {e : Err} (h : execList fuel s p = .error e) (hne : e ≠ .outOfFuel)
+    (hle : fuel ≤ fuel') :
+    execList fuel' s p = .error e :=
+  execList_mono fuel s p (.error e) h (fun he => absurd (Except.error.inj he) hne)
+    fuel' hle
+
+/-- THE VELVET TRANSPORT (result uniqueness): two completed runs of the
+    same program from the same state — at ANY two budgets — agree. This
+    is what discharges the partial-correctness reshapes: one convergence
+    witness pins the answer at every fuel. -/
+theorem execList_ok_unique {f1 f2 : Nat} {s s1 s2 : State} {p : List Instr}
+    (h1 : execList f1 s p = .ok s1) (h2 : execList f2 s p = .ok s2) :
+    s1 = s2 := by
+  cases Nat.le_total f1 f2 with
+  | inl hle =>
+    have h2' := execList_ok_mono h1 hle
+    rw [h2'] at h2
+    injection h2
+  | inr hle =>
+    have h1' := execList_ok_mono h2 hle
+    rw [h1'] at h1
+    injection h1 with h1''
+    exact h1''.symm
+
 /-! ## checkStack — the instruction-level stack typing -/
 
 mutual
@@ -931,10 +1188,31 @@ theorem exec_typed (locals : Nat → Ty) :
             subst hls
             exact hin.2.2 (k'+1) ls hx
 
-/-- THE deliverable theorem: a well-typed program (checked against
-    its declared type), NEVER raises the stack-underflow error; and
-    if it completes normally, the final stack is statically `final` with
-    the locals well-formedness preserved (preservation). -/
+/-- THE deliverable theorem, FUEL-INSENSITIVE (the Velvet primary —
+    W6.9): at ANY budget, a well-typed program (checked against its
+    declared type) NEVER raises the stack-underflow error; and IF it
+    completes normally at that budget, the final stack is statically
+    `final` with the locals well-formedness preserved (preservation).
+    No fuel lower bound: at budget 0 the machine returns `outOfFuel`,
+    which is not `underflow`, and the `.ok` clause is vacuous —
+    `exec_typed` already quantifies over all fuel. Termination (enough
+    fuel exists) is a SEPARATE question; this is partial correctness. -/
+theorem typeSafetyList (locals : Nat → Ty) (body : List Instr) (base final : List Ty)
+    (s : State) (fuel : Nat)
+    (hcheck : checkStack locals base body = .ok final)
+    (hstack : stackTys s.stack = base)
+    (hloc : ∀ n, tyOf (s.locals n) = locals n) :
+    execList fuel s body ≠ .error .underflow
+    ∧ (∀ s', execList fuel s body = .ok s' →
+          stackTys s'.stack = final ∧ (∀ n, tyOf (s'.locals n) = locals n)) :=
+  ⟨(exec_typed locals fuel).1 body base final s hcheck hstack hloc |>.1,
+   ((exec_typed locals fuel).1 body base final s hcheck hstack hloc).2.1⟩
+
+/-- THE deliverable theorem at the top-level budget: a well-typed
+    program NEVER raises the stack-underflow error; and if it completes
+    normally, the final stack is statically `final` with the locals
+    well-formedness preserved (preservation). Thin corollary of the
+    fuel-insensitive `typeSafetyList` at `defaultFuel`. -/
 theorem typeSafety (locals : Nat → Ty) (body : List Instr) (base final : List Ty)
     (s : State)
     (hcheck : checkStack locals base body = .ok final)
@@ -942,9 +1220,8 @@ theorem typeSafety (locals : Nat → Ty) (body : List Instr) (base final : List 
     (hloc : ∀ n, tyOf (s.locals n) = locals n) :
     exec s body ≠ .error .underflow
     ∧ (∀ s', exec s body = .ok s' →
-          stackTys s'.stack = final ∧ (∀ n, tyOf (s'.locals n) = locals n)) := by
-  have h := (exec_typed locals defaultFuel).1 body base final s hcheck hstack hloc
-  exact ⟨h.1, h.2.1⟩
+          stackTys s'.stack = final ∧ (∀ n, tyOf (s'.locals n) = locals n)) :=
+  typeSafetyList locals body base final s defaultFuel hcheck hstack hloc
 
 /-! ## Memory safety -/
 
@@ -1261,53 +1538,56 @@ theorem getD_append_single {r d : Val} :
 
 /-- The push phase: `pushArgs ++ rest` executes as `rest` from the
     stack `args.reverse ++ s.stack` (the args pushed in order, param 0
-    deepest), one fuel unit per arg. -/
+    deepest), one fuel unit per arg. UNCONDITIONAL in the fuel (W6.9):
+    an underfueled push phase exhausts mid-list = `outOfFuel`, which is
+    exactly `execList (fuel - args.length)` at a zeroed budget — the
+    equation absorbs the starvation. -/
 theorem pushArgs_exec (args : List Val) :
-    ∀ (fuel : Nat) (rest : List Instr) (s : State), args.length < fuel →
+    ∀ (fuel : Nat) (rest : List Instr) (s : State),
       execList fuel s (pushArgs args ++ rest)
         = execList (fuel - args.length)
             { s with stack := args.reverse ++ s.stack } rest := by
   induction args with
   | nil =>
-    intro fuel rest s hf
+    intro fuel rest s
     cases fuel with
-    | zero => simp at hf
+    | zero => simp [execList]
     | succ n => simp [pushArgs, execList]
   | cons a as ih =>
-    intro fuel rest s hf
+    intro fuel rest s
     cases fuel with
-    | zero => simp at hf
+    | zero => simp [execList]
     | succ n =>
-      simp only [List.length_cons] at hf
       simp only [pushArgs, List.cons_append, execList, List.length_cons]
       cases a with
       | i32 c =>
         simp only [step, constOf, List.reverse_cons, List.append_assoc]
         rw [show n + 1 - (as.length + 1) = n - as.length from by omega]
-        exact ih n rest { s with stack := .i32 c :: s.stack } (by omega)
+        exact ih n rest { s with stack := .i32 c :: s.stack }
       | i64 c =>
         simp only [step, constOf, List.reverse_cons, List.append_assoc]
         rw [show n + 1 - (as.length + 1) = n - as.length from by omega]
-        exact ih n rest { s with stack := .i64 c :: s.stack } (by omega)
+        exact ih n rest { s with stack := .i64 c :: s.stack }
 
 /-- The pop phase (stated over the args' STACK IMAGE `rs` — head =
     top): `popParams rs.length ++ rest` executes as `rest` from the
     state with the args bound to the param locals (`rs.reverse` = the
     args in push order) and the stack drained to `bot`, one fuel unit
     per pop. This is Correct.lean's convention contract as a program
-    EQUALITY. -/
+    EQUALITY. UNCONDITIONAL in the fuel (W6.9 — same `outOfFuel`
+    absorption as `pushArgs_exec`). -/
 theorem popParams_exec (rs : List Val) :
     ∀ (fuel : Nat) (rest : List Instr) (bot : List Val) (s : State),
-      s.stack = rs ++ bot → rs.length < fuel →
+      s.stack = rs ++ bot →
       execList fuel s (popParams rs.length ++ rest)
         = execList (fuel - rs.length)
             { s with locals := fun n => rs.reverse.getD n (s.locals n)
                    , stack := bot } rest := by
   induction rs with
   | nil =>
-    intro fuel rest bot s hs hf
+    intro fuel rest bot s hs
     cases fuel with
-    | zero => simp at hf
+    | zero => simp [execList]
     | succ n =>
       rw [List.nil_append] at hs
       subst hs
@@ -1315,11 +1595,10 @@ theorem popParams_exec (rs : List Val) :
           = s.locals := by funext m; simp
       simp [popParams, execList, hloc]
   | cons r rs ih =>
-    intro fuel rest bot s hs hf
+    intro fuel rest bot s hs
     cases fuel with
-    | zero => simp at hf
+    | zero => simp [execList]
     | succ n =>
-      simp only [List.length_cons] at hf
       -- the head of the `rs ++ bot`-shaped stack is `r` (the top arg
       -- = the HIGHEST param); `localset rs.length` binds it, then the
       -- IH binds the rest into locals rs.length-1 … 0.
@@ -1333,7 +1612,7 @@ theorem popParams_exec (rs : List Val) :
       simp only [List.length_cons, popParams, List.cons_append, hstep]
       have hI := ih n rest bot
         { s with locals := fun m => if m = rs.length then r else s.locals m
-                , stack := rs ++ bot } rfl (by omega)
+                , stack := rs ++ bot } rfl
       simp only [hI]
       -- the composed locals: param binding = `rs.reverse ++ [r]`'s getD
       have hfun : ∀ m, rs.reverse.getD m
@@ -1366,18 +1645,18 @@ theorem popParams_exec (rs : List Val) :
     pops, then the callee's body) executes EXACTLY AS the big-step
     call (bind the args, run the body as a sub-exec). The convention
     is now a program equality with the callee appended, not a contract
-    about two lists. -/
+    about two lists. UNCONDITIONAL in the fuel (W6.9): an underfueled
+    prep exhausts = `outOfFuel` = `callExecFuel` at a zeroed budget. -/
 theorem call_split (fuel : Nat) (f : Fn) (args : List Val) (s : State)
-    (harity : args.length = f.params) (hs : s.stack = [])
-    (hf : 2 * args.length < fuel) :
+    (harity : args.length = f.params) (hs : s.stack = []) :
     execList fuel s (pushArgs args ++ (popParams args.length ++ f.body))
       = callExecFuel (fuel - 2 * args.length) f args s := by
-  have h1 := pushArgs_exec args fuel (popParams args.length ++ f.body) s (by omega)
+  have h1 := pushArgs_exec args fuel (popParams args.length ++ f.body) s
   rw [h1]
   simp only [hs, List.append_nil]
   have h2 := popParams_exec args.reverse (fuel - args.length) f.body []
     { s with stack := args.reverse }
-    (by simp [List.append_nil]) (by simp; omega)
+    (by simp [List.append_nil])
   simp only [List.length_reverse] at h2
   rw [h2]
   -- both sides: the bound state, the callee's body
@@ -1399,21 +1678,20 @@ theorem call_split (fuel : Nat) (f : Fn) (args : List Val) (s : State)
     final stack's top (the return convention). -/
 def adderFn : Fn := { params := 2, body := [.localget 0, .localget 1, .i64add] }
 
-/-- THE CALL-EXECUTION THEOREM: the caller's prep (the args' pushes),
-    the call's binding (the pops), and the callee's body compose to
-    compute the CALLEE's result on the caller's stack — the args go
-    IN, the callee-computed sum comes OUT. Symbolic args, arbitrary
-    initial state, kernel-checked. -/
-theorem call_exec_correct (fuel : Nat) (a b : UInt64) (s : State)
-    (hs : s.stack = []) (hf : 2 * 2 + 4 ≤ fuel) :
-    ∃ s', execList fuel s
+/-- THE CALL-EXECUTION THEOREM, the TERMINATION leg (W6.9): at any
+    budget ≥ 8 the composed call program RETURNS — the caller's prep
+    (the args' pushes), the call's binding (the pops), and the callee's
+    body compose to compute the CALLEE's result on the caller's stack.
+    Symbolic args, arbitrary initial state, kernel-checked. -/
+theorem call_exec_correct_converges (a b : UInt64) (s : State)
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', execList (m + 8) s
         (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ adderFn.body))
       = .ok s' ∧ s'.stack = [.i64 (a + b)] := by
-  have h := call_split fuel adderFn [.i64 a, .i64 b] s rfl hs
-    (by have hl : ([.i64 a, .i64 b] : List Val).length = 2 := rfl; omega)
+  intro m
+  have h := call_split (m + 8) adderFn [.i64 a, .i64 b] s rfl hs
   simp only [List.length_cons, List.length_nil] at h
   simp only [h]
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 8 := ⟨fuel - 8, by omega⟩
   simp only [callExecFuel, adderFn, List.length_cons, List.length_nil]
   rw [show m + 8 - 2 * 2 = m + 4 from by omega]
   simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil,
@@ -1423,23 +1701,38 @@ theorem call_exec_correct (fuel : Nat) (a b : UInt64) (s : State)
   refine ⟨_, rfl, ?_⟩
   rw [UInt64.add_comm]
 
+/-- THE CALL-EXECUTION THEOREM, PARTIAL CORRECTNESS (the primary,
+    fuel-insensitive statement — W6.9): IF the composed call program
+    returns a state at ANY budget, the stack IS the callee-computed
+    sum — the args go IN, the sum comes OUT. No fuel hypothesis: an
+    underfueled run returns `outOfFuel`, not a wrong state (the
+    `execList_ok_unique` transport against the convergence witness). -/
+theorem call_exec_correct (a b : UInt64) (s : State)
+    (hs : s.stack = []) (fuel : Nat) (s' : State)
+    (h : execList fuel s
+        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ adderFn.body))
+      = .ok s') :
+    s'.stack = [.i64 (a + b)] := by
+  obtain ⟨s8, h8, hs8⟩ := call_exec_correct_converges a b s hs 0
+  cases execList_ok_unique h8 h
+  exact hs8
+
 /-- The first-param callee (returns param 0 — exposes the binding;
     the negative control's target). -/
 def head0Fn : Fn := { params := 2, body := [.localget 0] }
 
-/-- The convention's POSITIVE pin at the machine level (the head0
-    callee): the correctly-ordered prep delivers param 0 = the FIRST
-    arg — the mirror of `call_prep_swapped`. -/
-theorem call_prep_ok (fuel : Nat) (a b : UInt64) (s : State)
-    (hs : s.stack = []) (hf : 2 * 2 + 2 ≤ fuel) :
-    ∃ s', execList fuel s
+/-- The convention's POSITIVE pin, the TERMINATION leg (W6.9): at any
+    budget ≥ 6 the correctly-ordered prep returns with param 0 = the
+    FIRST arg — the mirror of `call_prep_swapped_converges`. -/
+theorem call_prep_ok_converges (a b : UInt64) (s : State)
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', execList (m + 6) s
         (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ head0Fn.body))
       = .ok s' ∧ s'.stack = [.i64 a] := by
-  have h := call_split fuel head0Fn [.i64 a, .i64 b] s rfl hs
-    (by have hl : ([.i64 a, .i64 b] : List Val).length = 2 := rfl; omega)
+  intro m
+  have h := call_split (m + 6) head0Fn [.i64 a, .i64 b] s rfl hs
   simp only [List.length_cons, List.length_nil] at h
   simp only [h]
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 6 := ⟨fuel - 6, by omega⟩
   simp only [callExecFuel, head0Fn, List.length_cons, List.length_nil]
   rw [show m + 6 - 2 * 2 = m + 2 from by omega]
   simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil,
@@ -1447,23 +1740,35 @@ theorem call_prep_ok (fuel : Nat) (a b : UInt64) (s : State)
   simp only [execList, step, List.getD, List.getElem?_cons_zero,
     Option.getD_some]
   exact ⟨_, rfl, rfl⟩
+
+/-- The convention's POSITIVE pin, PARTIAL CORRECTNESS (primary,
+    fuel-insensitive — W6.9): IF the correctly-ordered prep program
+    returns at ANY budget, param 0 got the FIRST arg. -/
+theorem call_prep_ok (a b : UInt64) (s : State)
+    (hs : s.stack = []) (fuel : Nat) (s' : State)
+    (h : execList fuel s
+        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ head0Fn.body))
+      = .ok s') :
+    s'.stack = [.i64 a] := by
+  obtain ⟨s6, h6, hs6⟩ := call_prep_ok_converges a b s hs 0
+  cases execList_ok_unique h6 h
+  exact hs6
 
 /-- THE NEGATIVE CONTROL (the arg-order swap — the calling-convention
     bug class, now at the MACHINE level): pushing the args in REVERSE
     order binds param 0 = the LAST arg, and the callee computes on the
     swapped binding. Same input state, different result — the
     checker cannot see it (shape-only); the disagreement is a theorem
-    (`call_prep_swapped_disagrees`). -/
-theorem call_prep_swapped (fuel : Nat) (a b : UInt64) (s : State)
-    (hs : s.stack = []) (hf : 2 * 2 + 2 ≤ fuel) :
-    ∃ s', execList fuel s
+    (`call_prep_swapped_disagrees`). The TERMINATION leg (W6.9). -/
+theorem call_prep_swapped_converges (a b : UInt64) (s : State)
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', execList (m + 6) s
         (pushArgs [.i64 b, .i64 a] ++ (popParams 2 ++ head0Fn.body))
       = .ok s' ∧ s'.stack = [.i64 b] := by
-  have h := call_split fuel head0Fn [.i64 b, .i64 a] s rfl hs
-    (by have hl : ([.i64 b, .i64 a] : List Val).length = 2 := rfl; omega)
+  intro m
+  have h := call_split (m + 6) head0Fn [.i64 b, .i64 a] s rfl hs
   simp only [List.length_cons, List.length_nil] at h
   simp only [h]
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 6 := ⟨fuel - 6, by omega⟩
   simp only [callExecFuel, head0Fn, List.length_cons, List.length_nil]
   rw [show m + 6 - 2 * 2 = m + 2 from by omega]
   simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil,
@@ -1472,23 +1777,37 @@ theorem call_prep_swapped (fuel : Nat) (a b : UInt64) (s : State)
     Option.getD_some]
   exact ⟨_, rfl, rfl⟩
 
-/-- THE NEGATIVE INSTANCE: the swapped prep DISAGREES with the
-    convention — same input state, different result stack. If a
-    regression re-swapped the arg pushes, this theorem's shape is what
-    the differential duel's sabotage control checks empirically. -/
-theorem call_prep_swapped_disagrees (fuel : Nat) (a b : UInt64) (s : State)
-    (hs : s.stack = []) (hAB : a ≠ b) (hf : 2 * 2 + 3 ≤ fuel) :
-    (match execList fuel s
-        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ head0Fn.body)) with
-     | .ok s' => s'.stack | .error _ => [])
-      ≠ (match execList fuel s
-        (pushArgs [.i64 b, .i64 a] ++ (popParams 2 ++ head0Fn.body)) with
-     | .ok s' => s'.stack | .error _ => []) := by
-  obtain ⟨s1, h1, h1s⟩ := call_prep_ok fuel a b s hs (by omega)
-  obtain ⟨s2, h2, h2s⟩ := call_prep_swapped fuel a b s hs (by omega)
+/-- THE NEGATIVE CONTROL, PARTIAL CORRECTNESS (primary, fuel-insensitive
+    — W6.9): IF the swapped prep returns at ANY budget, param 0 got the
+    LAST arg. -/
+theorem call_prep_swapped (a b : UInt64) (s : State)
+    (hs : s.stack = []) (fuel : Nat) (s' : State)
+    (h : execList fuel s
+        (pushArgs [.i64 b, .i64 a] ++ (popParams 2 ++ head0Fn.body))
+      = .ok s') :
+    s'.stack = [.i64 b] := by
+  obtain ⟨s6, h6, hs6⟩ := call_prep_swapped_converges a b s hs 0
+  cases execList_ok_unique h6 h
+  exact hs6
+
+/-- THE NEGATIVE INSTANCE (fuel-insensitive — W6.9): the swapped prep
+    DISAGREES with the convention at ANY pair of budgets — whenever
+    BOTH return, the result stacks differ. If a regression re-swapped
+    the arg pushes, this theorem's shape is what the differential
+    duel's sabotage control checks empirically. (The old same-fuel
+    match-form at `fuel ≥ 11` is recovered via the `_converges` legs.) -/
+theorem call_prep_swapped_disagrees (a b : UInt64) (s : State)
+    (hs : s.stack = []) (hAB : a ≠ b) (f1 f2 : Nat) (s1 s2 : State)
+    (h1 : execList f1 s
+        (pushArgs [.i64 a, .i64 b] ++ (popParams 2 ++ head0Fn.body))
+      = .ok s1)
+    (h2 : execList f2 s
+        (pushArgs [.i64 b, .i64 a] ++ (popParams 2 ++ head0Fn.body))
+      = .ok s2) :
+    s1.stack ≠ s2.stack := by
+  have h1s := call_prep_ok a b s hs f1 s1 h1
+  have h2s := call_prep_swapped a b s hs f2 s2 h2
   intro hEq
-  rw [h1, h2] at hEq
-  simp only at hEq
   rw [h1s, h2s] at hEq
   injection hEq with hA hE1
   injection hA with hABeq
@@ -1509,17 +1828,17 @@ def curriedBoxedFn : Fn :=
     value) + the fresh args IN ORDER, then the DIRECT call (v1 models
     `call`, not `call_indirect` — the funcref table is the follow-up).
     The hop computes the target's sum of the three delivered args.
+    The TERMINATION leg (W6.9): at any budget ≥ 12 the hop returns.
     Kernel-checked. -/
-theorem trampoline_call_ok (fuel : Nat) (p a b : UInt64) (s : State)
-    (hs : s.stack = []) (hf : 2 * 3 + 6 ≤ fuel) :
-    ∃ s', execList fuel s
+theorem trampoline_call_ok_converges (p a b : UInt64) (s : State)
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', execList (m + 12) s
         (pushArgs [.i64 p, .i64 a, .i64 b] ++ (popParams 3 ++ curriedBoxedFn.body))
       = .ok s' ∧ s'.stack = [.i64 (p + (a + b))] := by
-  have h := call_split fuel curriedBoxedFn [.i64 p, .i64 a, .i64 b] s rfl hs
-    (by have hl : ([.i64 p, .i64 a, .i64 b] : List Val).length = 3 := rfl; omega)
+  intro m
+  have h := call_split (m + 12) curriedBoxedFn [.i64 p, .i64 a, .i64 b] s rfl hs
   simp only [List.length_cons, List.length_nil] at h
   simp only [h]
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 12 := ⟨fuel - 12, by omega⟩
   simp only [callExecFuel, curriedBoxedFn, List.length_cons, List.length_nil]
   rw [show m + 12 - 2 * 3 = m + 6 from by omega]
   simp only [bindArgs, dropBottom, hs, List.reverse_nil, List.drop_nil]
@@ -1527,6 +1846,19 @@ theorem trampoline_call_ok (fuel : Nat) (p a b : UInt64) (s : State)
     List.getElem?_cons_succ, Option.getD_some]
   refine ⟨_, rfl, ?_⟩
   rw [UInt64.add_comm b a]
+
+/-- THE TRAMPOLINE DEMO, PARTIAL CORRECTNESS (primary, fuel-insensitive
+    — W6.9): IF the hop's program returns at ANY budget, the stack IS
+    the target's sum of the three delivered args. -/
+theorem trampoline_call_ok (p a b : UInt64) (s : State)
+    (hs : s.stack = []) (fuel : Nat) (s' : State)
+    (h : execList fuel s
+        (pushArgs [.i64 p, .i64 a, .i64 b] ++ (popParams 3 ++ curriedBoxedFn.body))
+      = .ok s') :
+    s'.stack = [.i64 (p + (a + b))] := by
+  obtain ⟨s12, h12, hs12⟩ := trampoline_call_ok_converges p a b s hs 0
+  cases execList_ok_unique h12 h
+  exact hs12
 
 /-! ### The type-safety cross-ref -/
 
@@ -1759,7 +2091,10 @@ theorem popFrame_restores (fr : Frame) (rest : List Frame) (s : State) (r : Val)
     body, same fuel. The machine the emitter's `call_indirect` protocol
     assumes IS the composition semantics. The 2-slack fuel hypothesis
     is the model artifact (the pop + the resume phase each consume a
-    unit). Kernel-checked. -/
+    unit) — and it is GENUINE (W6.9 audit): at `fuel = 1` the resume
+    phase starves (`runToReturn 1` runs its `mRun` at 0 = `outOfFuel`)
+    while the big-step side has already returned, so the fuel-
+    insensitive form is FALSE and the bound stays. Kernel-checked. -/
 theorem callProtocol_agrees (fuel : Nat) (f : Fn) (args : List Val) (s : State)
     (harity : args.length = f.params) (hs : s.stack = args.reverse)
     (hf : 2 ≤ fuel) :
@@ -1798,7 +2133,13 @@ theorem callProtocol_agrees (fuel : Nat) (f : Fn) (args : List Val) (s : State)
 /-- THE COMPOSITION COROLLARY: the machine ≡ the FULL flat composition
     (`call_split`'s left side — prep pushes, binding pops, callee body)
     at the matched budget. The emitter's `call_indirect` protocol and
-    the composition semantics are the same machine. Kernel-checked. -/
+    the composition semantics are the same machine. Kernel-checked.
+    The `+ 2` fuel slack STAYS (W6.9 note): it is the machine's own
+    budget arithmetic, not a correctness hypothesis — `callProtocol`'s
+    resume phase consumes one unit beyond the sub-exec's, so at
+    `fuel - 2*len = 1` the machine starves mid-resume (`outOfFuel`,
+    genuinely observable: `callProtocol_agrees` at fuel 1 is a
+    counterexample) where the flat side has already returned. -/
 theorem callProtocol_is_call_split (fuel : Nat) (f : Fn) (args : List Val) (s : State)
     (harity : args.length = f.params) (hs0 : s.stack = [])
     (hf : 2 * args.length + 2 ≤ fuel) :
@@ -1810,7 +2151,7 @@ theorem callProtocol_is_call_split (fuel : Nat) (f : Fn) (args : List Val) (s : 
     (match execList fuel s (pushArgs args ++ (popParams args.length ++ f.body)) with
      | .ok s' => s'.stack.head?
      | .error _ => none) := by
-  rw [call_split fuel f args s harity hs0 (by have := hf; omega)]
+  rw [call_split fuel f args s harity hs0]
   rw [callExecFuel, if_pos harity]
   have h := callProtocol_agrees (fuel - 2 * args.length) f args
     { s with stack := args.reverse } harity rfl (by have := hf; omega)

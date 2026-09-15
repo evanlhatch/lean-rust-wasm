@@ -68,6 +68,34 @@ def demoDb : Item := .resource "db"
 def demoItems : List Item :=
   [ demoUser, demoRole, demoOrderError, demoGetUser, demoWatchOrders, demoDb ]
 
+/-! ## W3.5 — `WellFormed` (the reasoning authority) via the checker bridge -/
+
+/-- The broken-universe fixture at top level (the bridge's negative
+    control quantifies over it in a theorem). -/
+def wfBrokenItems : List Item :=
+  [ .record "a" [{ name := "x", ty := .ty "usr" }], .record "user" [] ]
+
+/-- The demo universe is well-formed, VIA the sound bridge: the checker
+    discharges (`rfl`), the relation receives. -/
+theorem demoItems_wellFormed : WellFormed demoItems :=
+  universeCheck_sound rfl
+
+/-- The complete direction on the same fixture: the relation certifies
+    the clean run. -/
+theorem demoItems_universeCheck_nil : universeCheck demoItems = [] :=
+  universeCheck_complete demoItems_wellFormed
+
+/-- NEGATIVE CONTROL (non-vacuity): a universe with an unresolvable ref
+    is NOT well-formed — the complete bridge would certify a clean run,
+    but the checker finds one diag. A vacuous `WellFormed` (inhabited
+    for every list) breaks this proof. -/
+theorem broken_not_wellFormed : ¬ WellFormed wfBrokenItems := by
+  intro hwf
+  have hnil := universeCheck_complete hwf
+  have hlen : (universeCheck wfBrokenItems).length = 1 := rfl
+  rw [hnil] at hlen
+  exact absurd hlen (by decide)
+
 /-! ## The linen patterns, exercised -/
 
 /-- Schema-indexed field resolution (abbrev list — the reducibility rule). -/
@@ -99,8 +127,7 @@ def resolutionChecks : CheckResult := do
   -- the DIAGNOSTIC authority: empty diags = well formed
   _ ← assertEq "demo check clean" (universeCheck demoItems) []
   -- a ref to a missing type: rejected WITH did-you-mean + valid space
-  let broken : List Item :=
-    [ .record "a" [{ name := "x", ty := .ty "usr" }], .record "user" [] ]
+  let broken : List Item := wfBrokenItems
   _ ← assertEq "unknown ref rejected" (universeWellFormed broken) false
   let diags := universeCheck broken
   match diags with
@@ -1955,7 +1982,7 @@ run_cmd do
     throwError "id-positive: the stored term is not the predicate"
   let verdict (it : SchemaLang.InvariantItem) (row : Name) : CommandElabM Bool :=
     liftTermElabM do
-      let fsList ← SchemaLang.Meta.fieldsToExpr it.inv.fields
+      let fsList := SchemaLang.Meta.fieldsToExpr it.inv.fields
       let expected := mkApp2 (mkConst `SchemaLang.VExpr) fsList
         (mkConst `SchemaLang.Ty.bool)
       let stx ← Lean.Elab.Term.exprToSyntax it.exprTerm

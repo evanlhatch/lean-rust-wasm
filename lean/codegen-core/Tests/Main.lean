@@ -216,6 +216,108 @@ def didYouMeanChecks : CheckResult := do
     (didYouMean "completely-unrelated-token" ["user", "role"]) []
   .ok ()
 
+/-! ## Emitter.law + checkNodup (W7.9 phase 1)
+
+The optional `law` field defaults to `none` (downstream literals unchanged);
+`runCertified` is the proof-carrying lane; `checkNodup` is the decidable
+one-writer audit. -/
+
+/-- Plain emitter: no law. -/
+def demoEmitterA : Emitter Unit where
+  name := "demo-a"
+  style := .doubleSlash
+  specSource := "CodegenCore Tests"
+  outputs := ["gen/a.txt"]
+  run _ := []
+
+/-- Second plain emitter, distinct output. -/
+def demoEmitterB : Emitter Unit where
+  name := "demo-b"
+  style := .doubleSlash
+  specSource := "CodegenCore Tests"
+  outputs := ["gen/b.txt"]
+  run _ := []
+
+/-- Law-carrying emitter: one file per item, the law is name `Nodup`
+    (the one-writer law — the CertifiedEmitter demo's shape, absorbed). -/
+def demoLawEmitter : Emitter (List String) where
+  name := "law-demo"
+  style := .doubleSlash
+  specSource := "CodegenCore Tests"
+  outputs := ["gen/la.txt", "gen/lb.txt"]
+  run items := items.map fun i => { path := s!"gen/{i}.txt", contents := s!"// {i}\n" }
+  law := some List.Nodup
+
+/-- The discharged certificate over concrete data (`by decide` — the
+    registry-ships-the-proof pattern `checkNodup`'s docstring prescribes). -/
+theorem demoLawCert : demoLawEmitter.Cert ["la", "lb"] := by
+  show List.Nodup ["la", "lb"]
+  decide
+
+/-- The documented registry pattern: the one-writer audit discharged by
+    `decide`, shipped beside the registry. -/
+theorem demoEmitters_nodup :
+    Emitter.checkNodup [demoEmitterA, demoEmitterB] = true := by decide
+
+def emitterLawChecks : CheckResult := do
+  _ ← assertEq "law defaults to none" demoEmitterA.law.isNone true
+  _ ← assertEq "law some" demoLawEmitter.law.isSome true
+  -- the uncertified lane still works for law-less emitters
+  _ ← assertEq "runCertified (no law)"
+    ((demoEmitterA.runCertified () trivial).map (·.path)) []
+  -- the certified lane consumes the discharged certificate
+  _ ← assertEq "runCertified (law) paths"
+    ((demoLawEmitter.runCertified ["la", "lb"] demoLawCert).map (·.path))
+    demoLawEmitter.outputs
+  -- checkNodup: distinct outputs pass, a collision is rejected
+  _ ← assertEq "checkNodup distinct"
+    (Emitter.checkNodup [demoEmitterA, demoEmitterB]) true
+  _ ← assertEq "checkNodup collision"
+    (Emitter.checkNodup [demoEmitterA, demoEmitterA]) false
+  _ ← assertEq "checkNodup empty" (Emitter.checkNodup (Spec := Unit) []) true
+  .ok ()
+
+/-! ## DataRegistry (W7.16)
+
+Dup rejection is COMPILE-TIME: the `nodup` field's `by decide` default
+fails to elaborate a duplicate-named literal, so there is no runtime
+rejection path to test — the negative control is the type error. Only
+positive tests ship here. -/
+
+/-- A small concrete registry (String items are their own names). -/
+def colorReg : DataRegistry String where
+  items := ["red", "green", "blue"]
+  nameOf := id
+  -- `nodup` discharged by the `by decide` default — a dup here would not
+  -- elaborate.
+
+/-- Compile-time law consumption: the proved determinism law instantiated
+    on the concrete registry — `"blue"` is THE unique item named `"blue"`. -/
+theorem colorReg_lookup_unique :
+    ∀ b ∈ colorReg.items, colorReg.nameOf b = "blue" → b = "blue" :=
+  fun b hb hn => colorReg.lookup?_ok_unique (by rfl) b hb hn
+
+def dataRegistryChecks : CheckResult := do
+  _ ← assertEq "all" colorReg.all ["red", "green", "blue"]
+  _ ← match colorReg.lookup? "green" with
+    | .ok g => assertEq "lookup hit" g "green"
+    | .error miss => .error s!"unexpected miss: {miss.got}"
+  _ ← match colorReg.lookup? "gren" with
+    | .error miss =>
+      if miss.got == "gren" && miss.didYouMean.contains "green" then .ok ()
+      else .error s!"bad miss payload: {miss.got} {miss.didYouMean}"
+    | .ok _ => .error "expected miss for 'gren'"
+  -- insertion: fresh name in, findable immediately, old items intact
+  let reg2 := colorReg.insert "yellow" (by decide)
+  _ ← assertEq "insert grows" reg2.all.length 4
+  _ ← match reg2.lookup? "yellow" with
+    | .ok y => assertEq "insert hit" y "yellow"
+    | .error _ => .error "inserted item not found"
+  _ ← match reg2.lookup? "red" with
+    | .ok r => assertEq "old item survives" r "red"
+    | .error _ => .error "old item lost after insert"
+  .ok ()
+
 def main : IO UInt32 := do
   let code ← mainOfChecks "CodegenCore"
     [ ("mangle", mangleChecks)
@@ -224,6 +326,8 @@ def main : IO UInt32 := do
     , ("emit", emitChecks)
   , ("didYouMean", didYouMeanChecks)
   , ("enumerable", enumerableChecks)
+  , ("emitter-law", emitterLawChecks)
+  , ("data-registry", dataRegistryChecks)
     ]
   if code != 0 then return code
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND

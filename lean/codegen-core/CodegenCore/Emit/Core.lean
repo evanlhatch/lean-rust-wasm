@@ -151,6 +151,44 @@ structure Emitter (Spec : Type) where
   outputs : List String
   /-- Fold the spec into files. Pure and deterministic (tested). -/
   run : Spec → List GeneratedFile
+  /-- OPTIONAL emission law (W7.9 phase 1: the `CertifiedEmitter` pattern
+      absorbed into the base structure). When `some L`, the driver SHOULD
+      discharge `L spec` over the concrete spec and emit via
+      `runCertified` — the artifact is unemittable without the discharged
+      certificate. Defaults to `none` so every existing `Emitter` literal
+      compiles unchanged; phase 2 (next wave) makes the law mandatory
+      where a registry opts in. -/
+  law : Option (Spec → Prop) := none
+
+/-- The certificate an emitter demands over a concrete spec: `some L`
+    requires the discharged `L spec`; `none` is trivially certified. -/
+def Emitter.Cert (e : Emitter Spec) (spec : Spec) : Prop :=
+  match e.law with
+  | some L => L spec
+  | none => True
+
+/-- Proof-carrying emission: the certified lane. Phase 1 keeps `run`
+    plain (backward compatibility); certified drivers call here with the
+    discharged certificate — the `SpawnGate` shape from
+    `Emit.Certified`'s doctrine comment. -/
+def Emitter.runCertified (e : Emitter Spec) (spec : Spec) (_cert : e.Cert spec) :
+    List GeneratedFile := e.run spec
+
+/-- One-writer audit, decidable: no two emitters in the registry declare
+    the same output path. Registries SHOULD ship the discharged theorem
+    beside the registry:
+
+    ```
+    theorem myRegistry_outputs_nodup :
+        Emitter.checkNodup myRegistry = true := by decide
+    ```
+
+    (Phase 2 carries the proof INSIDE the registry type, making collisions
+    unconstructible; this wave keeps the check data-level. schema-lang's
+    `pathsUnique` and faults' audit row are the existing instances of the
+    pattern.) -/
+def Emitter.checkNodup (es : List (Emitter Spec)) : Bool :=
+  (es.flatMap (·.outputs)).Nodup
 
 /-! ## Name mangling (one place, every target)
 

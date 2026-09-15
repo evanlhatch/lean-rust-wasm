@@ -5,8 +5,13 @@ lean-v3 Part 5: "Rewind.lean — generic undo; flatland's tick-segmented
 overlay is one instance."
 
 The shape: a rewindable machine's events carry a Δ witness (what the
-journal records) and a `revert` that walks a state back across one event.
-`runLogged` records the deltas alongside the trace; the theorems:
+journal records) over a `Dbsp.ChangeInversion` change structure —
+`revert` IS `patch ∘ invert`, and the one-step revert law IS
+`correct_invert` (W4.2: the hand-carried `revert`/`revert_left` fields
+are gone; the structure instead witnesses that firing an event IS
+patching by the recorded delta, `action_is_patch`, and that recorded
+deltas are valid, `deltaOf_valid`). `runLogged` records the deltas
+alongside the trace; the theorems:
 
 - `runLogged_run` — the logged run is the SAME execution as `Machine.run`
   (deltas are observations, not machinery).
@@ -24,25 +29,47 @@ ChangeSet.revert — `revert_left` discharges from Change.lean's revert law
 -/
 
 import Machines.Core
+import Dbsp.ChangeSpec
 
 namespace Machines
 
+open Dbsp (Change ChangeInversion)
+
 /-- A rewindable machine: a machine whose events record a delta witness
-    with a left-inverse revert. -/
+    over a `ChangeInversion` change structure; firing an event IS
+    patching the state by the recorded delta, so reverting (patching by
+    the inverse delta) walks a state back across the event. -/
 structure RewindableMachine extends Machine where
   /-- The delta type (what the journal records per event). -/
   Δ : Type
+  /-- The change structure on states: patch + invert + the revert law. -/
+  [changeInv : ChangeInversion State Δ]
   /-- The delta an event produces at a state. -/
   deltaOf : (l : Label) → (s : State) → (h : (event l).guard s = true) → Δ
-  /-- Reverting a delta walks a state back across the event that
-      produced it. -/
-  revert : Δ → State → State
-  /-- revert is left-inverse to the action that produced the delta. -/
-  revert_left : ∀ l s h, revert (deltaOf l s h) ((event l).action s h) = s
+  /-- Firing the event IS patching by the recorded delta. -/
+  action_is_patch : ∀ l s h, (event l).action s h = Change.patch s (deltaOf l s h)
+  /-- The recorded delta is valid for the state that produced it. -/
+  deltaOf_valid : ∀ l s h, Change.valid s (deltaOf l s h)
 
 namespace RewindableMachine
 
 variable (m : RewindableMachine)
+
+/-- Reverting a delta onto a state: patch by the delta's inverse
+    (`ChangeInversion` — the rollback canon row). -/
+def revert (m : RewindableMachine) (d : m.Δ) (t : m.State) : m.State :=
+  Change.patch (self := m.changeInv.toChange) t
+    (ChangeInversion.invert (α := m.State) (Δα := m.Δ) (self := m.changeInv) d)
+
+/-- revert is left-inverse to the action that produced the delta —
+    `correct_invert` transported along `action_is_patch`. -/
+theorem revert_left (m : RewindableMachine) (l : m.Label) (s : m.State)
+    (h : (m.event l).guard s = true) :
+    m.revert (m.deltaOf l s h) ((m.event l).action s h) = s := by
+  unfold RewindableMachine.revert
+  rw [m.action_is_patch]
+  exact ChangeInversion.correct_invert (self := m.changeInv) s (m.deltaOf l s h)
+    (m.deltaOf_valid l s h)
 
 /-- A logged run: the trace plus the per-step deltas (the journal). The
     guard proof is in scope at each step, so the delta is recorded with

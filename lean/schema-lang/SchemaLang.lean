@@ -3,6 +3,7 @@
    Vortex lowering. -/
 import SchemaLang.Ty
 import SchemaLang.Item
+import SchemaLang.Wf
 import SchemaLang.Diff
 import SchemaLang.Migration
 import SchemaLang.Snapshot

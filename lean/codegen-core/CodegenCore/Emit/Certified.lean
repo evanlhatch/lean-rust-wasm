@@ -13,6 +13,12 @@ Convention, not framework: a `CertifiedEmitter` is the `Emitter` metadata
 (name/style/specSource/outputs — the registry-audit surface) plus the law
 and a proof-carrying `run`. Drivers call `run spec cert`; registries audit
 `toEmitter` (one-writer over `outputs`, jobs coverage) exactly as today.
+
+SUPERSEDED (W7.9 phase 1): `Emitter` itself now carries an optional `law`
+field + `Emitter.runCertified` — new certified emitters should be plain
+`Emitter`s with `law := some L`. `CertifiedEmitter` is KEPT compiling
+(downstream may reference it); `toEmitter` now transports the law into the
+field, so both views agree.
 -/
 
 import CodegenCore.Emit.Core
@@ -45,7 +51,7 @@ structure CertifiedEmitter (Spec : Type) where
     nothing. -/
 def CertifiedEmitter.toEmitter (ce : CertifiedEmitter Spec) : Emitter Spec :=
   { name := ce.name, style := ce.style, specSource := ce.specSource,
-    outputs := ce.outputs, run := fun _ => [] }
+    outputs := ce.outputs, run := fun _ => [], law := some ce.Law }
 
 /-! ### Compile-time demo
 
@@ -76,5 +82,9 @@ theorem demoCert : demoCertified.Law demoItems :=
     emitted paths are exactly the declared outputs. -/
 example : (demoCertified.run demoItems demoCert).map (·.path)
     = demoCertified.outputs := rfl
+
+/-- The absorbed view (W7.9): the discharged certificate also serves the
+    new `Emitter.Cert` shape — the same law, transported by `toEmitter`. -/
+example : demoCertified.toEmitter.Cert demoItems := demoCert
 
 end CodegenCore.Emit

@@ -72,8 +72,16 @@ THE BRIDGE (what is proved vs what is tested):
 
 1. THEOREMS (over the TYPED emission templates, `spec*` below — total
    defs, kernel-checked): the Sem-execution of the template computes the
-   intended arithmetic, for SYMBOLIC inputs, arbitrary initial state and
-   sufficient fuel (`tpl_add_ret_ok`), plus the concrete pins
+   intended arithmetic, for SYMBOLIC inputs and arbitrary initial state.
+   W6.9 (the Velvet shape): the correctness statements are
+   FUEL-INSENSITIVE — `X` says "IF the template's `Sem.execList` returns
+   a state at ANY budget, the state is right" (partial correctness, no
+   fuel hypothesis); the fuel side is a SEPARATE termination witness
+   `X_converges` ("at any budget ≥ k it returns"), glued by
+   `Sem.execList_ok_unique` / `Sem.execList_ok_mono` (a decided result
+   is upward-fuel-stable). The old `∀ fuel ≥ k, ∃ s', …` forms are
+   recovered by composing the two legs. Primary theorem:
+   `tpl_add_ret_ok`; concrete pins
    (`spec_double_ok`: 21 + 21 = 42; `spec_add_ok`: 40 + 2 = 42 — the
    duel's own values, PROVEN at the Sem level).
 2. THE EXTRACTION CHECK (#guard, build-failing, interpreter-evaluated):
@@ -209,19 +217,17 @@ theorem spec_add_ok :
       = .ok s' ∧ s'.stack = [.i64 42] :=
   ⟨_, rfl, rfl⟩
 
-/-- THE general theorem (the theorem-shaped goal over the template):
-    for ARBITRARY fuel ≥ 6, arbitrary local indices, arbitrary initial
-    state whose stack is empty and whose locals `x`/`y` hold `a`/`b`,
-    the emitted add-shape computes `a + b` onto the (otherwise empty)
-    stack. This is the statement the per-shape pins instantiate. -/
-theorem tpl_add_ret_ok (fuel : Nat) (x y l : Nat) (a b : UInt64) (s : Sem.State)
-    (hx : s.locals x = .i64 a) (hy : s.locals y = .i64 b) (hs : s.stack = [])
-    (hf : 6 ≤ fuel) :
-    ∃ s', Sem.execList fuel s
+/-- THE general theorem, the TERMINATION leg (W6.9): at any budget
+    ≥ 6 the template RETURNS. (The `rw [show … from rfl]` puts the
+    budget in `succ`-chain form so the `Sem.execList` equations fire
+    under `simp only`.) -/
+theorem tpl_add_ret_converges (x y l : Nat) (a b : UInt64) (s : Sem.State)
+    (hx : s.locals x = .i64 a) (hy : s.locals y = .i64 b) (hs : s.stack = []) :
+    ∀ m, ∃ s', Sem.execList (m + 6) s
         [Sem.Instr.localget x, Sem.Instr.localget y, .i64add, .localset l, .localget l]
       = .ok s' ∧ s'.stack = [.i64 (a + b)] := by
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m'.succ.succ.succ.succ.succ.succ :=
-    ⟨fuel - 6, by omega⟩
+  intro m
+  rw [show m + 6 = m.succ.succ.succ.succ.succ.succ from rfl]
   -- one shot: simp unfolds execList/step along the 5 instructions. The
   -- machine pops the SECOND operand first (stack head = top), so i64.add
   -- computes b + a — commuted at the end.
@@ -229,6 +235,24 @@ theorem tpl_add_ret_ok (fuel : Nat) (x y l : Nat) (a b : UInt64) (s : Sem.State)
   refine ⟨_, rfl, ?_⟩
   rw [UInt64.add_comm]
   rfl
+
+/-- THE general theorem, PARTIAL CORRECTNESS (the primary statement —
+    W6.9, fuel-insensitive): for arbitrary local indices and arbitrary
+    initial state whose stack is empty and whose locals `x`/`y` hold
+    `a`/`b`, IF the emitted add-shape returns a state at ANY budget,
+    the stack IS `a + b` (the `Sem.execList_ok_unique` transport
+    against the convergence witness). An underfueled run returns
+    `outOfFuel`, never a wrong state. -/
+theorem tpl_add_ret_ok (x y l : Nat) (a b : UInt64) (s : Sem.State)
+    (hx : s.locals x = .i64 a) (hy : s.locals y = .i64 b) (hs : s.stack = [])
+    (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s
+        [Sem.Instr.localget x, Sem.Instr.localget y, .i64add, .localset l, .localget l]
+      = .ok s') :
+    s'.stack = [.i64 (a + b)] := by
+  obtain ⟨s6, h6, hs6⟩ := tpl_add_ret_converges x y l a b s hx hy hs 0
+  cases Sem.execList_ok_unique h6 h
+  exact hs6
 
 -- The emitted program is WELL-TYPED (`checkStack` accepts it) — so
 -- `Sem.typeSafety` applies: it can never raise the underflow error.
@@ -421,101 +445,210 @@ def specCasesLoad (base off : Nat) (alts : List (List Sem.Instr)) :
     List Sem.Instr :=
   [.localget base, .i32load8u off, .localset 0] ++ specCases 0 alts
 
-/-- THE COMPOSED BRANCH THEOREM (the tag-read lane's tractable leg,
-    tag byte = 0): the load+branch template executes the CHOSEN alt
-    with the tag read IN the spec — the object pointer in local `base`,
-    the tag byte 0 AT `ptr + off` in memory, in bounds. The result =
-    alt 0's value; the initial local 0 (overwritten by the read's
-    `local.set`) is irrelevant. Arbitrary initial state, fuel ≥ 15 (the
-    read's 3 steps + the dispatch's 12). Kernel-checked. -/
-theorem specCasesLoad_ok (fuel : Nat) (z o : UInt64) (lz lo : Nat)
+/-- THE COMPOSED BRANCH THEOREM, the TERMINATION leg (W6.9): at any
+    budget ≥ 15 (the read's 3 steps + the dispatch's 12) the load+branch
+    template RETURNS — the tag read IN the spec: the object pointer in
+    local `base`, the tag byte 0 AT `ptr + off` in memory, in bounds.
+    Kernel-checked. -/
+theorem specCasesLoad_ok_converges (z o : UInt64) (lz lo : Nat)
     (base off : Nat) (ptr : UInt32) (s : Sem.State)
     (hptr : s.locals base = .i32 ptr)
     (hmem : s.mem (ptr.toNat + off) = 0)
     (hbound : ptr.toNat + off < s.memSize)
-    (hs : s.stack = []) (hf : 15 ≤ fuel) :
-    ∃ s', Sem.execList fuel s
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', Sem.execList (m + 15) s
         (specCasesLoad base off
           [[.i64const z, .localset lz, .localget lz],
            [.i64const o, .localset lo, .localget lo]])
       = .ok s'
     ∧ s'.stack = [.i64 z] := by
-  obtain ⟨m, rfl⟩ : ∃ m',
-      fuel = m'.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ :=
-    ⟨fuel - 15, by omega⟩
+  intro m
+  rw [show m + 15
+      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp [Sem.execList, Sem.step, hptr, hmem, hs, hbound, specCasesLoad,
     specCases, specCasesFrom]
 
-/-- THE BRANCH THEOREM (the tractable version, the tag = 0 leg): the
-    2-alt cases template with STRAIGHT-LINE alt bodies executes the
-    CHOSEN alt — the tag `0` (false's ctor index) in local 0 selects
-    alt 0; the result = the CHOSEN alt's value on the (otherwise
-    unchanged) stack — the branch's preservation. Arbitrary initial
-    state, fuel ≥ 12 (the dispatch's 8 steps + the 3-instruction body
-    + the tail, with slack — the exact budget is the proof's
-    `obtain`). Kernel-checked. (The statement splits by tag VALUE: a
-    tag outside the ctor indices runs off the chain into the emitter's
-    `unreachable` — `specCases_trap` below; a symbolic `if` over the
-    tag would HIDE that.) -/
-theorem specCases_ok (fuel : Nat) (z o : UInt64) (lz lo : Nat) (b : UInt32)
+/-- THE COMPOSED BRANCH THEOREM, PARTIAL CORRECTNESS (primary,
+    fuel-insensitive — W6.9): IF the load+branch template returns at
+    ANY budget, the result IS alt 0's value (the tag byte 0 selects
+    the alt); the initial local 0 (overwritten by the read's
+    `local.set`) is irrelevant. Arbitrary initial state. -/
+theorem specCasesLoad_ok (z o : UInt64) (lz lo : Nat)
+    (base off : Nat) (ptr : UInt32) (s : Sem.State)
+    (hptr : s.locals base = .i32 ptr)
+    (hmem : s.mem (ptr.toNat + off) = 0)
+    (hbound : ptr.toNat + off < s.memSize)
+    (hs : s.stack = []) (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s
+        (specCasesLoad base off
+          [[.i64const z, .localset lz, .localget lz],
+           [.i64const o, .localset lo, .localget lo]])
+      = .ok s') :
+    s'.stack = [.i64 z] := by
+  obtain ⟨s15, h15, hs15⟩ :=
+    specCasesLoad_ok_converges z o lz lo base off ptr s hptr hmem hbound hs 0
+  cases Sem.execList_ok_unique h15 h
+  exact hs15
+
+/-- THE BRANCH THEOREM, the TERMINATION leg (W6.9, the tag = 0 leg):
+    at any budget ≥ 12 (the dispatch's 8 steps + the 3-instruction body
+    + the tail, with slack) the 2-alt cases template RETURNS. (The
+    statement splits by tag VALUE: a tag outside the ctor indices runs
+    off the chain into the emitter's `unreachable` —
+    `specCases_trap_converges` below; a symbolic `if` over the tag
+    would HIDE that.) -/
+theorem specCases_ok_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b = 0)
-    (hs : s.stack = []) (hf : 12 ≤ fuel) :
-    ∃ s', Sem.execList fuel s
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', Sem.execList (m + 12) s
         (specCases 0 [[.i64const z, .localset lz, .localget lz],
                       [.i64const o, .localset lo, .localget lo]])
       = .ok s'
     ∧ s'.stack = [.i64 z] := by
+  intro m
   subst hb
-  obtain ⟨m, rfl⟩ : ∃ m',
-      fuel = m'.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ := ⟨fuel - 12, by omega⟩
+  rw [show m + 12
+      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom]
 
-/-- THE mirror leg: the tag `1` (true's ctor index) selects alt 1. -/
-theorem specCases_alt1 (fuel : Nat) (z o : UInt64) (lz lo : Nat) (b : UInt32)
+/-- THE BRANCH THEOREM, PARTIAL CORRECTNESS (primary, fuel-insensitive
+    — W6.9): IF the 2-alt cases template with STRAIGHT-LINE alt bodies
+    returns at ANY budget, the tag `0` (false's ctor index) in local 0
+    selected alt 0 — the result IS the CHOSEN alt's value. Arbitrary
+    initial state. Kernel-checked. -/
+theorem specCases_ok (z o : UInt64) (lz lo : Nat) (b : UInt32)
+    (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b = 0)
+    (hs : s.stack = []) (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s
+        (specCases 0 [[.i64const z, .localset lz, .localget lz],
+                      [.i64const o, .localset lo, .localget lo]])
+      = .ok s') :
+    s'.stack = [.i64 z] := by
+  obtain ⟨s12, h12, hs12⟩ := specCases_ok_converges z o lz lo b s hd hb hs 0
+  cases Sem.execList_ok_unique h12 h
+  exact hs12
+
+/-- THE mirror leg, TERMINATION (W6.9): the tag `1` (true's ctor
+    index) selects alt 1 — the template returns at any budget ≥ 12. -/
+theorem specCases_alt1_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b = 1)
-    (hs : s.stack = []) (hf : 12 ≤ fuel) :
-    ∃ s', Sem.execList fuel s
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', Sem.execList (m + 12) s
         (specCases 0 [[.i64const z, .localset lz, .localget lz],
                       [.i64const o, .localset lo, .localget lo]])
       = .ok s'
     ∧ s'.stack = [.i64 o] := by
+  intro m
   subst hb
-  obtain ⟨m, rfl⟩ : ∃ m',
-      fuel = m'.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ := ⟨fuel - 12, by omega⟩
+  rw [show m + 12
+      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom]
 
-/-- THE exhaustiveness leg: a tag outside the alts' ctor indices runs
-    off the chain into the emitter's `unreachable` — the Sem-exec
-    TRAPS (the same `unreach` the emitter's exhausted `goAlts` emits).
-    The dispatch is TOTAL over the scrutinee's values: chosen, or
-    trap — never a silent wrong-alt. -/
-theorem specCases_trap (fuel : Nat) (z o : UInt64) (lz lo : Nat) (b : UInt32)
+/-- THE mirror leg, PARTIAL CORRECTNESS (primary, fuel-insensitive —
+    W6.9): IF the template returns at ANY budget with the tag `1`,
+    the result IS alt 1's value. -/
+theorem specCases_alt1 (z o : UInt64) (lz lo : Nat) (b : UInt32)
+    (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b = 1)
+    (hs : s.stack = []) (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s
+        (specCases 0 [[.i64const z, .localset lz, .localget lz],
+                      [.i64const o, .localset lo, .localget lo]])
+      = .ok s') :
+    s'.stack = [.i64 o] := by
+  obtain ⟨s12, h12, hs12⟩ := specCases_alt1_converges z o lz lo b s hd hb hs 0
+  cases Sem.execList_ok_unique h12 h
+  exact hs12
+
+/-- THE exhaustiveness leg, the TERMINATION/behavior witness (W6.9):
+    at any budget ≥ 12 the out-of-range tag's run REACHES the trap. -/
+theorem specCases_trap_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b ≠ 0) (hb1 : b ≠ 1)
-    (hs : s.stack = []) (hf : 12 ≤ fuel) :
-    ∃ e, Sem.execList fuel s
+    (hs : s.stack = []) :
+    ∀ m, ∃ e, Sem.execList (m + 12) s
         (specCases 0 [[.i64const z, .localset lz, .localget lz],
                       [.i64const o, .localset lo, .localget lo]])
       = .error e ∧ e = .trap := by
-  obtain ⟨m, rfl⟩ : ∃ m',
-      fuel = m'.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ := ⟨fuel - 12, by omega⟩
+  intro m
+  rw [show m + 12
+      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom,
     (show (0 : UInt32) ≠ b from fun hc => hb hc.symm),
     (show (1 : UInt32) ≠ b from fun hc => hb1 hc.symm)]
 
-/-- THE checkFrame contract, dynamically: a `br 0` out of the chosen
-    branch's inner frame exits at the frame-ENTRY stack — the values
-    pushed inside since entry are dropped (Sem.lean's conservative
-    no-result rule). This is the branch-restore behavior the scoped
-    alt bodies rely on. Kernel-checked. -/
-theorem branch_br0_entry_stack (fuel : Nat) (s : Sem.State)
-    (hs : s.stack = []) (hf : 7 ≤ fuel) :
-    ∃ s', Sem.execList fuel s
+/-- THE exhaustiveness leg, PARTIAL (primary, fuel-insensitive — W6.9):
+    a tag outside the alts' ctor indices NEVER returns a state at any
+    budget, and any error it DOES raise is the `trap` (or the
+    `outOfFuel` artifact of a starving budget) — the dispatch is TOTAL
+    over the scrutinee's values: chosen, or trap — never a silent
+    wrong-alt. (The old `∀ fuel ≥ 12, ∃ e, … = .error e ∧ e = .trap`
+    form is recovered: the witness traps at 12 and `trap` is
+    fuel-monotone by `Sem.execList_error_mono`.) -/
+theorem specCases_trap (z o : UInt64) (lz lo : Nat) (b : UInt32)
+    (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b ≠ 0) (hb1 : b ≠ 1)
+    (hs : s.stack = []) :
+    (∀ fuel s', Sem.execList fuel s
+        (specCases 0 [[.i64const z, .localset lz, .localget lz],
+                      [.i64const o, .localset lo, .localget lo]])
+      ≠ .ok s')
+    ∧ (∀ fuel e, Sem.execList fuel s
+        (specCases 0 [[.i64const z, .localset lz, .localget lz],
+                      [.i64const o, .localset lo, .localget lo]])
+        = .error e → e = .outOfFuel ∨ e = .trap) := by
+  obtain ⟨e12, h12, he12⟩ := specCases_trap_converges z o lz lo b s hd hb hb1 hs 0
+  subst he12
+  constructor
+  . intro fuel s' hok
+    cases Nat.le_total fuel (0 + 12) with
+    | inl hle =>
+      have hok' := Sem.execList_ok_mono hok hle
+      rw [h12] at hok'
+      injection hok'
+    | inr hle =>
+      have htrap := Sem.execList_error_mono h12 (fun he => by simp at he) hle
+      rw [htrap] at hok
+      injection hok
+  . intro fuel e herr
+    by_cases hoof : e = .outOfFuel
+    . exact .inl hoof
+    . cases Nat.le_total fuel (0 + 12) with
+      | inl hle =>
+        have herr' := Sem.execList_error_mono herr hoof hle
+        rw [h12] at herr'
+        injection herr' with herr''
+        exact .inr herr''.symm
+      | inr hle =>
+        have htrap := Sem.execList_error_mono h12 (fun he => by simp at he) hle
+        rw [htrap] at herr
+        injection herr with herr''
+        exact .inr herr''.symm
+
+/-- THE checkFrame contract, dynamically, the TERMINATION leg (W6.9):
+    at any budget ≥ 7 the br-0 program returns. Kernel-checked. -/
+theorem branch_br0_entry_stack_converges (s : Sem.State)
+    (hs : s.stack = []) :
+    ∀ m, ∃ s', Sem.execList (m + 7) s
         [.i32const 1, .if_ [.block [.i64const 7, .drop, .br 0]] []]
       = .ok s' ∧ s'.stack = [] := by
-  obtain ⟨m, rfl⟩ : ∃ m',
-      fuel = m'.succ.succ.succ.succ.succ.succ.succ := ⟨fuel - 7, by omega⟩
+  intro m
+  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp only [Sem.execList, Sem.step, hs]
   exact ⟨_, rfl, rfl⟩
+
+/-- THE checkFrame contract, dynamically, PARTIAL CORRECTNESS (primary,
+    fuel-insensitive — W6.9): IF the br-0 program returns at ANY
+    budget, a `br 0` out of the chosen branch's inner frame exited at
+    the frame-ENTRY stack — the values pushed inside since entry are
+    dropped (Sem.lean's conservative no-result rule). This is the
+    branch-restore behavior the scoped alt bodies rely on. -/
+theorem branch_br0_entry_stack (s : Sem.State)
+    (hs : s.stack = []) (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s
+        [.i32const 1, .if_ [.block [.i64const 7, .drop, .br 0]] []]
+      = .ok s') :
+    s'.stack = [] := by
+  obtain ⟨s7, h7, hs7⟩ := branch_br0_entry_stack_converges s hs 0
+  cases Sem.execList_ok_unique h7 h
+  exact hs7
 
 /-! ## THE DEMO — the is-big branch shape (the duel's own function) -/
 
@@ -568,18 +701,18 @@ def isBigAlts : List (List Sem.Instr) :=
 
 -- THE DUEL PINS (kernel-checked): the template computes is-big's own
 -- values — the true-Bool (250 > 100) picks the true-alt (= 1), the
--- false-Bool (42 > 100) picks the false-alt (= 0).
+-- false-Bool (42 > 100) picks the false-alt (= 0). (W6.9: the
+-- CONVERGENCE legs at budget 988 + 12 — definitionally `defaultFuel`
+-- = 1000, so the pins typecheck as `Sem.exec` statements.)
 theorem isBig_250 :
     ∃ s', Sem.exec (bigParam 1) (specCases 0 isBigAlts) = .ok s'
       ∧ s'.stack = [.i64 1] :=
-  specCases_alt1 (fuel := 993 + 7) 0 1 1 2 1 (bigParam 1) rfl rfl rfl
-    (by omega)
+  specCases_alt1_converges 0 1 1 2 1 (bigParam 1) rfl rfl rfl 988
 
 theorem isBig_42 :
     ∃ s', Sem.exec (bigParam 0) (specCases 0 isBigAlts) = .ok s'
       ∧ s'.stack = [.i64 0] :=
-  specCases_ok (fuel := 993 + 7) 0 1 1 2 0 (bigParam 0) rfl rfl rfl
-    (by omega)
+  specCases_ok_converges 0 1 1 2 0 (bigParam 0) rfl rfl rfl 988
 
 -- THE DEMO, end-to-end (build-failing): backend emission → lowering →
 -- machine → the duel's own values (is-big 250 = 1, is-big 42 = 0).
@@ -817,20 +950,17 @@ def tplPrologue1 (p0 p1 : Nat) : List Sem.Instr :=
 def tplPrologue2 (p0 p1 p2 : Nat) : List Sem.Instr :=
   [.localset p2, .localset p1, .localset p0]
 
-/-- THE CALLING-CONVENTION THEOREM (the 1-fresh closure-apply
-    contract): the caller's pushes are EXACTLY the callee's expected
-    entry state — the prep/prologue composition passes each value
-    through: param 0 = the closure ptr, param 1 = the fresh arg, stack
-    drained. Arbitrary initial state, symbolic values, fuel ≥ 5. The
-    distinctness hypothesis = the flat model's frame separation (the
-    callee's param locals are its own). Kernel-checked. -/
-theorem call_convention1 (fuel : Nat) (c x p0 p1 : Nat) (C A : Sem.Val)
+/-- THE CALLING-CONVENTION THEOREM, the TERMINATION leg (W6.9): at
+    any budget ≥ 5 the prep/prologue composition RETURNS.
+    Kernel-checked. -/
+theorem call_convention1_converges (c x p0 p1 : Nat) (C A : Sem.Val)
     (s : Sem.State) (hc : s.locals c = C) (ha : s.locals x = A)
-    (hs : s.stack = []) (hd : p0 ≠ p1) (hf : 5 ≤ fuel) :
-    ∃ s', Sem.execList fuel s (tplCallPrep1 c x ++ tplPrologue1 p0 p1)
+    (hs : s.stack = []) (hd : p0 ≠ p1) :
+    ∀ m, ∃ s', Sem.execList (m + 5) s (tplCallPrep1 c x ++ tplPrologue1 p0 p1)
       = .ok s'
     ∧ s'.locals p0 = C ∧ s'.locals p1 = A ∧ s'.stack = [] := by
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 5 := ⟨fuel - 5, by omega⟩
+  intro m
+  rw [show m + 5 = m.succ.succ.succ.succ.succ from rfl]
   simp only [tplCallPrep1, tplPrologue1, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, hc, ha, hs]
   refine ⟨_, rfl, ?_, ?_, ?_⟩
@@ -838,20 +968,39 @@ theorem call_convention1 (fuel : Nat) (c x p0 p1 : Nat) (C A : Sem.Val)
   · simp [Ne.symm hd]
   · rfl
 
-/-- THE CALLING-CONVENTION THEOREM (the 2-fresh shape —
-    `pap_curried._boxed_1`): param 0 = the closure ptr, param 1 = fresh
-    arg 0, param 2 = fresh arg 1, stack drained. Kernel-checked. -/
-theorem call_convention2 (fuel : Nat) (c x0 x1 p0 p1 p2 : Nat)
+/-- THE CALLING-CONVENTION THEOREM (the 1-fresh closure-apply
+    contract), PARTIAL CORRECTNESS (primary, fuel-insensitive — W6.9):
+    IF the prep/prologue composition returns at ANY budget, the
+    caller's pushes ARE the callee's entry state — param 0 = the
+    closure ptr, param 1 = the fresh arg, stack drained. Arbitrary
+    initial state, symbolic values. The distinctness hypothesis = the
+    flat model's frame separation (the callee's param locals are its
+    own). -/
+theorem call_convention1 (c x p0 p1 : Nat) (C A : Sem.Val)
+    (s : Sem.State) (hc : s.locals c = C) (ha : s.locals x = A)
+    (hs : s.stack = []) (hd : p0 ≠ p1) (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s (tplCallPrep1 c x ++ tplPrologue1 p0 p1)
+      = .ok s') :
+    s'.locals p0 = C ∧ s'.locals p1 = A ∧ s'.stack = [] := by
+  obtain ⟨s5, h5, hC, hA, hs5⟩ := call_convention1_converges c x p0 p1 C A s
+    hc ha hs hd 0
+  cases Sem.execList_ok_unique h5 h
+  exact ⟨hC, hA, hs5⟩
+
+/-- THE CALLING-CONVENTION THEOREM (the 2-fresh shape), the
+    TERMINATION leg (W6.9): returns at any budget ≥ 7.
+    Kernel-checked. -/
+theorem call_convention2_converges (c x0 x1 p0 p1 p2 : Nat)
     (C A B : Sem.Val) (s : Sem.State)
     (hc : s.locals c = C) (h0 : s.locals x0 = A) (h1 : s.locals x1 = B)
     (hs : s.stack = [])
-    (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2)
-    (hf : 7 ≤ fuel) :
-    ∃ s', Sem.execList fuel s (tplCallPrep2 c x0 x1 ++ tplPrologue2 p0 p1 p2)
+    (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2) :
+    ∀ m, ∃ s', Sem.execList (m + 7) s (tplCallPrep2 c x0 x1 ++ tplPrologue2 p0 p1 p2)
       = .ok s'
     ∧ s'.locals p0 = C ∧ s'.locals p1 = A ∧ s'.locals p2 = B
     ∧ s'.stack = [] := by
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 7 := ⟨fuel - 7, by omega⟩
+  intro m
+  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp only [tplCallPrep2, tplPrologue2, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, hc, h0, h1, hs]
   refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
@@ -859,6 +1008,27 @@ theorem call_convention2 (fuel : Nat) (c x0 x1 p0 p1 p2 : Nat)
   · simp [Ne.symm hd01]
   · simp [Ne.symm hd02, Ne.symm hd12]
   · rfl
+
+/-- THE CALLING-CONVENTION THEOREM (the 2-fresh shape —
+    `pap_curried._boxed_1`), PARTIAL CORRECTNESS (primary,
+    fuel-insensitive — W6.9): IF the composition returns at ANY
+    budget, param 0 = the closure ptr, param 1 = fresh arg 0,
+    param 2 = fresh arg 1, stack drained. -/
+theorem call_convention2 (c x0 x1 p0 p1 p2 : Nat)
+    (C A B : Sem.Val) (s : Sem.State)
+    (hc : s.locals c = C) (h0 : s.locals x0 = A) (h1 : s.locals x1 = B)
+    (hs : s.stack = [])
+    (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2)
+    (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s (tplCallPrep2 c x0 x1 ++ tplPrologue2 p0 p1 p2)
+      = .ok s') :
+    s'.locals p0 = C ∧ s'.locals p1 = A ∧ s'.locals p2 = B
+    ∧ s'.stack = [] := by
+  obtain ⟨s7, h7, hC, hA, hB, hs7⟩ :=
+    call_convention2_converges c x0 x1 p0 p1 p2 C A B s hc h0 h1 hs
+      hd01 hd02 hd12 0
+  cases Sem.execList_ok_unique h7 h
+  exact ⟨hC, hA, hB, hs7⟩
 
 /-- The trampoline's arg-forward (1 partial + 1 fresh — the
     `pap_runPaps._lam_1._boxed_1` shape): push the partial arg (the
@@ -875,18 +1045,16 @@ def tplTrampFwd1 (p : UInt32) (x : Nat) : List Sem.Instr :=
 def tplTrampFwd2 (p : UInt32) (x0 x1 : Nat) : List Sem.Instr :=
   [.i32const p, .localget x0, .localget x1]
 
-/-- THE TRAMPOLINE'S CONTRACT (the trampoline→target hop, 1-fresh
-    shape): the forward puts the loaded partial DEEPEST (the target's
-    param 0) and the fresh arg on top — the composition with the
-    target's prologue delivers partial → param 0, fresh → param 1.
-    Kernel-checked. -/
-theorem trampoline_convention1 (fuel : Nat) (p : UInt32) (x q0 q1 : Nat)
+/-- THE TRAMPOLINE'S CONTRACT (1-fresh), the TERMINATION leg
+    (W6.9): returns at any budget ≥ 5. Kernel-checked. -/
+theorem trampoline_convention1_converges (p : UInt32) (x q0 q1 : Nat)
     (A : Sem.Val) (s : Sem.State) (ha : s.locals x = A)
-    (hs : s.stack = []) (hd : q0 ≠ q1) (hf : 5 ≤ fuel) :
-    ∃ s', Sem.execList fuel s (tplTrampFwd1 p x ++ tplPrologue1 q0 q1)
+    (hs : s.stack = []) (hd : q0 ≠ q1) :
+    ∀ m, ∃ s', Sem.execList (m + 5) s (tplTrampFwd1 p x ++ tplPrologue1 q0 q1)
       = .ok s'
     ∧ s'.locals q0 = .i32 p ∧ s'.locals q1 = A ∧ s'.stack = [] := by
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 5 := ⟨fuel - 5, by omega⟩
+  intro m
+  rw [show m + 5 = m.succ.succ.succ.succ.succ from rfl]
   simp only [tplTrampFwd1, tplPrologue1, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, ha, hs]
   refine ⟨_, rfl, ?_, ?_, ?_⟩
@@ -894,19 +1062,34 @@ theorem trampoline_convention1 (fuel : Nat) (p : UInt32) (x q0 q1 : Nat)
   · simp [Ne.symm hd]
   · rfl
 
-/-- THE TRAMPOLINE'S CONTRACT (the golden's `pap_curried._boxed_1`
-    shape): partial → param 0, fresh args → params 1/2, in order.
-    Kernel-checked. -/
-theorem trampoline_convention2 (fuel : Nat) (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
+/-- THE TRAMPOLINE'S CONTRACT (the trampoline→target hop, 1-fresh
+    shape), PARTIAL CORRECTNESS (primary, fuel-insensitive — W6.9):
+    IF the forward+prologue composition returns at ANY budget, the
+    loaded partial is DEEPEST (the target's param 0) and the fresh arg
+    on top → partial → param 0, fresh → param 1. -/
+theorem trampoline_convention1 (p : UInt32) (x q0 q1 : Nat)
+    (A : Sem.Val) (s : Sem.State) (ha : s.locals x = A)
+    (hs : s.stack = []) (hd : q0 ≠ q1) (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s (tplTrampFwd1 p x ++ tplPrologue1 q0 q1)
+      = .ok s') :
+    s'.locals q0 = .i32 p ∧ s'.locals q1 = A ∧ s'.stack = [] := by
+  obtain ⟨s5, h5, hp, hA, hs5⟩ :=
+    trampoline_convention1_converges p x q0 q1 A s ha hs hd 0
+  cases Sem.execList_ok_unique h5 h
+  exact ⟨hp, hA, hs5⟩
+
+/-- THE TRAMPOLINE'S CONTRACT (2-fresh), the TERMINATION leg
+    (W6.9): returns at any budget ≥ 7. Kernel-checked. -/
+theorem trampoline_convention2_converges (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
     (A B : Sem.Val) (s : Sem.State)
     (h0 : s.locals x0 = A) (h1 : s.locals x1 = B) (hs : s.stack = [])
-    (hd01 : q0 ≠ q1) (hd02 : q0 ≠ q2) (hd12 : q1 ≠ q2)
-    (hf : 7 ≤ fuel) :
-    ∃ s', Sem.execList fuel s (tplTrampFwd2 p x0 x1 ++ tplPrologue2 q0 q1 q2)
+    (hd01 : q0 ≠ q1) (hd02 : q0 ≠ q2) (hd12 : q1 ≠ q2) :
+    ∀ m, ∃ s', Sem.execList (m + 7) s (tplTrampFwd2 p x0 x1 ++ tplPrologue2 q0 q1 q2)
       = .ok s'
     ∧ s'.locals q0 = .i32 p ∧ s'.locals q1 = A ∧ s'.locals q2 = B
     ∧ s'.stack = [] := by
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 7 := ⟨fuel - 7, by omega⟩
+  intro m
+  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
   simp only [tplTrampFwd2, tplPrologue2, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, h0, h1, hs]
   refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
@@ -914,6 +1097,25 @@ theorem trampoline_convention2 (fuel : Nat) (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
   · simp [Ne.symm hd01]
   · simp [Ne.symm hd02, Ne.symm hd12]
   · rfl
+
+/-- THE TRAMPOLINE'S CONTRACT (the golden's `pap_curried._boxed_1`
+    shape), PARTIAL CORRECTNESS (primary, fuel-insensitive — W6.9):
+    IF the composition returns at ANY budget, partial → param 0,
+    fresh args → params 1/2, in order. -/
+theorem trampoline_convention2 (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
+    (A B : Sem.Val) (s : Sem.State)
+    (h0 : s.locals x0 = A) (h1 : s.locals x1 = B) (hs : s.stack = [])
+    (hd01 : q0 ≠ q1) (hd02 : q0 ≠ q2) (hd12 : q1 ≠ q2)
+    (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s (tplTrampFwd2 p x0 x1 ++ tplPrologue2 q0 q1 q2)
+      = .ok s') :
+    s'.locals q0 = .i32 p ∧ s'.locals q1 = A ∧ s'.locals q2 = B
+    ∧ s'.stack = [] := by
+  obtain ⟨s7, h7, hp, hA, hB, hs7⟩ :=
+    trampoline_convention2_converges p x0 x1 q0 q1 q2 A B s h0 h1 hs
+      hd01 hd02 hd12 0
+  cases Sem.execList_ok_unique h7 h
+  exact ⟨hp, hA, hB, hs7⟩
 
 /-! ## THE DEMO — the run-paps 5 = 8 inner-call path
 
@@ -1021,19 +1223,19 @@ def tplCallPrep2Buggy (c x0 x1 : Nat) : List Sem.Instr :=
           (tplCallPrep2Buggy 0 1 2 ++ tplPrologue2 3 4 5) with
         | .ok [] => true | _ => false) = true
 
-/-- The swapped prep delivers the SWAPPED values: param 1 = B, param 2
-    = A (the same distinctness hypotheses as the convention). --/
-theorem call_convention2_buggy (fuel : Nat) (c x0 x1 p0 p1 p2 : Nat)
+/-- The swapped prep, the TERMINATION leg (W6.9): returns at any
+    budget ≥ 7, delivering the SWAPPED values. --/
+theorem call_convention2_buggy_converges (c x0 x1 p0 p1 p2 : Nat)
     (C A B : Sem.Val) (s : Sem.State)
     (hc : s.locals c = C) (h0 : s.locals x0 = A) (h1 : s.locals x1 = B)
     (hs : s.stack = [])
-    (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2)
-    (hf : 7 ≤ fuel) :
-    ∃ s', Sem.execList fuel s
+    (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2) :
+    ∀ m, ∃ s', Sem.execList (m + 7) s
         (tplCallPrep2Buggy c x0 x1 ++ tplPrologue2 p0 p1 p2)
       = .ok s'
     ∧ s'.locals p1 = B ∧ s'.locals p2 = A := by
-  obtain ⟨m, rfl⟩ : ∃ m', fuel = m' + 7 := ⟨fuel - 7, by omega⟩
+  intro m
+  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
   -- the swapped pushes (C, then B, then A) pop TOP-first: A → p2,
   -- B → p1, C → p0 — the values land SWAPPED.
   simp only [tplCallPrep2Buggy, tplPrologue2, List.nil_append,
@@ -1042,29 +1244,47 @@ theorem call_convention2_buggy (fuel : Nat) (c x0 x1 p0 p1 p2 : Nat)
   · simp [Ne.symm hd01]
   · simp [Ne.symm hd02, Ne.symm hd12]
 
-/-- THE NEGATIVE INSTANCE: the swapped prep DISAGREES with the
-    convention — same input, different callee entry-state (param 1
-    gets B instead of A). If a regression re-swapped the arg pushes,
+/-- The swapped prep, PARTIAL CORRECTNESS (primary, fuel-insensitive —
+    W6.9): IF the swapped composition returns at ANY budget, param 1 =
+    B and param 2 = A — the SWAPPED delivery (the same distinctness
+    hypotheses as the convention). --/
+theorem call_convention2_buggy (c x0 x1 p0 p1 p2 : Nat)
+    (C A B : Sem.Val) (s : Sem.State)
+    (hc : s.locals c = C) (h0 : s.locals x0 = A) (h1 : s.locals x1 = B)
+    (hs : s.stack = [])
+    (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2)
+    (fuel : Nat) (s' : Sem.State)
+    (h : Sem.execList fuel s
+        (tplCallPrep2Buggy c x0 x1 ++ tplPrologue2 p0 p1 p2)
+      = .ok s') :
+    s'.locals p1 = B ∧ s'.locals p2 = A := by
+  obtain ⟨s7, h7, hB, hA⟩ :=
+    call_convention2_buggy_converges c x0 x1 p0 p1 p2 C A B s hc h0 h1 hs
+      hd01 hd02 hd12 0
+  cases Sem.execList_ok_unique h7 h
+  exact ⟨hB, hA⟩
+
+/-- THE NEGATIVE INSTANCE (fuel-insensitive — W6.9): the swapped prep
+    DISAGREES with the convention at ANY pair of budgets — whenever
+    BOTH compositions return, the callee's entry state differs (param
+    1 gets B instead of A). If a regression re-swapped the arg pushes,
     this theorem's shape is what the differential duel's sabotage
-    control checks empirically. -/
+    control checks empirically. (The old same-fuel ∃-form at
+    `fuel ≥ 7` is recovered via the `_converges` legs.) -/
 theorem call_convention2_buggy_disagrees
-    (fuel : Nat) (c x0 x1 p0 p1 p2 : Nat) (A B : Sem.Val) (s : Sem.State)
+    (c x0 x1 p0 p1 p2 : Nat) (A B : Sem.Val) (s : Sem.State)
     (h0 : s.locals x0 = A) (h1 : s.locals x1 = B) (hs : s.stack = [])
     (hd01 : p0 ≠ p1) (hd02 : p0 ≠ p2) (hd12 : p1 ≠ p2)
-    (hAB : A ≠ B) (hf : 7 ≤ fuel) :
-    ∃ s1 s2,
-      Sem.execList fuel s (tplCallPrep2 c x0 x1 ++ tplPrologue2 p0 p1 p2)
-        = .ok s1
-      ∧ Sem.execList fuel s
-          (tplCallPrep2Buggy c x0 x1 ++ tplPrologue2 p0 p1 p2)
-        = .ok s2
-      ∧ s1.locals p1 ≠ s2.locals p1 := by
-  obtain ⟨s1, he1, -, hA, -, -⟩ :=
-    call_convention2 fuel c x0 x1 p0 p1 p2 (s.locals c) A B s rfl h0 h1 hs
-      hd01 hd02 hd12 hf
-  obtain ⟨s2, he2, hB, -⟩ :=
-    call_convention2_buggy fuel c x0 x1 p0 p1 p2 (s.locals c) A B s rfl h0 h1 hs
-      hd01 hd02 hd12 hf
-  exact ⟨s1, s2, he1, he2, fun h => hAB (hA.symm.trans (h.trans hB))⟩
+    (hAB : A ≠ B) (f1 f2 : Nat) (s1 s2 : Sem.State)
+    (he1 : Sem.execList f1 s (tplCallPrep2 c x0 x1 ++ tplPrologue2 p0 p1 p2)
+      = .ok s1)
+    (he2 : Sem.execList f2 s
+        (tplCallPrep2Buggy c x0 x1 ++ tplPrologue2 p0 p1 p2)
+      = .ok s2) :
+    s1.locals p1 ≠ s2.locals p1 :=
+  fun h => hAB ((call_convention2 c x0 x1 p0 p1 p2 (s.locals c) A B s rfl h0 h1 hs
+      hd01 hd02 hd12 f1 s1 he1).2.1.symm.trans
+    (h.trans (call_convention2_buggy c x0 x1 p0 p1 p2 (s.locals c) A B s rfl h0 h1 hs
+      hd01 hd02 hd12 f2 s2 he2).1))
 
 end WasmBackend.Correct

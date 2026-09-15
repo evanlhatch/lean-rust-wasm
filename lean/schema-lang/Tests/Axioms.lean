@@ -47,3 +47,9 @@ import Demo
 -- registration RESOLVES at elaboration (Demo.lean's `name-min-length`).
 #print axioms SchemaLang.checkCitation?
 #print axioms userNameLenProved
+
+-- The W3.5 checker↔relation bridge (`universeCheck` → `WellFormed` and
+-- back). The demo discharge (`demoItems_wellFormed`) lives in
+-- Tests/Main.lean — the test root is not importable from here.
+#print axioms SchemaLang.universeCheck_sound
+#print axioms SchemaLang.universeCheck_complete

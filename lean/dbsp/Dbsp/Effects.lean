@@ -9,6 +9,11 @@ way only — **write-disjoint mutations commute**. Everything downstream
 (adjacent swap, bubble, permutation invariance of conflict-free batches)
 is derived ONCE over the interface.
 
+W4.3: `Mut` is a PARAMETER and `DeltaSystem` EXTENDS `Change S Mut` —
+application IS patching — so a delta system is a change structure with a
+disjoint-commutes law, and the `ChangeSpec` vocabulary (validity,
+inversion, noc) composes with it.
+
 Different claim from `Dbsp.Replicas` (group-commutes vs
 disjoint-write-commutes): this one works for NON-commutative mutations
 whose write sets are statically disjoint.
@@ -33,6 +38,7 @@ import Mathlib.Data.Finsupp.Single
 import Mathlib.Algebra.Group.Finsupp
 import Mathlib.Algebra.Order.Ring.Int
 import Mathlib.Tactic.Ring
+import Dbsp.ChangeSpec
 
 namespace Dbsp
 
@@ -51,72 +57,70 @@ theorem LocDisjoint.symm {α : Type} {l₁ l₂ : List α}
 
 /-- A delta system: mutations over state `S` with static write sets over
     locations `Loc`, sound in one way — disjoint influence commutes. -/
-class DeltaSystem (S Loc : Type) where
-  /-- The mutation representation (ZSet entry, patch tuple…). -/
-  Mut : Type
-  /-- Deterministic transition. -/
-  applyM : Mut → S → S
+class DeltaSystem (S Loc Mut : Type) extends Change S Mut where
   /-- Static influence: locations possibly written. -/
   writesOf : Mut → List Loc
   /-- THE contract (Core ECS Lemma 4.6 shape). Each instance proves it
       once against its own semantics. -/
   disjoint_commutes :
     ∀ (m₁ m₂ : Mut), LocDisjoint (writesOf m₁) (writesOf m₂) →
-      ∀ s, applyM m₁ (applyM m₂ s) = applyM m₂ (applyM m₁ s)
+      ∀ (s : S), Change.patch (Change.patch s m₂) m₁ = Change.patch (Change.patch s m₁) m₂
 
-variable {S Loc : Type} {sys : DeltaSystem S Loc}
+variable {S Loc Mut : Type} {sys : DeltaSystem S Loc Mut}
 
 /-! ### Derived laws -/
 
-/-- Staged application: fold a batch in order. -/
-def applySeq (ms : List sys.Mut) (s : S) : S :=
-  ms.foldl (fun acc m => sys.applyM m acc) s
+/-- Staged application: fold a batch in order. `sys` is EXPLICIT: `Loc`
+    appears only in the system, so instance/implicit search cannot
+    determine it from the batch or the state. -/
+def applySeq (sys : DeltaSystem S Loc Mut) (ms : List Mut) (s : S) : S :=
+  ms.foldl (fun acc m => sys.patch acc m) s
 
-theorem applySeq_cons (m : sys.Mut) (ms : List sys.Mut) (s : S) :
-    applySeq (m :: ms) s = applySeq ms (sys.applyM m s) := rfl
+theorem applySeq_cons (m : Mut) (ms : List Mut) (s : S) :
+    applySeq sys (m :: ms) s = applySeq sys ms (sys.patch s m) := rfl
 
-theorem applySeq_append (a b : List sys.Mut) (s : S) :
-    applySeq (a ++ b) s = applySeq b (applySeq a s) := by
+theorem applySeq_append (a b : List Mut) (s : S) :
+    applySeq sys (a ++ b) s = applySeq sys b (applySeq sys a s) := by
   induction a generalizing s with
   | nil => rfl
-  | cons x _ ih => exact ih (sys.applyM x s)
+  | cons x _ ih => exact ih (sys.patch s x)
 
 /-- **Adjacent transposition** at any position. -/
-theorem applySeq_swap_at (l₁ : List sys.Mut) (f g : sys.Mut)
-    (l₂ : List sys.Mut)
+theorem applySeq_swap_at (l₁ : List Mut) (f g : Mut)
+    (l₂ : List Mut)
     (hd : LocDisjoint (sys.writesOf f) (sys.writesOf g)) :
-    applySeq (l₁ ++ f :: g :: l₂) = applySeq (l₁ ++ g :: f :: l₂) := by
+    applySeq sys (l₁ ++ f :: g :: l₂) = applySeq sys (l₁ ++ g :: f :: l₂) := by
   funext s
   rw [applySeq_append, applySeq_append, applySeq_cons, applySeq_cons]
-  exact congrArg (applySeq l₂)
-    (sys.disjoint_commutes f g hd (applySeq l₁ s)).symm
+  exact congrArg (applySeq sys l₂)
+    (sys.disjoint_commutes f g hd (applySeq sys l₁ s)).symm
 
 /-- **Bubble**: a mutation moves past an entire conflict-free block. -/
-theorem applySeq_bubble (m : sys.Mut) (blk : List sys.Mut)
+theorem applySeq_bubble (m : Mut) (blk : List Mut)
     (hdis : ∀ z ∈ blk, LocDisjoint (sys.writesOf m) (sys.writesOf z)) :
-    applySeq (m :: blk) = applySeq (blk ++ [m]) := by
+    applySeq sys (m :: blk) = applySeq sys (blk ++ [m]) := by
   induction blk with
   | nil => rfl
   | cons y rest ih =>
       funext s
       calc
-        applySeq (m :: y :: rest) s
-            = applySeq (y :: m :: rest) s := by
+        applySeq sys (m :: y :: rest) s
+            = applySeq sys (y :: m :: rest) s := by
                 simpa using congrFun
                   (applySeq_swap_at [] m y rest (hdis y (List.mem_cons_self ..))) s
-        _ = applySeq (m :: rest) (sys.applyM y s) := rfl
-        _ = applySeq (rest ++ [m]) (sys.applyM y s) := congrFun
-            (ih (fun z hz => hdis z (List.mem_cons_of_mem _ hz))) (sys.applyM y s)
+        _ = applySeq sys (m :: rest) (sys.patch s y) := rfl
+        _ = applySeq sys (rest ++ [m]) (sys.patch s y) := congrFun
+            (ih (fun z hz => hdis z (List.mem_cons_of_mem _ hz))) (sys.patch s y)
 
 /-- Bubble with an arbitrary prefix (the usable form). -/
-theorem applySeq_bubble_prefix (l₁ : List sys.Mut) (m : sys.Mut)
-    (blk : List sys.Mut)
+theorem applySeq_bubble_prefix (l₁ : List Mut) (m : Mut)
+    (blk : List Mut)
     (hdis : ∀ z ∈ blk, LocDisjoint (sys.writesOf m) (sys.writesOf z)) :
-    applySeq (l₁ ++ m :: blk) = applySeq (l₁ ++ blk ++ [m]) := by
+    applySeq sys (l₁ ++ m :: blk) = applySeq sys (l₁ ++ blk ++ [m]) := by
   funext s
   have hb := applySeq_bubble m blk hdis
   rw [applySeq_append, List.append_assoc, applySeq_append]
-  exact congrFun hb (applySeq l₁ s)
+  exact congrFun hb (applySeq sys l₁ s)
 
 /-! ### The payoff -/
 
@@ -127,21 +131,21 @@ theorem applySeq_bubble_prefix (l₁ : List sys.Mut) (m : sys.Mut)
 
     The pairwise-transfers-along-Perm step is core's `List.Perm.pairwise`
     (flatland proved it by hand as `pairwise_perm`; core has it). -/
-theorem applySeq_perm {ms₁ ms₂ : List sys.Mut} (hp : ms₁.Perm ms₂)
+theorem applySeq_perm {ms₁ ms₂ : List Mut} (hp : ms₁.Perm ms₂)
     (hpair : ms₁.Pairwise
       (fun a b => LocDisjoint (sys.writesOf a) (sys.writesOf b)))
-    (s : S) : applySeq ms₁ s = applySeq ms₂ s := by
+    (s : S) : applySeq sys ms₁ s = applySeq sys ms₂ s := by
   induction hp generalizing s with
   | nil => rfl
   | @cons x l _ _ ih =>
       rw [applySeq_cons, applySeq_cons]
-      exact ih hpair.tail (sys.applyM x s)
+      exact ih hpair.tail (sys.patch s x)
   | @swap x y l =>
       -- core `Perm.swap`: ms₁ = y :: x :: l, so hpair's head is y
       have hxy : LocDisjoint (sys.writesOf x) (sys.writesOf y) :=
         (List.rel_of_pairwise_cons hpair (List.mem_cons_self ..)).symm
       rw [applySeq_cons, applySeq_cons, applySeq_cons, applySeq_cons]
-      exact congrArg (applySeq l) (sys.disjoint_commutes x y hxy s)
+      exact congrArg (applySeq sys l) (sys.disjoint_commutes x y hxy s)
   | trans h₁ _ ih₁ ih₂ =>
       rw [ih₁ hpair s]
       exact ih₂ (h₁.pairwise hpair (fun hd => hd.symm)) s
@@ -159,12 +163,13 @@ set_option warn.classDefReducibility false in
     proof reduces to case-splitting on support membership and `ring`.
     Semireducible on purpose: the system is passed explicitly
     (`self := …`), never found by instance search. -/
-noncomputable def pointDeltaSystem : DeltaSystem (Nat →₀ Int) Nat where
-  Mut := Nat →₀ Int
-  applyM d s := d + s
+noncomputable def pointDeltaSystem : DeltaSystem (Nat →₀ Int) Nat (Nat →₀ Int) where
+  patch s d := s + d
+  valid _ _ := True
   writesOf d := d.support.toList
   disjoint_commutes d₁ d₂ hd s := by
     ext n
+    show (s + d₂ + d₁) n = (s + d₁ + d₂) n
     simp only [Finsupp.add_apply]
     by_cases h₁ : n ∈ d₁.support <;> by_cases h₂ : n ∈ d₂.support
     · exact (hd (Finset.mem_toList.mpr h₁) (Finset.mem_toList.mpr h₂)).elim
@@ -177,9 +182,9 @@ noncomputable def pointDeltaSystem : DeltaSystem (Nat →₀ Int) Nat where
     instantiated with `Perm.swap`, the pairwise proof discharged against
     the concrete supports. -/
 example :
-    applySeq (sys := pointDeltaSystem)
+    applySeq pointDeltaSystem
         [Finsupp.single 1 (7 : Int), Finsupp.single 0 (9 : Int)] 0 =
-      applySeq (sys := pointDeltaSystem)
+      applySeq pointDeltaSystem
         [Finsupp.single 0 (9 : Int), Finsupp.single 1 (7 : Int)] 0 := by
   refine applySeq_perm (List.Perm.swap (Finsupp.single 0 (9 : Int))
     (Finsupp.single 1 (7 : Int)) []) ?_ 0
@@ -187,12 +192,12 @@ example :
   · intro y hy
     obtain rfl := List.mem_singleton.mp hy
     intro x hx₁ hx₂
-    rw [show DeltaSystem.writesOf (self := pointDeltaSystem)
-          (Finsupp.single 1 (7 : Int))
+    rw [show DeltaSystem.writesOf (S := Nat →₀ Int) (Loc := Nat) (Mut := Nat →₀ Int)
+          (self := pointDeltaSystem) (Finsupp.single 1 (7 : Int))
         = (Finsupp.single 1 (7 : Int)).support.toList from rfl,
         Finset.mem_toList, Finsupp.mem_support_single] at hx₁
-    rw [show DeltaSystem.writesOf (self := pointDeltaSystem)
-          (Finsupp.single 0 (9 : Int))
+    rw [show DeltaSystem.writesOf (S := Nat →₀ Int) (Loc := Nat) (Mut := Nat →₀ Int)
+          (self := pointDeltaSystem) (Finsupp.single 0 (9 : Int))
         = (Finsupp.single 0 (9 : Int)).support.toList from rfl,
         Finset.mem_toList, Finsupp.mem_support_single] at hx₂
     exact absurd (hx₁.1.symm.trans hx₂.1) (by decide)

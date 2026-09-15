@@ -129,6 +129,18 @@ class UpdatePure (fs : List Field) (f : Field)
   /-- The stored volatile-ref set is empty (the scan's decided fact). -/
   volatileFree : u.volatileRefs = [] := by decide
 
+/-- The REGISTRATION-ROUTE constructor: an item built by `mk` whose
+    `volatileRefs` slot is literally `[]` is pure — the `rfl` reduces
+    on the ctor with the binders still abstract. The `schema_update`
+    command Qq-quotes this as the emitted instance's proof (W2.1): a
+    statically elaborated proof can only discharge against a NAMED
+    lemma — a raw `⟨rfl⟩` inside a quotation sees opaque antiquotes
+    and cannot reduce. -/
+theorem UpdatePure.emptyScan {fs : List Field} {f : Field} {n : String}
+    {g : VExpr fs .bool} {v : VExpr fs f.ty} {p : ColPath f.name f.ty fs} :
+    UpdatePure fs f (UpdateItem.mk n g v p []) :=
+  ⟨rfl⟩
+
 /-- THE NON-INTERFERENCE LOCK — literally `cascade_two_commute`'s
 hypothesis set as ONE class: neither update's TERMS (guard or value)
 read the other's written column, and the write columns differ. Every

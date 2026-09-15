@@ -34,6 +34,7 @@ environment, and the emitters see exactly what was registered.
 -/
 
 import Lean
+import Qq
 import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Invariant
@@ -42,6 +43,7 @@ import SchemaLang.Update
 namespace SchemaLang.Meta
 
 open Lean
+open Qq
 
 /-- The registry: Lean declaration name ↦ schema item, append-only
     (the `CodegenCore.mkRegistryExt` semantics: append on add,
@@ -413,21 +415,82 @@ def registeredInvariants (env : Environment) : List InvariantItem :=
 def registeredInvariantNames (env : Environment) : List String :=
   (registeredInvariants env).map (·.name)
 
-/-- `Ty` → its constructor tree as an `Expr` (the expected-type
-    builder: the command elaborates the author's term against
-    `VExpr <the record's real fields> .bool`). -/
-def tyToExpr : Ty → Expr :=
-  toExpr
+/-! ## Typed-quotation helpers (Qq)
 
-/-- One field → the `Field.mk` application (the GADT's index term). -/
-def fieldToExpr (f : Field) : Expr :=
-  .app (.app (.const ``Field.mk []) (.lit (.strVal f.name))) (tyToExpr f.ty)
+Every `q(...)` quotation takes its runtime data as BINDERS, never
+let-bound or inline `toExpr` antiquotes: Qq's unquoter unfolds
+let-values/definitions before checking for the `Quoted` type, so only
+binder-position `Q(_)` variables survive (`unquoteExpr: ... : Expr`
+otherwise). The plain wrappers then fill the binders with `toExpr`
+casts — sound because the `ToExpr` instances emit literal denotations. -/
+
+/-- `Ty` → its constructor tree as a TYPED quotation (the
+    expected-type builder: the command elaborates the author's term
+    against `VExpr <the record's real fields> .bool`). The `Q(Ty)`
+    ascription is sound: the `ToExpr Ty` instance (Ty.lean) emits the
+    literal denotation. -/
+def tyToExpr (t : Ty) : Q(Ty) :=
+  toExpr t
+
+/-- One field → the `Field.mk` application (the binder-discipline
+    quotation; see the section note). -/
+def fieldToExprQ (n : Q(String)) (t : Q(Ty)) : Q(Field) :=
+  q(Field.mk $n $t)
+
+/-- One field → the `Field.mk` application (the GADT's index term),
+    as a typed quotation. -/
+def fieldToExpr (f : Field) : Q(Field) :=
+  fieldToExprQ (toExpr f.name) (tyToExpr f.ty)
+
+/-- The empty field list (the fold's seed; binder discipline). -/
+def fieldsNilQ : Q(List Field) := q([])
+
+/-- `cons` on the field-list literal (binder discipline). -/
+def fieldsConsQ (f : Q(Field)) (fs : Q(List Field)) : Q(List Field) :=
+  q($f :: $fs)
 
 /-- The record's fields as a `List Field` literal term — the index the
     expected type carries, so the `HasCol` instance search walks the
-    REAL schema (a misspelled column fails instance search). -/
-def fieldsToExpr (fields : List Field) : MetaM Expr :=
-  Meta.mkListLit (.const ``Field []) (fields.map fieldToExpr)
+    REAL schema (a misspelled column fails instance search). Pure Qq
+    fold (was `Meta.mkListLit`). -/
+def fieldsToExpr (fields : List Field) : Q(List Field) :=
+  fields.foldr (fun f acc => fieldsConsQ (fieldToExpr f) acc) fieldsNilQ
+
+/-- `VExpr <fields> .bool` as a type quotation. -/
+def vexprBoolTyQ (fsList : Q(List Field)) : Q(Type) :=
+  q(VExpr $fsList Ty.bool)
+
+/-- `VExpr <fields> <ty>` as a type quotation. -/
+def vexprTyQ (fsList : Q(List Field)) (t : Q(Ty)) : Q(Type) :=
+  q(VExpr $fsList $t)
+
+/-- `ColPath <name> <ty> <fields>` as a type quotation. -/
+def colPathTyQ (fsList : Q(List Field)) (n : Q(String)) (t : Q(Ty)) : Q(Type) :=
+  q(ColPath $n $t $fsList)
+
+/-- The `UpdatePure` instance TYPE for a registered update, as a typed
+    quotation. The projections `($fQ).ty`/`($fQ).name` (not separate
+    antiquotes) keep the quotation elaborator's indices SHARED with the
+    `fQ` binder — opaque per-piece antiquotes would not unify against
+    `UpdateItem.mk`'s signature. -/
+def updatePureInstTyQ (fsList : Q(List Field)) (fQ : Q(Field))
+    (unameQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
+    (e : Q(VExpr $fsList ($fQ).ty))
+    (path : Q(ColPath ($fQ).name ($fQ).ty $fsList)) : Q(Prop) :=
+  q(UpdatePure $fsList $fQ
+    (UpdateItem.mk (fs := $fsList) (f := $fQ) $unameQ $g $e $path []))
+
+/-- The instance PROOF: `UpdatePure.emptyScan`'s `rfl` reduces on the
+    literal `[]` scan result with the binders still abstract (a raw
+    `⟨rfl⟩` inside a quotation sees opaque antiquotes and cannot
+    reduce — the named lemma is the Qq-compatible discharge). -/
+def updatePureInstPfQ (fsList : Q(List Field)) (fQ : Q(Field))
+    (unameQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
+    (e : Q(VExpr $fsList ($fQ).ty))
+    (path : Q(ColPath ($fQ).name ($fQ).ty $fsList)) :
+    Q(UpdatePure $fsList $fQ
+      (UpdateItem.mk (fs := $fsList) (f := $fQ) $unameQ $g $e $path [])) :=
+  q(UpdatePure.emptyScan)
 
 /-- The invariant's NAME may be an ident OR a string literal: the registry
 names are kebab (`id-positive`) — the emitted Rust's fn suffix and the
@@ -475,10 +538,9 @@ unsafe def elabSchemaInvariant : CommandElab := fun (stx : Syntax) => do
   -- the predicate: elaborated against `VExpr <fields> .bool`, then
   -- evaluated to the GADT value (the emitter compiles the VALUE)
   let (exprTerm, inv) : Expr × SchemaInvariant ← liftTermElabM do
-    let fsList ← fieldsToExpr fields
-    let expectedFs ← Meta.inferType fsList
-    let expected := mkApp2 (mkConst ``SchemaLang.VExpr) fsList
-      (mkConst ``SchemaLang.Ty.bool)
+    let fsList := fieldsToExpr fields
+    let expectedFs : Q(Type) := q(List Field)
+    let expected : Expr := vexprBoolTyQ fsList
     let e ← elabTerm stx[6]! (some expected)
     Term.synthesizeSyntheticMVarsNoPostponing
     let e ← instantiateMVars e
@@ -495,7 +557,7 @@ unsafe def elabSchemaInvariant : CommandElab := fun (stx : Syntax) => do
   if let some pn := proofName? then
     liftTermElabM do
       let env' ← getEnv
-      let fsListE ← fieldsToExpr fields
+      let fsListE := fieldsToExpr fields
       match ← checkCitation? env' fsListE exprTerm pn with
       | some d => throwError s!"schema_invariant `{invName}`: {d}"
       | none => pure ()
@@ -636,12 +698,12 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
   -- values, resolve the write path (the `VExpr.colOf` route, its `.col`
   -- path extracted) — all data by the time it registers
   let (row, instName, instTy, instVal) ← liftTermElabM do
-    let fsList ← fieldsToExpr fields
-    let expectedFs ← Meta.inferType fsList
+    let fsList := fieldsToExpr fields
+    let expectedFs : Q(Type) := q(List Field)
     let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
     -- the value: against `VExpr <fields> f.ty` — the FIELD's OWN TYPE
     -- is the type gate (a u64 expr on a string column fails here)
-    let expectedValue := mkApp2 (mkConst ``SchemaLang.VExpr) fsList (tyToExpr fVal.ty)
+    let expectedValue : Expr := vexprTyQ fsList (tyToExpr fVal.ty)
     let e ← elabTerm valueStx (some expectedValue)
     Term.synthesizeSyntheticMVarsNoPostponing
     let e ← instantiateMVars e
@@ -662,8 +724,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
       throwError s!"schema_update `{uname}`: unresolved metavariables in the value"
     let valueVal : VExpr fsVal fVal.ty ← Meta.evalExpr (VExpr fsVal fVal.ty) expectedValue e
     -- the guard: against `VExpr <fields> .bool`
-    let expectedGuard := mkApp2 (mkConst ``SchemaLang.VExpr) fsList
-      (mkConst ``SchemaLang.Ty.bool)
+    let expectedGuard : Expr := vexprBoolTyQ fsList
     let g ← elabTerm guardStx (some expectedGuard)
     Term.synthesizeSyntheticMVarsNoPostponing
     let g ← instantiateMVars g
@@ -694,8 +755,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     unless peCtor.getAppFn.isConstOf ``SchemaLang.VExpr.col do
       throwError s!"schema_update `{uname}`: internal: `colOf` did not reduce to the .col ctor"
     let pathE := peCtor.getAppArgs[peCtor.getAppArgs.size - 1]!
-    let pathTyE := mkApp3 (mkConst ``SchemaLang.ColPath)
-      (mkStrLit fVal.name) (tyToExpr fVal.ty) fsList
+    let pathTyE : Expr := colPathTyQ fsList (toExpr fVal.name) (tyToExpr fVal.ty)
     let pathVal : ColPath fVal.name fVal.ty fsVal ←
       Meta.evalExpr (ColPath fVal.name fVal.ty fsVal) pathTyE pathE
     -- THE COMPOSABLE LOCK (the second layer — the scan above stays
@@ -706,16 +766,19 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     -- FAILS to elaborate (the proof checks the gate). Downstream,
     -- `UpdateItem.cascade2` assembles legality by instance search —
     -- no re-scan at the consumer.
+    -- the instance assembly, fully typed (Qq): the elaborated terms
+    -- are passed to the typed-quotation helpers with their CHECKED
+    -- types (the `VExpr`/`ColPath` gates above) — the `Q(_)` casts are
+    -- `implicit_reducible` defeq, sound by the gates. The proof is
+    -- `UpdatePure.emptyScan`, discharging `rfl` against the literal
+    -- `[]` scan result — the kernel checks the gate (was: raw `mkAppN`
+    -- assembly + runtime `elabTerm` of `⟨rfl⟩` + an "internal:
+    -- unresolved metavariables" guard, all dead now that the instance
+    -- is typed at construction)
     let instTy : Expr :=
-      mkApp3 (mkConst ``SchemaLang.UpdatePure) fsList (fieldToExpr fVal)
-        (mkAppN (mkConst ``SchemaLang.UpdateItem.mk)
-          #[fsList, fieldToExpr fVal, mkStrLit uname, g, e, pathE,
-            mkApp (mkConst ``List.nil [Lean.Level.zero]) (mkConst ``String)])
-    let pf ← elabTerm (← `(⟨rfl⟩)) (some instTy)
-    let pf ← instantiateMVars pf
-    if pf.hasExprMVar then
-      throwError s!"schema_update `{uname}`: internal: unresolved "
-        ++ "metavariables in the UpdatePure instance"
+      updatePureInstTyQ fsList (fieldToExpr fVal) (toExpr uname) g e pathE
+    let pf : Expr :=
+      updatePureInstPfQ fsList (fieldToExpr fVal) (toExpr uname) g e pathE
     pure ({ fields := fsVal, field := fVal
           , update := { name := uname, guard := guardVal
                       , value := valueVal, writePath := pathVal

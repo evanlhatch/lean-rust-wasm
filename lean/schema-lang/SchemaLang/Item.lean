@@ -304,8 +304,11 @@ def Item.check (known : List String) : Item → List SchemaDiag
               ++ t.check known
         | none => checkSchemaIdent (s!"case of `{n}`") c
   | .func s =>
-      s.params.flatMap fun (_, t) => t.check known
-        ++ s.ret.check known
+      -- parens load-bearing: the `fun` body is greedy, so an
+      -- unparenthesized `++ s.ret.check known` lands INSIDE the
+      -- per-param lambda (param-less funcs never got their return type
+      -- checked; N-param funcs got it N times)
+      (s.params.flatMap fun (_, t) => t.check known) ++ s.ret.check known
   | .resource _ => []
 
 /-- The universe check: ALL diagnostics. Empty list = well formed. -/
