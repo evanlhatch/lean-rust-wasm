@@ -41,7 +41,7 @@ mutual
     | map (key value : SType)
     | struct (fields : List SType)
     | userDefined (urn : String) (name : String) (params : List SParam)
-  deriving Repr, BEq, Inhabited
+  deriving Repr, Inhabited
 
   /-- Parameter values for parameterized/user-defined types (wire `Type.Parameter`). -/
   inductive SParam where
@@ -51,7 +51,7 @@ mutual
     | enum (e : String)
     | null (t : SType)
     | dataType (t : SType)
-  deriving Repr, BEq, Inhabited
+  deriving Repr, Inhabited
 end
 
 /-- A schema column: name × type × nullable. -/
@@ -203,5 +203,159 @@ mutual
     | [], _ => .no
     | _, [] => .no
 end
+
+
+/-! ## Decidable equality (the lawful BEq route)
+
+Hand-written structural equality + the `beq_iff_eq` family (the DERIVED
+`BEq`'s generated matcher is not a proof surface — the hand-written
+function is). The instances live next to the type. `eqAns` above stays:
+the proof-carrying directed answer for elaboration-time reflection. -/
+
+mutual
+  /-- Structural equality over the schema types. -/
+  def SType.beq : SType → SType → Bool
+    | .bool, .bool => true
+    | .i8, .i8 => true
+    | .i16, .i16 => true
+    | .i32, .i32 => true
+    | .i64, .i64 => true
+    | .fp32, .fp32 => true
+    | .fp64, .fp64 => true
+    | .string, .string => true
+    | .binary, .binary => true
+    | .decimal p s, .decimal p' s' => p == p' && s == s'
+    | .list e1, .list e2 => SType.beq e1 e2
+    | .map k1 v1, .map k2 v2 => SType.beq k1 k2 && SType.beq v1 v2
+    | .struct fs1, .struct fs2 => SType.beqFields fs1 fs2
+    | .userDefined u1 n1 p1, .userDefined u2 n2 p2 =>
+        u1 == u2 && n1 == n2 && SParam.beqParams p1 p2
+    | _, _ => false
+
+  /-- Pairwise list equality (in the mutual block so the terminator sees
+      structural recursion). -/
+  def SType.beqFields : List SType → List SType → Bool
+    | [], [] => true
+    | x :: xs, y :: ys => SType.beq x y && SType.beqFields xs ys
+    | _, _ => false
+
+  /-- Structural equality over the wire `Type.Parameter` values. -/
+  def SParam.beq : SParam → SParam → Bool
+    | .boolean b1, .boolean b2 => b1 == b2
+    | .integer i1, .integer i2 => i1 == i2
+    | .string s1, .string s2 => s1 == s2
+    | .enum e1, .enum e2 => e1 == e2
+    | .null t1, .null t2 => SType.beq t1 t2
+    | .dataType t1, .dataType t2 => SType.beq t1 t2
+    | _, _ => false
+
+  /-- Pairwise parameter-list equality. -/
+  def SParam.beqParams : List SParam → List SParam → Bool
+    | [], [] => true
+    | x :: xs, y :: ys => SParam.beq x y && SParam.beqParams xs ys
+    | _, _ => false
+end
+
+mutual
+  /-- The lawful direction both ways: structural equality IS equality. -/
+  theorem SType.beq_iff_eq : ∀ (a b : SType), SType.beq a b = true ↔ a = b
+    | .bool, b => by cases b <;> simp [SType.beq]
+    | .i8, b => by cases b <;> simp [SType.beq]
+    | .i16, b => by cases b <;> simp [SType.beq]
+    | .i32, b => by cases b <;> simp [SType.beq]
+    | .i64, b => by cases b <;> simp [SType.beq]
+    | .fp32, b => by cases b <;> simp [SType.beq]
+    | .fp64, b => by cases b <;> simp [SType.beq]
+    | .string, b => by cases b <;> simp [SType.beq]
+    | .binary, b => by cases b <;> simp [SType.beq]
+    | .decimal p s, b => by cases b <;> simp [SType.beq]
+    | .list e1, b => by
+        cases b <;> simp [SType.beq]
+        rename_i e2
+        exact ⟨fun h => by rw [SType.beq_iff_eq e1 e2 |>.1 h],
+               fun h => by cases h; exact SType.beq_iff_eq e1 e1 |>.2 rfl⟩
+    | .map k1 v1, b => by
+        cases b <;> simp [SType.beq]
+        rename_i k2 v2
+        exact ⟨fun h => by
+                have ⟨hk, hv⟩ := h
+                rw [SType.beq_iff_eq k1 k2 |>.1 hk, SType.beq_iff_eq v1 v2 |>.1 hv]
+                exact ⟨rfl, rfl⟩,
+               fun h => by
+                have ⟨hk, hv⟩ := h
+                subst hk; subst hv
+                exact ⟨SType.beq_iff_eq _ _ |>.2 rfl, SType.beq_iff_eq _ _ |>.2 rfl⟩⟩
+    | .struct fs1, b => by
+        cases b <;> simp [SType.beq]
+        rename_i fs2
+        exact ⟨fun h => by rw [SType.beqFields_iff_eq fs1 fs2 |>.1 h],
+               fun h => by cases h; exact SType.beqFields_iff_eq fs1 fs1 |>.2 rfl⟩
+    | .userDefined u1 n1 p1, b => by
+        cases b <;> simp [SType.beq]
+        rename_i u2 n2 p2
+        exact ⟨fun h => by
+                have ⟨⟨hu, hn⟩, hp⟩ := h
+                rw [hu, hn, SParam.beqParams_iff_eq p1 p2 |>.1 hp]
+                exact ⟨rfl, rfl, rfl⟩,
+               fun h => by
+                have ⟨hu, hn, hp⟩ := h
+                subst hu; subst hn; subst hp
+                exact ⟨⟨rfl, rfl⟩, SParam.beqParams_iff_eq _ _ |>.2 rfl⟩⟩
+
+  theorem SType.beqFields_iff_eq : ∀ (xs ys : List SType),
+      SType.beqFields xs ys = true ↔ xs = ys
+    | [], [] => by simp [SType.beqFields]
+    | [], _ :: _ => by simp [SType.beqFields]
+    | _ :: _, [] => by simp [SType.beqFields]
+    | x :: xs, y :: ys => by
+        simp only [SType.beqFields, Bool.and_eq_true]
+        exact ⟨fun ⟨hx, hxs⟩ => by
+                rw [SType.beq_iff_eq x y |>.1 hx, SType.beqFields_iff_eq xs ys |>.1 hxs],
+               fun h => by cases h; exact ⟨SType.beq_iff_eq x x |>.2 rfl,
+                SType.beqFields_iff_eq xs xs |>.2 rfl⟩⟩
+
+  theorem SParam.beq_iff_eq : ∀ (a b : SParam), SParam.beq a b = true ↔ a = b
+    | .boolean b1, b => by cases b <;> simp [SParam.beq]
+    | .integer i1, b => by cases b <;> simp [SParam.beq]
+    | .string s1, b => by cases b <;> simp [SParam.beq]
+    | .enum e1, b => by cases b <;> simp [SParam.beq]
+    | .null t1, b => by
+        cases b <;> simp [SParam.beq]
+        rename_i t2
+        exact ⟨fun h => by rw [SType.beq_iff_eq t1 t2 |>.1 h],
+               fun h => by cases h; exact SType.beq_iff_eq t1 t1 |>.2 rfl⟩
+    | .dataType t1, b => by
+        cases b <;> simp [SParam.beq]
+        rename_i t2
+        exact ⟨fun h => by rw [SType.beq_iff_eq t1 t2 |>.1 h],
+               fun h => by cases h; exact SType.beq_iff_eq t1 t1 |>.2 rfl⟩
+
+  theorem SParam.beqParams_iff_eq : ∀ (xs ys : List SParam),
+      SParam.beqParams xs ys = true ↔ xs = ys
+    | [], [] => by simp [SParam.beqParams]
+    | [], _ :: _ => by simp [SParam.beqParams]
+    | _ :: _, [] => by simp [SParam.beqParams]
+    | x :: xs, y :: ys => by
+        simp only [SParam.beqParams, Bool.and_eq_true]
+        exact ⟨fun ⟨hx, hxs⟩ => by
+                rw [SParam.beq_iff_eq x y |>.1 hx, SParam.beqParams_iff_eq xs ys |>.1 hxs],
+               fun h => by cases h; exact ⟨SParam.beq_iff_eq x x |>.2 rfl,
+                SParam.beqParams_iff_eq xs xs |>.2 rfl⟩⟩
+end
+
+instance : BEq SType := ⟨SType.beq⟩
+instance : LawfulBEq SType where
+  eq_of_beq := fun h => (SType.beq_iff_eq _ _).1 h
+  rfl := (SType.beq_iff_eq _ _).2 rfl
+
+instance : DecidableEq SType := fun a b => decidable_of_iff _ (SType.beq_iff_eq a b)
+
+instance : BEq SParam := ⟨SParam.beq⟩
+instance : LawfulBEq SParam where
+  eq_of_beq := fun h => (SParam.beq_iff_eq _ _).1 h
+  rfl := (SParam.beq_iff_eq _ _).2 rfl
+
+instance : DecidableEq SParam := fun a b => decidable_of_iff _ (SParam.beq_iff_eq a b)
+
 
 end Substrait.Typed

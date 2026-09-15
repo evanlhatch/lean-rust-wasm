@@ -22,7 +22,7 @@ import Demo
 open Lean SchemaLang.Meta
 
 open SchemaLang.Emit (emitters)
-open CodegenCore.Emit (header)
+open CodegenCore.Emit (header runEmitters)
 
 unsafe def main : IO Unit := do
   -- Replay BOTH spec modules' registrations (loadExts; `lake exe`
@@ -55,11 +55,5 @@ unsafe def main : IO Unit := do
   -- The generation metadata: ONE assembly (the clock + git), shared by
   -- every artifact this run writes. The emitters stay pure.
   let gm ← CodegenCore.Emit.genMeta ctx.items.length 0
-  for e in emitters do
-    for f in e.run ctx do
-      -- the content hash = per-artifact (the header excluded — the
-      -- drift check strips the header, so ANY metadata is safe)
-      let gm := { gm with contentHash := f.contents.hash }
-      CodegenCore.Emit.writeFileCreatingDirs f.path
-        (header e.style "schema-lang" e.specSource gm ++ f.contents)
-      IO.println s!"wrote {f.path}"
+  runEmitters "schema-lang" (emitters.map (λ e => (e, ctx)))
+    (λ _ f => pure { gm with contentHash := f.contents.hash })

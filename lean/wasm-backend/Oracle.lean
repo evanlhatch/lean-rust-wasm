@@ -28,7 +28,10 @@ import Lean
 import DemoFn
 import GuestlangStd
 import Plausible
+import TestKit
 import LintKit.PackageNamespace
+
+open TestKit
 
 -- The oracle row surface (`rows`/`resolve`/`jsonRow`/…) is keyed by the
 -- demo world's WIT export names — deliberately unprefixed.
@@ -86,8 +89,6 @@ def rows : List (String × List String) :=
 -- random args); the engines must agree on inputs the fixed grid never
 -- visits (the overflow wraps: UInt64 arithmetic is wrapping — the
 -- random args cross the wrap boundary the grid avoids).
-def lcg : UInt64 → UInt64 := fun s => s * 6364136223846793005 + 1442695040888963407
-
 def fuzzRows : Nat → UInt64 → List (String × List String)
   | 0, _ => []
   | n+1, seed =>

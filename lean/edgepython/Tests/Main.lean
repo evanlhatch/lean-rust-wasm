@@ -102,5 +102,6 @@ def badBranch : List Py.Fn :=
 -- an inconsistent variable type across branches: REJECTED
 #guard Compiler.compModule badBranch = none
 
-def main : IO Unit :=
+def main : IO UInt32 := do
   IO.println "edgepython: structural + negative controls green (Lean engine)"
+  return 0

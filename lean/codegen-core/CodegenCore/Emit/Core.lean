@@ -207,6 +207,20 @@ def kebab (s : String) : String := String.intercalate "-" (words s)
 def rootRel (p : String) : String :=
   match p.dropPrefix? "../../" with | some rest => rest.toString | none => p
 
+/-- The shared driver loop: for each (emitter, spec) job, run the emitter,
+    prepend the header, and write each generated file. `tool` = the emitting
+    package name (e.g. `"schema-lang"`, `"faults"`). `mkGm` gives the driver
+    control over per-file GenMeta — schema-lang precomputes GenMeta once and
+    only varies contentHash; faults computes GenMeta per file with items=1.
+    Emitted bytes match the hand-written loops exactly. -/
+def runEmitters {Spec : Type} (tool : String) (jobs : List (Emitter Spec × Spec))
+    (mkGm : Emitter Spec → GeneratedFile → IO GenMeta) : IO Unit :=
+  for (e, spec) in jobs do
+    for f in e.run spec do
+      let gm ← mkGm e f
+      writeFileCreatingDirs f.path (header e.style tool e.specSource gm ++ f.contents)
+      IO.println s!"wrote {f.path}"
+
 /-- Escape a JSON string (paths + names only — quotes and backslashes
     are the whole story). Shared by every manifest emitter (schema-lang's
     Registry + WitFixture both consume it; it lives here so neither can

@@ -62,19 +62,14 @@ def flagKeyEcho : UpdateItem flagFields ⟨"key", .string⟩ :=
 
 /-! ## The 50-tick deterministic sweep (LCG — no Plausible dependency) -/
 
-/-- The LCG step: numerical-drink constants (Knuth), wrapping u64 —
-    the sweep is DETERMINISTIC (the same seed = the same trace). -/
-def lcgNext (s : UInt64) : UInt64 :=
-  s * 6364136223846793005 + 1442695040888963407
-
 /-- `n` update batches from seed `s`: per tick, the LCG's residue mod 3
     chooses the batch shape (clamp-only / clamp+echo / echo-only — the
     sweep exercises guarded-fire, the boundary row, and the echo). -/
 def flagBatches : Nat → UInt64 → List (List SomeUpdate)
   | 0, _ => []
   | n + 1, s =>
-      let s1 := lcgNext s
-      let s2 := lcgNext s1
+      let s1 := TestKit.lcg s
+      let s2 := TestKit.lcg s1
       let suClamp : SomeUpdate :=
         { fields := flagFields, field := ⟨"rollout", .u64⟩
         , update := flagClamp }

@@ -11,16 +11,7 @@ artifact, regenerate.
 import Faults.Emit.Registry
 
 open Faults.Emit (jobs)
-open CodegenCore.Emit (header)
+open CodegenCore.Emit (header runEmitters)
 
-def main : IO Unit := do
-  for h in jobs do
-    let (e, spec) := h
-    for f in e.run spec do
-      let p := (CodegenCore.Emit.GeneratedFile.path f : String)
-      -- the meta = per-file (the content hash); the clock/git = the
-      -- driver's IO (the emitters stay pure)
-      let contents := CodegenCore.Emit.GeneratedFile.contents f
-      let gm ← CodegenCore.Emit.genMeta 1 contents.hash
-      CodegenCore.Emit.writeFileCreatingDirs p (header e.style "faults" e.specSource gm ++ contents)
-      IO.println s!"wrote {p}"
+def main : IO Unit :=
+  runEmitters "faults" jobs (λ _ f => CodegenCore.Emit.genMeta 1 f.contents.hash)
