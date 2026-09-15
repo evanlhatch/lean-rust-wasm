@@ -13,7 +13,10 @@ import SchemaLang.Emit.Registry
 import SchemaLang.Docs
 import SchemaLang.ModuleDocs
 import SchemaLang.Codec
+import SchemaLang.EnumWire
 import SchemaLang.CodecValue
+import SchemaLang.Layout
+import SchemaLang.Gen
 import SchemaLang.Field
 import SchemaLang.Validate
 import SchemaLang.Subschema
@@ -21,10 +24,14 @@ import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
 import SchemaLang.Vortex.Emit
 import SchemaLang.Vortex.ExtDType
+import SchemaLang.Vortex.Encoding
+import SchemaLang.Vortex.Batch
+import SchemaLang.Vortex.DataFusion
 import SchemaLang.Pipeline
 import SchemaLang.OrderMachine
 import SchemaLang.Emit.Machine
 import SchemaLang.Meta.Derive
+import SchemaLang.Meta.Gen
 import SchemaLang.Invariant
 import SchemaLang.Emit.Invariant
 import SchemaLang.Update

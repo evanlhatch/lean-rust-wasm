@@ -1,0 +1,193 @@
+# Lean internals — module documentation
+
+Generated from the elaborated environment (`Lean.getModuleDoc?`) at the
+build of `SchemaLang.ModuleDocs`: the module manifest (`internalsModules`)
+is data, the docstrings are VERBATIM environment replay. DO NOT EDIT:
+regenerate with `just gen`.
+
+## SchemaLang.Item
+
+## Items 
+
+## Well-formedness — resolution over the universe, with designed errors
+
+The universe check returns STRUCTURED diagnostics (TOOLKIT §11.1: errors
+enumerate the valid space, did-you-mean everywhere, never a bare Bool).
+`universeWellFormed` stays as the Bool projection for gates; `universeCheck`
+is the diagnostic authority.
+
+The closed-world superpower: `unknownRef` carries the closest matches AND
+the full valid space — for an LLM, an error that lists the valid moves is
+a self-correcting prompt. 
+
+## Reserved words — the identifier gate (elab-time, via the
+    registration handlers in `Meta.Reflect`; also enforced by the pure
+    `Item.check` for hand-built universes)
+
+A field/case named `u8` would emit INVALID WIT (`record user { u8: ... }`)
+and invalid Rust; the collision is caught HERE — at registration —
+not downstream at wit-parser time. The identifier is checked in its
+EMITTED spellings (kebab for WIT, snake for Rust).
+
+
+## The diagnostic authority (supersedes the Bool) 
+
+## The Bool projection (derived from the diagnostic authority) 
+
+## SchemaLang.Diff
+
+## Field-level compat evidence (EqAns-based: WHICH fields moved) 
+
+## SchemaLang.Validate
+
+## The value-aligned row 
+
+## The field path — the resolution's RUNTIME half 
+
+## The cast kit (the TorchLean castShape suite, on GADT indices)
+
+The registry's existential wrappers (`SomeUpdate.applyRow`,
+`InvariantItem.checkOn`) transport a row across a DATA-equality of the
+field list with raw `▸`. The named cast + its four lemmas make the
+transport GREPPABLE and the proof-irrelevance usable: two consumers that
+derived the same equality differently share a lemma (the cast does not
+depend on which proof is used), and `▸`-inserted rewrites are the same
+function (the bridge lemma keeps simp firing on elaborator-produced
+goals).
+
+
+## The field resolution's ELABORATION half 
+
+## The indexed expression 
+
+## The evaluators 
+
+## Phase 3 — the variant family (the second indexed-expr family)
+
+The honest-skip's scope, RESOLVED at the spec level. The second
+family's full inventory, as predicted: its own variant-row type, its
+own resolution classes, its own expression level, its own evaluator —
+and the pin.
+
+THE COMPILED-LANE DECISION (the strlen precedent, applied): the VCase
+family is SPEC-LEVEL ONLY. `evalCase` constructs `Value` boxes (the
+boxed reading — `evalV`'s reason, unmarked), and a RAW variant
+evaluator would need the discr + joined-payload scalar level the
+backend does not emit (the canonical ABI's f64→i64 payload join makes
+the slot non-scalar — the demo's f64 arm is deliberately UNREAD). So
+the registered variant validator (`GuestImpl.orderErrorValid`) KEEPS
+the hand `match` — the tag case + the payload sproj is the shape the
+backend already emits — and the VCase form (`orderErrorSpecValid`)
+rides beside it, eval-tested against the mirrored case list in the
+schema-lang tests.
+
+Payload-access rules, BY CONSTRUCTION:
+- SOME-payload cases get the arm-typed accessor (`payload`, its type
+  index = the case's payload type); a NONE-payload case has NO
+  accessor (`CasePath.here` exists only over `some t` heads) — the
+  read fails at ELABORATION, never at runtime.
+- The MISS case (the row's fired tag is NOT the queried arm) yields
+  the 0-analog (`HasPayload.miss`) — an unfired slot's read is
+  meaningless, so the guarded-usage pattern (`isCase` ∧ `payload`)
+  discards it. The 0-analog exists for the valueable scalar fragment
+  (u64/f64/bool/string); other payload types get no accessor yet
+  (additive — the instances extend, the universe stays closed).
+- `.ty`-ref payloads: a named ref has NO `Value` ctor (the boxed lane
+  cannot value it), so those arms get no instance — the honest skip.
+
+
+### The variant expression 
+
+## The `[inv| …]` surface syntax — the DSL embedding (the ch. 8 pattern)
+
+The Metaprogramming-in-Lean book's chapter 8 ("Embedding DSLs by
+Elaboration"), IMP shape: a `declare_syntax_cat` for the invariant
+language + a RECURSIVE elaborator into the `VExpr` constructors + a
+`term`-level quoter. ADDITIVE: the `VExpr` ctors and the evaluators
+above are untouched — this section only SPELLS them.
+
+- The field-ref leaf rides `VExpr.colOf` — the `HasCol` instance
+  search happens at the elaboration site, so the MISSPELLED field is a
+  BUILD error (the same gate the hand spelling has, now through the
+  syntax).
+- Precedence: the book's `:50/:40` shape — `&&` binds tighter than
+  `||`, the comparisons (`>`, `==`) tighter than both; the right
+  operand parses at prec+1 (left associativity, the `infixl` recipe).
+- `||` has NO VExpr constructor — it elaborates to the De Morgan form
+  `not (and (not a) (not b))` (exact on Bool; no ctor added, the
+  universe stays closed). `!` is the `not` node's spelling — it exists
+  so the unexpanders (below) can round-trip EVERY tree the syntax can
+  build.
+- The unexpanders are the book's Pretty Printing pattern: per-ctor
+  `@[app_unexpander]`, each matching the delaborated form INSIDE the
+  pattern (the children arrive already unexpanded to `[inv| … ]`
+  terms — the inner syntax is unwrapped and re-spliced, parenthesized
+  when the child's top node binds looser than the operand position
+  demands — the tree parses back to the SAME constructor tree).
+
+No `set_option hygiene false`: the book's `myid` case is about a macro
+EXPOSING a local name through hygiene marks; the unexpanders here run
+at pp-time and construct RAW syntax (no marks), and every other name
+is a global constant (resolved through marks).
+
+
+### The unexpanders — a VExpr pretty-prints back to `[inv| … ]` 
+
+## SchemaLang.Session
+
+## The gateway instance, typed 
+
+## Machines.Session
+
+## Protocols 
+
+## Payload-TYPED steps — generic over the payload universe (the CORE)
+
+The string layer certifies the choreography SHAPE with payloads as wire
+names; the TYPED core abstracts the payload: a `TProtocol P` is a
+conversation whose payloads range over ANY universe `P`. Machines owns
+the MECHANISM (the typed dual and its mirror/liveness certificates)
+ONCE — the string layer below is the INSTANTIATION `P := String` (not a
+second implementation), and the schema-lang layer supplies
+`P := SchemaLang.Ty` (SchemaLang.Session). The two cannot drift.
+
+
+## The string layer — the typed core at `P := String`
+
+`Step = Dir × String = TStep String` and `Protocol = TProtocol String`
+definitionally, so the string theorems ARE the typed ones:
+`dual := tdual`, and every string theorem below delegates to its typed
+twin. The `@[simp]` surface (`dual_nil`/`dual_cons`/`dual_length`) stays
+for the session machine's reasoning. 
+
+## The session machine (Label = the script's indices) 
+
+## Duality — dual peers mirror payloads 
+
+## The gateway instance — the real WIT world's conversation 
+
+### Peer agreement as a TYPE — the elaboration-error property
+
+`IsDualOf theirs mine` is inhabited EXACTLY when `theirs` is the typed
+dual of `mine`. The generic instance is the only witness, so the peer's
+script is COMPUTED by the unifier (deriving, not stating): a
+hand-written script that disagrees — a direction that doesn't flip, or
+a payload that differs at any position — fails definitional equality
+at ELABORATION time. This is the type-level check the runtime cannot
+skip: the mismatched conversation does not compile. 
+
+## Machines.Sim
+
+## The model: components + in-flight messages + clock 
+
+## The step — deterministic by construction 
+
+## (a) Schedule determinism 
+
+## (b) No loss — queue conservation 
+
+## (c) No deadlock — the non-stuck states are steppable 
+
+## The queue diamond — two deliveries, either order 
+
+## The demo — the CRDT point: schedule-independence 

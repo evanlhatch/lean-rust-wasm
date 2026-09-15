@@ -26,10 +26,12 @@ import Demo
 #print axioms SchemaLang.TVal.toList_length
 #print axioms SchemaLang.buildOne?_toList
 #print axioms SchemaLang.pipeline.rank_advances
-#print axioms SchemaLang.decode_encodeValue_append
-#print axioms SchemaLang.TVal.toList_length
-#print axioms SchemaLang.buildOne?_toList
 #print axioms SchemaLang.pipeline.rank_advances_tr
+#print axioms SchemaLang.decode_encodeValue_append
+#print axioms SchemaLang.flatIdxT_inj
+#print axioms SchemaLang.TSlices.toList_get
+#print axioms SchemaLang.TVal.toList_get
+#print axioms SchemaLang.flatIdxT_ofList
 #print axioms SchemaLang.tick.rank_advances
 #print axioms SchemaLang.tick.rank_advances_tr
 #print axioms SchemaLang.orderMachine.rank_advances

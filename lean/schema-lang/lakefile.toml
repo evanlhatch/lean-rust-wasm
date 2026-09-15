@@ -24,6 +24,14 @@ path = "../TestKit"
 name = "Substrait"
 path = "../substrait"
 
+# Plausible as a DIRECT dep (the generators lane): SchemaLang.Gen imports
+# it library-side, so the dep must not ride mathlib's manifest (the
+# fragile inherited form). Same pinned rev the tree already vendors.
+[[require]]
+name = "Plausible"
+git = "https://github.com/leanprover-community/plausible"
+rev = "b7eb3304aeae834b12dda98993a37f6a41f6f0bb"
+
 [[require]]
 name = "LintKit"
 path = "../LintKit"

@@ -936,14 +936,6 @@ partial def shrinkTy : Ty → List Ty
 instance : Shrinkable Ty where
   shrink t := (shrinkTy t).filter (· != t)
 
-/-- A short list combinator (bounded length) over the small supplies. -/
-def genShortList (g : Gen α) (maxLen : Nat) : Gen (List α) := do
-  let len ← Gen.chooseNat
-  let rec go : Nat → Gen (List α)
-    | 0 => pure []
-    | k + 1 => do pure ((← g) :: (← go k))
-  go (len % (maxLen + 1))
-
 /-- A generated field: name from the field supply, type from the fueled
     type generator. -/
 def genField (supply : List String) (fuel : Nat) : Gen Field := do
@@ -1150,23 +1142,9 @@ def sizeS : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m �
 
 end
 
--- Structural equality on `Value t` (Bool-valued — the sweep and the
--- checks compare decoded against encoded through it).
--- (plain comment: `mutual` cannot follow a doc comment)
-
--- Structural equality on `Value t`, THROUGH the codec: two values are
--- equal iff their encodings are byte-equal. NOT a GADT match — the
--- three-arg GADT match's unfold equations are underivable (the
--- catch-all-vs-refined splitter limit); the codec route is total,
--- reflexive (byte equality), and faithful on the codec-closed universe
--- (the round-trip theorem: equal bytes decode equal). The sweep and
--- the checks consume this.
-def valueEq (t : Ty) (a b : Value t) : Bool :=
-  encodeValue t a == encodeValue t b
-
--- the refl pin, kernel-checked (the sweep's equality is not vacuous):
-theorem valueEq_refl (t : Ty) (v : Value t) : valueEq t v v = true :=
-  beq_self_eq_true _
+-- Structural equality on `Value t`: LIFTED to SchemaLang.Gen (the
+-- library's `valueEq`/`valueEq_refl` — same bodies; the sweep consumes
+-- the library versions via `open SchemaLang`).
 
 -- Debug rendering of a `Value t` (Plausible counterexample output).
 mutual
@@ -1238,6 +1216,26 @@ def demoVal : Value (.tensor demoDims .u64) := .tensor demoTv
 -- the flatten's length = the product (the count gate's input)
 #guard (TVal.toList demoTv).length = 6
 
+-- THE LAYOUT TIE, executed (Layout.toList_get): the flatten (the wire
+-- order) at the typed offset IS the coordinate's element — coordinate
+-- (1,0) in [2,3] sits at flat 1·3+0 = 3, holding the value 3. The
+-- ingress route (Coords.ofList?) validates once; the read is total.
+-- (Bool form via valueEq — the GADT has no DecidableEq.)
+#guard (match Coords.ofList? demoDims [1, 0] with
+  | some cs =>
+      match (TVal.toList demoTv)[(flatIdxT demoDims cs : Nat)]? with
+      | some v => valueEq .u64 v (TVal.get demoTv cs)
+      | none => false
+  | none => false) = true
+#guard (match Coords.ofList? demoDims [1, 0] with
+  | some cs =>
+      match (TVal.toList demoTv)[(flatIdxT demoDims cs : Nat)]? with
+      | some v => valueEq .u64 v (.u64 3)
+      | none => false
+  | none => false) = true
+#guard (match Coords.ofList? demoDims [1, 3] with
+  | none => true | some _ => false) = true  -- the boundary check bites
+
 -- THE ROUND TRIP, executed: encode → decode = the same value (the
 -- byte-equality — the GADT has no DecidableEq, the valueEq route)
 #guard (match decodeValue (.tensor demoDims .u64)
@@ -1268,65 +1266,9 @@ instance : Shrinkable Pack where
     if valueEq p.t p.val (defaultValue p.t p.h) then []
     else [⟨p.t, p.h, defaultValue p.t p.h⟩]
 
-/-! ### the generators -/
-
-/-- Short bounded list. -/
-def genShortList (g : Gen α) (maxLen : Nat) : Gen (List α) := do
-  let len ← Gen.chooseNat
-  let rec go : Nat → Gen (List α)
-    | 0 => pure []
-    | k + 1 => do pure ((← g) :: (← go k))
-  go (len % (maxLen + 1))
-
-def genChar : Gen Char := do
-  let n ← Gen.chooseNat
-  pure (Char.ofNat ('a'.toNat + n % 3))
-
-def genU8 : Gen UInt8 := do
-  pure ((← Gen.chooseNat) % 256).toUInt8
-
-/-- One value of type `t` (must be codec-closed), size-bounded by fuel. -/
-def genVal : (t : Ty) → CodecClosed t → Nat → Gen (Value t)
-  | .bool, _, _ => do pure (.bool ((← Gen.chooseNat) % 2 == 0))
-  | .u8, _, _ => do pure (.u8 (← genU8))
-  | .u16, _, _ => do pure (.u16 ((← Gen.chooseNat) % 65536).toUInt16)
-  | .u32, _, _ => do pure (.u32 ((← Gen.chooseNat) % 4294967296).toUInt32)
-  | .u64, _, _ => do
-      pure (.u64 ((← Gen.chooseNat) % 18446744073709551616).toUInt64)
-  | .i8, _, _ => do pure (.i8 (Int8.ofInt (unzigzag ((← Gen.chooseNat) % 200))))
-  | .i16, _, _ => do
-      pure (.i16 (Int16.ofInt (unzigzag ((← Gen.chooseNat) % 40000))))
-  | .i32, _, _ => do
-      pure (.i32 (Int32.ofInt (unzigzag ((← Gen.chooseNat) % 4000000000))))
-  | .i64, _, _ => do
-      pure (.i64 (Int64.ofInt (unzigzag ((← Gen.chooseNat) % 1000000000000000000))))
-  | .string, _, _ => do pure (.string (String.ofList (← genShortList genChar 4)))
-  | .bytes, _, _ => do pure (.bytes (← genShortList genU8 4))
-  | .option t, .option h, fuel + 1 => do
-      let b ← Gen.chooseNat
-      if b % 2 == 0 then pure .none else pure (.some (← genVal t h fuel))
-  | .result ok err, .result hok herr, fuel + 1 => do
-      let b ← Gen.chooseNat
-      if b % 2 == 0 then pure (.ok (← genVal ok hok fuel))
-      else pure (.err (← genVal err herr fuel))
-  | .list t, .list h, fuel + 1 => do
-      pure (.list (listToVList (← genShortList (genVal t h fuel) 3)))
-  | .future t, .future h, fuel + 1 => do pure (.future (← genVal t h fuel))
-  | .stream t, .stream h, fuel + 1 => do
-      pure (.stream (listToVList (← genShortList (genVal t h fuel) 3)))
-  | .tensor dims a, .tensor h, fuel + 1 => do
-      -- the shape-FILLED random tensor: the flat elements generated at
-      -- the type's count (the dims are the type's data, not a choice),
-      -- assembled by the codec's own shape-checked builder; the
-      -- fallback = the default tensor (the generator's base)
-      let elems ← (List.range dims.prod).mapM (fun _ => genVal a h (fuel - 1))
-      match buildOne? a (dims.prod * (dims.length + 1) + dims.length + 10) dims elems with
-      | some (tv, []) => pure (.tensor tv)
-      | _ => pure (defaultValue (.tensor dims a) (.tensor h))
-  -- fuel 0: composites fall back to the default value (u8 is the
-  -- oneOfWithDefault default leaf below, so the control still bites)
-  | t, h, 0 => pure (defaultValue t h)
-  termination_by _ _ fuel => fuel
+/-! ### the generators (LIFTED to SchemaLang.Gen — the sweep consumes
+the library's `genShortList`/`genChar`/`genU8`/`genVal` via
+`open SchemaLang`; the test-side verbatim copies are gone) -/
 
 def genLeafPack : Gen Pack :=
   Gen.oneOfWithDefault
@@ -1473,6 +1415,34 @@ def coverageChecks : CheckResult := do
   .ok ()
 
 end CodecValueSweep
+
+/-! ## The ROW generators (derive_row_gen — the registry-driven lane) -/
+
+-- DERIVED at elaboration from the registry (`SchemaLang.Meta.derive_row_gen`):
+-- Demo's `@[schema]` record User → the row generator + the shape (the
+-- fields abbrev). Not hand mirrors: renaming a field or changing a
+-- field's type in Demo.lean fails THIS module's elaboration. The
+-- refusal discipline: a non-closed field (f32/f64/.ty — OrderItem's
+-- Float, say) throws here, so an ungeneratable row is UNWRITABLE, not
+-- a runtime `none`.
+derive_row_gen for User
+
+-- The generated row round-trips through the ROW codec (Trace's
+-- decRowVals_encRowVals_append law, executed on a GENERATED row — the
+-- generator feeds the proved law; pinned seed, deterministic).
+def rowGenChecks : CheckResult := do
+  match PropSweep.runGenPure (userRowGen 3) 20261105 5 with
+  | .ok row =>
+      -- decode (encode row) = some (r, []) with r re-encoding to the
+      -- same bytes (the valueEq discipline at row level — RowVals has
+      -- no BEq; the codec's bytes are the equality, as proved)
+      _ ← assert (match decRowVals? userRowGenFields
+              (encRowVals userRowGenFields row) with
+        | some (r, []) => encRowVals userRowGenFields r
+            == encRowVals userRowGenFields row
+        | _ => false)
+        "rowGen: generated User row round-trips"
+  | .error e => assert false s!"rowGen: generator errored: {repr e}"
 
 /-! ## Typed session choreography (SchemaLang.Session) -/
 
@@ -2884,6 +2854,111 @@ of sort `Type` in the application
 #guard_msgs in
 example : Subschema [⟨"id", .u64⟩] subUserOld := by decide
 
+/-! ## Vortex Batch + EnumWire: the retention theorems, executed
+
+Batch.lean's theorems (`project_weaken`/`project_self`, `col_project`,
+`u64col_rle_roundtrip`) are compile-time — these checks EXECUTE them on
+concrete batches (a theorem that compiles but reads the wrong column
+still compiles; the executed pin cannot). The EnumWire half runs the
+generated enums' codecs (token + binary) and their PropSpecs with the
+MANDATORY negative controls (`runSpecs` at the bottom).
+-/
+section
+open SchemaLang.Vortex
+
+/-- The id column path over `subUserOld` (the head field IS id —
+    `.here` by the abbrev's reducibility). -/
+def batchColId : ColPath "id" .u64 subUserOld := .here
+
+/-- The name column path (one `there` deep). -/
+def batchColName : ColPath "name" .string subUserOld := .there .here
+
+/-- A two-row batch over the OLD user schema. -/
+def batchOld : Vortex.Batch subUserOld :=
+  [subRowOld 42, subRowOld 7]
+
+/-- The weakened schema: the NEW user schema with a nick field
+    PREPENDED (the shape `Subschema.weaken` produces). -/
+abbrev subUserWeakened : List Field := ⟨"nick", .string⟩ :: subUserNew
+
+/-- A batch over the weakened schema (the nick column first). -/
+def batchWeakened : Vortex.Batch subUserWeakened :=
+  [ .cons (.string "n1") (subRowNew 42)
+  , .cons (.string "n2") (subRowNew 7) ]
+
+/-- The scalar readings the executed pins compare (the Value GADT has
+    no BEq — compare the UNBOXED columns). -/
+def batchStrUnbox : Value .string → String | .string s => s
+
+/-- The id column path over the PROJECTED (id-only) schema. -/
+def batchColIdSmall : ColPath "id" .u64 [⟨"id", .u64⟩] := .here
+
+def batchChecks : CheckResult := do
+  -- column extraction reads the RIGHT values, in batch order
+  _ ← assertEq "col id"
+    ((Batch.col batchColId batchOld).map u64Unbox) [42, 7]
+  _ ← assertEq "col name"
+    ((Batch.col batchColName batchOld).map batchStrUnbox) ["Evan", "Evan"]
+  -- project_self, executed: the reflexive projection IS the identity
+  _ ← assertEq "project_self: id column survives"
+    (Batch.col batchColId
+      (Batch.project batchOld (Subschema.reflexive subUserOld)) |>.map u64Unbox)
+    (Batch.col batchColId batchOld |>.map u64Unbox)
+  -- col_project, executed: reading a column of the projected batch =
+  -- reading the widened path off the original
+  _ ← assertEq "col_project: id through the id-only projection"
+    (Batch.col batchColIdSmall (Batch.project batchOld subId) |>.map u64Unbox)
+    (Batch.col (subId.widen batchColIdSmall) batchOld |>.map u64Unbox)
+  -- weaken, executed: prepending the nick field to the big schema AND
+  -- its rows leaves the projection's reads unchanged (the theorem's
+  -- per-row shape, executed over a two-row batch)
+  let projTails := [subRowNew 42, subRowNew 7].map
+    (fun r => u64Unbox (batchColId.get (r.project subFullEmbed)))
+  _ ← assertEq "project_weaken: nick prepended, reads unchanged"
+    (Batch.col batchColId
+      (Batch.project batchWeakened
+        (subFullEmbed.weaken (f := ⟨"nick", .string⟩))) |>.map u64Unbox)
+    projTails
+  -- u64col + the RLE tie, executed: the batch's u64 column
+  -- RLE-round-trips EXACTLY (the retention theorem, consumed)
+  _ ← assertEq "u64col" (Batch.u64col batchColId batchOld) [42, 7]
+  _ ← assertEq "u64col rle roundtrip"
+    (rleDecode (rleEncode (Batch.u64col batchColId batchOld)))
+    (Batch.u64col batchColId batchOld)
+  -- the run-heavy shape (RLE's actual use): a constant column
+  _ ← assertEq "u64col rle constant column"
+    (rleDecode (rleEncode (Batch.u64col batchColId
+      [subRowOld 5, subRowOld 5, subRowOld 5])))
+    [5, 5, 5]
+  -- the other exact encodings' laws, executed on batch-shaped columns
+  _ ← assertEq "const encoding" (constRead (constEncode [5, 5, 5])) [5, 5, 5]
+  _ ← assertEq "FoR encoding" (forRead (forEncode [100, 103, 99])) [100, 103, 99]
+  _ ← assertEq "dict encoding" (dictRead (dictEncode ["b", "a", "b"]))
+    ["b", "a", "b"]
+  .ok ()
+
+def enumWireChecks : CheckResult := do
+  -- the token spelling (the ONE spelling the snapshot codec consumes)
+  _ ← assertEq "toToken" (NullSem.toToken .propagate) "propagate"
+  _ ← assert (Delivery.ofToken? "stream" == some .stream) "ofToken?"
+  _ ← assert (NullSem.ofToken? "nonsense" |>.isNone) "ofToken? reject"
+  -- the PROVED binary round trip, executed (incl. the append form)
+  _ ← assert (Delivery.decode? (Delivery.encode .once) == some (.once, []))
+      "decode_encode"
+  _ ← assert (NullSem.decode? (NullSem.encode .strict ++ [9]) == some (.strict, [9]))
+      "decode_encode_append"
+  -- the sabotage control's predicate, executed: tag+1 NEVER decodes
+  -- back (the negative controls in `wirePropSpec` run in `runSpecs`)
+  _ ← assertEq "sabotage caught (strict)" (NullSem.wireSabotage .strict) false
+  _ ← assertEq "sabotage caught (custom)" (NullSem.wireSabotage .custom) false
+  _ ← assertEq "sabotage caught (once)" (Delivery.wireSabotage .once) false
+  _ ← assertEq "sabotage caught (stream)" (Delivery.wireSabotage .stream) false
+  _ ← assertEq "sabotage caught (determinism)"
+    (Determinism.wireSabotage .volatile) false
+  .ok ()
+
+end
+
 /-! ## The `[inv| …]` DSL — the VExpr surface syntax (the ch. 8 embedding)
 
 The Metaprogramming-in-Lean book's chapter-8 pattern, landed in
@@ -3113,6 +3188,9 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("trace", traceChecks)
      , ("migration", migrationChecks)
      , ("subschema", subschemaChecks)
+     , ("batch", batchChecks)
+     , ("enumWire", enumWireChecks)
+     , ("rowGen", rowGenChecks)
      , ("docs", docsChecks)
     , ("moduleDocs", moduleDocsChecks)
      , ("diagGolden", diagGoldenChecks)
@@ -3121,7 +3199,10 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- the property sweep WITH its mandatory negative control
   -- (TestKit.PropSpec: the property must pass AND the sabotaged sibling
   -- must be caught — a vacuous sweep fails the gate)
-  TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec]
+  -- the generated enum wires' PropSpecs (Item.lean's three enums:
+  -- the round-trip sweep + the mandatory tag+1 sabotage control)
+  TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec,
+    NullSem.wirePropSpec, Determinism.wirePropSpec, Delivery.wirePropSpec]
 
 /-! ## Debug commands (the author's REPL) — #guard_msgs smokes
 

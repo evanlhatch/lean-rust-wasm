@@ -24,6 +24,7 @@ Registration is attribute-first (`@[schema]`/`@[schema_fn]`/
 -/
 
 import SchemaLang.Ty
+import SchemaLang.EnumWire
 import CodegenCore.Emit.Core
 import CodegenCore.DidYouMean
 
@@ -37,48 +38,46 @@ structure Field where
   ty : Ty
 deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- Nullability semantics of a func item, AS DATA (refactor-guide
-    6.5.1; flatland SPEC-core §2): how the fn treats null (`option`)
-    arguments. `strict` = any null arg → error (the body never sees
-    `none`); `propagate` = any null arg → null result (the body runs
-    only when every arg is present); `custom` = the body owns null
-    handling. Emitters and the wasm differential oracle may consume
-    this later; today it is validated data. -/
-inductive NullSem where
-  | strict | propagate | custom
-deriving Repr, BEq, DecidableEq, Inhabited
+/- The semantic-contract enums are `declare_enum_wire` outputs
+    (`SchemaLang.EnumWire` — doctrine §6: boilerplate families are
+    generated, not written). The hand-rolled inductive + toToken/
+    ofToken? triples these replaced were exactly the drift surface the
+    command closes; each generated enum ships its wire codec with the
+    PROVED round-trip laws (`decode_encode_append`), its plausible
+    instances, and its PropSpec with the mandatory negative control
+    (`NullSem.wirePropSpec` etc. — run in Tests).
 
-/-- Determinism of a func item, AS DATA (6.5.1; SPEC-core §11.5):
-    `pure` = same args → same result, always (reorderable, memoizable);
-    `stable` = pure within one run; `volatile` = may observe the world
-    (clock, rng, host state). The enforcement rule: a `volatile` fn in
-    a purity-required context (aggregation/reorderable operand) fails
-    `universeCheck` — the diag ctor `volatileInPureContext` is armed,
-    but NO such role exists in the item algebra yet, so nothing fires
-    it today (v1: validated data + the armed diag; the firing site
-    lands with the first pure-context consumer, e.g. an aggregation
-    emitter or the wasm oracle). -/
-inductive Determinism where
-  | pure | stable | volatile
-deriving Repr, BEq, DecidableEq, Inhabited
+    Wire tags are CONSTRUCTOR ORDER (0-based): inserting a ctor must
+    append at the end — reordering is a wire-breaking change (the
+    snapshot/breaking gates catch drift).
 
-/-- The delivery contract of a func item: `once` = the result arrives
-    as one value (a list result = ONE payload); `stream` = the host
-    consumes the results INCREMENTALLY (the WASI 0.3 stream — the
-    delta-shaped contracts on the wire). The default (`once`) keeps
-    every existing item unchanged. -/
-inductive Delivery where
-  | once | stream
-deriving Repr, BEq, DecidableEq, Inhabited
+- Nullability semantics of a func item, AS DATA (refactor-guide
+  6.5.1; flatland SPEC-core §2): how the fn treats null (`option`)
+  arguments. `strict` = any null arg → error (the body never sees
+  `none`); `propagate` = any null arg → null result (the body runs
+  only when every arg is present); `custom` = the body owns null
+  handling. Emitters and the wasm differential oracle may consume
+  this later; today it is validated data.
+- Determinism of a func item, AS DATA (6.5.1; SPEC-core §11.5):
+  `pure` = same args → same result, always (reorderable, memoizable);
+  `stable` = pure within one run; `volatile` = may observe the world
+  (clock, rng, host state). The enforcement rule: a `volatile` fn in
+  a purity-required context (aggregation/reorderable operand) fails
+  `universeCheck` — the diag ctor `volatileInPureContext` is armed,
+  but NO such role exists in the item algebra yet, so nothing fires
+  it today (v1: validated data + the armed diag; the firing site
+  lands with the first pure-context consumer, e.g. an aggregation
+  emitter or the wasm oracle).
+- The delivery contract of a func item: `once` = the result arrives
+  as one value (a list result = ONE payload); `stream` = the host
+  consumes the results INCREMENTALLY (the WASI 0.3 stream — the
+  delta-shaped contracts on the wire). The default (`once`) keeps
+  every existing item unchanged. -/
+declare_enum_wire NullSem where strict | propagate | custom
 
-/-- Delivery tokens — the ONE spelling (snapshot + attr args). -/
-def Delivery.toToken : Delivery → String
-  | .once => "once" | .stream => "stream"
+declare_enum_wire Determinism where pure | stable | volatile
 
-def Delivery.ofToken? : String → Option Delivery
-  | "once" => some .once
-  | "stream" => some .stream
-  | _ => none
+declare_enum_wire Delivery where once | stream
 
 /-- The semantic contract fields of a func item (6.5.1): nullability +
     determinism + delivery, as DATA. The defaults (`propagate`, `pure`,
@@ -90,26 +89,9 @@ structure FuncSem where
   delivery : Delivery := .once
 deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- NullSem tokens — the ONE spelling, consumed by the snapshot codec
-    (`Snapshot`) and the `@[schema_fn]` attr args (`Meta.Reflect`). -/
-def NullSem.toToken : NullSem → String
-  | .strict => "strict" | .propagate => "propagate" | .custom => "custom"
-
-def NullSem.ofToken? : String → Option NullSem
-  | "strict" => some .strict
-  | "propagate" => some .propagate
-  | "custom" => some .custom
-  | _ => none
-
-/-- Determinism tokens (closed set). -/
-def Determinism.toToken : Determinism → String
-  | .pure => "pure" | .stable => "stable" | .volatile => "volatile"
-
-def Determinism.ofToken? : String → Option Determinism
-  | "pure" => some .pure
-  | "stable" => some .stable
-  | "volatile" => some .volatile
-  | _ => none
+/- The generated token spellings above (`toToken`/`ofToken?`) are
+    consumed by the snapshot codec (`Snapshot`) and the `@[schema_fn]`
+    attr args (`Meta.Reflect`). -/
 
 /-- A function signature: params in order, one return type.
     Errors are `.result` constructors — no special error channel.
