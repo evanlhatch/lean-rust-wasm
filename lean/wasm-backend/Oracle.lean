@@ -1,9 +1,9 @@
 /-
 # Oracle — the wasm differential gate's Lean-side row universe
 
-Extracted from `target/oracle.lean` (which stays the manifest EMITTER —
-`just wasm-compile` runs it and byte-ties nothing: the manifest is
-regenerated with the WAT so it can never go stale). The extraction makes
+THE single source of the oracle's rows (the generated-script era is
+over): the emission loop is `OracleMain.lean` (`lake exe oracle`;
+`just wasm-compile` pipes it to `target/diff.json`). The extraction makes
 the gate's Lean side testable: `Tests/Main.lean` now ships a
 `TestKit.DiffSpec` proving the oracle REJECTS a sabotaged row (unknown
 fn, arity drift) — the corruption-negative discipline the smoke
@@ -346,7 +346,7 @@ def resultOf (fn : String) (args : List String) : String :=
   -- the richer record validator: the same flat-record args as user-valid
   | "user-complete", [id, name, email, tags] =>
     if (GuestImpl.userComplete { id := id.toNat!.toUInt64, name := name, email := email, tags := tags.splitOn "," }) then "1" else "0"
-  | "watch-users", [a] =>
+  | "watch-users", [_a] =>
     -- the ser_val's forms: the list = the comma-NO-space joins; the
     -- record = "{ k=v, ... }" with the comma-space joins
     let parts := (GuestImpl.watchUsers 0).map fun u =>

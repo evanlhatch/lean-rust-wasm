@@ -33,11 +33,6 @@ declaration): inserting a ctor appends a new tag only if done at the
 end — reordering is a WIRE-BREAKING change (the same rule as the
 versioned envelope's fingerprint; `BreakingMain` is the gate).
 
-Ledger (sibling-lane maintenance): this module came from the
-port-smalls lane; the Vortex-encodings lane applied a one-line fix
-while landing Vortex/Batch — `tokArms`' lambda is now
-`(fun (c, _) => …)`, destructuring `zipIdx`'s (elem, index) pair
-order on v4.33 (the token arms read the CTOR, discarding the index).
 -/
 
 import Lean

@@ -11,6 +11,10 @@ testDriver = "QLangTests"
 # Core-only: no mathlib, matching the substrait package's dependency policy.
 
 [[require]]
+name = "CodegenCore"
+path = "../codegen-core"
+
+[[require]]
 name = "Substrait"
 path = "../substrait"
 

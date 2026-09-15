@@ -152,13 +152,4 @@ def genRowVals : (fields : List Field) → FieldsClosed fields → Nat →
       let rest ← genRowVals fs hr fuel
       pure (.cons v rest)
 
-/-! ### The landing site's history
-
-This module's stub section previously read "NOT BUILT": the row layer
-was the next lane's landing site, consuming `registeredItems` + the
-fields' `Ty`s. It landed as `FieldsClosed`/`genRowVals` (above) + the
-`derive_row_gen` command (`SchemaLang.Meta.Gen`) that walks the
-registry and constructs the witness terms structurally.
--/
-
 end SchemaLang

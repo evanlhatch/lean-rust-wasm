@@ -65,5 +65,11 @@ root = "GenMain"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "oracle"
+root = "OracleMain"
+# The differential oracle's driver: rows + expecteds from the Oracle
+# library (the single source — the generated-script era is over).
+
+[[lean_exe]]
 name = "WasmBackendTests"
 root = "Tests.Main"

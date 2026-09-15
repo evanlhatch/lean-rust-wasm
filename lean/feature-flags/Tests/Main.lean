@@ -43,10 +43,6 @@ import Tests.Stress
 #guard (FeatureFlagsImpl.flag_watch "").isEmpty
 #guard (FeatureFlagsImpl.flag_watch "checkout").map (·.key) == ["checkout"]
 
--- THE PROVED-ERASED INVARIANT: the sentinel contract (kernel-checked
--- in the impl module; the guard re-pins it here).
-#guard (FeatureFlagsImpl.flag_get 0).isNone
-
 def main : IO UInt32 := do
   IO.println "FeatureFlagsTests: guards green (elab-time)"
   match stressChecks with

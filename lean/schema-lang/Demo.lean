@@ -60,18 +60,8 @@ inductive OrderError where
 
 /-! ## Async markers (WASI 0.3 at the boundary) -/
 
--- The Async prefix keeps the marker names from colliding with core's
--- lazy-stream `Stream`; the reifier matches the full qualified names.
-namespace Async
-
-def Future (a : Type) : Type := a
-
-/-- Defined as `Future` itself: both are boundary markers whose bodies are
-the identity BY DESIGN, so the bodies share one definition rather than two
-copies (the dupDefBodies lesson — one anchor, aliases of it). -/
-def Stream (a : Type) : Type := Future a
-
-end Async
+-- `Async.Future`/`Async.Stream`: the ONE copy lives in
+-- `SchemaLang.Meta.Reflect` (the reifier matches them by name).
 
 /-! ## Function signatures (the bodies are NOT part of the spec) -/
 

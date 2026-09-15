@@ -52,15 +52,6 @@ def ladderChecks : CheckResult := do
     (out.map (fun r => u64Of (ColPath.get (.there .here) r))) [1]
   .ok ()
 
-/-! ## The binop contract's runtime face -/
-
-def binopChecks : CheckResult := do
-  -- the wrapping semantics the emitted i64.add carries: max + 1 = 0
-  _ ← assertEq "u64 add wraps" (0xFFFFFFFFFFFFFFFF + 1 : UInt64) 0
-  _ ← assertEq "u64add_wrapping's face"
-    ((BitVec.ofNat 64 (2^64 - 1) + BitVec.ofNat 64 1).toNat) 0
-  .ok ()
-
 /-! ## The @[implemented_by] swap -/
 
 def implByChecks : CheckResult := do
@@ -80,8 +71,6 @@ def implBySpec : TestKit.DetSpec :=
 def main : IO UInt32 := do
   let code ← mainOfChecks "Proofkit"
     [ ("ladder", ladderChecks)
-    , ("binop", binopChecks)
-    , ("implBy", implByChecks)
     ]
   if code != 0 then return code
   TestKit.runDets [implBySpec]

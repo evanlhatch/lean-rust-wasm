@@ -104,28 +104,11 @@ def delaySanity : CheckResult := Id.run do
   if delay s 0 != 0 then return .error "delay s 0 ≠ 0"
   return .ok ()
 
--- The THEORY-side ZSet is noncomputable (mathlib Finsupp quotients with
--- classical choice), so its checks are compile-time proofs, not executable
--- tests. The exec side is Flatland.Change (proved merge/revert laws).
-
-/-- The group law that licenses rollback: deltas invert. -/
-example (m : ZSet Nat) : m - m = 0 := sub_self m
-
-/-- Union is commutative — rule application order is provably irrelevant
-    (the aggregate phase of the two-phase tick, SPEC-core §7.2). -/
-example (a b : ZSet Nat) : a + b = b + a := add_comm a b
-
-/-- The replica-convergence core, at the theory level: opposite arrival
-    orders of the same deltas converge (`Dbsp.Replicas`). -/
-example (s δ₁ δ₂ : ZSet Nat) :
-    Dbsp.Replicas.applyDeltas s [δ₁, δ₂] = Dbsp.Replicas.applyDeltas s [δ₂, δ₁] :=
-  Dbsp.Replicas.two_replica_converge s δ₁ δ₂
-
-/-- The retraction law the engine's rewind executes, at the replica level:
-    delta-then-inverse restores the state. -/
-example (s δ : ZSet Nat) :
-    Dbsp.Replicas.applyDeltas (Dbsp.Replicas.applyDeltas s [δ]) [-δ] = s :=
-  Dbsp.Replicas.retract_is_inverse s δ
+-- The THEORY-side ZSet is noncomputable (mathlib Finsupp); its laws are
+-- kernel-proved where they live (ZSet/Relational/Replicas) — re-
+-- instantiating them here would test nothing (T5). The witnesses above
+-- exist to prove the ported constructions COMPUTE, and the sweeps below
+-- cover the executable spine.
 
 /-! ## Determinism — the hash-chained event log (`Dbsp.Determinism`), executed
 

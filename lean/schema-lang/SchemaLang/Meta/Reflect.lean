@@ -765,3 +765,11 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     Lean.Meta.addInstance instName .global 1000
 
 end SchemaLang.Meta
+
+/- The async boundary markers (WASI 0.3): the ONE copy. The reifier
+    (`tyOfExpr?`) matches these BY NAME - do not move into a namespace. -/
+namespace Async
+def Future (a : Type) : Type := a
+/- Same marker shape as `Future` (the boundary marker pair). -/
+def Stream (a : Type) : Type := Future a
+end Async

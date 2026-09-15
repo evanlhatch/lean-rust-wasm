@@ -42,23 +42,8 @@ set_option linter.guestlang.packageNamespace false -- because the framework's re
 
 /-! ## The async markers (WASI 0.3 at the boundary)
 
-DOGFOOD FINDING (moved to the substrate): these lived as per-module
-copies (Demo's precedent) because the reifier matches them BY NAME —
-the markers now live HERE too, but the real fix is ONE copy in
-`SchemaLang.Meta` (the reifier's name-match is the only obstacle).
-Tracking as the flags lane's substrate follow-up.
+ONE copy: SchemaLang.Meta.Reflect exports Async.Future / Async.Stream.
  -/
-
-namespace Async
-
-def Future (a : Type) : Type := a
-
-/-- Defined as `Future` itself: both are boundary markers whose bodies
-    are the identity BY DESIGN (the dupDefBodies lesson — one anchor,
-    aliases of it). -/
-def Stream (a : Type) : Type := Future a
-
-end Async
 
 /-! ## Records -/
 

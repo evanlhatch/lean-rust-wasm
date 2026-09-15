@@ -15,34 +15,15 @@ Excluded from the flatland port: the engine-facing constructors
 machine/rule layer (the dig's SKIP list).
 -/
 import Substrait.Typed
+import CodegenCore
 
 namespace QLang
 
-/-- Levenshtein edit distance — the did-you-mean engine. (Name lists are
-    small; the naive DP is the right size.) -/
-def editDistance (a b : String) : Nat := Id.run do
-  let xs := a.toList.toArray
-  let ys := b.toList.toArray
-  let n := xs.size
-  let m := ys.size
-  let mut prev : Array Nat := Array.range (m + 1)
-  for i in [1 : n + 1] do
-    let mut cur : Array Nat := Array.replicate (m + 1) 0
-    cur := cur.set! 0 i
-    for j in [1 : m + 1] do
-      let cost := if xs[i - 1]! == ys[j - 1]! then 0 else 1
-      cur := cur.set! j (min (min (prev[j]! + 1) (cur[j - 1]! + 1)) (prev[j - 1]! + cost))
-    prev := cur
-  return prev[m]!
-
-/-- The closest dictionary entries to `got`, nearest first. The closed world
-    means the dictionary is always complete — the candidates ARE the valid
-    space, not a heuristic. -/
-def didYouMean (got : String) (dict : List String) (maxDist : Nat := 3) : List String :=
-  let scored := dict.map (fun d => (editDistance got d, d))
-  let close := scored.filter (fun (dist, _) => dist ≤ maxDist)
-  let sorted := close.toArray.qsort (fun a b => a.1 < b.1 || (a.1 == b.1 && a.2 < b.2))
-  sorted.toList.map (·.2)
+/-- The closest dictionary entries to `got`, nearest first — the SHARED
+    engine (`CodegenCore.didYouMean`; the local DP copy is deleted).
+    Kept as an abbrev so the error renderers below read in domain
+    vocabulary. -/
+abbrev didYouMean := @CodegenCore.didYouMean
 
 /-- One definition, two renderings. Every constructor: domain vocabulary +
     the valid space + the fix. (JSON rendering lands with an elaborator

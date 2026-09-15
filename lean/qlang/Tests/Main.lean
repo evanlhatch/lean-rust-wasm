@@ -22,11 +22,13 @@ open TestKit
 abbrev units : Schema :=
   [("health", .i32, true), ("regen", .i32, true)]
 
+-- the DP itself is core's `Lean.EditDistance.levenshtein` (tested
+-- upstream); this pins the SHARED engine's behavior at our call shape
 def editDistanceChecks : CheckResult := do
-  _ ← assertEq "ident" (editDistance "health" "health") 0
-  _ ← assertEq "one-sub" (editDistance "helth" "health") 1
-  _ ← assertEq "empty" (editDistance "" "abc") 3
-  _ ← assertEq "case" (editDistance "Health" "health") 1
+  _ ← assertEq "ident" (Lean.EditDistance.levenshtein "health" "health" 4) (some 0)
+  _ ← assertEq "one-sub" (Lean.EditDistance.levenshtein "helth" "health" 4) (some 1)
+  _ ← assertEq "empty" (Lean.EditDistance.levenshtein "" "abc" 4) (some 3)
+  _ ← assertEq "case" (Lean.EditDistance.levenshtein "Health" "health" 4) (some 1)
   .ok ()
 
 def didYouMeanChecks : CheckResult := do

@@ -80,10 +80,9 @@ def fieldResolutionChecks : CheckResult := do
   .ok ()
 
 def codecChecks : CheckResult := do
-  -- the theorems, executed
-  _ ← assertEq "bool roundtrip" (Codec.decodeBool (Codec.encodeBool true)) (some true)
+  -- the round trips are PROVED (Codec.decode_encodeBool/decode_encodeU8 —
+  -- axiom-gated); what needs executing is the REJECTION surface
   _ ← assertEq "bool reject" (Codec.decodeBool [5]) none
-  _ ← assertEq "u8 roundtrip" (Codec.decodeU8 (Codec.encodeU8 42)) (some 42)
   _ ← assertEq "u8 reject len" (Codec.decodeU8 [1, 2]) none
   -- exhaustive byte sweep for Bool's 2-byte domain
   let allBytes : List UInt8 := (List.range 256).map (·.toUInt8)

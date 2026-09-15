@@ -5,6 +5,7 @@ import SchemaLang
 import SchemaLang.Meta.Reflect
 import WasmBackend
 import WasmBackend.Check
+import Oracle
 
 /-!
 # WasmBackend.GenMain — the LCNF → WAT artifact writer
@@ -13,9 +14,11 @@ The `leanir` pattern: import the manifest's modules' oleans, re-run the
 LCNF pipeline (the impure-phase LCNF — Perceus RC included — is NOT
 persisted in oleans), read the final `Decl`s from `impureExt`, emit WAT.
 
-Pipeline: this exe writes `target/demo.wat` (+ the differential oracle
-program); the justfile drives `wasm-tools parse -g` → binary, the
-component wrap, and the differential smoke.
+Pipeline: this exe writes `target/demo.wat` + `demo-world.wit` (+ the
+observability manifest); the oracle manifest is `lake exe oracle`
+(OracleMain.lean — the row universe lives in the Oracle library);
+the justfile drives `wasm-tools parse -g` → binary, the component
+wrap, and the differential smoke.
 
 The COMPILE-SET + the world = the PROJECT MANIFEST (`project.json`
 beside this exe) + the attribute registries — no hand-list:
@@ -186,12 +189,12 @@ def worldExportsOf (env : Environment) (targetDecls : Array Name) : List (String
         some (nm, params, ret, isAsync)
     | _ => none
 
-/-- The oracle's fn names — mirrors `oracleSrc`'s `rows`/`resultOf`
-    (kebab, as the JSON spells them). The drift surface 3.4 pins: an
-    oracle row for a fn the world does not export is a differential row
-    with no component export to run it against. -/
-def oracleFns : List String :=
-  ["double", "is-big", "adder", "double-area", "run-paps", "total", "pick", "str-len-demo", "greet", "get-user", "watch-counts", "watch-users", "user-valid", "user-complete", "order-error-valid"]
+/-- The oracle's fn names — DERIVED from `Oracle.rowUniverse` (the
+    library is the single source; kebab, as the JSON spells them). The
+    drift surface 3.4 pins: an oracle row for a fn the world does not
+    export is a differential row with no component export to run it
+    against. -/
+def oracleFns : List String := (rowUniverse.map (·.1)).eraseDups
 
 -- 3.4: every oracle fn IS a world export (the component contract covers
 -- everything the differential manifest exercises).
@@ -226,204 +229,13 @@ world is the HONEST surface of what's compiled, and the compiled
 component embeds IT.
 -/
 
-/-- The DIFFERENTIAL ORACLE program: calls the real Lean functions over
-generated inputs and prints the manifest as JSON. The Lean semantics is
-the authority; the Rust diff test replays this against the emitted wasm.
-(String VALUES go through `Lean.Json.str`/`compress` — proper escaping;
-the row skeleton stays hand-spelled: `Json.mkObj` sorts keys and
-`compress` strips spaces, so neither may touch the manifest's bytes.) -/
-def oracleSrc : String := "
-import Lean
-import DemoFn
-import GuestlangStd
-
-def u64s : List UInt64 :=
-  ((List.range 20).map (fun i => (i * 7 + 3) % 100)).map (fun n => n.toUInt64)
-
--- THE FUZZ SUPPLEMENT: a deterministic LCG drives RANDOM scalar rows —
--- the authority stays LEAN (the expected = resultOf's evals on the
--- random args); the engines must agree on inputs the fixed grid never
--- visits (the overflow wraps: UInt64 arithmetic is wrapping — the
--- random args cross the wrap boundary the grid avoids).
-def lcg : UInt64 → UInt64 := fun s => s * 6364136223846793005 + 1442695040888963407
-
-def fuzzRows : Nat → UInt64 → List (String × List String)
-  | 0, _ => []
-  | n+1, seed =>
-      let s1 := lcg seed
-      let s2 := lcg s1
-      let s3 := lcg s2
-      let s4 := lcg s3
-      let row := match s1 % 7 with
-        | 0 => (\"double\", [toString (s2 % 1000)])
-        | 1 => (\"is-big\", [toString (s2 % 1000)])
-        | 2 => (\"adder\", [toString (s2 % 1000), toString (s3 % 1000)])
-        | 3 => (\"double-area\", [toString (s2 % 100)])
-        | 4 => (\"run-paps\", [toString (s2 % 1000)])
-        | 5 => (\"total\", [toString (s2 % 100), toString (s3 % 100), toString (s4 % 100)])
-        | _ => (\"pick\", [if s2 % 2 == 0 then \"1\" else \"0\", toString (s3 % 100), toString (s4 % 100)])
-      row :: fuzzRows n s4
-
--- THE BOUNDARY SWEEP: the u64 fns at 0, 1, 2, 2^k and 2^k±1 (k = 31,
--- 32, 63) — the grid's mod-1000 and the LCG's small residues never
--- visit the wrap/limit surface. The adder/pick args are COMPLEMENTS
--- (a + (2^64-1-a) = 2^64-1; a=0 pins max, wrap = 0 at 2^64-1+1).
-def bounds : List UInt64 :=
-  [0, 1, 2, 2147483648, 4294967295, 4294967296, 9223372036854775807,
-   9223372036854775808, 18446744073709551615]
-
-def boundaryRows : List (String × List String) :=
-  let maxU : UInt64 := 18446744073709551615
-  (bounds.map fun a => (\"double\", [toString a]))
-  ++ (bounds.map fun a => (\"is-big\", [toString a]))
-  ++ (bounds.map fun a => (\"adder\", [toString a, toString (maxU - a)]))
-  ++ (bounds.map fun a => (\"double-area\", [toString a]))
-  ++ (bounds.map fun a => (\"run-paps\", [toString a]))
-  ++ (bounds.map fun a => (\"str-len-demo\", [toString a]))
-  ++ (bounds.map fun a =>
-    (\"pick\", [if a % 2 == 0 then \"1\" else \"0\", toString a, toString (maxU - a)]))
-  ++ (bounds.map fun a => (\"total\", [toString a, toString a, toString a]))
-
--- THE SWEEP SUPPLEMENT: a second LCG (splitmix-style — seed, then two
--- advances per row) over the fns the first fuzz skips (str-len-demo,
--- watch-counts) plus the scalar surface — 120 rows, seed = a CONSTANT
--- (same seed → same manifest, that's what makes it a gate).
-def sweepRows : Nat → UInt64 → List (String × List String)
-  | 0, _ => []
-  | n+1, seed =>
-      let s1 := lcg seed
-      let s2 := lcg s1
-      let s3 := lcg s2
-      let row := match s1 % 9 with
-        | 0 => (\"double\", [toString (s2 % 1000)])
-        | 1 => (\"is-big\", [toString (s2 % 1000)])
-        | 2 => (\"adder\", [toString (s2 % 1000), toString (s3 % 1000)])
-        | 3 => (\"double-area\", [toString (s2 % 100)])
-        | 4 => (\"run-paps\", [toString (s2 % 1000)])
-        | 5 => (\"total\", [toString (s2 % 100), toString (s3 % 100), toString (s2 % 1000)])
-        | 6 => (\"pick\", [if s2 % 2 == 0 then \"1\" else \"0\", toString (s3 % 100), toString (s2 % 1000)])
-        | 7 => (\"str-len-demo\", [toString (s2 % 1000)])
-        | _ => (\"watch-counts\", [toString (s2 % 1000)])
-      row :: sweepRows n s3
-
-def rows : List (String × List String) :=
-  (u64s.map fun a => (\"double\", [toString a]))
-  ++ (u64s.map fun a => (\"is-big\", [toString a]))
-  ++ (u64s.map fun a => (\"adder\", [toString a, toString (a + 3)]))
-  ++ (u64s.map fun a => (\"double-area\", [toString a]))
-  ++ (u64s.map fun a => (\"run-paps\", [toString a]))
-  ++ ((List.range 20).map fun i =>
-    (\"total\", [toString (i * 3), toString (i + 1), toString (i * 2)]))
-  ++ (u64s.map fun a => (\"pick\", [if a % 2 == 0 then \"1\" else \"0\", toString a, toString (a + 1)]))
-  ++ (u64s.map fun a => (\"str-len-demo\", [toString a]))
-  ++ (u64s.map fun a => (\"greet\", [toString a]))
-  ++ (u64s.map fun a => (\"get-user\", [toString a]))
-  ++ (u64s.map fun a => (\"watch-counts\", [toString a]))
-  ++ (u64s.map fun a => (\"watch-users\", [toString a]))
-  -- the VALIDATOR's duel: the row args = the record's FIELD VALUES FLAT
-  -- (id, name, email, tags comma-joined) — the wasm_diff arg-builder
-  -- constructs the Val::Record from them. THE INVALID ROW (id = 0) is
-  -- the point: the validator must REFUSE it (the negative control —
-  -- Lean says false, the wasm must agree).
-  ++ [(\"user-valid\", [\"0\", \"zero\", \"0@g.dev\", \"a\"])]
-  ++ (u64s.map fun a => (\"user-valid\", [toString a, \"first\", \"1@g.dev\", \"a\"]))
-  -- the VARIANT validator's duel: the args = [discr, payload] — the
-  -- canonical-ABI flat form (the discr = the WIT case order:
-  -- empty-cart=0, invalid-item=1, insufficient-funds=2; the payload
-  -- rides the joined i64 slot — u64 raw, f64 bits). The empty-cart row
-  -- is the documented NEGATIVE (the validator refuses the
-  -- no-information report); invalid-item(0) is the sentinel negative;
-  -- the f64 arm's payload is unread (GuestImpl.orderErrorValid) — the
-  -- row pins the CONSTANT arm, not a Float compare.
-  ++ [(\"order-error-valid\", [\"0\", \"0\"])]
-  ++ [(\"order-error-valid\", [\"1\", \"0\"])]
-  ++ [(\"order-error-valid\", [\"1\", \"5\"])]
-  ++ [(\"order-error-valid\", [\"2\", \"1.5\"])]
-  -- the RICHER record validator's duel: the same flat-record arg form
-  -- as user-valid — each gate (id, strlen, tags-count) gets its
-  -- negative; the map rows are the positives. (The empty-LIST gate has
-  -- no row: the flat-string convention cannot express the empty list —
-  -- \"\" splits to [\"\"], one element, BOTH sides agree.)
-  ++ [(\"user-complete\", [\"0\", \"zero\", \"0@g.dev\", \"a\"])]
-  ++ [(\"user-complete\", [\"1\", \"ab\", \"1@g.dev\", \"a\"])]
-  ++ (u64s.map fun a => (\"user-complete\", [toString a, \"first\", \"1@g.dev\", \"a,b\"]))
-
-def resultOf (fn : String) (args : List String) : String :=
-  match fn, args with
-  | \"double\", [a] => toString (double a.toNat!.toUInt64)
-  | \"is-big\", [a] => if isBig a.toNat!.toUInt64 then \"1\" else \"0\"
-  | \"adder\", [a, b] => toString (adder a.toNat!.toUInt64 b.toNat!.toUInt64)
-  | \"double-area\", [a] => toString (doubleArea a.toNat!.toUInt64)
-  | \"run-paps\", [a] => toString (runPaps a.toNat!.toUInt64)
-  | \"total\", [a, b, c] => toString (total a.toNat!.toUInt64 b.toNat!.toUInt64 c.toNat!.toUInt64)
-  | \"pick\", [b, a, x] => toString (pick (b == \"1\") a.toNat!.toUInt64 x.toNat!.toUInt64)
-  | \"str-len-demo\", [a] => toString (GuestImpl.strLenDemo a.toNat!.toUInt64)
-  | \"greet\", [a] => GuestImpl.greet a.toNat!.toUInt64
-  | \"get-user\", [a] => match GuestImpl.getUser a.toNat!.toUInt64 with
-    | none => \"none\"
-    | some u =>
-      let tagS := String.intercalate \",\" (u.tags.map (fun t => t))
-      s!\"some(\\{ id={u.id}, name={u.name}, email={u.email}, tags=({tagS}) })\"
-  -- the stream's expected = the COLLECTED list (the host reads the
-  -- stream to completion; the ser form = the list's)
-  | \"watch-counts\", [_a] => \"(42,43)\"
-  -- the validator: the args = the FLAT field values (see the rows);
-  -- the bool result = the ser convention (1/0 — ser_val's Val::Bool form)
-  | \"user-valid\", [id, name, email, tags] =>
-    if (GuestImpl.userValid { id := id.toNat!.toUInt64, name := name, email := email, tags := tags.splitOn \",\" }) then \"1\" else \"0\"
-  -- the variant validator: the discr → the Lean ctor; the payload only
-  -- READ for invalid-item (the f64 arm ignores it — see the impl)
-  | \"order-error-valid\", [d, p] =>
-    let e : OrderError :=
-      match d with
-      | \"0\" => .emptyCart
-      | \"1\" => .invalidItem p.toNat!.toUInt64
-      | _ => .insufficientFunds 1.5
-    if GuestImpl.orderErrorValid e then \"1\" else \"0\"
-  -- the richer record validator: the same flat-record args as user-valid
-  | \"user-complete\", [id, name, email, tags] =>
-    if (GuestImpl.userComplete { id := id.toNat!.toUInt64, name := name, email := email, tags := tags.splitOn \",\" }) then \"1\" else \"0\"
-  | \"watch-users\", [a] =>
-    -- the ser_val's forms: the list = the comma-NO-space joins; the
-    -- record = \"{ k=v, ... }\" with the comma-space joins
-    let parts := (GuestImpl.watchUsers 0).map fun u =>
-      let tagS := String.intercalate \",\" (u.tags.map (fun t => t))
-      s!\"\\{ id={u.id}, name={u.name}, email={u.email}, tags=({tagS}) }\"
-    let ser := String.intercalate \",\" parts
-    s!\"({ser})\"
-  | _, _ => \"?\"
-
-def jsonRow (fn : String) (args : List String) (expected : String) : String :=
-  -- values via Lean.Json (compress = core's escaping); the skeleton
-  -- keeps the manifest's byte format (`mkObj` sorts keys — forbidden
-  -- here).
-  \"{\" ++ \"\\\"fn\\\": \" ++ (Lean.Json.str fn).compress ++ \", \\\"args\\\": [\" ++
-    String.intercalate \",\" (args.map fun a => (Lean.Json.str a).compress) ++
-    \"], \\\"expected\\\": \" ++ (Lean.Json.str expected).compress ++ \"}\"
-
-def main : IO Unit := do
-  let mut out := \"[\"
-  let mut first := true
-  -- the row universe: the PINNED grid (the regression surface) + the
-  -- two LCG sweeps + the u64 boundary sweep — appended, never spliced
-  -- (the existing rows' bytes are the byte-tie invariant).
-  for (fn, args) in
-      (rows ++ fuzzRows 200 0x5EED ++ boundaryRows ++ sweepRows 120 0xA11CE) do
-    let expected := resultOf fn args
-    if !first then out := out ++ \",\"
-    first := false
-    out := out ++ jsonRow fn args expected
-  out := out ++ \"]\"
-  IO.println out
-"
 
 unsafe def main : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot)
   Lean.enableInitializersExecution
-  -- 2.1 was 'DemoFn only' (mathlib cost) — OBSOLETE: the guest IMPLS
-  -- (lean/std, schema-typed functions) are now the point of this exe;
-  -- they need the schema types (Demo — via GuestlangStd's import) and
-  -- the std ops. The mathlib-in-closure cost is the product now.
+  -- the guest IMPLS (lean/std, schema-typed functions) are the point
+  -- of this exe; they need the schema types (Demo — via GuestlangStd's
+  -- import) and the std ops.
   let manifest ← loadProjectManifest "project.json"
   -- the manifest = the modules: load the deduped union, extensions
   -- replayed (the schema + guest-mark registries come back populated).
@@ -438,7 +250,6 @@ unsafe def main : IO Unit := do
   let (wat, _) ← (emitModuleWasm targetDecls preMeta).toIO ctx state
   IO.FS.createDirAll "target"
   IO.FS.writeFile "target/demo.wat" wat
-  IO.FS.writeFile "target/oracle.lean" oracleSrc
   -- the folded world: the registry is the export authority. The guard
   -- (3.4) moved here from the top level: the oracle's rows must cover
   -- fns the world actually exports.
@@ -487,4 +298,4 @@ unsafe def main : IO Unit := do
       ++ spanRows.map (· ++ ",\n")
       ++ ["];\n"] )
   IO.FS.writeFile "../../src/observability_generated.rs" obs
-  IO.println "wrote target/demo.wat + target/oracle.lean + demo-world.wit"
+  IO.println "wrote target/demo.wat + demo-world.wit (the oracle: lake exe oracle)"

@@ -17,8 +17,6 @@ import QLang
 #print axioms QLang.Query.checked
 #print axioms QLang.Query.fromRegistry
 
--- the error system
-#print axioms QLang.editDistance
-#print axioms QLang.didYouMean
+-- the error system (the suggestion engine is CodegenCore's — gated there)
 #print axioms QLang.QLangError.unknownColumnMsg
 #print axioms QLang.Registry.find
