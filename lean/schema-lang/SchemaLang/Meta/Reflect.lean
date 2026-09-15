@@ -61,6 +61,53 @@ def registerSchemaItem (leanName : Name) (item : Item) : CoreM Unit :=
   modifyEnv fun env =>
     schemaItemExt.addEntry env (leanName, item)
 
+/-! ## Provenance — doc strings for registered items (parallel registry)
+
+The declaring Lean constant's doc string is stored in a SEPARATE
+persistent extension, NOT on `Item` — `Item` is the closed boundary
+universe, and a provenance field would poison its BEq/specEq/snapshot
+surface (see `FuncSig.body` for the precedent, extended to all item
+kinds). The extension is replayed from oleans at import, exactly like
+`schemaItemExt`. -/
+
+/-- Provenance extension: Lean declaration name ↦ doc string (the ONE
+    doc string for the declaring constant). -/
+initialize schemaItemDocsExt :
+    SimplePersistentEnvExtension (Name × String) (List (Name × String)) ←
+  CodegenCore.mkRegistryExt `schemaItemDocsExt
+
+/-- All registered doc strings from an environment (the emitter entry
+    point). -/
+def registeredItemDocs (env : Environment) : List (Name × String) :=
+  schemaItemDocsExt.getState env
+
+/-- Look up the doc string for one declared schema item. Returns the
+    empty string when no doc string was written (not all declarations
+    carry one). -/
+def itemDoc? (env : Environment) (leanName : Name) : String :=
+  match (registeredItemDocs env).find? (fun (n, _) => n == leanName) with
+  | some (_, doc) => doc
+  | none => ""
+
+/-- Register the doc string for one reflected item. Silent when the
+    declaration carries no doc string. -/
+def registerSchemaItemDoc (leanName : Name) : CoreM Unit := do
+  let env ← getEnv
+  let doc? ← liftM <| findDocString? env leanName
+  if let some doc := doc? then
+    modifyEnv fun env =>
+      schemaItemDocsExt.addEntry env (leanName, doc)
+
+/-- Provenance summary for ONE registered item: `"declName: docString"`
+    (the first line of the doc string; empty when undocumented). The
+    emitters (and the `#schema` debug command) may call this per item
+    to annotate emitted artifacts with origins. -/
+def provenanceOf (env : Environment) (leanName : Name) (_item : Item) : String :=
+  let doc := itemDoc? env leanName
+  let line := doc.splitOn "\n" |>.head? |>.getD "" |>.trimAscii
+  if line.isEmpty then s!"{leanName}"
+  else s!"{leanName}: {line}"
+
 /-- The schema name for a reflected declaration (kebab at emission). -/
 def schemaNameOf (leanName : Name) : String := leanName.toString
 
@@ -182,7 +229,9 @@ def registerSchemaStruct (declName : Name) : CoreM Unit := do
   match checkStruct env declName with
   | .inl ds => throwError ("@[schema] `" ++ declName.toString ++ "`: "
       ++ String.intercalate "; " (ds.map SchemaDiag.render))
-  | .inr fields => registerSchemaItem declName (.record (schemaNameOf declName) fields)
+  | .inr fields => do
+    registerSchemaItem declName (.record (schemaNameOf declName) fields)
+    registerSchemaItemDoc declName
 
 /-! ## Variants — `@[schema]` on a non-parameterized inductive -/
 
@@ -232,7 +281,9 @@ def registerSchemaVariant (declName : Name) : CoreM Unit := do
   match checkInductive env declName with
   | .inl ds => throwError ("@[schema] `" ++ declName.toString ++ "`: "
       ++ String.intercalate "; " (ds.map SchemaDiag.render))
-  | .inr cases => registerSchemaItem declName (.variant (schemaNameOf declName) cases)
+  | .inr cases => do
+    registerSchemaItem declName (.variant (schemaNameOf declName) cases)
+    registerSchemaItemDoc declName
 
 /-- `@[schema]` — reflect a structure OR a non-parameterized inductive
     into the schema registry. -/
@@ -345,7 +396,9 @@ def registerSchemaFunc (declName : Name) (sem : FuncSem := {}) : CoreM Unit := d
   let env ← getEnv
   match funcSignature env declName with
   | .error msg => throwError ("@[schema_fn] `" ++ declName.toString ++ "`: " ++ msg)
-  | .ok sig => registerSchemaItem declName (.func { sig with sem })
+  | .ok sig => do
+    registerSchemaItem declName (.func { sig with sem })
+    registerSchemaItemDoc declName
 
 /-- `@[schema_fn]` — reflect a function's SIGNATURE into the schema
     registry (params + return type; the body is not part of the spec).
@@ -370,8 +423,9 @@ initialize registerBuiltinAttribute {
 
 /-- Register one reflected resource (an opaque handle: the name is the
     schema content; there is nothing to check). -/
-def registerSchemaResource (declName : Name) : CoreM Unit :=
+def registerSchemaResource (declName : Name) : CoreM Unit := do
   registerSchemaItem declName (.resource (schemaNameOf declName))
+  registerSchemaItemDoc declName
 
 /-- `@[schema_resource]` — register an opaque handle type as a schema
     resource item (its method surface arrives as `func` items referencing

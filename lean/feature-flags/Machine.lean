@@ -36,31 +36,28 @@ inductive FlagState where
 deriving Repr, BEq, DecidableEq, Inhabited
 
 -- (plain comment: doc comments cannot precede machine!)
+-- W2.3: the `states:` clause makes machine! generate the entourage this
+-- file used to hand-write — `flagLifecycleStates` (the state space),
+-- `flagLifecycleTrans` (the transition table, computed from the machine),
+-- `flagLifecycleTableStep?` + the agreement theorem
+-- `flagLifecycleTableStep?_eq_step?`, and the `DecidablePred
+-- flagLifecycle.Inv` instance. The hand copies are deleted below.
 machine! flagLifecycle where
   State: FlagState
   Inv: fun s => s ≠ .stale
+  states: [.draft, .enabled, .disabled, .retired, .stale]
   event: enable guard: (fun s => s = .draft || s = .disabled) action: (fun _ _ => .enabled)
   event: disable guard: (fun s => s = .enabled) action: (fun _ _ => .disabled)
   event: retire guard: (fun s => s = .draft || s = .disabled) action: (fun _ _ => .retired)
   event: reset guard: (fun _ => true) action: (fun _ _ => .draft)
 
-instance : DecidablePred flagLifecycle.Inv := fun s =>
-  match s with
-  | .stale => isFalse (fun h => h rfl)
-  | .draft => isTrue (fun h => FlagState.noConfusion h)
-  | .enabled => isTrue (fun h => FlagState.noConfusion h)
-  | .disabled => isTrue (fun h => FlagState.noConfusion h)
-  | .retired => isTrue (fun h => FlagState.noConfusion h)
-
-/-- The battery state space (stale included — the non-vacuity target). -/
-def flagStates : List FlagState :=
-  [.draft, .enabled, .disabled, .retired, .stale]
-
 /-- The conformance battery: deadlock-freedom (reset always enabled),
-    guard coverage, invariant non-vacuity. -/
+    guard coverage, invariant non-vacuity. State space (`stale` included —
+    the non-vacuity target), labels, completeness proof, and the
+    `DecidablePred` instance are all machine!-generated. -/
 def flagConformance : List (String × TestKit.CheckResult) :=
-  Machines.Testing.conformance flagLifecycle flagLifecycle.labels flagStates
-    flagLifecycle.labels_complete
+  Machines.Testing.conformance flagLifecycle flagLifecycle.labels
+    flagLifecycleStates flagLifecycle.labels_complete
 
 /-! ## The proved discipline -/
 
@@ -114,33 +111,12 @@ theorem lifecycle_happy : flagLifecycle.run .draft
 theorem lifecycle_reject_reenable : flagLifecycle.run .draft
     [.enable, .disable, .retire, .enable] = none := rfl
 
-/-! ## The emitted table (the driver's data — the matchArms discipline) -/
+/-! ## The emitted table (the driver's data — the matchArms discipline)
 
-def flagTrans : List (flagLifecycle.Label × FlagState × FlagState) :=
-  [ (.enable, .draft, .enabled)
-  , (.enable, .disabled, .enabled)
-  , (.disable, .enabled, .disabled)
-  , (.retire, .draft, .retired)
-  , (.retire, .disabled, .retired)
-  , (.reset, .draft, .draft)
-  , (.reset, .enabled, .draft)
-  , (.reset, .disabled, .draft)
-  , (.reset, .retired, .draft)
-  , (.reset, .stale, .draft) ]
-
-/-- The structural reading (the emission theorem's subject). -/
-def flagTableStep? : flagLifecycle.Label → FlagState → Option FlagState
-  | .enable, .draft => some .enabled
-  | .enable, .disabled => some .enabled
-  | .disable, .enabled => some .disabled
-  | .retire, .draft => some .retired
-  | .retire, .disabled => some .retired
-  | .reset, _ => some .draft
-  | _, _ => none
-
-/-- The emitted table IS the machine. -/
-theorem flagTableStep?_eq_step? (e : flagLifecycle.Label) (s : FlagState) :
-    flagTableStep? e s = flagLifecycle.step? s e := by
-  cases s <;> cases e <;> simp [flagTableStep?, flagLifecycle, flagLifecycle.spec]
+machine!-generated (W2.3): `flagLifecycleTrans` (the transition table,
+computed from `step?` over the enumerated space — same rows as the deleted
+hand copy, label-major), `flagLifecycleTableStep?` (the lookup reading),
+and `flagLifecycleTableStep?_eq_step?` (the table IS the machine, over the
+enumerated states). -/
 
 end FeatureFlags

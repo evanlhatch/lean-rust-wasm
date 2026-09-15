@@ -318,6 +318,97 @@ def dataRegistryChecks : CheckResult := do
     | .error _ => .error "old item lost after insert"
   .ok ()
 
+/-! ## Validation (W7.18) — error-ACCUMULATING applicative
+
+The accumulation contract as executable checks (the laws are compile-side:
+`foldlM_ok` / `foldlM_errs_length` instantiated on concrete data below). -/
+
+/-- Law consumption (compile-time): the ok-identity on concrete data —
+    folding pure-ok addition steps IS the plain fold. -/
+theorem foldlM_ok_demo :
+    Validation.foldlM (fun (b a : Nat) => Validation.ok (b + a)) 0 [1, 2, 3] =
+      Validation.ok (ε := String) 6 := by
+  rw [Validation.foldlM_ok (g := fun (b a : Nat) => b + a)]
+  rfl
+
+/-- Law consumption (compile-time): the anti-early-exit pin — 3 failing
+    steps, 3 errors reported. -/
+theorem foldlM_errs_length_demo :
+    (Validation.foldlM (fun (_ : Unit) (_ : Nat) => Validation.errs ["boom"])
+      () [1, 2, 3]).errors?.length = 3 :=
+  Validation.foldlM_errs_length "boom" () 1 [2, 3]
+
+def validationChecks : CheckResult := do
+  -- foldlM: three failures across five elements, errors in element order,
+  -- the ok-steps between errors still fold (state continues from the last
+  -- known accumulator)
+  let step (acc : List Nat) (n : Nat) : Validation String (List Nat) :=
+    if n % 2 == 0 then .ok (acc ++ [n]) else .errs [s!"E{n}"]
+  _ ← assertEq "foldlM accumulates in order"
+    (Validation.foldlM step [] [1, 2, 3, 4, 5])
+    (Validation.errs ["E1", "E3", "E5"])
+  -- the ok case: no errors, plain fold
+  _ ← assertEq "foldlM all-ok"
+    (Validation.foldlM (fun (b a : Nat) => Validation.ok (b + a)) 0 [1, 2, 3])
+    (Validation.ok (ε := String) 6)
+  -- traverse: every failure reported, element order, values discarded
+  _ ← assertEq "traverse accumulates"
+    (Validation.traverse
+      (fun n : Nat => if n == 2 then Validation.errs [s!"bad{n}"] else Validation.ok n)
+      [1, 2, 3, 2])
+    (Validation.errs ["bad2", "bad2"])
+  _ ← assertEq "traverse all-ok"
+    (Validation.traverse (ε := String) (fun n : Nat => Validation.ok (n * 10)) [1, 2, 3])
+    (Validation.ok [10, 20, 30])
+  -- applicative seq: both sides' errors concatenate, function side first
+  _ ← assertEq "seq concatenates"
+    ((Validation.errs ["fn"] : Validation String (Nat → Nat)) <*>
+      (Validation.errs ["arg"] : Validation String Nat))
+    (Validation.errs ["fn", "arg"])
+  _ ← assertEq "seq ok"
+    ((Validation.ok (fun n : Nat => n + 1) : Validation String (Nat → Nat)) <*>
+      (Validation.ok 41 : Validation String Nat))
+    (Validation.ok (ε := String) 42)
+  .ok ()
+
+/-! ## RoundTripSpec (W7.17) — toy Bool wire codec
+
+The combinator assembles sweep + sabotage control + golden; the tests pin
+that the control is CAUGHT (default sabotage bites this codec), that the
+golden byte-tie detects drift, and that a non-biting sabotage (identity)
+is flagged VACUOUS — the negative control cannot be omitted or defused
+silently. -/
+
+/-- Toy byte codec: Bool as one tag byte, exact decode (everything else
+    rejected) — a `Kit.PartialIso` value. -/
+def boolIso : PartialIso (List UInt8) Bool where
+  decode
+    | [0] => some false
+    | [1] => some true
+    | _ => none
+  encode
+    | false => [0]
+    | true => [1]
+  decode_encode := by
+    intro b
+    cases b <;> decide
+
+/-- The generated suite: sweep + first-byte-increment control + golden
+    samples (false → [0] decodes the +1 sabotage as `true` ≠ false;
+    true → [1] corrupts to [2], rejected). -/
+def boolWireSpec : RoundTripSpec Bool where
+  name := "codegencore-bool-wire"
+  iso := boolIso
+  samples := [false, true, true]
+  goldenDir := some "/tmp"
+
+/-- The defused variant: identity "sabotage" — the control asserts the
+    kit law itself, passes trivially, and `runIO` MUST flag it vacuous. -/
+def boolWireVacuous : RoundTripSpec Bool where
+  name := "codegencore-bool-wire-vacuous"
+  iso := boolIso
+  sabotage := id
+
 def main : IO UInt32 := do
   let code ← mainOfChecks "CodegenCore"
     [ ("mangle", mangleChecks)
@@ -328,6 +419,7 @@ def main : IO UInt32 := do
   , ("enumerable", enumerableChecks)
   , ("emitter-law", emitterLawChecks)
   , ("data-registry", dataRegistryChecks)
+  , ("validation", validationChecks)
     ]
   if code != 0 then return code
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND
@@ -335,4 +427,24 @@ def main : IO UInt32 := do
   let detCode ← TestKit.runDets [manglerSpec]
   if detCode != 0 then return detCode
   -- the property sweep (PropSpec: property passes, control caught)
-  TestKit.runSpecs [manglerPropSpec]
+  let propCode ← TestKit.runSpecs [manglerPropSpec]
+  if propCode != 0 then return propCode
+  -- W7.17: the assembled round-trip suite — sweep + control + golden
+  let rtWrite ← boolWireSpec.runIO (update := true)
+  if rtWrite != 0 then return rtWrite
+  let rtMatch ← boolWireSpec.runIO
+  if rtMatch != 0 then return rtMatch
+  -- golden drift MUST be caught
+  IO.FS.writeFile "/tmp/codegencore-bool-wire.golden" "drifted\n"
+  let rtDrift ← boolWireSpec.runIO
+  if rtDrift == 0 then
+    IO.eprintln "FAIL: golden drift was not caught"
+    return 1
+  IO.println "✓ roundtrip golden drift caught"
+  -- a defused (identity) sabotage MUST be flagged vacuous
+  let (vacOk, vacVerdict) ← boolWireVacuous.propSpec.runIO
+  IO.println vacVerdict
+  if vacOk then
+    IO.eprintln "FAIL: identity-sabotage control was not flagged vacuous"
+    return 1
+  return 0

@@ -1,14 +1,65 @@
 import CodegenCore.GuestGate
 /-
-# GuestlangStd.StrOps — the string intrinsics' DECLARATIONS
+# GuestlangStd.StrOps — the string intrinsics: ONE closed universe
 
-The std ops' bodies are never compiled (the backend maps the NAMES to
-the runtime primitives — see WasmBackend.stdOp?); they live here so the
-impl module can use them and the oracle can EVAL them. The bodies are
-the real Lean implementations (the oracle's authority).
+Cedar's ExtFun pattern (notes/studies/cedar-study.md C1): ONE closed
+inductive + ONE total `call` + ONE `runtimeName` — every consumer (the
+wasm backend's emit arm, the manifest fold) folds the same
+constructors; adding an intrinsic = one ctor, and exhaustiveness
+forces every consumer. The named wrappers (`strlen`/`strcat`) keep the
+existing signatures/usages AND the oracle bodies verbatim; `call`
+delegates to them.
+
+Why not the reverse (bodies in `call`, wrappers delegating)? LCNF's
+inlineDefs unfolds the tiny wrapper bodies and constant-folds
+`String.append` on literal arguments — the baseline WAT has ZERO
+`call $string_cat` (every demo strcat site folds to a string
+constant). Routing the wrappers through the dependent `call` broke
+that fold and changed the emitted bytes (W6.10 is byte-invariant), so
+the delegation direction is pinned: wrappers own the bodies.
+
+This module stays core-only (CodegenCore.GuestGate alone) so the
+backend can import it without the schema-lang closure.
 -/
 
 namespace GuestlangStd
+
+/-- The guest stdlib intrinsics — the CLOSED set. -/
+inductive Intrinsic
+  | strlen
+  | strcat
+  deriving DecidableEq, Repr
+
+/-- The intrinsic's Lean signature (reducible: defeq checks at the
+    `call` consumer sites see through it). -/
+abbrev Intrinsic.Sig : Intrinsic → Type
+  | .strlen => String → UInt64
+  | .strcat => String → String → String
+
+/-- The runtime primitive spellings — the ONE place they exist (the
+    emitted `call $string_len` / `call $string_cat` resolve to the
+    spliced runtime's primitives over the guest string layout
+    `{rc@0, tag=250@4, len u32@8, bytes@16}`). -/
+def Intrinsic.runtimeName : Intrinsic → String
+  | .strlen => "string_len"
+  | .strcat => "string_cat"
+
+/-- The wasm result type of the intrinsic's call (the IMPL convention:
+    UInt64 = raw i64; String = object pointer i32). -/
+def Intrinsic.resultWasmTy : Intrinsic → String
+  | .strlen => "i64"
+  | .strcat => "i32"
+
+/-- The Lean declaration names denoting each intrinsic — includes the
+    schema-root `SchemaLang.string_len` (the raw evaluator's
+    `call $string_len` wire-up contract; a name LITERAL only, this
+    module never imports schema-lang). Both the Lean names and the
+    runtime names derive from this ONE inductive — no string mirror. -/
+def Intrinsic.ofName? : Lean.Name → Option Intrinsic
+  | `GuestlangStd.strlen => some .strlen
+  | `SchemaLang.string_len => some .strlen
+  | `GuestlangStd.strcat => some .strcat
+  | _ => none
 
 /-- Byte length of a string. Real body = the oracle; the backend emits
     `call $string_len` for the NAME (the body is never compiled). -/
@@ -19,5 +70,12 @@ def strlen (s : String) : UInt64 := s.length.toUInt64
     runs (`memory.copy`). Real body = the oracle. -/
 @[guest_std]
 def strcat (a b : String) : String := a ++ b
+
+/-- The oracle semantics — the TOTAL fold over the closed set. The
+    arms are the named wrappers above (the bodies stay on the wrappers:
+    the header's inlineDefs/constant-fold pinning). -/
+def Intrinsic.call : (i : Intrinsic) → i.Sig
+  | .strlen => _root_.GuestlangStd.strlen
+  | .strcat => _root_.GuestlangStd.strcat
 
 end GuestlangStd

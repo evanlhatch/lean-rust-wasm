@@ -16,11 +16,13 @@ authored machine:
    proves nothing; with it, guard coverage is the only signal).
 
 These are SWEEPS, not theorems: the framework proves the laws, the battery
-checks the instance. One line per machine:
+checks the instance. One line per machine — with the `machine!` `states:`
+clause (W2.3) EVERY input is generated (`door.labels`, `doorStates`,
+`door.labels_complete`, the `DecidablePred door.Inv` instance):
 
 ```lean
 def doorConformance := Machines.Testing.conformance door
-  doorLabelList doorStateList
+  door.labels doorStates door.labels_complete
 ```
 
 Deliberately NOT here: trace correctness (that's the oracle, engine-side)

@@ -283,7 +283,7 @@ def evalV : VExpr s t → RowVals s → Value t
     $string_len` resolves to the SPLICED RUNTIME's primitive (the
     `i32.load offset=8` on the string object) — the same name
     resolution the `GuestlangStd.strlen`/`strcat` intrinsics ride
-    (`WasmBackend.stdOp?`). The root NAME IS THE CONTRACT (`string_len`
+    (`GuestlangStd.Intrinsic.ofName?`). The root NAME IS THE CONTRACT (`string_len`
     below, outside the namespace). Byte-length ≠ char-length off
     ASCII (the StrOps v1 stance). -/
 @[nolint linter.guestlang.dupDefBodies "deliberate mirror of root `string_len` (below): the namespaced copy is the oracle compiled into evalRaw's strlen arm (`$SchemaLang.string_len`); the ROOT copy is the spliced-runtime wire-up contract — identical bodies keep oracle == contract"]
@@ -859,7 +859,7 @@ end SchemaLang
     $string_len` resolves to the SPLICED RUNTIME's primitive (the
     `i32.load offset=8` on the string object) — the same name
     resolution the `GuestlangStd.strlen`/`strcat` intrinsics ride
-    (`WasmBackend.stdOp?`). ROOT NAME IS THE CONTRACT: a namespaced
+    (`GuestlangStd.Intrinsic.ofName?`). ROOT NAME IS THE CONTRACT: a namespaced
     name emits prefixed in the LCNF (`$SchemaLang.string_len`) and
     would NOT resolve (the `unknown func` lesson). Byte-length ≠
     char-length off ASCII (the StrOps v1 stance). -/

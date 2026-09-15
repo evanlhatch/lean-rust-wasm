@@ -8,5 +8,7 @@ import CodegenCore.Emit.Rust
 import CodegenCore.Enumerable
 import CodegenCore.GuestGate
 import CodegenCore.Kit
+import CodegenCore.RoundTrip
+import CodegenCore.Validation
 
 

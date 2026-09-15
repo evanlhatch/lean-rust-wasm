@@ -82,14 +82,16 @@ def loadProjectManifest (path : System.FilePath) : IO ProjectManifest := do
 
 /-- The manifest's fold: the compile roots = the guest-marked decls
     (the `CodegenCore.GuestGate` registry, replayed from the loaded
-    oleans), minus the std INTRINSICS (`strlen`/`strcat` — the backend
-    maps the NAMES to the runtime primitives; the bodies are never
-    compiled). The manifest's modules bound the loaded world; the marks
-    pick the decls; this fold is the rest. Dedup: a def marked both
-    `@[guest]` and `@[guest_std]` joins once. -/
+    oleans), minus the std INTRINSICS (`strlen`/`strcat` —
+    `GuestlangStd.Intrinsic.ofName?` maps their names to the closed
+    universe's ctors; the backend emits the ctors' `runtimeName`
+    primitives, the bodies are never compiled). The manifest's modules
+    bound the loaded world; the marks pick the decls; this fold is the
+    rest. Dedup: a def marked both `@[guest]` and `@[guest_std]` joins
+    once. -/
 def targetDeclsOf (env : Environment) : Array Name :=
   (CodegenCore.GuestGate.guestMarkedDecls env).eraseDups.toArray.filter
-    fun n => (WasmBackend.stdOp? n).isNone
+    fun n => (GuestlangStd.Intrinsic.ofName? n).isNone
 
 /-- Run the LCNF pipeline + emit the module, in CoreM. Returns the
     runtime-spliced WAT body WITHOUT the GENERATED header — the header

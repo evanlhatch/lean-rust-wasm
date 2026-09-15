@@ -18,7 +18,8 @@ path = "../codegen-core"
 
 # GenMain's LCNF re-run compiles the GUEST IMPLS (lean/std) — the std
 # package requires codegen-core + schema-lang only (no back-edge; the
-# backend's stdOp? maps the intrinsics BY NAME).
+# backend folds std's closed `GuestlangStd.Intrinsic` universe —
+# StrOps.lean is core-only, so the import adds no closure).
 [[require]]
 name = "GuestlangStd"
 path = "../std"

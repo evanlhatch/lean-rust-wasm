@@ -1637,6 +1637,34 @@ unsafe def funcSemReflectChecks : IO (String × CheckResult) := do
     | _ => throw "watchOrders not in the reflected registry"
   pure ("funcSemReflect", r)
 
+/-! ## Provenance (W7.5) — doc strings follow items through the parallel registry -/
+
+/-- The provenance extension (schemaItemDocsExt) replayed from the Demo
+    olean: documented items carry their doc string; undocumented ones
+    return empty. -/
+unsafe def provenanceChecks : IO (String × CheckResult) := do
+  let env ← loadDemoEnv
+  let r : CheckResult := do
+    -- getUser has a doc string ("u64 \u2192 option<user>. The body is a stub...")
+    let getUserDoc := SchemaLang.Meta.itemDoc? env ``getUser
+    _ ← assert (getUserDoc.contains "u64") "getUser doc contains 'u64'"
+    _ ← assert (getUserDoc.contains "option") "getUser doc contains 'option'"
+    -- Db has a doc string ("An opaque handle type...")
+    let dbDoc := SchemaLang.Meta.itemDoc? env ``Db
+    _ ← assert (dbDoc.contains "opaque") "Db doc contains 'opaque'"
+    _ ← assert (dbDoc.contains "handle") "Db doc contains 'handle'"
+    -- User has no doc string (the `-- ## Records` is a section comment, not a doc comment)
+    _ ← assertEq "User doc is empty" (SchemaLang.Meta.itemDoc? env ``User) ""
+    -- provenanceOf format: "declName: first line" or just "declName" when undocumented
+    let p1 := SchemaLang.Meta.provenanceOf env ``getUser
+      (Item.func { name := "get-user", params := [("id", .u64)], ret := .option (.ty "user") })
+    _ ← assert (p1.contains "getUser") "provenanceOf getUser: contains name"
+    _ ← assert (p1.contains "u64") "provenanceOf getUser: contains doc fragment"
+    let p2 := SchemaLang.Meta.provenanceOf env ``User (Item.record "user" [])
+    _ ← assert (p2.contains "User") "provenanceOf User: contains name"
+    _ ← assert (p2.contains ":" == false) "provenanceOf User: no doc = no colon"
+  pure ("provenance", r)
+
 /-! ## 6.5.2: migration soundness (the REMEDY half of the breaking gate) -/
 
 def migrationChecks : CheckResult := do
@@ -3199,6 +3227,7 @@ unsafe def main (args : List String) : IO UInt32 := do
   let vortexWf ← vortexWellFormedChecks
   let snapGate ← snapshotGateChecks
   let funcSemReflect ← funcSemReflectChecks
+  let provenance ← provenanceChecks
   let code ← mainOfChecks "SchemaLang"
     ([ ("resolution", resolutionChecks)
      , ("fieldRes", fieldResolutionChecks)
@@ -3233,6 +3262,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("propCoverage", PropSweep.propCoverageChecks)
      , ("funcSem", funcSemChecks)
      , funcSemReflect
+     , provenance
      , ("validate", validateChecks)
      , ("strlen", strlenChecks)
      , ("dsl", dslChecks)

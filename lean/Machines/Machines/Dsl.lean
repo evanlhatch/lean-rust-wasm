@@ -21,6 +21,38 @@ when present, `machine!` additionally generates `counter.rank_advances`
 pair three machines (schema-lang's pipeline/tick/orderMachine) used to
 carry by hand, byte-identical modulo names.
 
+Finite-state entourage clause (optional): `states: [<s1>, <s2>, …]` — for
+machines whose state space is a finite enumeration (a list LITERAL, so the
+generated proof can case it). When present, `machine!` additionally
+generates (W2.3 — the four in-tree hand-written copies this replaces):
+- `<m>States : List State` — the enumeration itself (the conformance
+  battery's state argument, no longer hand-written),
+- `<m>Trans : List (<m>.Label × State × State)` — the transition table,
+  COMPUTED from the machine (`step?` over labels × states, label-major —
+  the hand-written row order), so it cannot drift from the guards,
+- `<m>TableStep? : <m>.Label → State → Option State` — the table as a
+  lookup (the emitter-facing structural reading),
+- `<m>TableStep?_eq_step?` — the agreement theorem: over enumerated
+  states the table lookup IS `step?` (proved by `fin_cases` + `decide`;
+  an enumeration that misses a guard-satisfying state fails THIS proof
+  at build time — the check is the compile),
+- `instance : DecidablePred <m>.Inv` — via `inferInstanceAs` (the
+  invariant must be instance-synthesizable: equalities, comparisons,
+  Boolean coercions, ∧/→ over decidables — NOT a `match` on the state,
+  which is why the clause is opt-in: schema-lang's pipeline keeps its
+  hand-written instance).
+Requirements on the state type: `BEq` (the lookup key) and `DecidableEq`
+(the tie proof's `decide`). Payload-CARRYING state constructors (e.g.
+`failed (stage : String)`) defeat the lookup reading — a table row keys on
+the exact state; keep those machines hand-written (the hand `tableStep?`
+wildcard arms are the mechanism the lookup cannot express).
+
+Deliberately NOT generated (W2.3(d), follow-up): payload-carrying EVENTS
+(`event send (v : α) …`). The Label ctors would take arguments and the
+guard/action family would become payload-indexed — a `Machines.Core`
+`EventSpec` change, not a macro change; it is the gap keeping
+Machines.Sync's five machines hand-assembled.
+
 generates:
 - `counter.Label` — an inductive with one constructor per event name (the
   veil Assemble pattern: proofs case-split and execution enumerates the
@@ -64,6 +96,7 @@ guard, action, invariant, and (when needed) one named tactic block.
 import Machines.Core
 import Machines.Tactics
 import Lean
+import Mathlib.Tactic.FinCases
 
 namespace Machines.Dsl
 
@@ -92,6 +125,13 @@ syntax machineEvent := "event:" ident "guard:" term "action:" term ("safety:" te
 -- byte-identical modulo names.
 syntax machineRank := "rank:" term "rewind:" ident
 
+-- The optional finite-state entourage clause: `states:` names the state's
+-- finite enumeration (a list literal — the generated tie theorem case-
+-- splits it with `fin_cases`). When present, `machine!` generates the
+-- `<m>States`/`<m>Trans`/`<m>TableStep?`/`<m>TableStep?_eq_step?` table
+-- stack + the `DecidablePred <m>.Inv` instance (see the module header).
+syntax machineStates := "states:" term
+
 /-- Generate a `Machines.Machine` from State/Inv and a list of events.
     Optional binders between the name and `where` make a parameterized
     machine: `machine! counter (max : Nat) where …` generates
@@ -99,22 +139,26 @@ syntax machineRank := "rank:" term "rewind:" ident
     (the Label inductive and the labels list stay parameter-free — event
     names don't depend on parameters). -/
 syntax (name := machineCmd) "machine!" ident bracketedBinder* "where"
-  "State:" term "Inv:" term (machineRank)? machineEvent* : command
+  "State:" term "Inv:" term (machineRank)? (machineStates)? machineEvent* : command
 
 open Lean.Parser.Term in
 def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
-  -- stx = [machine!, name, bindersNode, where, State:, StateTerm, Inv:, InvTerm, eventsNode]
+  -- stx = [machine!, name, bindersNode, where, State:, StateTerm, Inv:, InvTerm,
+  --        optRank, optStates, eventsNode]
   let name : TSyntax `ident := ⟨stx[1]!⟩
   let binders : Array (TSyntax `Lean.Parser.Term.bracketedBinder) :=
     (stx[2]!.getArgs).map (⟨·⟩)
   let sty : Term := ⟨stx[5]!⟩
   let invty : Term := ⟨stx[7]!⟩
   -- stx[8] = the optional rank/rewind group (a null node when absent:
-  -- [rank:, term, rewind:, ident] when present); stx[9] = the events.
-  -- the optional group wraps the NAMED machineRank node (arity 1):
+  -- [rank:, term, rewind:, ident] when present); stx[9] = the optional
+  -- states group (likewise); stx[10] = the events.
+  -- the optional groups wrap the NAMED nodes (arity 1):
   -- optRank[0] = machineRank = [rank:, term, rewind:, ident]
+  -- optStates[0] = machineStates = [states:, term]
   let optRank : Syntax := stx[8]!
-  let evs : Array Syntax := stx[9]!.getArgs
+  let optStates : Syntax := stx[9]!
+  let evs : Array Syntax := stx[10]!.getArgs
   let labelId := mkIdentFrom stx (name.getId ++ `Label)
   let specId := mkIdentFrom stx (name.getId ++ `spec)
   let mut ctors : Array (TSyntax `Lean.Parser.Command.ctor) := #[]
@@ -162,6 +206,58 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   elabCommand (← `(command|
     theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
       intro l; cases l <;> decide))
+  -- The finite-state entourage, generated when the states clause is
+  -- present (W2.3 — replaces the hand-written `flagTrans`/
+  -- `flagTableStep?`/`flagTableStep?_eq_step?`/`DecidablePred` copies).
+  -- The table is COMPUTED from the machine (step? over labels × states,
+  -- label-major — the hand-written row order), so table and guards cannot
+  -- drift; the tie theorem's `fin_cases`+`decide` proof is the check that
+  -- the enumeration covers every guard-satisfying state (an under-
+  -- enumeration fails the BUILD, loudly). Names are CONCATENATED
+  -- (`doorTrans`, not `door.Trans`) — the hand-written convention.
+  if optStates.getNumArgs > 0 then
+    let statesT : Term := ⟨optStates[0]![1]!⟩
+    let base : String := name.getId.getString!
+    let statesId := mkIdentFrom stx (Name.mkSimple (base ++ "States"))
+    let transId := mkIdentFrom stx (Name.mkSimple (base ++ "Trans"))
+    let tstepId := mkIdentFrom stx (Name.mkSimple (base ++ "TableStep?"))
+    let tieId := mkIdentFrom stx (Name.mkSimple (base ++ "TableStep?_eq_step?"))
+    elabCommand (← `(command|
+      /-- The finite state space, machine!-generated from the `states:`
+          clause (the conformance battery's state argument). -/
+      def $statesId:ident $[$binders]* : List $sty := $statesT))
+    elabCommand (← `(command|
+      /-- The transition table, computed from the machine itself: for each
+          event (label-major, states in enumeration order — the hand-
+          written row order), the enabled (event, from, to) triples. -/
+      def $transId:ident $[$binders]* : List ($labelId × $sty × $sty) :=
+        _root_.List.flatMap
+          (fun l => _root_.List.filterMap
+            (fun s => _root_.Option.map (fun s' => (l, s, s'))
+              (_root_.Machines.Machine.step? ($name $binderNames*) s l))
+            ($statesId $binderNames*))
+          $labelsId))
+    elabCommand (← `(command|
+      /-- The machine as a table lookup (the emitter-facing structural
+          reading; the tie theorem pins it to `step?`). -/
+      def $tstepId:ident $[$binders]* : $labelId → $sty → _root_.Option $sty :=
+        fun e s => _root_.Option.map (fun r => r.2.2)
+          (_root_.List.find? (fun r => r.1 == e && r.2.1 == s)
+            ($transId $binderNames*))))
+    elabCommand (← `(command|
+      /-- The generated table IS the machine, over the enumerated state
+          space. -/
+      theorem $tieId:ident $[$binders]* (e : $labelId) (s : $sty)
+          (hs : s ∈ ($statesId $binderNames*)) :
+          ($tstepId:ident $binderNames*) e s =
+            _root_.Machines.Machine.step? ($name $binderNames*) s e := by
+        simp only [$statesId:ident] at hs
+        fin_cases hs <;> cases e <;> decide))
+    elabCommand (← `(command|
+      /-- The invariant is decidable (machine!-generated; the `states:`
+          clause opts the machine into the finite-space entourage). -/
+      instance $[$binders]* : _root_.DecidablePred ($name $binderNames*).Inv :=
+        fun s => inferInstanceAs (_root_.Decidable (($name $binderNames*).Inv s))))
   -- The acyclicity pair, generated when the rank clause is present. The
   -- proof mirrors the hand-written originals verbatim (cases over the
   -- enumerated state/label space, then omega over the rank arithmetic).

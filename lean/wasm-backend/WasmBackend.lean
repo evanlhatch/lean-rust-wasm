@@ -4,6 +4,7 @@ import WasmBackend.Check
 import WasmBackend.Layout
 import WasmBackend.Sem
 import WasmBackend.Wat
+import GuestlangStd.StrOps
 
 /-!
 # WasmBackend — LCNF → WAT emission
@@ -142,8 +143,12 @@ def binop? : Name → Option Wat.Op
 
 /-! ## guestlang-std string intrinsics
 
-The std functions' NAMES map to runtime primitives; their Lean bodies
-are never compiled (they are the differential ORACLE — see DemoFn).
+The std intrinsics fold the CLOSED `GuestlangStd.Intrinsic` universe
+(`GuestlangStd/StrOps.lean` — the oracle bodies, the runtime
+spellings, the wasm result types all derive from the one inductive):
+`Intrinsic.ofName?` maps a Lean declaration name to its ctor. The
+Lean bodies are never compiled (they are the differential ORACLE —
+see DemoFn).
 Guest string layout: `{rc@0, tag=250@4, len u32@8, bytes@16}` — a
 variable-size object (16 + len); the bytes live INLINE so RC frees the
 whole string (no separate byte allocation to leak). Byte-length ≠
@@ -151,17 +156,6 @@ char-length off ASCII (documented, v1). -/
 
 /-- The guest string tag byte. -/
 def stringTag : Nat := 250
-
-/-- `GuestlangStd.*` std ops (and the schema-root `SchemaLang.string_len`
-    the raw evaluator rides — the root-namespace-name contract, the
-    `Validate.string_len` doc) → the runtime primitive to call. The
-    result is the IMPL convention: UInt64 = raw i64; String = object
-    pointer (i32). -/
-def stdOp? : Name → Option String
-  | `GuestlangStd.strlen => some "string_len"
-  | `SchemaLang.string_len => some "string_len"
-  | `GuestlangStd.strcat => some "string_cat"
-  | _ => none
 
 def storeMemOp (ty : Option String) : Wat.MemOp :=
   match ty with | some "i32" => .i32store | _ => .i64store
@@ -213,7 +207,8 @@ partial def emitCode (code : Code .impure) : M Unit := do
           -- intrinsics are NOT fusion targets (the primitive is not a
           -- Lean decl; its mapped call has its own convention) — std ops
           -- fall through to the normal let path
-          if rv == decl.fvarId && (binop? fn).isNone && (stdOp? fn).isNone then
+          if rv == decl.fvarId && (binop? fn).isNone
+              && (GuestlangStd.Intrinsic.ofName? fn).isNone then
             for a in args do emitArg a
             emitI (.returncall fn.toString)
           else
@@ -343,20 +338,17 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.callindirect s!"sig_{args.size}box")
         emitI (.localset l)
   | .fap fn args =>
-      match binop? fn, stdOp? fn with
+      match binop? fn, GuestlangStd.Intrinsic.ofName? fn with
       | some op, _ =>
           let l ← bindLocal decl.fvarId (ty.getD "i64")
           for a in args do emitArg a
           emitI (.op op)
           emitI (.localset l)
-      | _, some callee =>
+      | _, some i =>
           -- std intrinsic: strlen (obj) → raw i64; strcat (obj obj) → obj
-          let resTy : String := match fn with
-            | `GuestlangStd.strlen | `SchemaLang.string_len => "i64"
-            | _ => "i32"
-          let l ← bindLocal decl.fvarId resTy
+          let l ← bindLocal decl.fvarId i.resultWasmTy
           for a in args do emitArg a
-          emitI (.call callee)
+          emitI (.call i.runtimeName)
           emitI (.localset l)
       | none, _ =>
           -- the local's type = the CALLEE's actual wasm result type
@@ -792,7 +784,7 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
   -- the return-area pointer as its LAST param; the adapter calls the impl
   -- (→ the string object), then writes (bytes-ptr, byte-len) into it.
   -- The host's canonical lift reads the UTF-8 from the bytes-ptr. The
-  -- guest string's bytes live INLINE at +16 (see the stdOp? layout).
+  -- guest string's bytes live INLINE at +16 (see the intrinsics layout).
   -- (The STRING-ness comes from the ORIGINAL def type — GenMain looks it
   -- up in the imported env — the LCNF type is erased to `obj` for every
   -- object result, Shape and String alike.)
