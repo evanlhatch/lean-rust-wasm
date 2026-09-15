@@ -19,3 +19,15 @@ serde_json = "1"
 [dev-dependencies]
 # The conformance test compares against the wasmtime run of the SAME module.
 wasmtime = { version = "47", default-features = false, features = ["cranelift"] }
+# Fuzz targets (tests/module_bytes, tests/snapshot_restore_seq):
+# bolero's `arbitrary` feature powers with_arbitrary::<T>() inputs.
+bolero = { version = "0.13", features = ["arbitrary"] }
+arbitrary = { version = "1", features = ["derive"] }
+
+[[test]]
+name = "module_bytes"
+harness = false
+
+[[test]]
+name = "snapshot_restore_seq"
+harness = false

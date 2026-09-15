@@ -147,6 +147,12 @@ strip = "none"
 debug = false
 split-debuginfo = "off"
 
+# Fuzz profile (cargo bolero): dev settings + just enough optimization
+# to keep long campaigns from crawling.
+[profile.fuzz]
+inherits = "dev"
+opt-level = 2
+
 [profile.release]
 opt-level = 3
 debug = false

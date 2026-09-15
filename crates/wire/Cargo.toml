@@ -28,3 +28,15 @@ futures-util = { version = "0.3", default-features = false, features = ["async-a
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+# Fuzz targets (tests/val_from_json, tests/stream_frames): bolero's
+# `arbitrary` feature powers with_arbitrary::<T>() structured inputs.
+bolero = { version = "0.13", features = ["arbitrary"] }
+arbitrary = { version = "1", features = ["derive"] }
+
+[[test]]
+name = "val_from_json"
+harness = false
+
+[[test]]
+name = "stream_frames"
+harness = false
