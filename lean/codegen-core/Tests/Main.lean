@@ -15,6 +15,23 @@ open CodegenCore.Emit
 open TestKit
 open Plausible
 open Plausible.Gen
+open CodegenCore.Enumerable
+
+/-! ## Enumerable test enum — nullary constructors, deriving Enumerable
+
+The handler must generate the `all` def and the instance, and the
+complete proof must compile. -/
+
+inductive EnumColor where
+  | red | green | blue
+  deriving DecidableEq, Enumerable
+
+def enumerableChecks : CheckResult := do
+  _ ← assertEq "all length" EnumColor.all.length 3
+  _ ← assertEq "all contains red" (decide (EnumColor.red ∈ EnumColor.all)) true
+  _ ← assertEq "all contains green" (decide (EnumColor.green ∈ EnumColor.all)) true
+  _ ← assertEq "all contains blue" (decide (EnumColor.blue ∈ EnumColor.all)) true
+  .ok ()
 
 def mangleChecks : CheckResult := do
   _ ← assertEq "camel" (camel "max_health.current") "maxHealthCurrent"
@@ -206,6 +223,7 @@ def main : IO UInt32 := do
     , ("registry", registryChecks)
     , ("emit", emitChecks)
   , ("didYouMean", didYouMeanChecks)
+  , ("enumerable", enumerableChecks)
     ]
   if code != 0 then return code
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND

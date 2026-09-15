@@ -4,7 +4,6 @@ import Machines
 #print axioms Machines.RewindableMachine.rewind_suffix
 #print axioms Machines.Machine.Refines.run_sim
 #print axioms Machines.Machine.compose_commute
-#print axioms Machines.ConvergentMachine.terminates
 #print axioms Machines.Convergent.run_length_le
 #print axioms Machines.Convergent.run_length_bound
 #print axioms Machines.Convergent.terminates

@@ -29,6 +29,9 @@ v1 payloads are plain types).
 -/
 
 
+import Lean
+open Lean
+
 namespace SchemaLang
 
 /-! ## The universe -/
@@ -237,5 +240,42 @@ def Ty.toType : Ty → TySem → Type
   -- static verified data — TVal carries them; the Lean reading flattens)
   | .tensor _ a, sem => List (a.toType sem)
   | .ty n, sem => sem n
+
+/-- The `ToExpr` instance: a hand-written walk of the `Ty` universe
+    (the deriving handler is unavailable because `ToExpr` lives in the
+    `Lean` package, not in the prelude — Ty.lean is a pure universe
+    definition with no prior ``Lean`` import; importing `Lean` is
+    intentional, not incidental, to own the single canonical walk). -/
+instance : ToExpr Ty where
+  toTypeExpr := .const ``Ty []
+  toExpr := go
+where
+  go : Ty → Expr
+    | .bool => .const ``Ty.bool []
+    | .u8 => .const ``Ty.u8 []
+    | .u16 => .const ``Ty.u16 []
+    | .u32 => .const ``Ty.u32 []
+    | .u64 => .const ``Ty.u64 []
+    | .i8 => .const ``Ty.i8 []
+    | .i16 => .const ``Ty.i16 []
+    | .i32 => .const ``Ty.i32 []
+    | .i64 => .const ``Ty.i64 []
+    | .f32 => .const ``Ty.f32 []
+    | .f64 => .const ``Ty.f64 []
+    | .string => .const ``Ty.string []
+    | .bytes => .const ``Ty.bytes []
+    | .option a => .app (.const ``Ty.option []) (go a)
+    | .result ok err =>
+        .app (.app (.const ``Ty.result []) (go ok)) (go err)
+    | .list a => .app (.const ``Ty.list []) (go a)
+    | .future a => .app (.const ``Ty.future []) (go a)
+    | .stream a => .app (.const ``Ty.stream []) (go a)
+    | .tensor dims a =>
+        let dimsE := dims.foldr (fun d acc =>
+          .app (.app (.app (.const ``List.cons [0]) (.const ``Nat []))
+            (.lit (.natVal d))) acc)
+          (.app (.const ``List.nil [0]) (.const ``Nat []))
+        .app (.app (.const ``Ty.tensor []) dimsE) (go a)
+    | .ty n => .app (.const ``Ty.ty []) (.lit (.strVal n))
 
 end SchemaLang

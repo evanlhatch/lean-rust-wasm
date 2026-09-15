@@ -6,15 +6,10 @@ variant into a well-founded type that every event strictly decreases — the
 cascade-termination certificate (and the CertifiedFixpoint variant's home).
 The two idiom shapes (count-down, cap-minus-fill) discharge by `omega`.
 
-Two structure layers, mirroring the two encodings:
-
-- `ConvergentMachine extends Machine` — the certificate bundled with the
-  machine, over an arbitrary well-founded codomain (the lean-machines
-  study's generic shape).
-- `Convergent m` — the engine-side certificate over an EXISTING `Machine`:
-  a Nat-valued variant, decreasing on every enabled event per the
-  EventSpec guard-proof (spec §5.1). This is the shape `countDown` /
-  `capMinusFill` build, and the shape `run_length_bound` consumes.
+Single encoding: `Convergent m` — the engine-side certificate over an EXISTING
+`Machine`: a Nat-valued variant, decreasing on every enabled event per the
+EventSpec guard-proof (spec §5.1). This is the shape `countDown` /
+`capMinusFill` build, and the shape `run_length_bound` consumes.
 
 The theorems: no infinite execution exists (`terminates`, through
 `WellFounded.no_infinite_descent`), and any successful `run` has length
@@ -29,6 +24,7 @@ cap-minus-fill idiom constructors this file ships.
 
 import Machines.Core
 import Mathlib.Order.WellFounded
+import Dbsp.Stream
 
 namespace Machines
 
@@ -45,36 +41,11 @@ theorem WellFounded.no_infinite_descent {V : Type} {r : V → V → Prop}
     subst h0
     exact ih (f 1) (hd 0) (fun n => f (n + 1)) rfl (fun n => hd (n + 1))
 
-/-- A convergent machine: every event strictly decreases the variant. -/
-structure ConvergentMachine extends Machine where
-  V : Type
-  rel : V → V → Prop
-  wf : WellFounded rel
-  variant : State → V
-  decreases : ∀ s l s', toMachine.tr s l s' → rel (variant s') (variant s)
-
 /-- A stream of states, each a legal step from the previous (the
-    divergence witness for a `Machine`, not a certificate). Defined here,
-    before `ConvergentMachine.InfiniteRun`, so the certificate's
-    `InfiniteRun` can delegate to it without a forward reference. -/
-def Machine.InfiniteRun (m : Machine) (steps : Nat → m.State) : Prop :=
+    divergence witness for a `Machine`, not a certificate). The
+    `Dbsp.Stream` type makes the dbsp time-theory available. -/
+def Machine.InfiniteRun (m : Machine) (steps : Dbsp.Stream m.State) : Prop :=
   ∀ n, ∃ l, m.tr (steps n) l (steps (n + 1))
-
-/-- An infinite execution: a state at every time, each a legal step from
-    the previous. Delegates to `Machine.InfiniteRun` on the underlying
-    machine (one definition, not two). -/
-abbrev ConvergentMachine.InfiniteRun (m : ConvergentMachine) (steps : Nat → m.State) : Prop :=
-  m.toMachine.InfiniteRun steps
-
-/-- Convergent machines terminate: no infinite run exists. In engine terms:
-    a certified iterative stage's cascade reaches fixpoint in finitely many
-    passes — the certificate is the variant, and this is its soundness. -/
-theorem ConvergentMachine.terminates (m : ConvergentMachine) (steps : Nat → m.State)
-    (h : m.InfiniteRun steps) : False := by
-  apply WellFounded.no_infinite_descent m.wf (fun n => m.variant (steps n))
-  intro n
-  obtain ⟨l, hl⟩ := h n
-  exact m.decreases _ l _ hl
 
 /-! ## The Nat-valued certificate over a `Machine` (engine shape, spec §5.1) -/
 
@@ -163,7 +134,7 @@ theorem run_length_bound (c : Convergent m) (s : m.State) (ls : List m.Label)
 /-- Convergence soundness: a convergent machine has no infinite run (the
     `Machine.InfiniteRun` witness is impossible) — `wellFounded_lt` on the
     Nat variant is the descending-host. -/
-theorem terminates (c : Convergent m) (steps : Nat → m.State)
+theorem terminates (c : Convergent m) (steps : Dbsp.Stream m.State)
     (h : Machine.InfiniteRun m steps) : False :=
   WellFounded.no_infinite_descent wellFounded_lt
     (fun n => c.variant (steps n))

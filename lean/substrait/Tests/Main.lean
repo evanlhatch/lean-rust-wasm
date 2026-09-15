@@ -20,16 +20,13 @@ Run from the package root:
     .lake/build/bin/SubstraitTests [--update]
 -/
 import Substrait
+import Substrait.Fixtures
 
 import TestKit
 import Lean
 
 open Substrait
 open Substrait.Typed
-
-/-- The units relation: health, regen — both nullable i32. -/
-abbrev units : Schema :=
-  [("health", .i32, true), ("regen", .i32, true)]
 
 /-- Join test schemas: a left key and a right key, both nullable i32. -/
 abbrev joinLeft : Schema := [("lk", .i32, true)]

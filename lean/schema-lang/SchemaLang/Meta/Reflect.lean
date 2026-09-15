@@ -416,33 +416,8 @@ def registeredInvariantNames (env : Environment) : List String :=
 /-- `Ty` → its constructor tree as an `Expr` (the expected-type
     builder: the command elaborates the author's term against
     `VExpr <the record's real fields> .bool`). -/
-def tyToExpr : Ty → Expr
-  | .bool => .const ``Ty.bool []
-  | .u8 => .const ``Ty.u8 []
-  | .u16 => .const ``Ty.u16 []
-  | .u32 => .const ``Ty.u32 []
-  | .u64 => .const ``Ty.u64 []
-  | .i8 => .const ``Ty.i8 []
-  | .i16 => .const ``Ty.i16 []
-  | .i32 => .const ``Ty.i32 []
-  | .i64 => .const ``Ty.i64 []
-  | .f32 => .const ``Ty.f32 []
-  | .f64 => .const ``Ty.f64 []
-  | .string => .const ``Ty.string []
-  | .bytes => .const ``Ty.bytes []
-  | .option a => .app (.const ``Ty.option []) (tyToExpr a)
-  | .result ok err =>
-      .app (.app (.const ``Ty.result []) (tyToExpr ok)) (tyToExpr err)
-  | .list a => .app (.const ``Ty.list []) (tyToExpr a)
-  | .future a => .app (.const ``Ty.future []) (tyToExpr a)
-  | .stream a => .app (.const ``Ty.stream []) (tyToExpr a)
-  | .tensor dims a =>
-      let dimsE := dims.foldr (fun d acc =>
-        .app (.app (.app (.const ``List.cons [0]) (.const ``Nat []))
-          (.lit (.natVal d))) acc)
-        (.app (.const ``List.nil [0]) (.const ``Nat []))
-      .app (.app (.const ``Ty.tensor []) dimsE) (tyToExpr a)
-  | .ty n => .app (.const ``Ty.ty []) (.lit (.strVal n))
+def tyToExpr : Ty → Expr :=
+  toExpr
 
 /-- One field → the `Field.mk` application (the GADT's index term). -/
 def fieldToExpr (f : Field) : Expr :=

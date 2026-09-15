@@ -12,15 +12,12 @@ Run: `lake build QLangTests && .lake/build/bin/QLangTests`
 -/
 import QLang
 import Substrait.Emit
+import Substrait.Fixtures
 import TestKit
 
 open QLang
 open Substrait.Typed
 open TestKit
-
-/-- The units relation: health, regen — both nullable i32. -/
-abbrev units : Schema :=
-  [("health", .i32, true), ("regen", .i32, true)]
 
 -- the DP itself is core's `Lean.EditDistance.levenshtein` (tested
 -- upstream); this pins the SHARED engine's behavior at our call shape
