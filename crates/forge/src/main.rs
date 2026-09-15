@@ -28,6 +28,9 @@ struct Job {
     package: String,
     /// `lake build` target + `lake exe` name.
     exe: String,
+    /// Args forwarded to the exe (e.g. the subcommand for consolidated
+    /// drivers: exe `schema`, args `["gen"]`). Absent in the manifest = [].
+    args: Vec<String>,
     /// Committed artifacts this job owns (repo-root-relative).
     outputs: Vec<String>,
 }
@@ -78,6 +81,18 @@ fn load_jobs_of(root: &Path, manifest: &str) -> Result<Vec<Job>, String> {
         };
         let package = string_val("package")?;
         let exe = string_val("exe")?;
+        // Optional subcommand args (absent = none). Same shape as outputs.
+        let args: Vec<String> = match obj.split("\"args\": [").nth(1) {
+            Some(rest) => rest
+                .split(']')
+                .next()
+                .ok_or("unterminated args")?
+                .split(", ")
+                .map(|s| s.trim().trim_matches('"').to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            None => Vec::new(),
+        };
         let outputs: Vec<String> = obj
             .split("\"outputs\": [")
             .nth(1)
@@ -92,6 +107,7 @@ fn load_jobs_of(root: &Path, manifest: &str) -> Result<Vec<Job>, String> {
         jobs.push(Job {
             package,
             exe,
+            args,
             outputs,
         });
     }
@@ -156,9 +172,10 @@ fn run_job(tc: &Path, root: &Path, job: &Job) -> Result<(), String> {
         Command::new(&lake)
             .arg("exe")
             .arg(&job.exe)
+            .args(&job.args)
             .current_dir(&pkg_dir)
             .env("PATH", &path),
-        &format!("lake exe {}", job.exe),
+        &format!("lake exe {} {:?}", job.exe, job.args),
     )
 }
 

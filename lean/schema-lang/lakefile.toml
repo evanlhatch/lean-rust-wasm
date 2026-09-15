@@ -38,10 +38,10 @@ path = "../LintKit"
 
 [[lean_lib]]
 name = "SchemaLang"
-roots = ["SchemaLang"]
+roots = ["SchemaLang", "GenMain", "CheckMain", "BreakingMain"]
 
 # The demo authoring surface: native Lean structures + @[schema].
-# Separate root so `lake exe schema-gen` can importModules #[`Demo].
+# Separate root so `lake exe schema gen` can importModules #[`Demo].
 [[lean_lib]]
 name = "Demo"
 roots = ["Demo"]
@@ -53,23 +53,11 @@ root = "Tests.Main"
 # importModules + enableInitializersExecution (unsafe init path).
 supportInterpreter = true
 
+# Unified driver: schema gen | check | breaking (subcommands).
 [[lean_exe]]
-name = "schema-gen"
-root = "GenMain"
+name = "schema"
+root = "SchemaMain"
 # `enableInitializersExecution` (extension replay for importModules) runs
 # imported initializers through the interpreter — needs the core native
 # impls (IO.getRandomBytes) linked in.
-supportInterpreter = true
-
-# `just check-schema`: universeCheck over the demo registry (buf lint analog).
-[[lean_exe]]
-name = "schema-check"
-root = "CheckMain"
-supportInterpreter = true
-
-# `just breaking`: Diff.diff of the demo registry against the committed
-# goldens/universe.snapshot baseline (buf breaking analog).
-[[lean_exe]]
-name = "schema-breaking"
-root = "BreakingMain"
 supportInterpreter = true

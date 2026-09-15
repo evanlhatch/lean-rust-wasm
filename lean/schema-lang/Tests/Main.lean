@@ -2229,7 +2229,7 @@ def moduleDocsChecks : CheckResult := do
   _ ← assertEq "internals path" (files.head?.map (·.path)) (some "../../docs/lean-internals.md")
   _ ← assert (SchemaLang.Emit.emitters.any fun e => e.name == "internals-docs")
     "internals emitter registered"
-  _ ← assert (SchemaLang.Emit.forgeJobs.any fun (_, outs) =>
+  _ ← assert (SchemaLang.Emit.forgeJobs.any fun (_, _, outs) =>
     outs.contains "../../docs/lean-internals.md")
     "internals output in the byte-tie manifest"
   .ok ()

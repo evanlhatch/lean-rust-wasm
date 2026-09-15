@@ -19,3 +19,5 @@ import Dbsp.Tactics
 import Dbsp.Effects
 import Dbsp.Certs
 import Dbsp.Subsystems
+import Cslib.Foundations.Relation.Confluence
+import Cslib.Foundations.Semantics.LTS.Basic

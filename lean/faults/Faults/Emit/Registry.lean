@@ -77,7 +77,7 @@ def forgeJobsLines : List String :=
   -- RAW outputs: `jobJson` roots paths itself (`CodegenCore.Emit.rootRel`) —
   -- mapping here too would root twice.
   forgeJobs.map fun (exe, outputs) =>
-    SchemaLang.Emit.jobJson "faults" exe outputs
+    SchemaLang.Emit.jobJson "faults" exe [] outputs
 
 def forgeJobsEmitter : Emitter FaultsSpec where
   name := "forge-jobs"

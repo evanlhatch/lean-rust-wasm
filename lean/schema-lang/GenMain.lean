@@ -24,7 +24,7 @@ open Lean SchemaLang.Meta
 open SchemaLang.Emit (emitters)
 open CodegenCore.Emit (header runEmitters)
 
-unsafe def main : IO Unit := do
+unsafe def runGen (_args : List String) : IO UInt32 := do
   -- Replay BOTH spec modules' registrations (loadExts; `lake exe`
   -- supplies LEAN_PATH for the package's own deps — the flags package
   -- joins via the extra search path, its oleans built by `just
@@ -57,3 +57,4 @@ unsafe def main : IO Unit := do
   let gm ← CodegenCore.Emit.genMeta ctx.items.length 0
   runEmitters "schema-lang" (emitters.map (λ e => (e, ctx)))
     (λ _ f => pure { gm with contentHash := f.contents.hash })
+  return 0

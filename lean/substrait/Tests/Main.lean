@@ -549,10 +549,10 @@ end RelSweep
     `runCheckMCollect` for the LSpec display). -/
 def runChecks : TestKit.CheckM Unit := do
   -- 1. HasCol resolves by name, head and tail.
-  TestKit.check "hasCol head" (TestKit.assert
-    ((HasCol.index (s := units) (name := "health") (t := .i32) (n := true)) == 0) "")
-  TestKit.check "hasCol tail" (TestKit.assert
-    ((HasCol.index (s := units) (name := "regen") (t := .i32) (n := true)) == 1) "")
+  TestKit.check "hasCol head" (TestKit.assertEq "index = 0"
+    (HasCol.index (s := units) (name := "health") (t := .i32) (n := true)) 0)
+  TestKit.check "hasCol tail" (TestKit.assertEq "index = 1"
+    (HasCol.index (s := units) (name := "regen") (t := .i32) (n := true)) 1)
 
   -- 2. Consecutive filters fuse into a single Filter rel.
   let fused : Rel units units :=
@@ -563,7 +563,7 @@ def runChecks : TestKit.CheckM Unit := do
     match fused with
     | .filter input _ => (match input with | .read _ _ => true | _ => false)
     | _ => false
-  TestKit.check "filter fusion" (TestKit.assert fusedIsOne "")
+  TestKit.check "filter fusion" (TestKit.assert fusedIsOne "two consecutive .filter calls must fuse into one Filter wrap over a Read")
 
   -- 3. The read-side evaluator: filter + project over an in-memory table.
   let src : Table units :=
@@ -575,7 +575,7 @@ def runChecks : TestKit.CheckM Unit := do
     match eval reader (Builder.read "units" units |> Builder.filter (col "health" .i32 true >. litI32 0)).rel src with
     | .ok rows => pure rows
     | .error e => TestKit.errorAbort "eval filter" s!"eval error: {e}"
-  TestKit.check "eval filter keeps alive rows only" (TestKit.assert (filtered.length == 2) "")
+  TestKit.check "eval filter keeps alive rows only" (TestKit.assertEq "filtered row count" filtered.length 2)
   let cellAt {s : Schema} (r : Row s) (k : Nat) (v : Int) : Bool :=
     match r.get k with
     | some (Sigma.mk SType.i32 (some (Cell.i32 x))) => x == v
@@ -587,7 +587,7 @@ def runChecks : TestKit.CheckM Unit := do
   TestKit.check "eval filter keeps row 0 and 2" (TestKit.assert
     (match filtered with
      | [r0, r1] => cellAt r0 0 5 && cellAt r1 0 7
-     | _ => false) "")
+     | _ => false) "row 0 health=5, row 1 health=7")
 
   -- 4. The typed projection evaluates.
   let projected ←
@@ -598,7 +598,7 @@ def runChecks : TestKit.CheckM Unit := do
   TestKit.check "eval project computes health + regen" (TestKit.assert
     (match projected with
      | [r0, r1] => cellAt r0 2 7 && cellAt r1 2 10
-     | _ => false) "")
+     | _ => false) "row 0 total=7, row 1 total=10")
 
   -- 5. The emitter rejects Write / Extension rels (grammar has no rules).
   let badWrite : Proto.Plan :=
@@ -608,7 +608,8 @@ def runChecks : TestKit.CheckM Unit := do
                                                     baseSchema := none, common := none },
                                    common := none })] }
   TestKit.check "emitter hard-fails on WriteRel" (TestKit.assert
-    (match Emit.Text.emit badWrite with | .error _ => true | .ok _ => false) "")
+    (match Emit.Text.emit badWrite with | .error _ => true | .ok _ => false)
+    "emitter must reject WriteRel (no text grammar rule for writes)")
 
   -- 6. A rel with no extensions emits no `=== Extensions` section.
   let plain : Proto.Plan :=
@@ -620,9 +621,11 @@ def runChecks : TestKit.CheckM Unit := do
     match Emit.Text.emit plain with
     | .ok t => pure t
     | .error e => TestKit.errorAbort "plain emit" s!"plain emit error: {e}"
-  TestKit.check "no extensions ⇒ no Extensions section" (TestKit.assert (!plainText.contains "=== Extensions") "")
+  TestKit.check "no extensions ⇒ no Extensions section" (TestKit.assert (!plainText.contains "=== Extensions")
+    "plain plan with no extensions must not emit an Extensions section")
   TestKit.check "plain Read renders canonically" (TestKit.assert
-    (plainText.startsWith "=== Plan\nRead[units => health:i32?, regen:i32?]\n") "")
+    (plainText.startsWith "=== Plan\nRead[units => health:i32?, regen:i32?]\n")
+    "plain Read must start with the canonical header line")
 
   -- 7. Join: inner join over a 2x2 product with a single match (2 == 2).
   let jsrc : Table joinS :=
@@ -637,11 +640,11 @@ def runChecks : TestKit.CheckM Unit := do
     match eval jreader jplan jsrc with
     | .ok rows => pure rows
     | .error e => TestKit.errorAbort "eval join inner" s!"eval join error: {e}"
-  TestKit.check "eval join inner keeps the single match" (TestKit.assert (joined.length == 1) "")
+  TestKit.check "eval join inner keeps the single match" (TestKit.assertEq "inner join result count" joined.length 1)
   TestKit.check "eval join inner row is [2,2]" (TestKit.assert
     (match joined with
      | [r0] => cellAt r0 0 2 && cellAt r0 1 2
-     | _ => false) "")
+     | _ => false) "inner join single result row must be [lk=2, rk=2]")
 
   -- 8. Join: left join pads the unmatched left row with a `none` right cell.
   let jlplan : Rel joinS joinS :=
@@ -650,7 +653,7 @@ def runChecks : TestKit.CheckM Unit := do
     match eval jreader jlplan jsrc with
     | .ok rows => pure rows
     | .error e => TestKit.errorAbort "eval join left" s!"eval left join error: {e}"
-  TestKit.check "eval join left emits matched then padded row" (TestKit.assert (lj.length == 2) "")
+  TestKit.check "eval join left emits matched then padded row" (TestKit.assertEq "left join result count" lj.length 2)
   TestKit.check "eval join left row 0 is the match, row 1 is [1,none]" (TestKit.assert
     (match lj with
      | [r0, r1] =>
@@ -659,7 +662,7 @@ def runChecks : TestKit.CheckM Unit := do
          (match r1.get 1 with
           | some (Sigma.mk SType.i32 none) => true
           | _ => false)
-     | _ => false) "")
+     | _ => false) "left join: row 0 must be [2,2] matched, row 1 must be [1,none] padded")
 
   -- 9. Aggregate: two groups (keys 1 vs 2), count + sum measures.
   let asrc : Table aggS :=
@@ -680,14 +683,14 @@ def runChecks : TestKit.CheckM Unit := do
     match eval areader aplan asrc with
     | .ok rows => pure rows
     | .error e => TestKit.errorAbort "eval aggregate" s!"eval aggregate error: {e}"
-  TestKit.check "eval aggregate emits three buckets (first-seen key order)" (TestKit.assert (aggd.length == 3) "")
+  TestKit.check "eval aggregate emits three buckets (first-seen key order)" (TestKit.assertEq "aggregate bucket count" aggd.length 3)
   TestKit.check "eval aggregate counts and sums per group" (TestKit.assert
     (match aggd with
      | [r1, r2, r3] =>
          cellAt r1 0 1 && cellAtI64 r1 1 2 && cellAt r1 2 2 &&
          cellAt r2 0 2 && cellAtI64 r2 1 1 && cellAt r2 2 2 &&
          cellAt r3 0 3 && cellAtI64 r3 1 1 && cellAt r3 2 3
-     | _ => false) "")
+     | _ => false) "groups: key1 count=2 sum=2, key2 count=1 sum=2, key3 count=1 sum=3")
 
   -- 9.5. Text wire round trip (lean-v3 step 8, D6): decode(emit(golden))
   --    is the plan, and re-emitting it is byte-identical.
@@ -695,11 +698,13 @@ def runChecks : TestKit.CheckM Unit := do
   | .error msg => TestKit.errorAbort "round-trip emit" s!"round-trip: emit failed: {msg}"
   | .ok rtt => do
       TestKit.check "decode∘emit = id (golden plan)" (TestKit.assert
-        (Decode.parsePlan rtt == some goldenPlan.toPlan) "")
+        (Decode.parsePlan rtt == some goldenPlan.toPlan)
+        "parsePlan(rtt) must match goldenPlan.toPlan")
       match Decode.parsePlan rtt with
       | some p =>
           TestKit.check "emit∘decode is byte-identical (golden text)" (TestKit.assert
-            (match Emit.Text.emit p with | .ok s => s == rtt | .error _ => false) "")
+            (match Emit.Text.emit p with | .ok s => s == rtt | .error _ => false)
+            "re-emitting decoded plan must produce identical text")
       | none => TestKit.errorAbort "round-trip parse" "round-trip: parse failed"
 
   -- 9.6. Type round-trip sweep (the executable witness for the type layer —
@@ -717,7 +722,7 @@ def runChecks : TestKit.CheckM Unit := do
     TestKit.check s!"type round-trip: {txt}" (TestKit.assert
       (match Decode.parseType (txt.length + 1) txt.toList with
        | some (t', []) => t' == ty
-       | _ => false) "")
+       | _ => false) s!"parse of '{txt}' must recover type {repr ty}")
 
   -- 9.6b. The master type-inversion theorem (parseType_typeText) witnessed on
   -- the same 14 sweep types: re-emit each type, then parse it back at the
@@ -731,7 +736,9 @@ def runChecks : TestKit.CheckM Unit := do
       (match Emit.Text.typeText ty with
        | .ok b =>
            Decode.parseType (Decode.typeDepth ty) b.toList == some (ty, []) && b == txt
-       | .error _ => false) "")
+       | .error _ => false) s!"emit(parse) must be identity for '{txt}', typeDepth satisfies fuel bound")
+
+  -- 9.7. Expression round-trip sweep (refs, calls, literals, if_then, cast).
 
   -- 9.7. Expression round-trip sweep (refs, calls, literals, if_then, cast).
   let fnCtx : Decode.FnCtx := [("gt", 1), ("add", 2)]
@@ -741,7 +748,10 @@ def runChecks : TestKit.CheckM Unit := do
     , "'hello'", "42", "-7:i16?", "true", "null:string" ]
   for txt in testExprs do
     TestKit.check s!"expr parses: {txt}" (TestKit.assert
-      ((Decode.parseExpr (txt.length + 1) fnCtx txt.toList).isSome) "")
+      ((Decode.parseExpr (txt.length + 1) fnCtx txt.toList).isSome)
+      s!"expression '{txt}' must parse with given fnCtx")
+
+  -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers
 
   -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers
   --    the wire term, for every typed constructor (the proved
@@ -760,7 +770,7 @@ def runChecks : TestKit.CheckM Unit := do
         TestKit.check s!"rel decode re-enc: {name}" (TestKit.assert
           (match Decode.decodeRel inv (rel.toProtoWith ctx) with
            | some pkg => Decode.relLower pkg ctx == rel.toProtoWith ctx
-           | none => false) "")
+           | none => false) s!"decode(rel) then relLower must recover original wire term for '{name}'")
   let relRoundtrip (name : String) (r : Decode.AnyRel) : TestKit.CheckM Unit := do
     match r with
     | .mk _ _ rel => relRoundtripWith name rel.toCtx r
@@ -803,7 +813,8 @@ def runChecks : TestKit.CheckM Unit := do
   --    check name carrying the corruption context).
   let relRejected (name : String) (w : Proto.Rel) : TestKit.CheckM Unit := do
     TestKit.check s!"rel decode rejects: {name}" (TestKit.assert
-      ((Decode.decodeRel (Decode.fnInvOf ExtCtx.empty) w).isNone) "")
+      ((Decode.decodeRel (Decode.fnInvOf ExtCtx.empty) w).isNone)
+      s!"corrupt/invalid wire rel '{name}' must be rejected by decodeRel")
   -- read: no base schema
   relRejected "read without baseSchema"
     (Proto.Rel.read { readType := .namedTable ["units"], baseSchema := none, common := none })
@@ -877,7 +888,8 @@ def runChecks : TestKit.CheckM Unit := do
                                                                    names := ["health", "regen"] },
                                               common := none },
                              common := some { emit := some .direct, advancedExtension := none } }) with
-     | some _ => true | none => false) "")
+     | some _ => true | none => false)
+    "decodeRel must accept emit=direct (canonicalized away)")
 
   -- 11. Wire round-trip (D12): SKIPPED — ProtoGen/protobuf excluded from v1.
   --    Re-add with the protobuf dep when binary Substrait interchange is needed.

@@ -12,7 +12,7 @@ import Demo
 
 open Lean SchemaLang SchemaLang.Meta
 
-unsafe def main : IO UInt32 := do
+unsafe def runCheck (_args : List String) : IO UInt32 := do
   let items := (← CodegenCore.loadRegisteredItems schemaItemExt #[`Demo]).map (·.2)
   let diags := universeCheck items
   if diags.isEmpty then

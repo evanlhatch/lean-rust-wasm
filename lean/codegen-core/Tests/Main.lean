@@ -8,10 +8,13 @@ Run: `lake build CodegenCoreTests && .lake/build/bin/CodegenCoreTests`
 -/
 import CodegenCore
 import TestKit
+import Plausible
 
 open CodegenCore
 open CodegenCore.Emit
 open TestKit
+open Plausible
+open Plausible.Gen
 
 def mangleChecks : CheckResult := do
   _ ← assertEq "camel" (camel "max_health.current") "maxHealthCurrent"
@@ -68,6 +71,67 @@ def manglerSpec : TestKit.DetSpec :=
   , check := manglerInverseChecks
   , control := assertEq "sabotage" (camel "foo_bar") "fooBarX"
   , controlName := "camel \"foo_bar\" == \"fooBarX\" (wrong suffix)" }
+
+/-! ## Mangler property sweep (PropSpec) — pinning invariants that hold
+
+Generator biased toward mangler-relevant characters: letters (lower + upper),
+digits, and the 4 separator characters (`.`, `-`, `_`, ` `) that `words`
+splits on. Length 0–12 so the edge-rich alphabet exercises all mangler paths. -/
+structure Mangled where
+  val : String
+  deriving Repr
+
+instance : Shrinkable Mangled where
+  shrink m := (Shrinkable.shrink m.val).map (fun s => { val := s })
+
+/-- Character pool: lowercase, uppercase, digits, and the 4 separators. -/
+def manglerChar : Gen Char :=
+  Gen.elements ("abcABC012._- ".toList) (by decide : 0 < ("abcABC012._- ".toList).length)
+
+/-- Custom Arbitrary: length 0-12, each char from manglerChar. -/
+instance : Arbitrary Mangled where
+  arbitrary := do
+    let lenGen : Gen Nat := Gen.chooseNat
+    -- resize to keep len ≤ 12 so the generator stays fast but edge-rich
+    let len ← Gen.resize (fun _ => 12) lenGen
+    let mut cs : List Char := []
+    for _ in [0:len] do
+      cs := (← manglerChar) :: cs
+    pure { val := String.ofList cs.reverse }
+
+/-- Mangler invariants (all proven true by construction — see the `words` fold
+    in Core.lean). Each is checked separately inside one `∀` so Plausible can
+    find ANY violation regardless of which conjunct breaks.
+
+    Invariant 1: `words s` never contains empty strings (the `if cur != ""` guard).
+    Invariant 2: `snake` output has no `-`, `.`, ` ` (only `_` is the glue).
+    Invariant 3: `kebab` output has no `_`, `.`, ` ` (only `-` is the glue).
+    Invariant 4: `camel` output has no `_`, `-`, `.`, ` ` (no separators in output).
+    Invariant 5: `pascal` output has no `_`, `-`, `.`, ` ` (same reason). -/
+def manglerPropTest : TestSeq :=
+  checkPlausibleIO "mangler invariants"
+    (∀ (s : Mangled),
+      ((words s.val).all (· ≠ "")) ∧
+      ((snake s.val).all (fun c => c ≠ '-' ∧ c ≠ '.' ∧ c ≠ ' ')) ∧
+      ((kebab s.val).all (fun c => c ≠ '_' ∧ c ≠ '.' ∧ c ≠ ' ')) ∧
+      ((camel s.val).all (fun c => c ≠ '_' ∧ c ≠ '-' ∧ c ≠ '.' ∧ c ≠ ' ')) ∧
+      ((pascal s.val).all (fun c => c ≠ '_' ∧ c ≠ '-' ∧ c ≠ '.' ∧ c ≠ ' '))
+    )
+    .done { numInst := 200, randomSeed := some 11 }
+
+/-- Sabotaged negative control: "snake never contains `_`" — FALSE (snake
+    joins multi-word lists with `_`). The sampler MUST catch this. -/
+def manglerControl : TestSeq :=
+  checkPlausibleIO "sabotage: snake never contains '_'"
+    (∀ (s : Mangled), (snake s.val).all (· ≠ '_'))
+    .done { numInst := 200, randomSeed := some 11 }
+
+/-- The PropSpec pair: property passes, control is caught. -/
+def manglerPropSpec : TestKit.PropSpec :=
+  { name := "mangler property sweep"
+  , suite := manglerPropTest
+  , control := manglerControl
+  , controlName := "snake output never contains '_' (must be caught)" }
 
 def headerCheck : CheckResult :=
   let h := header .doubleSlash "codegen-core" "spec.md"
@@ -146,4 +210,7 @@ def main : IO UInt32 := do
   if code != 0 then return code
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND
   -- the control must fail — a vacuous control fails the gate)
-  TestKit.runDets [manglerSpec]
+  let detCode ← TestKit.runDets [manglerSpec]
+  if detCode != 0 then return detCode
+  -- the property sweep (PropSpec: property passes, control caught)
+  TestKit.runSpecs [manglerPropSpec]

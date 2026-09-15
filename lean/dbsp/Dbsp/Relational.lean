@@ -89,8 +89,11 @@ theorem distinct_elem {m : ZSet A} {a : A} :
 
 /-- Distinct is positive (bags to bags). -/
 theorem distinct_pos : ZSet.funPositive (fun m : ZSet A => ZSet.distinct m) := by
+  unfold ZSet.funPositive ZSet.isBag
   intro m hm a
-  by_cases h : 0 < m a <;> simp [ZSet.distinct_apply, h]
+  have hma := hm a
+  simp [ZSet.distinct_apply]
+  grind
 
 @[simp]
 theorem distinct_0 : ZSet.distinct (0 : ZSet A) = 0 := by
@@ -126,9 +129,12 @@ theorem union_ok (s1 s2 : Finset A) :
     simp [ZSet.fromSet_apply, h1, h2]
 
 theorem union_pos : ZSet.funPositive2 (fun m1 m2 : ZSet A => ZSet.union m1 m2) := by
+  unfold ZSet.funPositive2 ZSet.isBag
   intro m1 m2 h1 h2 a
-  rw [ZSet.union_apply]
-  split_ifs <;> simp
+  have h1a := h1 a
+  have h2a := h2 a
+  simp [ZSet.union_apply]
+  grind
 
 /-! ## Map -/
 
@@ -190,8 +196,11 @@ theorem filter_linear (m1 m2 : ZSet A) :
   Finsupp.filter_add
 
 theorem filter_pos : ZSet.funPositive (ZSet.filter p) := by
+  unfold ZSet.funPositive ZSet.isBag
   intro m hm a
-  by_cases hpa : p a <;> simp [ZSet.filter_apply, hpa, hm a]
+  have hma := hm a
+  simp [ZSet.filter_apply]
+  grind
 
 theorem filter_0 : ZSet.filter p 0 = 0 := by
   ext a
@@ -275,9 +284,12 @@ theorem equiJoin_bilinear : Bilinear (ZSet.equiJoin π1 π2) := by
     rw [product_bilinear.2, filter_linear]
 
 theorem equiJoin_pos : ZSet.funPositive2 (ZSet.equiJoin π1 π2) := by
-  intro m1 m2 hpos1 hpos2
-  show ZSet.isBag (ZSet.filter (fun t : A × B => π1 t.1 = π2 t.2) (ZSet.product m1 m2))
-  exact ZSet.filter_pos _ _ (ZSet.product_pos _ _ hpos1 hpos2)
+  unfold ZSet.funPositive2 ZSet.isBag
+  intro m1 m2 hpos1 hpos2 t
+  have hp : ZSet.isBag (ZSet.product m1 m2) := ZSet.product_pos m1 m2 hpos1 hpos2
+  have hf : ZSet.isBag (ZSet.equiJoin π1 π2 m1 m2) :=
+    ZSet.filter_pos (fun t' : A × B => π1 t'.1 = π2 t'.2) (ZSet.product m1 m2) hp
+  exact hf t
 
 @[simp]
 theorem equiJoin_0_l (b : ZSet B) : equiJoin π1 π2 0 b = 0 := by
@@ -546,7 +558,7 @@ theorem add_distinct_dedup (i1 i2 : ZSet A) :
     ZSet.distinct (ZSet.distinct i1 + ZSet.distinct i2) = ZSet.distinct (i1 + i2) := by
   intro hpos1 hpos2
   ext a
-  simp only [ZSet.distinct_apply, Finsupp.add_apply]
+  simp only [zset]
   exact distinct_add (hpos1 a) (hpos2 a)
 
 theorem product_distinct_dedup (i1 : ZSet A) (i2 : ZSet B) :

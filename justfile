@@ -56,14 +56,14 @@ mutants name:
 # Fast type-check only, no emission (buf lint analog): universeCheck
 # over the demo registry; any diagnostic fails the gate.
 check-schema:
-	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema-check
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema check
 
 # Schema-compat diff vs the committed baseline (buf breaking analog):
 # goldens/universe.snapshot vs the current demo registry; breaking
 # changes (removed/reshaped items) fail the gate. Re-baseline with
-# `cd lean/schema-lang && lake exe schema-breaking --update`.
+# `cd lean/schema-lang && lake exe schema breaking --update`.
 breaking:
-	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema-breaking
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema breaking
 
 # Watchers — watchexec wraps the SAME commands, no redefinition.
 # --restart: kill in-flight gen on new save (codegen is idempotent).

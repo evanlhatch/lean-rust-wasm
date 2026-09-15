@@ -28,7 +28,7 @@ import Demo
 
 open Lean SchemaLang SchemaLang.Meta
 
-unsafe def main (args : List String) : IO UInt32 := do
+unsafe def runBreaking (args : List String) : IO UInt32 := do
   let items := (← CodegenCore.loadRegisteredItems schemaItemExt #[`Demo]).map (·.2)
   let path : System.FilePath := "goldens/universe.snapshot"
   if args.contains "--update" then
@@ -43,7 +43,7 @@ unsafe def main (args : List String) : IO UInt32 := do
         if !Snapshot.nameOk n then IO.eprintln s!"  `{n}`"
       return 1
   if !(← path.pathExists) then
-    IO.eprintln s!"breaking: FAIL — no baseline at {path}; commit one via `lake exe schema-breaking --update`"
+    IO.eprintln s!"breaking: FAIL — no baseline at {path}; commit one via `lake exe schema breaking --update`"
     return 1
   match Snapshot.parse (← IO.FS.readFile path) with
   | .error e =>

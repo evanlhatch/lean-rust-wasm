@@ -62,8 +62,12 @@ were registered here but never byte-tied there):
     package-relative outputs and roots them itself (`CodegenCore.Emit.rootRel`
     — callers pass raw paths so rooting happens exactly once). Paths in
     the JSON are REPO-ROOT-relative — forge joins from the root. -/
-def jobJson (package exe : String) (outputs : List String) : String :=
+def jobJson (package exe : String) (args : List String) (outputs : List String) : String :=
+  let argsField := match args with
+    | [] => ""
+    | _ => ", \"args\": [" ++ String.intercalate ", " (args.map CodegenCore.Emit.jsonStr) ++ "]"
   "  { \"package\": " ++ CodegenCore.Emit.jsonStr package ++ ", \"exe\": " ++ CodegenCore.Emit.jsonStr exe
+    ++ argsField
     ++ ", \"outputs\": [" ++ String.intercalate ", " ((outputs.map CodegenCore.Emit.rootRel).map CodegenCore.Emit.jsonStr) ++ "] }"
 
 /-- The Rust constructor name for a pipeline event label (the enum the
@@ -185,18 +189,19 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
 def forgeJobsOutputPath : String :=
   "../../crates/forge/src/jobs_generated.json"
 
-/-- The forge job rows for THIS package: (exe, outputs). DERIVED from
+/-- The forge job rows for THIS package: (exe, args, outputs). DERIVED from
     the core emitter registry — no hand copy. Adding an emitter to
     `coreEmitters` automatically joins byte-tie; `jobsCoverEmitters_true`
     PROVES the coverage (the old literal copy needed a TEST to catch
-    drift — the derivation cannot drift). -/
-def forgeJobs : List (String × List String) :=
-  [("schema-gen", (coreEmitters.flatMap (·.outputs)) ++ [forgeJobsOutputPath])]
+    drift — the derivation cannot drift). The exe is the consolidated
+    `schema` driver (W1.10) with the subcommand as the args. -/
+def forgeJobs : List (String × List String × List String) :=
+  [("schema", ["gen"], (coreEmitters.flatMap (·.outputs)) ++ [forgeJobsOutputPath])]
 
 /-- The manifest CONTENT for this package's rows (no header — the driver
     prepends; no brackets — forge unions rows across packages). -/
 def forgeJobsLines : List String :=
-  forgeJobs.map fun (exe, outputs) => jobJson "schema-lang" exe outputs
+  forgeJobs.map fun (exe, args, outputs) => jobJson "schema-lang" exe args outputs
 
 def forgeJobsEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "forge-jobs"
@@ -221,7 +226,7 @@ def pathsUnique : Bool :=
     derivation makes this `rfl` — the coverage is no longer a test
     claim but a theorem. -/
 def jobsCoverEmitters : Bool :=
-  (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2)
+  (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2.2)
 
 theorem jobsCoverEmitters_true : jobsCoverEmitters = true := rfl
 
