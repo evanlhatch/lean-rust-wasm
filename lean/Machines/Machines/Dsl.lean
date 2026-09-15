@@ -31,9 +31,11 @@ generates:
 ## The PO default
 
 An event's `safety` field is the proof-obligation slot. Omitted, it becomes
-`by machine_safety`, which tries `simp_all`/`omega`/`grind`/`trivial` in
-order (`grind` covers conjunction-shaped invariants that defeat
-`simp_all; omega` — verified against a `x ≤ 10 ∧ y ≤ x` machine).
+`by machine_safety` — an alias of the OPEN `guestlang_solver`
+(Machines.Tactics): `simp_all`/`omega`/`grind`/`trivial` in order, plus any
+rung a downstream package registers via `macro_rules` (`grind` covers
+conjunction-shaped invariants that defeat `simp_all; omega` — verified
+against a `x ≤ 10 ∧ y ≤ x` machine).
 When none close the goal, the error surfaces at the event site — supply
 `safety: (by ...)` with the real proof. The author-facing vocabulary is:
 guard, action, invariant, and (when needed) one named tactic block.
@@ -60,6 +62,7 @@ guard, action, invariant, and (when needed) one named tactic block.
 -/
 
 import Machines.Core
+import Machines.Tactics
 import Lean
 
 namespace Machines.Dsl
@@ -68,14 +71,13 @@ open Machines
 open Lean Lean.Parser.Command
 open Lean.Elab.Command (elabCommand CommandElabM)
 
-/-- The default safety discharge: cheap closers in order. Named once here
-    because tactic blocks containing `|` cannot be spliced into term
-    quotations (the pipe collides with matchAlt's separator). The `done`
-    guard matters: bare `simp_all` SUCCEEDS without closing the goal
-    (partial progress), which would swallow the `first` chain and leave
-    unsolved goals. omega/grind/trivial fail cleanly when stuck; simp_all
-    needs the guard. -/
-macro "machine_safety" : tactic => `(tactic| (intros; first | (simp_all; done) | omega | grind | trivial))
+/-- The default safety discharge: the machine-obligation alias of
+    `guestlang_solver` (W6.8 — the ladder itself, and the extension
+    point, live in Machines.Tactics). Named because tactic blocks
+    containing `|` cannot be spliced into term quotations (the pipe
+    collides with matchAlt's separator) — and because `machine!` authors
+    read obligations as SAFETY goals. -/
+macro "machine_safety" : tactic => `(tactic| guestlang_solver)
 
 /-- One event clause of `machine!`. Colon-suffixed keywords so the global
     token table is untouched. -/

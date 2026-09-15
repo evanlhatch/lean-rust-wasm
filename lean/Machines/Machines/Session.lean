@@ -38,9 +38,9 @@ The instance is the gateway world's real conversation: `gatewayProto`
 (the `get-user` call + the `watch-orders` async stream) at
 `P := String` (wire names).
 
-Deliberately retained (W4.1c bridge, consumed by SchemaLang.Session and
-its tests — delete when that layer migrates to the generic protocol):
-the `P := String` aliases `Protocol`/`Step`/`dual`/`dual_map_payload`.
+The schema-typed consumer (`P := SchemaLang.Ty`) is
+`SchemaLang.Session` — it instantiates THIS generic layer directly
+(W4.1c landed; the string-bridge aliases are gone).
 -/
 
 import Machines.Core
@@ -225,24 +225,6 @@ def gatewayProto : TProtocol String :=
     original (a peer dualized twice is the same script). -/
 theorem gateway_self_dual : tdual (tdual gatewayProto) = gatewayProto :=
   tdual_dual gatewayProto
-
-/-! ## The string bridge (W4.1c) — `P := String` aliases for
-    SchemaLang.Session + its tests. The generic layer above subsumes
-    them; delete this section when the schema-lang side migrates. -/
-
-/-- One choreography step with a wire-name payload. -/
-abbrev Step := TStep String
-
-/-- A linear protocol over wire-name payloads. -/
-abbrev Protocol := TProtocol String
-
-/-- The dual protocol at `P := String`. -/
-abbrev dual (p : Protocol) : Protocol := tdual p
-
-/-- The string dual keeps the payload sequence (generic `tdual_types`
-    at `P := String`). -/
-theorem dual_map_payload (q : Protocol) : (dual q).map (·.2) = q.map (·.2) :=
-  tdual_types q
 
 /-! ### Peer agreement as a TYPE — the elaboration-error property
 

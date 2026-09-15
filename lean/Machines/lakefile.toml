@@ -13,6 +13,13 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4"
 rev = "v4.33.0"
 
+# The correspondence kit (Iso/PartialIso/Denotes/ReprOp/CheckedProp/
+# iterateBounded) lives in CodegenCore.Kit (core-only); Foundations
+# re-exports it (W1.1).
+[[require]]
+name = "CodegenCore"
+path = "../codegen-core"
+
 # The shared test harness (core + LSpec only; see notes/lean/lean-v3.md D14).
 [[require]]
 name = "TestKit"
@@ -42,7 +49,3 @@ name = "gonzalgo"
 git = "../../vendor/gonzalgo.bundle"
 rev = "7e67f77292685c0e295027b530349e3c664a2758"
 
-# The conformance battery (Machines.Testing) uses the shared harness.
-[[require]]
-name = "TestKit"
-path = "../TestKit"

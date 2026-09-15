@@ -147,10 +147,6 @@ is a global constant (resolved through marks).
 
 ## The gateway instance — the real WIT world's conversation 
 
-## The string bridge (W4.1c) — `P := String` aliases for
-    SchemaLang.Session + its tests. The generic layer above subsumes
-    them; delete this section when the schema-lang side migrates. 
-
 ### Peer agreement as a TYPE — the elaboration-error property
 
 `IsDualOf theirs mine` is inhabited EXACTLY when `theirs` is the typed

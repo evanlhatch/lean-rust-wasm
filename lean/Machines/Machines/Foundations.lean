@@ -1,125 +1,46 @@
 /-
-# Machines.Foundations — the construct kit
+# Machines.Foundations — the Fin-indexed DAG + kit re-export
 
-The isomorphic primitives everything in the workspace builds on
-(flatland's notes/lean/TOOLKIT.md Part 2): the three correspondence shapes (laws attach
-to the SHAPE, not to each instance) and the Fin-indexed DAG with decidable
-acyclicity.
-
-## The correspondence shapes
-
-Every boundary in the system is one of these three:
-
-- `Iso` — true bijection (rare).
-- `PartialIso` — decode can fail; `decode∘encode = id` is the one-ended law
-  (wire bytes ↔ typed value).
-- `Denotes` + `ReprOp` — abstraction: many representations, one semantics.
-  THE shape for this engine (delta buffers, overlays, encoded columns).
-  The law lives on operations: one commuting square per operation.
-
-Squares compose (`ReprOp.comp`): the composite's proof is the composed
-proofs — nobody re-proves (TOOLKIT §4.1).
-
-## The DAG
-
-`Dag n` uses `Fin n` indexing: dangling edges are unrepresentable.
-Acyclicity is decidable — `checkAcyclic` — so concrete DAGs discharge with
-`decide` at elaboration. Soundness of the fueled check is proved
-(`reachesFuel_sound`); completeness (fuel `n` suffices) is the exhaustive
-executable check in Tests until the shortest-path proof lands.
+The correspondence kit (`Iso`/`PartialIso`/`Denotes`/`ReprOp`/`CheckedProp`/
+`iterateBounded`) moved to `CodegenCore.Kit` (W1.1: the kit needs zero
+mathlib; this package has it). Re-exported below so the `Machines.` names
+keep working for downstream. What STAYS here: the `Dag` with decidable
+acyclicity (Machines-owned; `Fin n` indexing makes dangling edges
+unrepresentable; `checkAcyclic` discharges concrete DAGs by `decide`).
+The two mathlib LINTER imports register the package's lint config — they
+serve neither the kit nor the Dag.
 -/
 
 import Mathlib.Tactic.Linter.FlexibleLinter
 import Mathlib.Tactic.Linter.Style
-import Mathlib.Logic.Function.Iterate
+import CodegenCore.Kit
 
 namespace Machines
 
-/-! ## Correspondence -/
-
-/-- True bijection. Rare, precious. (`to`/`inv`, not `to`/`from`:
-    `from` is a reserved token in Lean 4.) -/
-structure Iso (A B : Type) where
-  to : A → B
-  inv : B → A
-  to_inv : ∀ b, to (inv b) = b
-  inv_to : ∀ a, inv (to a) = a
-
-namespace Iso
-
-def refl : Iso A A := ⟨_root_.id, _root_.id, fun _ => rfl, fun _ => rfl⟩
-
-def symm (i : Iso A B) : Iso B A where
-  to := i.inv; inv := i.to
-  to_inv := i.inv_to; inv_to := i.to_inv
-
-/-- Isos compose; the laws compose with them. -/
-def trans (i₁ : Iso A B) (i₂ : Iso B C) : Iso A C where
-  to := i₂.to ∘ i₁.to
-  inv := i₁.inv ∘ i₂.inv
-  to_inv := fun c => by
-    show i₂.to (i₁.to (i₁.inv (i₂.inv c))) = c
-    rw [i₁.to_inv, i₂.to_inv]
-  inv_to := fun a => by
-    show i₁.inv (i₂.inv (i₂.to (i₁.to a))) = a
-    rw [i₂.inv_to, i₁.inv_to]
-
-end Iso
-
-/-- Partial correspondence: decode may fail; encode is a section.
-    The law is one-ended (`decode∘encode = id`): the wire may have
-    non-canonical encodings, but everything we emit decodes back. -/
-structure PartialIso (A B : Type) where
-  decode : A → Option B
-  encode : B → A
-  decode_encode : ∀ b, decode (encode b) = some b
-
-namespace PartialIso
-
-/-- Partial isos compose through `Option.bind`. -/
-def trans (p₁ : PartialIso A B) (p₂ : PartialIso B C) : PartialIso A C where
-  decode := fun a => (p₁.decode a).bind p₂.decode
-  encode := p₁.encode ∘ p₂.encode
-  decode_encode := by
-    intro c
-    show ((p₁.decode (p₁.encode (p₂.encode c))).bind p₂.decode) = some c
-    rw [p₁.decode_encode]
-    exact p₂.decode_encode c
-
-end PartialIso
-
-/-- Abstraction: the representation determines its semantics (`outParam`).
-    No inverse exists; the law lives on operations (`ReprOp`). -/
-class Denotes (R : Type) (A : outParam Type) where
-  abs : R → A
-
-/-- A representation-respecting operation: the commuting square
-    `abs(opR r) = opA (abs r)`. One per operation that moves through
-    the representation; each is a theorem shape for primitives and a
-    generated differential test for composed paths. -/
-structure ReprOp (R A : Type) [Denotes R A] where
-  opR : R → R
-  opA : A → A
-  respects : ∀ r, Denotes.abs (opR r) = opA (Denotes.abs r)
-
-namespace ReprOp
-
-variable [Denotes R A]
-
-/-- Vertical composition of squares: if both commute, the composite commutes. -/
-def comp (o₁ o₂ : ReprOp R A) : ReprOp R A where
-  opR := o₁.opR ∘ o₂.opR
-  opA := o₁.opA ∘ o₂.opA
-  respects := fun r => by
-    show Denotes.abs (o₁.opR (o₂.opR r)) = o₁.opA (o₂.opA (Denotes.abs r))
-    rw [o₁.respects, o₂.respects]
-
-/-- The identity square. -/
-def id : ReprOp R A where
-  opR := _root_.id; opA := _root_.id
-  respects := fun _ => rfl
-
-end ReprOp
+/-- W1.1 re-export: the kit's home is CodegenCore (core-only); the
+    `Machines.` aliases keep every existing use compiling. `abbrev` (not
+    `export` — core Lean 4 has no `export` command): reducible, so instance
+    search and anonymous constructors see through them (the AGENTS.md
+    abbrev rule). Dotted names do NOT unfold aliases, so the member names
+    (`Denotes.abs`, `Iso.trans`, …) get their own one-line aliases. -/
+abbrev Iso := CodegenCore.Iso
+abbrev Iso.refl := @CodegenCore.Iso.refl
+abbrev Iso.symm := @CodegenCore.Iso.symm
+abbrev Iso.trans := @CodegenCore.Iso.trans
+abbrev PartialIso := CodegenCore.PartialIso
+abbrev PartialIso.trans := @CodegenCore.PartialIso.trans
+abbrev Denotes := CodegenCore.Denotes
+abbrev Denotes.abs := @CodegenCore.Denotes.abs
+abbrev ReprOp := @CodegenCore.ReprOp
+abbrev ReprOp.comp := @CodegenCore.ReprOp.comp
+abbrev ReprOp.id := @CodegenCore.ReprOp.id
+abbrev CheckedProp := CodegenCore.CheckedProp
+abbrev CheckedProp.ofComplete := @CodegenCore.CheckedProp.ofComplete
+abbrev CheckedProp.check_iff := @CodegenCore.CheckedProp.check_iff
+abbrev CheckedProp.isComplete := @CodegenCore.CheckedProp.isComplete
+abbrev iterateN := @CodegenCore.iterateN
+abbrev iterateBounded := @CodegenCore.iterateBounded
+abbrev iterateBounded_sound := @CodegenCore.iterateBounded_sound
 
 /-! ## The Fin-indexed DAG -/
 
@@ -198,49 +119,11 @@ where
 
 end Dag
 
-/-! ## BoundedFix — fuel-bounded iteration with a convergence witness
+/-! ## BoundedFix — see CodegenCore.Kit
 
-The one combinator behind every "iterate until converged, with a cap"
-story in the workspace: the cascade exec loop (Flatland.Cascade.fixFuel
-is this with `converged := eqb x (step x)`), convergence variants
-(Machines.Convergent), Dag reachability fuel, pregel pass budgets.
-Soundness attaches ONCE here: a returned value is an iterate of the
-initial value AND passes the convergence check; callers discharge
-`converged`-soundness (the check implies fixpoint) at instantiation. -/
-
-/-- Iterate `step` from `init`, stopping when `converged` holds; `none`
-    when fuel runs out. The cap is a tripwire, not semantics (SPEC §7.5). -/
-def iterateBounded (step : α → α) (converged : α → Bool) : Nat → α → Option α
-  | 0, _ => none
-  | fuel + 1, x => if converged x then some x else iterateBounded step converged fuel (step x)
-
--- the @[simp] equation set (same discipline).
-@[simp] theorem iterateBounded_zero (step : α → α) (converged : α → Bool) (init : α) :
-    iterateBounded step converged 0 init = none := rfl
-
-@[simp] theorem iterateBounded_succ (step : α → α) (converged : α → Bool) (fuel : Nat) (init : α) :
-    iterateBounded step converged (fuel + 1) init =
-      if converged init then some init else iterateBounded step converged fuel (step init) := rfl
-
-/-- Soundness: a returned value is an iterate and passes the check. -/
-theorem iterateBounded_sound {step : α → α} {converged : α → Bool} :
-    ∀ fuel init y, iterateBounded step converged fuel init = some y →
-      ∃ n, y = step^[n] init ∧ converged y = true := by
-  intro fuel
-  induction fuel with
-  | zero => intro init y h; simp [iterateBounded] at h
-  | succ fuel ih =>
-    intro init y h
-    rw [iterateBounded] at h
-    by_cases hconv : converged init = true
-    · rw [if_pos hconv] at h
-      have : init = y := Option.some.inj h
-      subst this
-      exact ⟨0, rfl, hconv⟩
-    · rw [if_neg hconv] at h
-      obtain ⟨n, hn, hc⟩ := ih (step init) y h
-      refine ⟨n + 1, ?_, hc⟩
-      calc y = step^[n] (step init) := hn
-        _ = step^[n + 1] init := (Function.iterate_succ_apply step n init).symm
+`iterateBounded` + `iterateBounded_sound` moved to the kit; the aliases
+above keep `Machines.iterateBounded` working. The design note stands: the
+one combinator behind every "iterate until converged, with a cap" story
+(the cascade exec loop, Convergent, Dag fuel, pregel pass budgets). -/
 
 end Machines

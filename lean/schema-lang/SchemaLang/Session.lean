@@ -1,19 +1,23 @@
 /-
 # SchemaLang.Session — payload-TYPED choreographies
 
-`Machines.Session` certifies the choreography SHAPE (directions mirror
-under dual; mid-protocol deadlock-freedom; termination) with payload
-types as STRINGS. This layer upgrades the payload to the schema
-universe's `Ty` — the closed type universe the WIT/Rust emitters own —
-so a choreography that names a payload the schema doesn't define fails
-the universe check, and the wire names come from the ONE renderer.
+`Machines.Session` owns the choreography MECHANISM generically over the
+payload universe `P` (duality, lockstep, mid-protocol deadlock-freedom,
+termination — proved once). This layer is the `P := Ty` instantiation:
+the payload is the schema universe's `Ty` — the closed type universe the
+WIT/Rust emitters own — so a choreography that names a payload the
+schema doesn't define fails the universe check, and the wire names come
+from the ONE renderer.
 
-The bridge theorem (`tdual_toWire`) proves the typed layer's dual maps
-to the string layer's dual through the wire rendering (`Ty.witName` =
-`Emit.Wit.tyWit` — the same text the WIT emitter puts on the wire).
-The payload-sequence agreement (`typed_wire_payloads_agree`) then
-reduces to `Machines.Session.dual_map_payload` — no choreography fact
-is proved twice, and the choreography cannot drift from the wire.
+`TStep`/`TProtocol`/`tdual` are the generic `Machines.Session` defs at
+`P := Ty` (no local re-defs — the duality facts come from one place).
+The ONE remaining local fact is the bridge `tdual_toWire`: the typed
+dual's WIRE view (`toWire`, via `Ty.witName` = `Emit.Wit.tyWit` — the
+same text the WIT emitter puts on the wire) IS the wire dual of the
+wire view. The payload-sequence agreement
+(`typed_wire_payloads_agree`) then reduces to the generic
+`Machines.Session.tdual_types` — no choreography fact is proved twice,
+and the choreography cannot drift from the wire.
 
 The instance is the gateway conversation with REAL Tys: `get-user`
 (sends `u64`, receives `option<user>`), `watch-orders` (sends
@@ -37,62 +41,51 @@ namespace Session
 
 open Machines.Session (Dir)
 
-/-- A typed choreography step: direction × the payload's SCHEMA type
-    (the closed universe — `.ty "user"` resolves or fails at
-    elaboration via the universe check). -/
-abbrev TStep := Dir × Ty
+/-- A typed choreography step: direction × the payload's SCHEMA type —
+    the generic `Machines.Session.TStep` at `P := Ty` (the closed
+    universe — `.ty "user"` resolves or fails at elaboration via the
+    universe check). -/
+abbrev TStep := Machines.Session.TStep Ty
 
-/-- A typed protocol. -/
-abbrev TProtocol := List TStep
+/-- A typed protocol — the generic `Machines.Session.TProtocol` at
+    `P := Ty`. -/
+abbrev TProtocol := Machines.Session.TProtocol Ty
 
-/-- The wire-level (string) view of a typed protocol — exactly the
-    `Machines.Session.Protocol` the duality theorems speak about. -/
-def toWire (p : TProtocol) : Machines.Session.Protocol :=
+/-- The typed dual — the generic `Machines.Session.tdual` at `P := Ty`
+    (flip directions, keep the schema type). The duality facts
+    (`tdual_dual`, `tdual_types`, `tdual_directions_oppose`,
+    `tdual_payload_mirror`) are the generic theorems, instantiated. -/
+abbrev tdual (p : TProtocol) : TProtocol := Machines.Session.tdual p
+
+/-- The wire-level (string) view of a typed protocol — the
+    `Machines.Session.TProtocol String` the generic duality theorems
+    speak about at `P := String`. -/
+def toWire (p : TProtocol) : Machines.Session.TProtocol String :=
   p.map fun (d, t) => (d, t.witName)
-
-/-- The typed dual: flip directions, keep the schema type. -/
-def tdual (p : TProtocol) : TProtocol :=
-  p.map fun (d, t) => (d.flip, t)
 
 /-- THE BRIDGE: the wire view of the typed dual IS the wire dual of the
     wire view. Everything `Machines.Session` proves about the dual
     (mirror, lockstep, liveness) transfers to the typed layer through
-    this — proved ONCE, at the string layer. -/
+    this — proved ONCE, generically, in Machines.Session. -/
 theorem tdual_toWire (p : TProtocol) :
-    toWire (tdual p) = Machines.Session.dual (toWire p) := by
+    toWire (tdual p) = Machines.Session.tdual (toWire p) := by
   induction p with
   | nil => rfl
   | cons s rest ih =>
       -- both sides are definitional cons compositions:
       -- LHS = toWire (tdual cons) = (flip d, wire t) :: toWire (tdual rest)
-      -- RHS = dual (toWire cons) = (flip d, wire t) :: dual (toWire rest)
-      show (s.1.flip, s.2.witName) :: toWire (tdual rest)
-        = (s.1.flip, s.2.witName) :: Machines.Session.dual (toWire rest)
+      -- RHS = tdual (toWire cons) = (flip d, wire t) :: tdual (toWire rest)
+      show (s.1.flip, s.2.witName) :: toWire (Machines.Session.tdual rest)
+        = (s.1.flip, s.2.witName) :: Machines.Session.tdual (toWire rest)
       rw [ih]
 
 /-- The typed dual keeps the PAYLOAD SEQUENCE — the wire names agree
-    position-for-position (the typed reading of
-    `Machines.Session.dual_map_payload`, via the bridge). -/
+    position-for-position (the generic `Machines.Session.tdual_types`
+    at `P := String`, via the bridge). -/
 theorem typed_wire_payloads_agree (p : TProtocol) :
     (toWire (tdual p)).map (·.2) = (toWire p).map (·.2) := by
   rw [tdual_toWire]
-  exact Machines.Session.dual_map_payload _
-
-/-- The typed dual's payload sequence IS the original's schema types
-    (types survive dualing untouched). The generic theorem
-    (`Machines.Session.tdual_types`, any payload universe) instantiated
-    at `P := Ty` — the local generics cannot drift from it. -/
-theorem tdual_types (p : TProtocol) : (tdual p).map (·.2) = p.map (·.2) := by
-  simp [tdual]
-
-/-- Directions oppose pairwise: every send on one side is a receive on
-    the other (the typed lockstep condition, executed form) — the
-    generic theorem at `P := Ty`. -/
-theorem typed_directions_oppose (p : TProtocol) :
-    List.all (List.zip (p.map (·.1)) ((tdual p).map (·.1)))
-      (fun x => x.1 != x.2) := by
-  unfold tdual
-  exact Machines.Session.tdual_directions_oppose (P := Ty) p
+  exact Machines.Session.tdual_types _
 
 /-! ## The gateway instance, typed -/
 
@@ -105,11 +98,11 @@ def gatewayTyped : TProtocol :=
   [ (.snd, .u64), (.rcv, .option (.ty "user"))
   , (.snd, .ty "order-error"), (.rcv, .stream (.ty "user")) ]
 
-/-- The typed gateway duals through the bridge: the string-layer
-    guarantees (lockstep, mirror, mid-protocol liveness) hold of the
-    typed gateway conversation, proved ONCE in Machines.Session. -/
+/-- The typed gateway duals through the bridge: the generic guarantees
+    (lockstep, mirror, mid-protocol liveness) hold of the typed gateway
+    conversation, proved ONCE in Machines.Session. -/
 theorem gateway_typed_dual_wire :
-    toWire (tdual gatewayTyped) = Machines.Session.dual (toWire gatewayTyped) :=
+    toWire (tdual gatewayTyped) = Machines.Session.tdual (toWire gatewayTyped) :=
   tdual_toWire gatewayTyped
 
 end SchemaLang.Session

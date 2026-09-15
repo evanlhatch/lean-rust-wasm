@@ -1482,7 +1482,7 @@ def typedSessionChecks : CheckResult := do
   -- the bridge: the typed dual's wire view IS the wire dual (the
   -- string-layer guarantees transfer — Machines.Session proved them once)
   _ ← assert ((toWire (tdual gatewayTyped)) ==
-      (Machines.Session.dual (toWire gatewayTyped))) "typed dual bridge"
+      (Machines.Session.tdual (toWire gatewayTyped))) "typed dual bridge"
   -- the typed dual keeps the schema types (payloads survive dualing)
   _ ← assert (((tdual gatewayTyped).map (·.2)) == (gatewayTyped.map (·.2)))
       "dual keeps types"
@@ -2472,7 +2472,7 @@ def compCascade : List (RowVals updUserFields) → List (RowVals updUserFields) 
 example :
     (compCascade [invRow 150 "abcd"]).map updRowId = [0] := by
   simp [compCascade, UpdateItem.cascade2, UpdateItem.applyRow, validates,
-    evalB, evalU, evalV, updRowId, invRow, updCompA, updCompB, boolToU64]
+    evalB, evalU, evalRaw, evalV, updRowId, invRow, updCompA, updCompB, boolToU64]
   rfl
 
 -- THE LAW: the legal composite is order-free — `cascade_two_commute`
@@ -2496,6 +2496,35 @@ example :
     UpdateItem.cascade2 updCompB updCompA [invRow 150 "abcd"]
       = UpdateItem.cascade2 updCompA updCompB [invRow 150 "abcd"] :=
   cascade2_commutes updCompB updCompA [invRow 150 "abcd"]
+
+-- THE N-UPDATE ORDER-FREEDOM (W4.3), EXECUTED on the composite pair:
+-- the influence-disjoint batch computes the same table in either
+-- order — `cascade_applySeq_perm` (= dbsp's `applySeq_perm` read off
+-- the `cascadeSystem` instance); the pairwise premise is DECIDED over
+-- the derived influence sets (never hand-listed).
+example :
+    Dbsp.applySeq (cascadeSystem updUserFields)
+        [⟨⟨"id", .u64⟩, updCompA⟩, ⟨⟨"email", .string⟩, updCompB⟩]
+        [invRow 150 "abcd"]
+      = Dbsp.applySeq (cascadeSystem updUserFields)
+        [⟨⟨"email", .string⟩, updCompB⟩, ⟨⟨"id", .u64⟩, updCompA⟩]
+        [invRow 150 "abcd"] :=
+  cascade_applySeq_perm (List.Perm.swap _ _ _) (by
+    refine List.pairwise_cons.mpr ⟨?_, List.pairwise_cons.mpr
+      ⟨fun y hy => (List.not_mem_nil hy).elim, List.Pairwise.nil⟩⟩
+    intro y hy
+    obtain rfl := List.mem_singleton.mp hy
+    intro x hx₁ hx₂
+    have h1 : x = "id" := by
+      simpa [cascadeInfluence, updCompA, UpdateItem.reads, UpdateItem.writes,
+        VExpr.reads, VExpr.colOf] using hx₁
+    have h2 : x = "name" ∨ x = "email" := by
+      simpa [cascadeInfluence, updCompB, UpdateItem.reads, UpdateItem.writes,
+        VExpr.reads, VExpr.colOf] using hx₂
+    subst h1
+    cases h2 with
+    | inl h => exact absurd h (by decide)
+    | inr h => exact absurd h (by decide)) _
 
 /-- The hand mirrors of the registered updates (the runtime pins
     evaluate THESE — the same data the command registered; the run_cmd

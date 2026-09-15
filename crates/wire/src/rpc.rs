@@ -88,6 +88,7 @@ const MAX_VAL_DEPTH: usize = 128;
 /// A wire-representable component value: scalars plus the aggregate
 /// shapes option/list/record (see module docs for the exact JSON).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Val {
     /// Unsigned 64-bit integer (`u64` WIT scalar).
     U64(u64),

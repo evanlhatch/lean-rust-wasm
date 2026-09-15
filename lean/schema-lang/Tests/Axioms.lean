@@ -53,3 +53,12 @@ import Demo
 -- Tests/Main.lean — the test root is not importable from here.
 #print axioms SchemaLang.universeCheck_sound
 #print axioms SchemaLang.universeCheck_complete
+
+-- W3.4/W4.3: the raw lane's ONE general-index neutrality theorem (the
+-- fixed-slice `evalU_set_neutral`/`evalBNeutral` pair, collapsed) and
+-- the cascade as a `Dbsp.DeltaSystem` (disjoint-commutes + the N-update
+-- order-freedom via `Dbsp.applySeq_perm`).
+#print axioms SchemaLang.VExpr.evalRaw_set_neutral
+#print axioms SchemaLang.cascade_two_commute
+#print axioms SchemaLang.cascade_disj_commutes
+#print axioms SchemaLang.cascade_applySeq_perm

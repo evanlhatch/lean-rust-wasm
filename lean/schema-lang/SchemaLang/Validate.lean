@@ -16,7 +16,9 @@ Design (a layer ABOVE the closed `Ty` universe — no new ctors):
   order, indexed BY the schema.
 - `evalV` — the boxed evaluator (`VExpr → RowVals → Value t`) — the
   SPEC reading, consumed by the schema-lang tests.
-- `evalU`/`evalB` — the RAW-scalar evaluators — the COMPILED reading:
+- `evalRaw` — the ONE raw evaluator at the GENERAL index (W3.4:
+  `RawTy : Ty → Type` is the raw lane's scalar mapping; `evalU`/`evalB`
+  are the `.u64`/`.bool` specializations) — the COMPILED reading:
   `evalU` yields bare `UInt64`; `evalB` yields the 0/1 u64 (Bool is
   computed in u64 — see `boolToU64`). WHY RAW: the guest's RC pass
   turns ctor-after-dec (a matched-away `Value` box feeding a fresh
@@ -284,34 +286,8 @@ def evalV : VExpr s t → RowVals s → Value t
     (`WasmBackend.stdOp?`). The root NAME IS THE CONTRACT (`string_len`
     below, outside the namespace). Byte-length ≠ char-length off
     ASCII (the StrOps v1 stance). -/
-@[nolint linter.guestlang.dupDefBodies "deliberate mirror of root `string_len` (below): the namespaced copy is the oracle compiled into evalU's strlen arm (`$SchemaLang.string_len`); the ROOT copy is the spliced-runtime wire-up contract — identical bodies keep oracle == contract"]
+@[nolint linter.guestlang.dupDefBodies "deliberate mirror of root `string_len` (below): the namespaced copy is the oracle compiled into evalRaw's strlen arm (`$SchemaLang.string_len`); the ROOT copy is the spliced-runtime wire-up contract — identical bodies keep oracle == contract"]
 def string_len (s : String) : UInt64 := s.length.toUInt64
-
-/-- The RAW u64 evaluator (the compiled reading): operands surface as
-    bare `UInt64` — the `Value .u64` box is unboxed and dropped, and
-    NOTHING is constructed (the guest's reset/reuse pass finds no
-    firing site). The strlen arm reads the row's boxed string via the
-    root-namespace `string_len` (above — the namespace reopens for the
-    evaluators; a root name is visible inside). -/
-@[guest_std]
-def evalU : VExpr s .u64 → RowVals s → UInt64
-  | .lit v, _ => v
-  | .col _ p, row =>
-      match p.get row with
-      | .u64 x => x
-      | _ => 0
-  -- the strlen node's RAW reading (WIRED — the header's Phase 2): the
-  -- operand is a field ref (the only `.string`-typed VExpr shape), the
-  -- row's string box → the raw length via `string_len` — the
-  -- (ptr,len) pair's second half (the runtime `$string_len` read).
-  | .strlen e, row =>
-      match e with
-      | .col _ p =>
-          match p.get row with
-          | .string s => string_len s
-          | _ => 0
-      | _ => 0
-  | _, _ => 0
 
 /-- Bool → the 0/1 u64 the raw evaluator computes in (constant arms —
     a Bool-valued bare-return arm would hit `resultTyOf`'s i64 default
@@ -321,25 +297,72 @@ def boolToU64 : Bool → UInt64
   | true => 1
   | false => 0
 
-/-- The RAW evaluator (the compiled reading): a `.bool`-shaped
-    expression computes to the 0/1 u64 (the registered validator's
-    `validates` projects back to Bool with `== 1`). NO Bool matches in
-    the compiled path: conjunction = the 0/1 MULTIPLICATION (UInt64.mul
-    — a binop the backend emits); the comparisons route through
-    `boolToU64` (constant arms). The scalar-match arm shapes the backend
-    can't type (bare variable-returns) never occur. -/
+/-- The raw lane's scalar mapping (W3.4): EVERY raw reading lands in
+    the u64 word — `RawTy .u64 = UInt64` (the scalar itself),
+    `RawTy .bool = UInt64` (the 0/1 verdict, `boolToU64`), and every
+    index the lane cannot VALUE maps to the same word (the 0-analog —
+    strings are never materialized; the `strlen` node reads the row's
+    box through `string_len` directly). The mapping is deliberately
+    degenerate: the compiled lane has exactly ONE scalar (the guest
+    constructs NOTHING — the header's `reset/reuse` lesson), and the
+    constant index is what lets ONE `evalRaw` serve every slice. -/
+abbrev RawTy : Ty → Type := fun _ => UInt64
+
+/-- The ONE raw evaluator, at the GENERAL index: expression + row →
+    `RawTy t` (W3.4 — `evalU`/`evalB` below are the specializations).
+    The general index is what unblocks `induction` in the neutrality
+    theorem (`evalRaw_set_neutral`, TickCascade) — the fixed-index
+    `.bool` slice barred it, forcing the old proof-carrying-def
+    workaround (`evalBNeutral`, retired).
+
+    The arms are EXACTLY the union of the old `evalU`/`evalB` shapes —
+    NO new LCNF shape enters the compiled closure: the col arm matches
+    the row's box (u64 raw, bool via `boolToU64`, anything else the
+    0-analog — index-impossible at the specialized indices), and the
+    `strlen` arm keeps reading the operand's row box through
+    `string_len` (the (ptr,len) pair's second half, the runtime
+    `$string_len` read). -/
 @[guest_std]
-def evalB : VExpr s .bool → RowVals s → UInt64
+def evalRaw : VExpr s t → RowVals s → RawTy t
   | .col _ p, row =>
       match p.get row with
+      | .u64 x => x
       | .bool b => boolToU64 b
       | _ => 0
-  | .gt a b, row => boolToU64 (evalU a row > evalU b row)
-  | .eq a b, row => boolToU64 (evalU a row == evalU b row)
-  | .and a b, row => evalB a row * evalB b row
+  | .lit v, _ => v
+  | .gt a b, row => boolToU64 (evalRaw a row > evalRaw b row)
+  | .eq a b, row => boolToU64 (evalRaw a row == evalRaw b row)
+  | .and a b, row => evalRaw a row * evalRaw b row
+  -- the strlen node's RAW reading (WIRED — the header's Phase 2): the
+  -- operand is a field ref (the only `.string`-typed VExpr shape), the
+  -- row's string box → the raw length via `string_len`.
+  | .strlen e, row =>
+      match e with
+      | .col _ p =>
+          match p.get row with
+          | .string s => string_len s
+          | _ => 0
+      | _ => 0
   -- the negation on the 0/1 raw reading: 1-x wraps safely on {0,1}
-  | .not e, row => 1 - evalB e row
-  | _, _ => 0
+  | .not e, row => 1 - evalRaw e row
+
+/-- The RAW u64 evaluator (the compiled reading) — `evalRaw`
+    specialized at the `.u64` slice. Operands surface as bare `UInt64`
+    — the `Value .u64` box is unboxed and dropped, and NOTHING is
+    constructed (the guest's reset/reuse pass finds no firing site). -/
+@[guest_std]
+def evalU (e : VExpr s .u64) (row : RowVals s) : UInt64 := evalRaw e row
+
+/-- The RAW bool evaluator (the compiled reading) — `evalRaw`
+    specialized at the `.bool` slice: a `.bool`-shaped expression
+    computes to the 0/1 u64 (the registered validator's `validates`
+    projects back to Bool with `== 1`). NO Bool matches in the compiled
+    path: conjunction = the 0/1 MULTIPLICATION (UInt64.mul — a binop
+    the backend emits); the comparisons route through `boolToU64`
+    (constant arms). The scalar-match arm shapes the backend can't type
+    (bare variable-returns) never occur. -/
+@[guest_std]
+def evalB (e : VExpr s .bool) (row : RowVals s) : UInt64 := evalRaw e row
 
 /-- The registered validator's body: a `.bool`-shaped expression over a
     schema-aligned row → Bool (the raw evaluator's 0/1 → the Bool

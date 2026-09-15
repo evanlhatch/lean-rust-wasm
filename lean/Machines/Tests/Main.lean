@@ -729,21 +729,21 @@ open Machines.Session
     `tdual_dual`/`tdual_payload_mirror`/`session_mid_deadlockFree` are
     proved for ALL protocols; these check the INSTANCE behaves). -/
 def sessionChecks : CheckResult := do
-  -- dual is an involution on the gateway script
-  _ ← assertEq "gateway self-dual" (dual (dual gatewayProto)) gatewayProto
-  -- dual preserves length (the lockstep precondition)
-  _ ← assertEq "dual length" (dual gatewayProto).length gatewayProto.length
-  -- dual flips every direction, keeps every payload
-  -- dual's directions = flip of the original's (ONE flip — the test's
+  -- tdual is an involution on the gateway script
+  _ ← assertEq "gateway self-dual" (tdual (tdual gatewayProto)) gatewayProto
+  -- tdual preserves length (the lockstep precondition)
+  _ ← assertEq "tdual length" (tdual gatewayProto).length gatewayProto.length
+  -- tdual flips every direction, keeps every payload
+  -- tdual.s directions = flip of the original's (ONE flip — the test's
   -- first draft double-flipped and correctly failed)
-  _ ← assertEq "dual flips" (List.map (fun s => s.1) (dual gatewayProto))
+  _ ← assertEq "tdual flips" (List.map (fun s => s.1) (tdual gatewayProto))
       (List.map (fun s => s.1.flip) gatewayProto)
   -- the scripts disagree pairwise in direction (the duality content)
   let opposed := List.all
     (List.zip (List.map (fun s => s.1) gatewayProto)
-      (List.map (fun s => s.1) (dual gatewayProto)))
+      (List.map (fun s => s.1) (tdual gatewayProto)))
     (fun p => p.1 != p.2)
-  _ ← assert opposed "dual peers oppose every step"
+  _ ← assert opposed "tdual peers oppose every step"
   -- mid-protocol deadlock-freedom, EXECUTED (the theorem
   -- `session_mid_deadlockFree` covers all positions; this walks the real
   -- script): at every position i, the machine's OWN step i is enabled.
@@ -775,7 +775,7 @@ def typedChecks : CheckResult := do
   _ ← assertEq "tdual involution (Nat payloads)" (tdual (tdual natProto)) natProto
   _ ← assertEq "tdual involution (gateway payloads)"
       (tdual (tdual gatewayProto)) gatewayProto
-  -- the typed dual keeps the PAYLOAD sequence (generic dual_map_payload)
+  -- the typed dual keeps the PAYLOAD sequence (generic `tdual_types`)
   _ ← assertEq "tdual keeps payloads" ((tdual gatewayProto).map (·.2))
       (gatewayProto.map (·.2))
   -- directions oppose pairwise (the typed lockstep condition)
@@ -825,6 +825,34 @@ Hint: Type class instance resolution failures can be inspected with the `set_opt
                                  [(.snd, "u64"), (.rcv, "option<user>")])
 
 end TypedSessTest
+
+/-! ## guestlang_solver — the OPEN discharge macro (W6.8): a package-local
+    rung extends it via `macro_rules`, no edit to Machines. -/
+
+namespace SolverTest
+
+/-- Scratch proposition the default ladder CANNOT close. -/
+inductive Latched : Nat → Prop where
+  | ofZero : Latched 0
+
+/-- The package-local rung: one `macro_rules` line against the shared
+    syntax. Backtracking keeps every other rung reachable — this closer
+    fails fast on non-`Latched` goals. -/
+macro_rules | `(tactic| guestlang_solver) => `(tactic| exact Latched.ofZero)
+
+-- The custom rung fires: the default ladder (simp_all/omega/grind/trivial)
+-- cannot close `Latched 0`.
+example : Latched 0 := by guestlang_solver
+
+-- The default ladder still fires: the custom rung fails fast on an
+-- arithmetic goal and falls through to omega.
+example (n : Nat) (h : n ≤ 2) : n ≤ 5 := by guestlang_solver
+
+-- `machine_safety` is the same solver: the custom rung serves the DSL's
+-- default discharge too.
+example : Latched 0 := by machine_safety
+
+end SolverTest
 
 def main : IO UInt32 := do
   let code ← TestKit.mainOfChecks "Machines" ([

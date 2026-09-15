@@ -4,10 +4,17 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[features]
+arbitrary = ["dep:arbitrary"]
+
 [dependencies]
 # The first transport adapter: noq (n0-computer's Quinn fork).
 # Default features bring: rustls + ring crypto + tokio runtime.
 noq = "1.3"
+# Optional: arbitrary::Arbitrary for Val (fuzz targets, property tests).
+# The `arbitrary` Cargo feature gate keeps the derive dep out of the
+# public crate graph (no transitive arbitrary in production builds).
+arbitrary = { version = "1", features = ["derive"], optional = true }
 # noq does NOT re-export its `proto` crate — the QUIC-TLS config types
 # (QuicClientConfig / QuicServerConfig) live here. Version must match noq.
 noq-proto = "1.3"
@@ -32,6 +39,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 # `arbitrary` feature powers with_arbitrary::<T>() structured inputs.
 bolero = { version = "0.13", features = ["arbitrary"] }
 arbitrary = { version = "1", features = ["derive"] }
+
+# Enable the crate's `arbitrary` feature for fuzz/test targets.
+wire = { path = ".", features = ["arbitrary"] }
 
 [[test]]
 name = "val_from_json"

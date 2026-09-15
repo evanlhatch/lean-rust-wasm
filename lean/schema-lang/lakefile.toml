@@ -12,6 +12,13 @@ testDriver = "SchemaLangTests"
 name = "Machines"
 path = "../Machines"
 
+# Dbsp as a DIRECT dep (W4.3): TickCascade instantiates
+# `Dbsp.Effects.DeltaSystem` at the row/update cascade — the law class
+# must not ride Machines' manifest (the fragile inherited form).
+[[require]]
+name = "Dbsp"
+path = "../dbsp"
+
 [[require]]
 name = "CodegenCore"
 path = "../codegen-core"

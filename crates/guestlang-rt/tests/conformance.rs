@@ -11,49 +11,87 @@ fn demo_wasm() -> Vec<u8> {
     std::fs::read(std::fs::canonicalize(&p).expect("run `just wasm-compile`")).unwrap()
 }
 
+/// Look up a (fn, args) row in the oracle manifest and return the
+/// expected scalar result as a u64. Panics on miss (manifest must
+/// cover every row the smoke test asserts — drift is a gate failure).
+/// Look up a (fn, args) row in the oracle manifest and return the
+/// expected scalar result and the args (as the manifest stores them).
+/// Panics on miss (the test must cover every fn it asserts).
+fn manifest_expect(fn_name: &str) -> (Vec<String>, u64) {
+    let rows = manifest();
+    let (_, args, exp) = rows.into_iter()
+        .find(|(f, _, _)| f == fn_name)
+        .unwrap_or_else(|| panic!("{fn_name} not in oracle manifest"));
+    (args, exp.parse().expect("manifest expected value is not a u64"))
+}
+
 #[test]
 fn wasmi_runs_the_compiler_line_output() {
     let wasm = demo_wasm();
-    // double 21 = 42
-    assert_eq!(
-        invoke_core(&wasm, "double", &[21], 1_000_000).unwrap(),
-        vec![42]
-    );
-    // adder 40 2 = 42
-    assert_eq!(
-        invoke_core(&wasm, "adder", &[40, 2], 1_000_000).unwrap(),
-        vec![42]
-    );
-    // run-paps 5 = 8 — closures + pooled allocator under wasmi
-    assert_eq!(
-        invoke_core(&wasm, "run-paps", &[5], 1_000_000).unwrap(),
-        vec![8]
-    );
-    // double-area 5 = 100 — the full object lifecycle under wasmi
-    assert_eq!(
-        invoke_core(&wasm, "double-area", &[5], 1_000_000).unwrap(),
-        vec![100]
-    );
-    // pick 1 3 4 = 7 — scalar cases + canonical ABI (the bool arg is the
-    // flat I32; the adapter boxes it)
-    let r = guestlang_rt::invoke_core_vals(
-        &demo_wasm(),
-        "pick",
-        &[wasmi::Val::I32(1), wasmi::Val::I64(3), wasmi::Val::I64(4)],
-        1_000_000,
-    )
-    .unwrap();
-    assert_eq!(r, vec![7]);
+    // Each scalar fn is exercised with the args from its FIRST manifest
+    // row — the expected result is the Lean oracle's, not a hand constant.
+    // This replaces the old hardcoded (double 21=42, adder 40+2=42, etc.).
+    {
+        let (args, expected) = manifest_expect("double");
+        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        assert_eq!(
+            invoke_core(&wasm, "double", &iargs, 1_000_000).unwrap(),
+            vec![expected as i64]
+        );
+    }
+    {
+        let (args, expected) = manifest_expect("adder");
+        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        assert_eq!(
+            invoke_core(&wasm, "adder", &iargs, 1_000_000).unwrap(),
+            vec![expected as i64]
+        );
+    }
+    {
+        let (args, expected) = manifest_expect("run-paps");
+        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        assert_eq!(
+            invoke_core(&wasm, "run-paps", &iargs, 1_000_000).unwrap(),
+            vec![expected as i64]
+        );
+    }
+    {
+        let (args, expected) = manifest_expect("double-area");
+        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        assert_eq!(
+            invoke_core(&wasm, "double-area", &iargs, 1_000_000).unwrap(),
+            vec![expected as i64]
+        );
+    }
+    // pick: uses invoke_core_vals due to heterogeneous arg types
+    {
+        let (args_str, expected) = manifest_expect("pick");
+        let pick_args = args_str.iter().map(|a| a.parse::<u64>().unwrap()).collect::<Vec<_>>();
+        let r = guestlang_rt::invoke_core_vals(
+            &demo_wasm(),
+            "pick",
+            &[
+                wasmi::Val::I32(pick_args[0] as i32),
+                wasmi::Val::I64(pick_args[1] as i64),
+                wasmi::Val::I64(pick_args[2] as i64),
+            ],
+            1_000_000,
+        )
+        .unwrap();
+        assert_eq!(r, vec![expected as i64]);
+    }
 }
 
 #[test]
 fn fuel_bounds_runaway_guests_deterministically() {
     let wasm = demo_wasm();
-    // sum-list over a long list via total: 1M fuel is plenty for small n…
-    let r = invoke_core(&wasm, "double", &[21], 1_000_000).unwrap();
-    assert_eq!(r, vec![42]);
+    // Use the first manifest row for double
+    let (args, expected) = manifest_expect("double");
+    let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+    let r = invoke_core(&wasm, "double", &iargs, 1_000_000).unwrap();
+    assert_eq!(r, vec![expected as i64]);
     // …but 1 fuel cannot even START a call — the deterministic bound.
-    let err = invoke_core(&wasm, "double", &[21], 1).unwrap_err();
+    let err = invoke_core(&wasm, "double", &iargs, 1).unwrap_err();
     assert!(err.0.contains("wasmi"), "{err}");
 }
 

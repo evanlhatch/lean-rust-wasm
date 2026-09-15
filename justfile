@@ -179,6 +179,31 @@ lean-pkg-inventory:
 	[ "$fail" = 0 ] || exit 1
 	echo "lean-pkg-inventory: every package listed"
 
+# Import-reachability gate: every Tests/*.lean must be reachable from
+# the package's test driver (Tests/Main.lean). Tests/Axioms.lean is a
+# standalone entry point (run directly) and is excluded from the check.
+lean-proof-roots:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	fail=0
+	for d in lean/*/Tests/; do
+	  pkg="${d%/Tests/}"; pkg="${pkg#lean/}"
+	  main="$d/Main.lean"
+	  [ -f "$main" ] || continue
+	  for tf in "$d"*.lean; do
+	    base="${tf##*/}"
+	    [ "$base" = "Main.lean" ] && continue
+	    [ "$base" = "Axioms.lean" ] && continue
+	    mod="${base%.lean}"
+	    if ! grep -q "import Tests\.$mod\b" "$main" 2>/dev/null; then
+	      echo "FAIL: lean/$pkg/Tests/$base not imported in Tests/Main.lean"
+	      fail=1
+	    fi
+	  done
+	done
+	[ "$fail" = 0 ] || exit 1
+	echo "lean-proof-roots: every test file reachable"
+
 lean-build:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -259,6 +284,9 @@ deploy:
 # ── Docs site (docs-site/ — Astro Starlight; the flatland mirror) ────
 # Starlight is the renderer (zero hand-roll). Tool = bun (bun.lock in
 # docs-site/, pinned to the flatland dep versions). The schema-gen's
+# LATER doc-gen4 lane: once doc-gen4 is wired, this is its home — doc-gen4
+# generates API docs from Lean modules (the Starlight lane above is the
+# static schema-ref doc; the two complement each other).
 # docs emitter owns docs/api.md (just gen); this lane COPYs it into
 # docs-site/src/content/docs/ at BUILD time (Starlight's docsLoader
 # globs the content dir) with frontmatter prepended (the generator
@@ -314,7 +342,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-build gen-check artifact-headers wit-check lean-axioms check-schema breaking splice-smoke rt-conformance lean-lint
+gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms check-schema breaking splice-smoke rt-conformance lean-lint
 	@echo "gates: clean"
 
 # Axiom gate (delegated to guestlang-lint): every declaration's axiom

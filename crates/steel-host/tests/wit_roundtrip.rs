@@ -115,39 +115,90 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         );
     }
 
-    // ── record user: exact fields, exact types ──
+    // ── Data-driven type checks, sourced from the committed byte-tied
+    // schema snapshot (lean/schema-lang/goldens/universe.snapshot) — the
+    // registry's own surface, never a hand mirror. The snapshot's line
+    // format: `record|variant|resource Name` open an entry; `field`/`case`
+    // append to it; names are PascalCase/camelCase there, kebab on the wire.
+    fn kebab(s: &str) -> String {
+        let mut out = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if c.is_uppercase() && i > 0 {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        }
+        out
+    }
+    struct Entry {
+        name: String,
+        kind: String,
+        members: Vec<String>,
+    }
+    let snapshot = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../lean/schema-lang/goldens/universe.snapshot"),
+    )?;
+    let mut entries: Vec<Entry> = Vec::new();
+    for line in snapshot.lines() {
+        let mut it = line.split_whitespace();
+        match (it.next(), it.next()) {
+            (Some("record"), Some(n)) => entries.push(Entry { name: kebab(n), kind: "record".into(), members: vec![] }),
+            (Some("variant"), Some(n)) => entries.push(Entry { name: kebab(n), kind: "variant".into(), members: vec![] }),
+            (Some("resource"), Some(n)) => entries.push(Entry { name: kebab(n), kind: "resource".into(), members: vec![] }),
+            (Some("field"), Some(m)) => entries.last_mut().unwrap().members.push(kebab(m)),
+            (Some("case"), Some(m)) => entries.last_mut().unwrap().members.push(kebab(m)),
+            _ => {}
+        }
+    }
+    for entry in &entries {
+        let name = entry.name.as_str();
+        let kind = entry.kind.as_str();
+        let td = typedef(&resolve, types, name)?;
+        match (kind, &td.kind) {
+            ("record", TypeDefKind::Record(r)) => {
+                let got: Vec<&str> = r.fields.iter().map(|f| f.name.as_str()).collect();
+                let want: Vec<&str> = entry.members.iter().map(|s| s.as_str()).collect();
+                assert_eq!(got, want, "{name} record field names/order");
+            }
+            ("variant", TypeDefKind::Variant(v)) => {
+                let got: Vec<&str> = v.cases.iter().map(|c| c.name.as_str()).collect();
+                let want: Vec<&str> = entry.members.iter().map(|s| s.as_str()).collect();
+                assert_eq!(got, want, "{name} variant case names/order");
+            }
+            ("resource", TypeDefKind::Resource) => {}
+            (kind, got) => fail(&format!("{name}: manifest kind {kind} but parsed {got:?}")),
+        }
+    }
+    // The user record's TYPE details are schema-pinned independently
+    // (the field-level type check below); the fixture-sweep pattern
+    // only covers names/order — the type-navigation is per-field.
     let user = typedef(&resolve, types, "user")?;
-    let TypeDefKind::Record(record) = &user.kind else {
-        fail(&format!("`user` should be a record, got {:?}", user.kind));
+    let TypeDefKind::Record(user_rec) = &user.kind else {
+        fail("`user` should be a record");
         return Ok(());
     };
-    let field_names: Vec<&str> = record.fields.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(
-        field_names,
-        ["id", "name", "email", "tags"],
-        "user record fields"
-    );
-    fn field_ty<'a>(fields: &'a [wit_parser::Field], name: &str) -> Option<&'a Type> {
-        fields.iter().find(|f| f.name == name).map(|f| &f.ty)
+    fn field_ty<'a>(fields: &'a [wit_parser::Field], fname: &str) -> Option<&'a Type> {
+        fields.iter().find(|f| f.name == fname).map(|f| &f.ty)
     }
     assert!(
-        field_ty(&record.fields, "id") == Some(&Type::U64),
+        field_ty(&user_rec.fields, "id") == Some(&Type::U64),
         "user.id should be u64"
     );
     assert!(
-        field_ty(&record.fields, "name") == Some(&Type::String),
+        field_ty(&user_rec.fields, "name") == Some(&Type::String),
         "user.name should be string"
     );
     assert!(
-        field_ty(&record.fields, "email") == Some(&Type::String),
+        field_ty(&user_rec.fields, "email") == Some(&Type::String),
         "user.email should be string"
     );
-    match field_ty(&record.fields, "tags") {
+    match field_ty(&user_rec.fields, "tags") {
         Some(ty) => assert_list_of_string(&resolve, ty, "user.tags"),
         None => fail("user.tags missing"),
     }
 
-    // ── record order-item ──
+    // ── record order-item (type-level check beyond field names) ──
     let order_item = typedef(&resolve, types, "order-item")?;
     let TypeDefKind::Record(order_item) = &order_item.kind else {
         fail(&format!(
@@ -156,12 +207,6 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         ));
         return Ok(());
     };
-    let field_names: Vec<&str> = order_item.fields.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(
-        field_names,
-        ["id", "qty", "price"],
-        "order-item record fields"
-    );
     assert!(
         field_ty(&order_item.fields, "id") == Some(&Type::U64),
         "order-item.id should be u64"
@@ -261,13 +306,8 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
         "insufficient-funds should carry f64"
     );
 
-    // ── resource db ──
-    let db = typedef(&resolve, types, "db")?;
-    assert!(
-        matches!(db.kind, TypeDefKind::Resource),
-        "`db` should be a resource, got {:?}",
-        db.kind
-    );
+    // resource `db` is checked in the data-driven loop above (the
+    // `"resource"` arm of the type-spec JSON).
 
     Ok(())
 }

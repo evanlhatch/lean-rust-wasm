@@ -9,3 +9,5 @@ import CodegenCore
 #print axioms CodegenCore.DataRegistry.lookup?_ok_unique
 #print axioms CodegenCore.DataRegistry.lookup?_miss
 #print axioms CodegenCore.DataRegistry.lookup?_insert_self
+#print axioms CodegenCore.iterateBounded_sound
+#print axioms CodegenCore.CheckedProp.check_iff

@@ -91,8 +91,11 @@ def targetDeclsOf (env : Environment) : Array Name :=
   (CodegenCore.GuestGate.guestMarkedDecls env).eraseDups.toArray.filter
     fun n => (WasmBackend.stdOp? n).isNone
 
-/-- Run the LCNF pipeline + emit the module, in CoreM. -/
-def emitModuleWasm (targetDecls : Array Name) (gm : CodegenCore.Emit.GenMeta) : CoreM String := do
+/-- Run the LCNF pipeline + emit the module, in CoreM. Returns the
+    runtime-spliced WAT body WITHOUT the GENERATED header — the header
+    is the driver's prepend (`watEmitter` + `runEmitters`, W7.12); this
+    function's result joins the `WasmGenSpec` as spec data. -/
+def emitModuleWasm (targetDecls : Array Name) : CoreM String := do
   Lean.Compiler.LCNF.main targetDecls {}
   -- Closure constants + lambdas: `_closed`/`_lam` decls (holding the
   -- paps) are generated IN-PROCESS by the re-run — never in the imported
@@ -137,12 +140,10 @@ def emitModuleWasm (targetDecls : Array Name) (gm : CodegenCore.Emit.GenMeta) : 
     -- marker sits AFTER the async task-intrinsic imports (the core-wasm
     -- section order: imports first) and before the memory.
     let rt ← IO.FS.readFile "runtime.wat"
-    -- WAT line comments are `;;` — CommentStyle.wat (2.10).
-    let hdr := CodegenCore.Emit.header .wat "wasm-backend" "DemoFn.lean" gm
     -- the migration's progress metric: the `Instr.raw` count (the
     -- honest ledger lives in WasmBackend.lean's header)
     IO.println s!"wasm-backend: {st.rawCount} raw instrs (the Wat.Instr.raw ledger)"
-    pure (hdr ++ (wat.replace "  ;;RUNTIME-SPLICE\n" (rt ++ "\n")))
+    pure (wat.replace "  ;;RUNTIME-SPLICE\n" (rt ++ "\n"))
   | .error e => throwError e
 
 /-! ## The component world (the SSOT for demo-world.wit)
@@ -157,6 +158,11 @@ flattens them (strings/objects), and the KEPT list is the honest
 surface of what the component actually exports.
 -/
 
+/-- One folded world export: (wire name, rendered params, WIT return
+    type, async?). Reducible — the emitters + the guard destructure it
+    directly. -/
+abbrev WorldExport := String × List String × String × Bool
+
 /-- The COMPILED world's exports, FOLDED from the schema registry (the
     6.5.1 `body` seam): a fn is exported iff it is BOTH compiled
     (`targetDecls`) AND registered (`@[schema_fn]` — the registration
@@ -166,7 +172,7 @@ surface of what the component actually exports.
     async-ness = the `Async.Future` marker (the registered ret =
     `.future`); `delivery = stream` surfaces the impl's list element as
     the stream's item type (`stream<u64>`, `stream<user>`). -/
-def worldExportsOf (env : Environment) (targetDecls : Array Name) : List (String × List String × String × Bool) :=
+def worldExportsOf (env : Environment) (targetDecls : Array Name) : List WorldExport :=
   let items := SchemaLang.Meta.registeredItems env
   targetDecls.toList.filterMap fun n =>
     match items.find? fun (_, it) =>
@@ -205,7 +211,7 @@ def oracleFns : List String := (rowUniverse.map (·.1)).eraseDups
     authority); the demo-types interface stays the hand mirror of the
     schema's User/OrderError (the drift surface = the differential
     duel, which decodes through the HOST's generated types). -/
-def worldWitOf (worldExports : List (String × List String × String × Bool)) : String :=
+def worldWitOf (worldExports : List WorldExport) : String :=
   "package guestlang:demo;\n\n"
     ++ "interface demo-types {\n"
     ++ "  record user {\n    id: u64,\n    name: string,\n    email: string,\n    tags: list<string>,\n  }\n"
@@ -229,6 +235,102 @@ world is the HONEST surface of what's compiled, and the compiled
 component embeds IT.
 -/
 
+/-! ## The Emitter spine (W7.12)
+
+The three artifacts this exe writes (`target/demo.wat`,
+`demo-world.wit`, `../../src/observability_generated.rs`) are
+`CodegenCore.Emit.Emitter` instances over `WasmGenSpec` — declared
+outputs, header discipline, one write path (`runEmitters`). The spec
+is NOT `List Item`: the wat emitter's input is the LCNF re-run's
+RESULT — the LCNF emit is monadic (CoreM + the runtime.wat read), so
+it stays in the DRIVER and the pure `Emitter.run` receives the
+already-emitted, already-spliced body as spec data.
+
+The instances live HERE (the exe), not in a WasmBackend lib module:
+the lib is deliberately CodegenCore-only (lakefile note 2.1 — the
+SchemaLang mathlib closure stays out of the backend's modules), the
+lib's `globs` enumerate modules explicitly, and the spec is assembled
+from exe-side data (the registry fold + the compiled module).
+
+FOLLOW-UP (next wave, NOT this order): the forge jobs manifest
+(`SchemaLang.Emit.Registry.forgeJobs`) does NOT cover these outputs —
+they are not schema-lang emitters, so `jobsCoverEmitters` cannot see
+them. Registering wasm-backend's emitters with forge is a cross-package
+registry change; until it lands, these artifacts ride the
+`wasm-compile` recipe's own byte-tie (the committed observability
+surface + the wasm-tools validate) instead of `forge gen --check`.
+-/
+
+/-- The wasm-gen spec: exactly what the three emitters need, assembled
+    by the driver. `watBody` = the compiled module's WAT,
+    runtime-spliced, headerless; `worldExports` = the registry fold
+    (`worldExportsOf`). -/
+structure WasmGenSpec where
+  watBody : String
+  worldExports : List WorldExport
+
+/-- The observability manifest body (headerless — the driver prepends):
+    the spans = spec data, emitted from the SAME fold as the world (one
+    writer). The host's call path spans exactly what this table declares
+    — an unregistered fn = no span (the coverage = the registry by
+    construction). -/
+def observabilityRsOf (worldExports : List WorldExport) : String :=
+  let spanRows := worldExports.map fun (name, params, ret, isAsync) =>
+    let fields := params.map fun p =>
+      let sp := p.splitOn ": "
+      "(\"" ++ sp.head! ++ "\", \"" ++ sp.getLast! ++ "\")"
+    let del := if isAsync && ret.startsWith "stream<" then "stream" else "once"
+    "    SpanSpec { name: \"" ++ name ++ "\", delivery: \"" ++ del
+      ++ "\", fields: &[" ++ String.intercalate ", " fields ++ "] }"
+  String.join
+    ( [ "/// One observed export: the span name + its fields + the delivery\n"
+      , "/// contract (`once` = one result value; `stream` = incremental).\n"
+      , "pub struct SpanSpec {\n"
+      , "    pub name: &'static str,\n"
+      , "    pub delivery: &'static str,\n"
+      , "    pub fields: &'static [(&'static str, &'static str)],\n"
+      , "}\n\n"
+      , "/// The observed surface = the world's exports, in fold order.\n"
+      , "pub const SPANS: &[SpanSpec] = &[\n"
+      ]
+      ++ spanRows.map (· ++ ",\n")
+      ++ ["];\n"] )
+
+/-- The compiled module (`target/demo.wat`). `watBody` carries the
+    LCNF re-run's result; the emitter only wraps it with the path (the
+    header is the driver's prepend). -/
+def watEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
+  name := "wat"
+  style := .wat
+  specSource := "DemoFn.lean"
+  outputs := ["target/demo.wat"]
+  run spec := [{ path := "target/demo.wat", contents := spec.watBody }]
+
+/-- The component world (`demo-world.wit` — `./`-prefixed so the shared
+    write path's parent-dir computation names a real directory). -/
+def worldWitEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
+  name := "world-wit"
+  style := .doubleSlash
+  specSource := "the schema registry (the @[schema_fn] items — the fold)"
+  outputs := ["./demo-world.wit"]
+  run spec := [{ path := "./demo-world.wit", contents := worldWitOf spec.worldExports }]
+
+/-- THE OBSERVABILITY MANIFEST (the fast-observe seam): the spans =
+    spec data, emitted from the SAME fold as the world (one writer). -/
+def observabilityEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
+  name := "observability"
+  style := .doubleSlash
+  specSource := "the world fold (worldExportsOf)"
+  outputs := ["../../src/observability_generated.rs"]
+  run spec :=
+    [{ path := "../../src/observability_generated.rs"
+       contents := observabilityRsOf spec.worldExports }]
+
+/-- The registry. Order = write order (wat, wit, observability — the
+    pre-W7.12 driver's order). -/
+def wasmEmitters : List (CodegenCore.Emit.Emitter WasmGenSpec) :=
+  [watEmitter, worldWitEmitter, observabilityEmitter]
+
 
 unsafe def main : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot)
@@ -243,16 +345,14 @@ unsafe def main : IO Unit := do
   let env ← Lean.importModules (mods.toArray.map ({ module := · })) (opts := {}) (loadExts := true)
   let ctx : Core.Context := { fileName := "<wasm-gen>", fileMap := default }
   let state : Core.State := { env := env }
-  -- the generation metadata FIRST (the wat's header rides the splice)
-  let preMeta ← CodegenCore.Emit.genMeta 0 0
   -- the manifest's fold: the marks = the decls (no hand-list)
   let targetDecls := targetDeclsOf env
-  let (wat, _) ← (emitModuleWasm targetDecls preMeta).toIO ctx state
-  IO.FS.createDirAll "target"
-  IO.FS.writeFile "target/demo.wat" wat
+  -- the LCNF re-run + the runtime splice stay in the DRIVER (monadic);
+  -- the wat emitter receives the RESULT as spec data.
+  let (watBody, _) ← (emitModuleWasm targetDecls).toIO ctx state
   -- the folded world: the registry is the export authority. The guard
-  -- (3.4) moved here from the top level: the oracle's rows must cover
-  -- fns the world actually exports.
+  -- (3.4): the oracle's rows must cover fns the world actually exports
+  -- — checked BEFORE any artifact write (the emitters run after).
   let worldExports := worldExportsOf env targetDecls
   for f in oracleFns do
     unless worldExports.any fun (w, _, _, _) => w == f do
@@ -263,39 +363,19 @@ unsafe def main : IO Unit := do
       let hint := if cands.isEmpty then ""
         else s!" — did you mean: {String.intercalate ", " cands}?"
       throw (IO.userError s!"oracle fn `{f}` is not a world export{hint}")
-  -- the generation metadata (the clock + git; the drift check strips
-  -- the header, so the wall-clock is byte-tie-safe)
-  let gm ← CodegenCore.Emit.genMeta worldExports.length
-    (worldWitOf worldExports).hash
-  let witHdr := CodegenCore.Emit.header .doubleSlash "wasm-backend"
-    "the schema registry (the @[schema_fn] items — the fold)" gm
-  IO.FS.writeFile "demo-world.wit" (witHdr ++ worldWitOf worldExports)
-  -- THE OBSERVABILITY MANIFEST (the fast-observe seam): the spans =
-  -- spec data, emitted from the SAME fold as the world (one writer).
-  -- The host's call path spans exactly what this table declares — an
-  -- unregistered fn = no span (the coverage = the registry by
-  -- construction).
-  let spanRows := worldExports.map fun (name, params, ret, isAsync) =>
-    let fields := params.map fun p =>
-      let sp := p.splitOn ": "
-      "(\"" ++ sp.head! ++ "\", \"" ++ sp.getLast! ++ "\")"
-    let del := if isAsync && ret.startsWith "stream<" then "stream" else "once"
-    "    SpanSpec { name: \"" ++ name ++ "\", delivery: \"" ++ del
-      ++ "\", fields: &[" ++ String.intercalate ", " fields ++ "] }"
-  let obs := String.join
-    ( [ CodegenCore.Emit.header .doubleSlash "wasm-backend"
-          "the world fold (worldExportsOf)" gm
-      , "/// One observed export: the span name + its fields + the delivery\n"
-      , "/// contract (`once` = one result value; `stream` = incremental).\n"
-      , "pub struct SpanSpec {\n"
-      , "    pub name: &'static str,\n"
-      , "    pub delivery: &'static str,\n"
-      , "    pub fields: &'static [(&'static str, &'static str)],\n"
-      , "}\n\n"
-      , "/// The observed surface = the world's exports, in fold order.\n"
-      , "pub const SPANS: &[SpanSpec] = &[\n"
-      ]
-      ++ spanRows.map (· ++ ",\n")
-      ++ ["];\n"] )
-  IO.FS.writeFile "../../src/observability_generated.rs" obs
+  -- the emit fold: assemble the spec, write via the Emit discipline
+  -- (`runEmitters`: header prepend + createParentDirs + write — the
+  -- shared driver tail). The generation metadata (the clock + git) is
+  -- the driver's IO; the emitters stay pure.
+  let spec : WasmGenSpec := { watBody, worldExports }
+  let witBody := worldWitOf worldExports
+  CodegenCore.Emit.runEmitters "wasm-backend" (wasmEmitters.map (·, spec))
+    fun e _ =>
+      -- the wat header's metadata is content-free (0 items, hash 0 —
+      -- the LCNF result is not registry data); the wit + observability
+      -- headers carry the fold's size + the world document's content
+      -- hash (the drift check strips the 2-line header, so the
+      -- wall-clock is byte-tie-safe).
+      if e.name == "wat" then CodegenCore.Emit.genMeta 0 0
+      else CodegenCore.Emit.genMeta worldExports.length witBody.hash
   IO.println "wrote target/demo.wat + demo-world.wit (the oracle: lake exe oracle)"

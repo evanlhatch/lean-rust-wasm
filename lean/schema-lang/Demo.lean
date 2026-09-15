@@ -124,7 +124,7 @@ theorem userNameLenProved :
         (SchemaLang.VExpr.lit 3))
       userNameLenRow = true := by
   unfold SchemaLang.validates
-  simp only [SchemaLang.evalB, SchemaLang.evalU, SchemaLang.VExpr.colOf,
+  simp only [SchemaLang.evalB, SchemaLang.evalRaw, SchemaLang.VExpr.colOf,
     SchemaLang.string_len, SchemaLang.boolToU64]
   rfl
 

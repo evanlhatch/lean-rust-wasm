@@ -7,5 +7,6 @@ import CodegenCore.Emit.Certified
 import CodegenCore.Emit.Rust
 import CodegenCore.Enumerable
 import CodegenCore.GuestGate
+import CodegenCore.Kit
 
 
