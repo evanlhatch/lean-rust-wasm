@@ -1,7 +1,7 @@
 /-
 # CodegenCore.Registry — the one-source-of-truth pattern
 
-Lifted from flatland's `Codegen.Registry` (notes/lean/lean-v3.md Part 7.1),
+Lifted from flatland's `Codegen.Registry` (flatland's notes/lean/lean-v3.md Part 7.1),
 generalized: one `SimplePersistentEnvExtension` per item kind; registration
 is attribute-first (the attribute layer lands with the emitters); emitters
 run post-elaboration over the compiled environment, folding these

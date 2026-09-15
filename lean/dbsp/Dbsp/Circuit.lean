@@ -2,7 +2,7 @@
 # Dbsp.Circuit — the circuit DSL and the proven optimizer
 
 Ports tchajed/database-stream-processing-theory `src/circuits.lean`
-(Lean 3) to Lean 4 (notes/lean/lean-v3.md Part 3). This is the
+(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3). This is the
 flatlandc-certification TEMPLATE: a compiler knows a fixed set of
 operator templates (`Func`), wires them into circuits, and
 `incrementalize_ok` certifies that the incrementalization of a circuit

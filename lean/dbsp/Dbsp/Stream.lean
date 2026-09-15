@@ -2,13 +2,13 @@
 # Dbsp.Stream — streams and agreement
 
 Ports tchajed/database-stream-processing-theory `src/stream.lean` (Lean 3)
-to Lean 4 (notes/lean/lean-v3.md Part 3). Streams are functions of time;
+to Lean 4 (flatland's notes/lean/lean-v3.md Part 3). Streams are functions of time;
 `agree_upto` is the workhorse equivalence the fixpoint theorems are proved
 through.
 
 Deferred from the source: the `cut` machinery and `zero_after`/stream-elim
 (our exec layer is fuel-bounded vectors with a decidable convergence check +
-a bridge theorem — notes/lean/SPEC-core.md §7.1; the classical choice the
+a bridge theorem — flatland's notes/lean/SPEC-core.md §7.1; the classical choice the
 source needs evaporates for us).
 -/
 

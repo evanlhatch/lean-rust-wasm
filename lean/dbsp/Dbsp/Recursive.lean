@@ -2,7 +2,7 @@
 # Dbsp.Recursive — recursive rules, naive vs semi-naive evaluation
 
 Ports tchajed/database-stream-processing-theory `src/recursive.lean`
-(Lean 3) to Lean 4 (notes/lean/lean-v3.md Part 3).
+(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3).
 
 The theorems:
 

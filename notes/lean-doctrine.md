@@ -241,3 +241,67 @@ definitions before per-instance convergence is proved.
   needed; the stale lakefile/umbrella references to Vortex/ProtoGen get
   fixed (guide 0.x).
 - Reservoir publishing is deferred until APIs stabilize (README).
+
+---
+
+## 2026-09-15 additions (the cohesion wave)
+
+Sources: notes/lean-cohesion-plan.md, notes/code-review-2026-09-15.md,
+notes/runbook-2026-09-15.md. Enforcement levels as above.
+
+| Rule | Level | Notes |
+|---|---|---|
+| Every agreement theorem is an instance of `Iso`/`PartialIso`/`Denotes+ReprOp` (the kit) | convention → structural | The kit lives in a CORE-ONLY home (not Machines.Foundations — it needs zero mathlib). ~145 hand-rolled agreements predate this; new ones MUST be instances. |
+| One copy per concept: did-you-mean, Async markers, EqAns/HasCol, cert-citation, edit distance | lint (cross-package DupDefBodies extension) | The known copies are enumerated in the review; new copies fail review. |
+| Generated artifact = one writer + one SOURCE | gate (byte-tie) | The oracleSrc/Oracle.lean two-source drift is the canonical violation (W0.1). |
+| Simp sets are invoked or stripped — tagged-but-unused is theater | lint (≥2 set members listed by hand ⇒ use the set) | `zset` is the found instance. `unusedSimpArgs` ON for library targets. |
+| `deriving ToExpr` / Qq quotations over raw `Expr` surgery | convention → lint | Meta/Reflect's hand walks are the migration debt (W2.1/W2.2). |
+| `fuel` only where the bound IS semantics; structural measures use `termination_by` | lint (fuel param beside a proved measure) | Sem.exec/cascade cap = semantic fuel; parseType/buildOne? = measures exist. |
+| Elaboration errors are named (`register_error_explanation`), structured, enumerate the valid space | convention | The LLM contract. No bare `throwError` strings at authoring surfaces. |
+| Automation ladder: generated proofs → grind → omega/decide/bv_decide → aesop (leaf goals, mathlib packages only, never in cert-cited theorems) | convention | Proofs are artifacts: cited by #check_cert, pinned by byte-ties. Search rots silently; construction doesn't. |
+| mathlib: kernel packages core-only (kit, codegen-core, substrait, TestKit, LintKit); everything above may use it narrowly, never `import Mathlib` | gate (importGraph layering) | Qq/Batteries/aesop/ProofWidgets are in closure via mathlib — free above the kernel line. |
+| Unused-but-planned modules are marked `seed` in notes/reuse-map.md, not deleted on sight | convention | ledger/Foundations.Dag are seeds for the event-sourcing/scheduler lanes. True dead weight (empty dirs, dead defs) still dies. |
+| Module system (`module` keyword) for new/split modules; `meta` sections for elab internals | convention → lint | Adopt leaf-packages-first; mathlib at this rev is module-native. |
+
+## 2026-09-15 additions, part 2 (the framework decisions)
+
+| Rule | Level | Notes |
+|---|---|---|
+| Relations are a legal spec form WHEN the concept is relational (nondeterminism, don't-care order, inference-rule legibility); a relational spec MUST ship its executable checker + the bridge theorem | convention → structural | The two-projection pattern generalized (cedar: `InstanceOfType` ↔ `validateWellFormed`). Never relation-only. |
+| GADTs at the authoring surface + semantics; plain IR with external WF only where a transformation PASS PIPELINE exists | convention | Indices are first-order data here (closed Ty) — the sweet spot. The bar for dropping indices is a real pass pipeline, not vibes. |
+| Every checkable fact is an `Obligation` (label + assumptions + payload + provenance); the enforcement tier is a BACKEND ASSIGNMENT (kernel proof / decide / generated runtime check / oracle sweep) | structural (Wave 7) | Replaces: ad-hoc elab gates, hand-wired generated checks, the "armed but unfired" pattern. |
+| A rule that has fired twice as a violation becomes structural or generated — convention is a staging area, not a home | convention | The framework-mindset clause. |
+| mathlib: dev/tooling dep, never guest-compiled code. The guest fragment (what the wasm backend compiles) stays core-only | gate (GuestGate + importGraph) | Above the line, use mathlib narrowly: Finset/Fintype, NNRat/monus, ReflTransGen, Quiver/Paths, DFA/Language, linarith/ring/gcongr, aesop at leaf goals. Never `import Mathlib` umbrella in library code. |
+| Feature admission test: a new feature names its kernel concept (Universe / Correspondence / Law class / Machine / Registry→Emitter / Surface / Obligation) and its canon row, or it's a finding, not an addition | review | Keeps the conceptual surface at seven. |
+| Registry items carry provenance (declaring decl, doc, source range) | structural (W7.5) | Errors, docs, generated headers all read it. |
+| Generators are monad-polymorphic (the Basalt `Gen` pattern); new generators are written ONCE against `Gen g`, not per-backend | convention → structural (W6.14) | Plausible + byte-tape (FuzzGen) interpretations minimum; SPMF proofs opt-in. |
+
+| Every decidable property is a `CheckedProp` — relation (reasoning authority) + executable check + soundness proof (+ completeness when decidable; a documented gap when not) | structural (kit, W1.1) | The two-projection pattern at the predicate level. Bridges are TYPED, not commented — `checkAcyclic`'s deferred completeness would be a missing field, loud. |
+| Confluence is the relational form of order-freedom: cascades/schedules whose interleavings agree are confluence claims; state them relationally, prove via the confluence toolkit, discharge the finite cases by decide | convention (W8.3) | `cascade_two_commute` is the 2-element shadow of "the tick is confluent". |
+
+| Representation routing: index/GADT what elaboration must reject; inductive Prop family what proofs must invert; executable fn + CheckedProp what must run; canonical form what equality must decide (NEVER a quotient in computable land — quotients need the "no computable normal form + proof-land only" flip condition, documented); relation/setoid for agree-up-to (simulation/bisimilarity) | convention → lint | The six-row routing table; TOOLKIT 5.5 index ceiling stands; mathlib Multiset/Finsupp cover bag/zset proof-land needs |
+
+| Emitters consume `CheckedUniverse` (the universe + its WF evidence bundled), never raw items + assumption | structural (W7.9/W3.5) | Defensive arms become unrepresentable; "may assume checked input" comments become types. Bundling stays at boundaries/constructors (5.4). |
+| All text artifacts ride one pipeline: registry → typed doc → Std.Format → bytes; a format with a parse-back gets grammar-as-data (printer+parser+inversion from one table) | convention → structural (W7.10) | Raw-string emission is the drift surface; the oracle-manifest JSON trap is the evidence. |
+| Registration computes; emission assembles | convention (W2.7) | Everything computable at attribute-time is computed there; drivers never re-derive. |
+
+## 2026-09-15 lint battery (LANDED — the doctrine rows that are now gates)
+
+All in LintKit/TextLints.lean (+ the Runner artifact gate), each with
+positive AND negative controls in LintKit/Tests:
+
+| Lint | Blocks |
+|---|---|
+| `linter.guestlang.noNewPartial` | new `partial def` (per-file legacy allowance; Tests/ exempt) |
+| `linter.guestlang.noReprInEmit` | `repr` in Emit/ modules (Repr is not a wire format) |
+| `linter.guestlang.noFormatInDebug` | re-rendering in Debug.lean (debug views call emitters) |
+| `linter.guestlang.coreHasNoClaim` | uncited "core has no X" comments (multi-line docstring aware) |
+| `linter.guestlang.staleNotesPath` | bare `notes/lean/` refs (a `flatland's notes/…` pointer is honest) |
+| `linter.guestlang.nolintReason` | `@[nolint]` without the reason string |
+| `linter.guestlang.artifactHeader` | declared generated output missing / headerless (a `just gates` row: `just artifact-headers`) |
+| testImportDiscipline (extended) | driving LSpec directly in Tests/ (not just the import) |
+
+First catches, all landed with the battery: 19 stale `notes/lean/`
+references (now honest `flatland's notes/…` pointers), three "core has
+no X" claims verified TRUE and now cited, dbsp's Tests driving
+`LSpec.lspecIO` directly (routed through `TestKit.mainOfSuites`).

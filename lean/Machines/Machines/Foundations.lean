@@ -2,7 +2,7 @@
 # Machines.Foundations — the construct kit
 
 The isomorphic primitives everything in the workspace builds on
-(notes/lean/TOOLKIT.md Part 2): the three correspondence shapes (laws attach
+(flatland's notes/lean/TOOLKIT.md Part 2): the three correspondence shapes (laws attach
 to the SHAPE, not to each instance) and the Fin-indexed DAG with decidable
 acyclicity.
 

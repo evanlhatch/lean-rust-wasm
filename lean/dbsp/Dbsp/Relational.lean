@@ -2,7 +2,7 @@
 # Dbsp.Relational — the relational operators over Z-sets
 
 Ports tchajed/database-stream-processing-theory `src/relational.lean`
-(Lean 3) to Lean 4 (notes/lean/lean-v3.md Part 3), over the mathlib
+(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3), over the mathlib
 `Finsupp` Z-sets of `Dbsp.ZSet`.
 
 The operators: `union`, `map`, `filter`, `product`, `equiJoin`

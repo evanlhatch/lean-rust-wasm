@@ -1,4 +1,4 @@
-/- Machines — the guarded state-machine framework (notes/lean/TOOLKIT.md §2.4). -/
+/- Machines — the guarded state-machine framework (flatland's notes/lean/TOOLKIT.md §2.4). -/
 import Machines.Tactics
 import Machines.Foundations
 import Machines.Core

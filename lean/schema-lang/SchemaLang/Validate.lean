@@ -183,6 +183,14 @@ class HasCol (fs : List Field) (name : String) (t : outParam Ty) where
   /-- The structural path to the field. -/
   path : ColPath name t fs
 
+-- KNOWN FALSE POSITIVES (accepted, documented): `warn.classDefReducibility`
+-- flags every `@[instance]`-registered class-typed def below (hasCol*/
+-- hasCase*/hasPayload*) as "semireducible" — at the ATTRIBUTE line —
+-- whether the def carries `@[reducible]`, `@[instance_reducible]`, or
+-- neither; the linter reads the attribute's OWN registration, not the
+-- decl's hint. Silencing would trip the noLinterDisable lint; the
+-- instances resolve (the whole Validate suite consumes them).
+
 /-- Head match: the queried name IS the head field's name and the
     queried type IS its type. (Priority: same-name shadowing resolves
     to the FIRST field.) -/

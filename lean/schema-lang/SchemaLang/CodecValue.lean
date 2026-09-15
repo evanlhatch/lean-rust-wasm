@@ -250,8 +250,8 @@ theorem needOne_le_len (t : Ty) : ∀ dims, needOne t dims ≤ dims.length + 1
       have h := needOne_le_len t ds
       have hNeedS : needS t ds d ≤ needOne t ds := by
         cases d with
-        | zero => simpa [needS] using Nat.zero_le _
-        | succ _ => simpa [needS] using h
+        | zero => simp [needS]
+        | succ _ => simp [needS]
       simp only [needOne, List.length_cons]
       omega
 
@@ -343,7 +343,7 @@ def buildOne? : (t : Ty) → (fuel : Nat) → (dims : List Nat) →
 end
 
 mutual
-def buildSlices?_toList : {t : Ty} → {dims : List Nat} → {k : Nat} →
+theorem buildSlices?_toList : {t : Ty} → {dims : List Nat} → {k : Nat} →
     (ss : TSlices t dims k) → (f : Nat) → needS t dims k ≤ f →
     ∀ rest : List (Value t),
       buildSlices? t f dims k (TSlices.toList ss ++ rest)
@@ -365,7 +365,7 @@ def buildSlices?_toList : {t : Ty} → {dims : List Nat} → {k : Nat} →
       simp [hss]
   termination_by _ _ _ ss _ _ _ => sizeOf ss
 
-def buildOne?_toList : {t : Ty} → {dims : List Nat} → (tv : TVal t dims) →
+theorem buildOne?_toList : {t : Ty} → {dims : List Nat} → (tv : TVal t dims) →
     (f : Nat) → needOne t dims ≤ f → ∀ rest : List (Value t),
       buildOne? t f dims (TVal.toList tv ++ rest) = some (tv, rest)
   | _, [], .scalar v, _, _, rest => by
@@ -378,7 +378,7 @@ def buildOne?_toList : {t : Ty} → {dims : List Nat} → (tv : TVal t dims) →
       have hNeed : needS t ds d ≤ fuel := by
         have hdef : needOne t (d :: ds) = 1 + needS t ds d := by simp [needOne]
         omega
-      simp only [TVal.toList, TSlices.toList]
+      simp only [TVal.toList]
       simp only [buildOne?]
       rw [buildSlices?_toList ss fuel hNeed rest]
       simp [TSlices.ofCount?_sliceList]
@@ -663,11 +663,12 @@ theorem decode_encodeValue_append (t : Ty) (h : CodecClosed t) :
           rw [List.append_assoc, Codec.decList_encList_append Codec.encVarNat
             Codec.decNat? Codec.decNat_encVarNat_append dims
             (Codec.encList (encodeValue a) (TVal.toList tv) ++ rest)]
-          simp only [decVal?]
+          -- the match's iota (simp, not rw — the rw-produced scrutinee is
+          -- a `some` ctor the rewriter cannot see through)
+          simp only
           rw [Codec.decList_encList_append (encodeValue a) (decVal? a) ih
             (TVal.toList tv) rest]
           simp only [TVal.toList_length tv, flatLength_eq_prod,
-            List.append_nil, List.length_nil,
             if_neg (by simp : ¬((dims != dims) = true)),
             if_neg (by simp : ¬((dims.prod != dims.prod) = true))]
           have hApp : tv.toList = tv.toList ++ [] := (List.append_nil _).symm

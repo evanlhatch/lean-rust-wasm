@@ -37,7 +37,8 @@ namespace Substrait.Emit.Text
 
 /-! ## Primitive formatting -/
 
-/-- Repeat a string `n` times (core has no `String.replicate`). -/
+/-- Repeat a string `n` times (core has no `String.replicate` — checked
+    the 4.33 toolchain's Init/Data/String: only `List.replicate` exists). -/
 def replicate (s : String) (n : Nat) : String :=
   (List.range n).foldl (fun acc _ => acc ++ s) ""
 
@@ -291,7 +292,9 @@ inductive Col where
   | e (txt : String)
 deriving Repr
 
-/-- The column at index `i`, or an error (core has no `List.get?`). -/
+/-- The column at index `i`, or an error (core has no `List.get?` —
+    checked the 4.33 toolchain: the modern spelling is `List.getElem?`,
+    whose error TEXT we control here). -/
 def colAt (cols : List Col) (i : Nat) : Except String Col :=
   let rec go : List Col → Nat → Except String Col
     | [], _ => throw s!"column index {i} out of range (width {cols.length})"

@@ -32,6 +32,44 @@ register_option linter.guestlang.testImportDiscipline : Bool := {
   descr := "text lint: files under Tests/ import TestKit, never LSpec directly"
 }
 
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.noNewPartial : Bool := {
+  defValue := true
+  descr := "text lint: no new `partial def` (a per-file legacy allowance ratchets \
+    the existing ones down); use structural or well-founded recursion"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.noReprInEmit : Bool := {
+  defValue := true
+  descr := "text lint: no `repr` in Emit/ modules (Repr is not a stable format)"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.noFormatInDebug : Bool := {
+  defValue := true
+  descr := "text lint: Debug.lean calls emitter functions, never re-renders"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.coreHasNoClaim : Bool := {
+  defValue := true
+  descr := "text lint: a \"core has no X\" comment must cite the check run"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.staleNotesPath : Bool := {
+  defValue := true
+  descr := "text lint: stale notes-subdirectory path references (the \
+    flatland-era `notes` subdir does not exist in this repo)"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.nolintReason : Bool := {
+  defValue := true
+  descr := "text lint: `@[nolint]` requires the reason string"
+}
+
 namespace LintKit
 
 /-- A source-text lint finding. -/
@@ -75,27 +113,222 @@ def checkNoLinterDisable (file : String) (content : String) : Array TextFinding 
                         line or line above)" }
   return out
 
-/-- `testImportDiscipline`: files under `Tests/` must not `import LSpec`. -/
+/-- Per-line code/comment split: nested block comments are tracked,
+doc comments count as comments, a line comment runs to end of line, and
+string LITERALS are tracked (their contents land in neither channel —
+a format string mentioning a comment opener must not fool the scanner).
+APPROXIMATION: char literals containing quotes confuse the string state —
+accepted (heuristic gates, not a parser). -/
+def splitCodeComments (content : String) : Array (Nat × String × String) := Id.run do
+  let mut out := #[]
+  let mut depth : Nat := 0
+  let mut inStr : Bool := false
+  let mut i : Nat := 1
+  for line in content.splitOn "\n" do
+    let mut code := ""
+    let mut comment := ""
+    let mut cs := line.toList
+    while true do
+      match depth, inStr, cs with
+      | _, _, [] => break
+      | 0, true, '\\' :: c :: rest =>        -- string escape
+        code := code ++ "\\" ++ c.toString
+        cs := rest
+      | 0, true, '"' :: rest =>
+        inStr := false
+        code := code ++ "\""
+        cs := rest
+      | 0, true, _ :: rest =>
+        cs := rest                            -- string content: neither channel
+      | 0, false, '"' :: rest =>
+        inStr := true
+        code := code ++ "\""
+        cs := rest
+      | 0, false, '-' :: '-' :: _ =>
+        comment := comment ++ String.ofList cs
+        break
+      | 0, false, '/' :: '-' :: rest =>
+        depth := 1
+        comment := comment ++ " "
+        cs := rest
+      | d, false, '/' :: '-' :: rest =>
+        depth := d + 1
+        cs := rest
+      | d, false, '-' :: '/' :: rest =>
+        depth := d - 1
+        comment := comment ++ " "
+        cs := rest
+      | 0, false, c :: rest =>
+        code := code ++ c.toString
+        cs := rest
+      | _, false, c :: rest =>
+        comment := comment ++ c.toString
+        cs := rest
+      | _, true, c :: _ =>
+        -- unreachable: inStr is only set at depth 0; defensive reset
+        inStr := false
+        comment := comment ++ c.toString
+        cs := cs.drop 1
+    out := out.push (i, code, comment)
+    i := i + 1
+  return out
+
+/-- `testImportDiscipline`: files under `Tests/` must not `import LSpec`,
+nor drive LSpec directly (`LSpec.lspecIO` etc.) — the runner goes through
+TestKit so the harness discipline (controls, verdicts) holds. -/
 def checkTestImportDiscipline (file : String) (content : String) : Array TextFinding := Id.run do
   unless (file.splitOn "/Tests/").length > 1 do return #[]
-  let lines := (content.splitOn "\n").toArray
   let mut out := #[]
-  for h : i in [:lines.size] do
-    let line := lines[i]
-    let t := line.trimAscii.toString
+  for (i, code, _comment) in splitCodeComments content do
+    let t := code.trimAscii.toString
     let toks := t.splitOn.filter (!·.isEmpty)
-    unless toks.head? == some "import" do continue
-    let mods := toks.tail
-    if mods.any (fun m => m == "LSpec" || m.startsWith "LSpec.") then
-      out := out.push { file, line := i + 1
+    if toks.head? == some "import" then
+      let mods := toks.tail
+      if mods.any (fun m => m == "LSpec" || m.startsWith "LSpec.") then
+        out := out.push { file, line := i
+                          linter := `linter.guestlang.testImportDiscipline
+                          message := "Tests file imports LSpec directly — \
+                            import TestKit (the blessed surface re-exports what \
+                            tests need)" }
+    else if (t.splitOn "lspecIO").length > 1 || (t.splitOn "LSpec.").length > 1 then
+      out := out.push { file, line := i
                         linter := `linter.guestlang.testImportDiscipline
-                        message := "Tests file imports LSpec directly — \
-                          import TestKit (the blessed surface re-exports what \
-                          tests need)" }
+                        message := "Tests file drives LSpec directly — route \
+                          through TestKit (`mainOfSuites`/`runCheckM`)" }
+  return out
+
+/-- Legacy `partial def` allowance (file-name suffix → max count). The
+ratchet: a file may carry AT MOST its listed count; any `partial def`
+elsewhere — or any overage — is a finding. Tighten the counts as the
+runbook's W3.1/W5.3 work shrinks them. -/
+def partialAllowance : List (String × Nat) :=
+  [("wasm-backend/WasmBackend.lean", 9),
+   ("wasm-backend/WasmBackend/Correct.lean", 1),
+   ("schema-lang/SchemaLang/Validate.lean", 1),
+   ("schema-lang/SchemaLang/Meta/Reflect.lean", 2),
+   ("substrait/Substrait/Emit/Text.lean", 3),
+   ("codegen-core/CodegenCore/Emit/Rust.lean", 1),
+   ("LintKit/LintKit/DupDefBodies.lean", 1)]
+
+/-- `noNewPartial`: `partial` defeats totality proofs and the compiler
+correctness story — new sites need design review, not a keystroke. -/
+def checkNoNewPartial (file : String) (content : String) : Array TextFinding := Id.run do
+  let allowed := (partialAllowance.find? fun (s, _) =>
+    (file.splitOn s).length > 1).map (·.2)
+  let mut out := #[]
+  let mut count := 0
+  for (i, code, _) in splitCodeComments content do
+    -- test files are exempt: generators/fixtures don't ship proofs
+    if (file.splitOn "/Tests/").length > 1 then continue
+    if code.trimAscii.toString.startsWith "partial def" then
+      count := count + 1
+      match allowed with
+      | some max =>
+        if count > max then
+          out := out.push { file, line := i
+                            linter := `linter.guestlang.noNewPartial
+                            message := s!"`partial def` beyond this file's legacy \
+                              allowance ({max}) — the ratchet only tightens; see \
+                              notes/lean-doctrine.md (fuel/WF recursion instead)" }
+      | none =>
+        out := out.push { file, line := i
+                          linter := `linter.guestlang.noNewPartial
+                          message := "new `partial def` — partiality blocks \
+                            correctness theorems; use structural or well-founded \
+                            recursion (notes/lean-doctrine.md)" }
+  return out
+
+/-- `noReprInEmit`: `Repr` output is not a stable format — emitters spell
+types/values through their own renderer (Docs.lean's convention, now
+structural). Applies to modules under an `Emit/` directory. -/
+def checkNoReprInEmit (file : String) (content : String) : Array TextFinding := Id.run do
+  unless (file.splitOn "/Emit/").length > 1 do return #[]
+  let mut out := #[]
+  for (i, code, _) in splitCodeComments content do
+    let toks := code.splitOn
+    if toks.any (fun t => t == "repr" || t == "reprStr" || t == "reprPrec"
+        || t.startsWith "(repr" || t.endsWith "repr") then
+      out := out.push { file, line := i
+                        linter := `linter.guestlang.noReprInEmit
+                        message := "`repr` in an emitter — Repr is not a stable \
+                          format; use the target's own spelling (tyWit etc.)" }
+  return out
+
+/-- `noFormatInDebug`: debug commands call emitter functions; they never
+re-render (a second renderer is a second place to drift). -/
+def checkNoFormatInDebug (file : String) (content : String) : Array TextFinding := Id.run do
+  unless (file.splitOn "/").getLastD "" == "Debug.lean" do return #[]
+  let mut out := #[]
+  for (i, code, _) in splitCodeComments content do
+    if (code.splitOn "Std.Format").length > 1 || (code.splitOn ".pretty").length > 1
+        || (code.splitOn "Format.").length > 1 then
+      out := out.push { file, line := i
+                        linter := `linter.guestlang.noFormatInDebug
+                        message := "Debug.lean re-renders — debug views call the \
+                          emitter functions (worldOf etc.), never reformat" }
+  return out
+
+/-- `coreHasNoClaim`: a claim of the form core-lacks-X in a comment must
+cite the check run (the doctrine's rule: ~20 stale claims of this shape
+were found hand-rolling core functions). Accept if the comment — a
+docstring spans LINES, so the claim line plus the two following lines —
+contains \"check\"/\"http\". -/
+def checkCoreHasNoClaim (file : String) (content : String) : Array TextFinding := Id.run do
+  let parts := splitCodeComments content
+  let mut out := #[]
+  for h : idx in [:parts.size] do
+    let (i, _, comment) := parts[idx]
+    let low := comment.toLower
+    if (low.splitOn "core has no").length > 1 then
+      let window := ((List.range 3).filterMap fun k =>
+        parts[idx + k]? |>.map (·.2.2)).foldl (· ++ ·.toLower) low
+      let cited := (window.splitOn "check").length > 1 || (window.splitOn "http").length > 1
+      unless cited do
+        out := out.push { file, line := i
+                          linter := `linter.guestlang.coreHasNoClaim
+                          message := "\"core has no X\" without a citation — cite \
+                            the check you ran (the claim rots) or use the core def" }
+  return out
+
+/-- `staleNotesPath`: the flatland-era notes SUBDIRECTORY does not exist
+in this repo; comment references to it mislead. Point at a real file in
+notes/ or name the flatland doc explicitly. (Comment-scoped: string
+literals — e.g. this lint's own messages — are exempt.) -/
+def checkStaleNotesPath (file : String) (content : String) : Array TextFinding := Id.run do
+  let mut out := #[]
+  for (i, _code, comment) in splitCodeComments content do
+    -- a reference naming flatland explicitly is an honest pointer (the
+    -- docs live in the flatland repo); a bare one pretends a local path.
+    if (comment.splitOn "notes/lean/").length > 1
+        && (comment.toLower.splitOn "flatland").length == 1 then
+      out := out.push { file, line := i
+                        linter := `linter.guestlang.staleNotesPath
+                        message := "stale path reference — the flatland-era notes \
+                          subdirectory does not exist here; reference a real file \
+                          in notes/ or name the flatland doc" }
+  return out
+
+/-- `nolintReason`: `@[nolint ...]` must carry the reason string — a bare
+opt-out is unreviewable drift (the attribute's descr already says so; this
+makes it structural). -/
+def checkNolintReason (file : String) (content : String) : Array TextFinding := Id.run do
+  let mut out := #[]
+  for (i, code, _) in splitCodeComments content do
+    if (code.splitOn "@[nolint").length > 1 then
+      let quotes := (code.splitOn "\"").length - 1
+      if quotes < 2 then
+        out := out.push { file, line := i
+                          linter := `linter.guestlang.nolintReason
+                          message := "`@[nolint]` without a reason string — \
+                            `@[nolint <linter> \"why\"]`; bare opt-outs are \
+                            unreviewable" }
   return out
 
 /-- All text lints over one source file. -/
 def runTextLints (file : String) (content : String) : Array TextFinding :=
   checkNoLinterDisable file content ++ checkTestImportDiscipline file content
+    ++ checkNoNewPartial file content ++ checkNoReprInEmit file content
+    ++ checkNoFormatInDebug file content ++ checkCoreHasNoClaim file content
+    ++ checkStaleNotesPath file content ++ checkNolintReason file content
 
 end LintKit

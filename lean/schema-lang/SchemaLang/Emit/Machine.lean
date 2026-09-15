@@ -58,7 +58,7 @@ def matchArms {S E : Type} [BEq S] [BEq E] [Inhabited S] (r : Renderings S E)
     let froms := wildRows.map fun (_, f, _) => f
     let collapseOk := wildOnly &&
       (match targets with
-      | [t] => concrete.all (froms.contains ·)
+      | [_t] => concrete.all (froms.contains ·)
       | _ => false)
     specific.map (fun (e, f, t) => armOf e f t)
       ++ if collapseOk then [s!"        (_, {r.event w}) => Some({r.state (targets.head!)}),"]

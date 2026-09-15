@@ -1234,7 +1234,7 @@ def popParams : Nat → List Instr
 
 /-- `getD` on a one-element append: the appended element is the
     length-indexed lookup (the calls layer's helper — core has no
-    `getD_append`). -/
+    `getD_append`; checked the 4.33 toolchain's Init/Data/List lemmas). -/
 theorem getD_append_single {r d : Val} :
     ∀ (l : List Val) (m : Nat), (l ++ [r]).getD m d
       = if m < l.length then l.getD m d

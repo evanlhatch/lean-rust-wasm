@@ -3,7 +3,7 @@
 
 The query-language package: a lean-LINQ-shaped authoring surface over the
 `Substrait` package's typed layer (the flatland dig's transfer plan —
-`~/flatland/notes/lean/research-lean-linq.md`, flatland lineage).
+`~/flatland/flatland's notes/lean/research-lean-linq.md`, flatland lineage).
 
 Two surfaces, one substrate (the ergonomics answer):
 
@@ -18,7 +18,7 @@ Two surfaces, one substrate (the ergonomics answer):
   pipeline step accumulates validation errors instead of aborting, and
   `Query.checked` turns the log into an `Except String` at the end.
 
-The package-boundary rule (notes/lean/research-lean-substrait-pkg.md): the
+The package-boundary rule (flatland's notes/lean/research-lean-substrait-pkg.md): the
 substrate owns Substrait semantics + serialization; this package owns the
 authoring surface and communicates by the `Substrait.Typed.Rel`/`Plan` types
 only.

@@ -83,7 +83,7 @@ theorem typed_wire_payloads_agree (p : TProtocol) :
     (`Machines.Session.tdual_types`, any payload universe) instantiated
     at `P := Ty` — the local generics cannot drift from it. -/
 theorem tdual_types (p : TProtocol) : (tdual p).map (·.2) = p.map (·.2) := by
-  simpa [tdual] using (Machines.Session.tdual_types (P := Ty) p)
+  simp [tdual]
 
 /-- Directions oppose pairwise: every send on one side is a receive on
     the other (the typed lockstep condition, executed form) — the

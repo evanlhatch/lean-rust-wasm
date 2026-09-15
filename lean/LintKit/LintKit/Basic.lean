@@ -4,7 +4,8 @@ LintKit.Basic — shared infrastructure for the guestlang linters
 
 Owns the `@[nolint linter.guestlang.<x> "reason"]` attribute (the per-site
 opt-out the refactor guide spells `@[nolint]`; v4.33 core has no
-`builtin_nolint`, only the doc comment in EnvLinter/Basic.lean) and the skip
+`builtin_nolint` (checked the 4.33 toolchain: only the doc comment in
+EnvLinter/Basic.lean)) and the skip
 predicate shared by every linter (private/internal/compiler-generated
 declarations are never linted).
 

@@ -63,7 +63,7 @@ theorem ColPath.get_set_neutral {n₁ n : String} {t₁ t : Ty} :
 /-- An expression whose reads avoid column `n₁` evaluates the same
     before and after a write to `n₁` (the reads-congruence). -/
 theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
-    ∀ {t : Ty} (e : VExpr fs t) (p₁ : ColPath n₁ t₁ fs) (hne : n₁ ∉ e.reads)
+    ∀ {t : Ty} (e : VExpr fs t) (p₁ : ColPath n₁ t₁ fs) (_hne : n₁ ∉ e.reads)
       (row : RowVals fs) (v : Value t₁),
       evalV e (p₁.set row v) = evalV e row := by
   intro t e
@@ -72,7 +72,7 @@ theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
       intro p₁ hne row v
       have hnn : n ≠ n₁ := fun h => hne (by
         show n₁ ∈ VExpr.reads (VExpr.col n p)
-        simp only [VExpr.reads, List.mem_cons, List.mem_singleton]
+        simp only [VExpr.reads, List.mem_cons]
         exact Or.inl h.symm)
       exact ColPath.get_set_neutral p p₁ hnn row v
   | lit _ => intro _ _ _ _; rfl
@@ -103,7 +103,7 @@ theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
 /-- The RAW u64 evaluator's congruence — the `.u64` slice admits
     lit/col/strlen ONLY (cases, no induction needed: no self-recursion). -/
 theorem VExpr.evalU_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
-    ∀ (e : VExpr fs .u64) (p₁ : ColPath n₁ t₁ fs) (hne : n₁ ∉ e.reads)
+    ∀ (e : VExpr fs .u64) (p₁ : ColPath n₁ t₁ fs) (_hne : n₁ ∉ e.reads)
       (row : RowVals fs) (v : Value t₁),
       evalU e (p₁.set row v) = evalU e row := by
   intro e
@@ -113,7 +113,7 @@ theorem VExpr.evalU_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
       intro p₁ hne row v
       have hnn : n ≠ n₁ := fun h => hne (by
         show n₁ ∈ VExpr.reads (VExpr.col n p)
-        simp only [VExpr.reads, List.mem_cons, List.mem_singleton]
+        simp only [VExpr.reads, List.mem_cons]
         exact Or.inl h.symm)
       have := ColPath.get_set_neutral p p₁ hnn row v
       simp only [evalU, this]
@@ -124,7 +124,7 @@ theorem VExpr.evalU_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
       | col n p =>
           have hnn : n ≠ n₁ := fun h => hne (by
             show n₁ ∈ VExpr.reads (VExpr.col n p)
-            simp only [VExpr.reads, List.mem_cons, List.mem_singleton]
+            simp only [VExpr.reads, List.mem_cons]
             exact Or.inl h.symm)
           have := ColPath.get_set_neutral p p₁ hnn row v
           simp only [evalU, this]
@@ -132,7 +132,7 @@ theorem VExpr.evalU_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
 /-- The raw BOOL evaluator's congruence — a PROOF-CARRYING DEF (the
     fixed-index `.bool` slice bars `induction`; `and` recurses
     structurally — the `valueEqRefl` precedent). -/
-def VExpr.evalBNeutral {fs : List Field} {n₁ : String} {t₁ : Ty}
+theorem VExpr.evalBNeutral {fs : List Field} {n₁ : String} {t₁ : Ty}
     (e : VExpr fs .bool) (p₁ : ColPath n₁ t₁ fs) (hne : n₁ ∉ e.reads) :
     ∀ (row : RowVals fs) (v : Value t₁),
       evalB e (p₁.set row v) = evalB e row := by
@@ -141,7 +141,7 @@ def VExpr.evalBNeutral {fs : List Field} {n₁ : String} {t₁ : Ty}
       intro row v
       have hnn : n ≠ n₁ := fun h => hne (by
         show n₁ ∈ VExpr.reads (VExpr.col n p)
-        simp only [VExpr.reads, List.mem_cons, List.mem_singleton]
+        simp only [VExpr.reads, List.mem_cons]
         exact Or.inl h.symm)
       have := ColPath.get_set_neutral p p₁ hnn row v
       simp only [evalB, this]

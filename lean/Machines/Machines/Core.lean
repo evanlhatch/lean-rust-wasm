@@ -1,7 +1,7 @@
 /-
 # Machines.Core — the machine, its two projections
 
-Design: notes/lean/lean-v3.md Part 5 + notes/lean/TOOLKIT.md §2.4.
+Design: flatland's notes/lean/lean-v3.md Part 5 + flatland's notes/lean/TOOLKIT.md §2.4.
 Veil's two-projection shape, owned: actions are executable functions with
 the guard PROOF threaded into construction (an UPDATE…WHERE cannot be
 constructed without discharging its guard); the Prop relation is *derived*

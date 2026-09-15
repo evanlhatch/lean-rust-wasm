@@ -17,9 +17,17 @@ import LintKit
 
 open Lean LintKit
 
-private def parseArgs (args : List String) : DriverConfig × Array Name := Id.run do
+/-- The CLI surface: lint flags + module roots; `--artifacts-root=<path>`
+(and no modules) runs the artifact-header gate instead. -/
+private structure Cli where
+  cfg : DriverConfig
+  mods : Array Name
+  artifactsRoot : Option String
+
+def Cli.parse (args : List String) : Cli := Id.run do
   let mut cfg : DriverConfig := {}
   let mut mods : Array Name := #[]
+  let mut root : Option String := none
   for a in args do
     if let some n := a.dropPrefix? "--disable=" then
       cfg := { cfg with overrides := cfg.overrides.insert n.toString.toName false }
@@ -29,12 +37,26 @@ private def parseArgs (args : List String) : DriverConfig × Array Name := Id.ru
       cfg := { cfg with extraPrefixes :=
         if cfg.extraPrefixes.isEmpty then p.toString
         else cfg.extraPrefixes ++ "," ++ p.toString }
+    else if let some r := a.dropPrefix? "--artifacts-root=" then
+      root := some r.toString
     else
       mods := mods.push a.toName
-  return (cfg, mods)
+  return { cfg, mods, artifactsRoot := root }
+
+unsafe def runArtifactGate (root : String) : IO UInt32 := do
+  let findings ← LintKit.checkGeneratedArtifacts root
+  for f in findings do
+    IO.println s!"{f.file}: [{f.linter}] {f.message}"
+  if findings.isEmpty then
+    IO.println "artifact-headers: clean"
+    return 0
+  IO.println s!"artifact-headers: {findings.size} finding(s)"
+  return 1
 
 unsafe def main (args : List String) : IO UInt32 := do
-  let (cfg, mods) := parseArgs args
+  let { cfg, mods, artifactsRoot } := Cli.parse args
+  if let some root := artifactsRoot then
+    return ← runArtifactGate root
   if mods.isEmpty then
     IO.eprintln "usage: guestlang-lint [--disable=<linter.option>] \
       [--extra-prefix=<Prefix>] <Module>..."

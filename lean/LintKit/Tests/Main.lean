@@ -99,6 +99,71 @@ unsafe def run : M Unit := do
   check "testImportDiscipline accepts `import TestKit`" testkitInTests.isEmpty
   let lspecInLib := checkTestImportDiscipline "/pkg/Lib.lean" "import LSpec\n"
   check "testImportDiscipline only applies under Tests/" lspecInLib.isEmpty
+  let lspecCall := checkTestImportDiscipline "/pkg/Tests/Main.lean"
+    "def main := LSpec.lspecIO s []\n"
+  check "testImportDiscipline flags direct lspecIO use" (lspecCall.size == 1)
+  let testkitCall := checkTestImportDiscipline "/pkg/Tests/Main.lean"
+    "def main := TestKit.mainOfSuites s\n"
+  check "testImportDiscipline accepts TestKit drivers" testkitCall.isEmpty
+  -- noNewPartial: legacy allowance + new-site flagging
+  let legacyOk := checkNoNewPartial "lean/wasm-backend/WasmBackend.lean"
+    "partial def a := 1\npartial def b := 2\n"
+  check "noNewPartial accepts sites within the legacy allowance" legacyOk.isEmpty
+  let legacyOver := checkNoNewPartial "lean/wasm-backend/WasmBackend.lean"
+    (String.intercalate "" (List.replicate 10 "partial def x := 1\n"))
+  check "noNewPartial flags overage past the legacy allowance" (legacyOver.size == 1)
+  let newSite := checkNoNewPartial "lean/foo/Foo.lean" "partial def x := 1\n"
+  check "noNewPartial flags a new file's partial def" (newSite.size == 1)
+  let partialComment := checkNoNewPartial "lean/foo/Foo.lean"
+    "/- partial def is discussed here -/\ndef x := 1\n"
+  check "noNewPartial ignores comments" partialComment.isEmpty
+  -- noReprInEmit
+  let reprInEmit := checkNoReprInEmit "lean/schema-lang/SchemaLang/Emit/Wit.lean"
+    "def f := repr x\n"
+  check "noReprInEmit flags repr in an emitter" (reprInEmit.size == 1)
+  let reprComment := checkNoReprInEmit "lean/schema-lang/SchemaLang/Emit/Wit.lean"
+    "-- never `repr` here\ndef f := x\n"
+  check "noReprInEmit ignores comments" reprComment.isEmpty
+  let reprElsewhere := checkNoReprInEmit "lean/foo/Foo.lean" "def f := repr x\n"
+  check "noReprInEmit only applies under Emit/" reprElsewhere.isEmpty
+  -- noFormatInDebug
+  let fmtInDebug := checkNoFormatInDebug "lean/schema-lang/SchemaLang/Debug.lean"
+    "def f := fformat.pretty\n"
+  check "noFormatInDebug flags .pretty in Debug.lean" (fmtInDebug.size == 1)
+  let fmtElsewhere := checkNoFormatInDebug "lean/foo/Foo.lean"
+    "def f := fformat.pretty\n"
+  check "noFormatInDebug only applies to Debug.lean" fmtElsewhere.isEmpty
+  -- coreHasNoClaim
+  let bareClaim := checkCoreHasNoClaim "M.lean" "/-- helper (core has no `foo`) -/\ndef x := 1\n"
+  check "coreHasNoClaim flags an uncited claim" (bareClaim.size == 1)
+  let citedClaim := checkCoreHasNoClaim "M.lean"
+    "/-- helper (core has no `foo` — checked the 4.33 toolchain src) -/\ndef x := 1\n"
+  check "coreHasNoClaim accepts a cited claim" citedClaim.isEmpty
+  let codeMention := checkCoreHasNoClaim "M.lean" "def coreHasNo := 1\n"
+  check "coreHasNoClaim ignores code" codeMention.isEmpty
+  let multilineCite := checkCoreHasNoClaim "M.lean"
+    "/-- helper (core has no `foo` —\n    checked the toolchain) -/\ndef x := 1\n"
+  check "coreHasNoClaim accepts a citation on the next docstring line" multilineCite.isEmpty
+  let claimInString := checkCoreHasNoClaim "M.lean"
+    "def m := \"core has no documented behavior here\"\n"
+  check "coreHasNoClaim ignores string literals" claimInString.isEmpty
+  let commentOpenerInString := checkStaleNotesPath "M.lean"
+    "def a := \"/-\"\ndef b := \"notes/lean/x.md\"\n"
+  check "comment scanner ignores comment openers inside strings" commentOpenerInString.isEmpty
+  let nolintInString := checkNolintReason "M.lean"
+    "def m := m!\"opt out with @[nolint linter.guestlang.foo]\"\n"
+  check "nolintReason ignores attribute syntax inside string literals" nolintInString.isEmpty
+  -- staleNotesPath
+  let staleRef := checkStaleNotesPath "M.lean" "/- see notes/lean/lean-v3.md -/\ndef x := 1\n"
+  check "staleNotesPath flags notes/lean/" (staleRef.size == 1)
+  let liveRef := checkStaleNotesPath "M.lean" "/- see notes/vision.md -/\ndef x := 1\n"
+  check "staleNotesPath accepts real notes/ paths" liveRef.isEmpty
+  -- nolintReason
+  let bareNolint := checkNolintReason "M.lean" "@[nolint linter.guestlang.foo]\ndef x := 1\n"
+  check "nolintReason flags a bare opt-out" (bareNolint.size == 1)
+  let reasonedNolint := checkNolintReason "M.lean"
+    "@[nolint linter.guestlang.foo \"because the test\", linter.guestlang.bar \"why\"]\ndef x := 1\n"
+  check "nolintReason accepts a reasoned opt-out" reasonedNolint.isEmpty
 
 def main : IO UInt32 := do
   let (_, failures) ← (unsafe run).run #[]

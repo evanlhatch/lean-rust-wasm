@@ -1137,7 +1137,7 @@ def sizeT : (t : Ty) → {dims : List Nat} → TVal t dims → Nat
   | t, _, .dim ss => sizeS t ss + 1
 
 def sizeS : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → Nat
-  | t, _, _, .nil => 0
+  | _t, _, _, .nil => 0
   | t, _, _, .cons x ss => sizeT t x + sizeS t ss + 1
 
 end
@@ -1172,13 +1172,13 @@ def valueReprStr : (t : Ty) → Value t → String
   | .stream t, .stream vl => s!"stream [{vListReprStr t vl}]"
   | .tensor _ a, .tensor tv => s!"tensor [{valueTReprStr a tv}]"
   termination_by t v => sizeV t v
-decreasing_by all_goals (simp [sizeV, sizeL, sizeT, sizeS] <;> omega)
+decreasing_by all_goals (simp [sizeV])
 
 def valueTReprStr : (t : Ty) → {dims : List Nat} → TVal t dims → String
   | t, _, .scalar v => valueReprStr t v
   | t, _, .dim ss => slicesReprStr t ss
   termination_by t _ tv => sizeT t tv
-decreasing_by all_goals (simp [sizeV, sizeT, sizeS] <;> omega)
+decreasing_by all_goals (simp [sizeT])
 
 def slicesReprStr : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → String
   | _, _, _, .nil => ""
@@ -1187,7 +1187,7 @@ def slicesReprStr : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t d
       let head := valueTReprStr t x
       if rest == "" then head else s!"{head}, {rest}"
   termination_by t _ _ ss => sizeS t ss
-decreasing_by all_goals (simp [sizeV, sizeT, sizeS] <;> omega)
+decreasing_by all_goals (simp [sizeS]; omega)
 
 def vListReprStr : (t : Ty) → VList t → String
   | _, .nil => ""
@@ -1195,7 +1195,7 @@ def vListReprStr : (t : Ty) → VList t → String
       let rest := vListReprStr t vl
       if rest == "" then valueReprStr t v else s!"{valueReprStr t v}, {rest}"
   termination_by t vl => sizeL t vl
-decreasing_by all_goals (simp [sizeV, sizeL] <;> omega)
+decreasing_by all_goals (simp [sizeL]; omega)
 
 end
 
@@ -2434,7 +2434,7 @@ instance : UpdatePure updUserFields ⟨"email", .string⟩ updCompB := ⟨rfl⟩
 
 instance : NonInterfering updUserFields ⟨"id", .u64⟩ ⟨"email", .string⟩
     updCompA updCompB := ⟨by
-  simp only [UpdateItem.reads, VExpr.reads, UpdateItem.writes, updCompA, updCompB]
+  simp only [VExpr.reads, updCompA, updCompB]
   decide⟩
 
 -- the legal composite CONSTRUCTS (the instances assemble the legality)
@@ -2487,7 +2487,6 @@ def updSelfBumpMirror : UpdateItem updUserFields ⟨"id", .u64⟩ :=
   , value := .colOf "id", writePath := .here }
 
 def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
-  let ups := ctx.updates
   -- the DERIVED read/write sets + the linearity classification
   _ ← assertEq "reset-id: reads derived" updResetIdMirror.reads ["id"]
   _ ← assertEq "reset-id: writes derived" updResetIdMirror.writes ["id"]

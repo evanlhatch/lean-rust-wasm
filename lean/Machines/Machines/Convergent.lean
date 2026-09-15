@@ -1,7 +1,7 @@
 /-
 # Machines.Convergent — termination certificates
 
-notes/lean/TOOLKIT.md §2.4 / lean-v3 Part 5: a convergent machine carries a
+flatland's notes/lean/TOOLKIT.md §2.4 / lean-v3 Part 5: a convergent machine carries a
 variant into a well-founded type that every event strictly decreases — the
 cascade-termination certificate (and the CertifiedFixpoint variant's home).
 The two idiom shapes (count-down, cap-minus-fill) discharge by `omega`.

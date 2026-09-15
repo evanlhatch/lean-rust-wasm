@@ -2,7 +2,7 @@
 # Dbsp.Incremental — the incrementalization family
 
 Ports tchajed/database-stream-processing-theory `src/incremental.lean`
-(Lean 3) to Lean 4 (notes/lean/lean-v3.md Part 3). The source's postfix
+(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3). The source's postfix
 `Q^Δ` notation is deliberately dropped: `^` tokenization fights mathlib's
 HPow, and plain `incremental Q` reads fine.
 

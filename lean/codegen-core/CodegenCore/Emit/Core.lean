@@ -100,7 +100,7 @@ def genMeta (items : Nat) (contentHash : UInt64) : IO GenMeta := do
       cwd := some "../.." }
   let dateOut ← IO.Process.output
     { cmd := "date", args := #["-u", "+%Y-%m-%dT%H:%MZ"] }
-  let time := if dateOut.exitCode == 0 then dateOut.stdout.trim else "-"
+  let time := if dateOut.exitCode == 0 then dateOut.stdout.trimAscii.toString else "-"
   pure { time := time
        , specSha := sha ++ (if dirty.exitCode == 0 then "" else "+")
        , items := items

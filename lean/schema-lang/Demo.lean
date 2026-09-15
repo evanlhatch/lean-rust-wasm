@@ -135,8 +135,7 @@ theorem userNameLenProved :
       userNameLenRow = true := by
   unfold SchemaLang.validates
   simp only [SchemaLang.evalB, SchemaLang.evalU, SchemaLang.VExpr.colOf,
-    SchemaLang.hasColHead, SchemaLang.ColPath.get,
-    _root_.string_len, SchemaLang.string_len, SchemaLang.boolToU64]
+    SchemaLang.string_len, SchemaLang.boolToU64]
   rfl
 
 -- The proved registration: the tier is `proved` via the CITED theorem

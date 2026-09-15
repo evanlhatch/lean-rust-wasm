@@ -2,7 +2,7 @@
 # Dbsp.StreamElim — eliminating streams to single values
 
 Ports tchajed/database-stream-processing-theory `src/stream_elim.lean`
-(Lean 3) to Lean 4 (notes/lean/lean-v3.md Part 3).
+(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3).
 
 `streamElim s` ("∫ s" in the source) is the sum of an eventually-zero
 stream — well-defined because the partial sums stabilize. This is how a

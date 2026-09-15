@@ -4,7 +4,7 @@
 Ports the `fix2` section of tchajed/database-stream-processing-theory
 `src/operators.lean` and the nested-stream cycle theorems of
 `src/incremental.lean` (lines ~181-330) to Lean 4
-(notes/lean/lean-v3.md Part 3).
+(flatland's notes/lean/lean-v3.md Part 3).
 
 The source's notation maps: `↑↑` is our `lifting`, `↑²` is our `lifting2`,
 `z⁻¹` is `delay`, and `==n==` is `agree_upto`. `fix2` is the fixpoint

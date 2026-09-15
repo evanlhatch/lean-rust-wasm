@@ -1,4 +1,4 @@
-/- Dbsp — the delta-theory package (notes/lean/lean-v3.md Part 3). -/
+/- Dbsp — the delta-theory package (flatland's notes/lean/lean-v3.md Part 3). -/
 import Dbsp.Stream
 import Dbsp.Operators
 import Dbsp.ZSet

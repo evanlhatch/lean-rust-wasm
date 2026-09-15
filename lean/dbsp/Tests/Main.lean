@@ -1,5 +1,5 @@
 /-
-# Dbsp Tests — executable checks (harness: LSpec, per notes/lean/lean-v3.md D14)
+# Dbsp Tests — executable checks (harness: LSpec, per flatland's notes/lean/lean-v3.md D14)
 
 1. **fix_eq witness**: the ported theorem `fix_eq`/`fix_unique` is a proof;
    the executable check witnesses it on a concrete strict operator
@@ -275,7 +275,7 @@ end DbspTests
 
 open DbspTests in
 def main : IO UInt32 := do
-  let code ← LSpec.lspecIO (.ofList [("DbspTests", [suite])]) []
+  let code ← TestKit.mainOfSuites [("DbspTests", suite)]
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control
   TestKit.runSpecs [PropSweep.spec, DetSweep.spec]

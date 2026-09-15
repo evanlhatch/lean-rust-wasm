@@ -233,6 +233,12 @@ gen-check:
 	[ -x "$PCC" ] && export CC="$PCC"
 	cargo run -p forge -- gen --check
 
+# Every output declared in a forge jobs manifest exists and carries the
+# GENERATED header (a headerless file at a declared path = hand-written
+# file squatting on a generated artifact's path — the one-writer rule).
+artifact-headers:
+	cd lean/LintKit && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env .lake/build/bin/guestlang-lint --artifacts-root=../..
+
 # ── Cloudflare Pages (devenv/dev/cloudflare.nix) ─────────────────────
 # Pages as static host: no wrangler.toml, token via secretspec at
 # runtime (never the shell env). Project name/dist from the nix module.
@@ -308,7 +314,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-build gen-check wit-check lean-axioms check-schema breaking splice-smoke rt-conformance lean-lint
+gates: lean-pkg-inventory lean-build gen-check artifact-headers wit-check lean-axioms check-schema breaking splice-smoke rt-conformance lean-lint
 	@echo "gates: clean"
 
 # Axiom gate: sorryAx or an unexpected axiom fails the build (the allowed

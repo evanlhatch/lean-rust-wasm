@@ -596,7 +596,7 @@ partial def volatileSchemaFns (env : Environment) (e : Expr) : List String :=
 where
   go : Expr → List String → List String
     | .const n _, acc =>
-        match (schemaItemExt.getState env).find? (fun (ln, it) => ln == n) with
+        match (schemaItemExt.getState env).find? (fun (ln, _it) => ln == n) with
         | some (_, .func sig) =>
             if sig.sem.determinism == .volatile then sig.name :: acc else acc
         | _ => acc
@@ -751,6 +751,12 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
   -- the instance: a def with the instance attribute (4.33's `Declaration`
   -- has no `instanceDecl` constructor — the `instance` command's own
   -- route is defn + addInstance)
+  -- KNOWN FALSE POSITIVE: `warn.classDefReducibility` flags these
+  -- (`instUpdatePure.*` — Demo/Tests) as "semireducible" EVEN THOUGH the
+  -- hints ARE `.abbrev` — the linter reads only attribute-site
+  -- declarations, not the addDecl route. Accepted (documented), NOT
+  -- silenced: `set_option ... false` would trip the noLinterDisable
+  -- lint, and the instances resolve fine (the consumers prove it).
   liftTermElabM do
     Lean.addDecl (Declaration.defnDecl {
       name := instName, levelParams := [], type := instTy

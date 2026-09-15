@@ -2,7 +2,7 @@
 # Dbsp.Operators — causality, strictness, and the fixpoint
 
 Ports tchajed/database-stream-processing-theory `src/operators.lean`
-(Lean 3) to Lean 4 (notes/lean/lean-v3.md Part 3).
+(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3).
 
 The crown jewels, ported with their proofs:
 

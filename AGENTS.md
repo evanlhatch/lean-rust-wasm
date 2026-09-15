@@ -1,5 +1,14 @@
 # lean-rust-wasm — working agreements (agents and humans)
 
+## The docs (read before designing; runbook before executing)
+
+`notes/README.md` is the index. Reading order: `notes/vision.md`
+(what this is + scope locks) → `notes/canon.md` (what everything IS —
+binding: name your row, no row = a finding) → `notes/lean-doctrine.md`
+(the rules + enforcement levels) → `notes/runbook-2026-09-15.md`
+(the work plan: agent primer + prescriptive work orders). Evidence
+behind decisions: `notes/studies/` (cedar-spec, verified-ledger).
+
 ## Version control: jj
 
 - Working copy IS a commit. Small atomic changes, `jj describe` once known.
