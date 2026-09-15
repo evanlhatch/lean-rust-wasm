@@ -56,7 +56,25 @@ inductive Ty where
       flat form, dims dropped; Rust: `Vec<elem>`; snapshot: the paren
       encoding `tensor(dims…,elem)`); the dims are VERIFIED data — the
       payload constructor (TVal.tensor below) cannot hold a wrong-shape
-      value, the `RowVals` discipline. -/
+      value, the `RowVals` discipline.
+
+      THE LAYOUT LAYER (not built — no consumer yet): when a tensor
+      first crosses the WASM memory boundary (a tensor field in a
+      record = addressed offsets, not the self-describing wire lists
+      this codec uses), the blueprint is flatland's
+      `Flatland/Flatland/Tensor.lean`: `CoordsOf` (typed coordinates
+      `Fin d₀ × Fin d₁ × …`), `flatIdxT` (the total row-major offset,
+      the bound carried by types — the same telescope as
+      `Layout.go_pairwise`), and `dot_inj` (the write-safety theorem —
+      scatter through a view cannot alias). The ingress-validates-once
+      bridge (`Coords.ofList?` + `flatIdxT_ofList`) is the pattern this
+      codec's shape gate already mirrors at the value level. For the
+      WIRE FORMAT of tensor DATA (bytes, not values): NumPy's `.npy`
+      (header + raw row-major bytes) is the proven shape — see also
+      leanprover/TensorLib (the NumPy engine model: unitStrides/
+      startIndex zero-copy views, Dtype.itemsize, the LOrd
+      NaN-excluded Float32 order) — an engineering reference, not a
+      dependency (its shapes are runtime data; ours are indices). -/
   | tensor (dims : List Nat) (α : Ty)
   | ty (name : TyRef)
 deriving Repr, BEq, DecidableEq, Inhabited
