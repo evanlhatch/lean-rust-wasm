@@ -36,6 +36,36 @@ import SchemaLang.Update
 
 namespace SchemaLang
 
+/-! ## The reads-membership simp family -/
+
+@[simp] theorem VExpr.not_mem_reads_col {n m : String} {s : List Field} {t : Ty}
+    {p : ColPath m t s} : n ∉ (VExpr.col m p).reads ↔ n ≠ m := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_lit {n : String} {s : List Field} (v : UInt64) :
+    n ∉ (VExpr.lit v : VExpr s .u64).reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_gt {n : String} {s : List Field} (a b : VExpr s .u64) :
+    n ∉ (VExpr.gt a b).reads ↔ n ∉ a.reads ∧ n ∉ b.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_eq {n : String} {s : List Field} (a b : VExpr s .u64) :
+    n ∉ (VExpr.eq a b).reads ↔ n ∉ a.reads ∧ n ∉ b.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_and {n : String} {s : List Field} (a b : VExpr s .bool) :
+    n ∉ (VExpr.and a b).reads ↔ n ∉ a.reads ∧ n ∉ b.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_strlen {n : String} {s : List Field} (e : VExpr s .string) :
+    n ∉ (VExpr.strlen e).reads ↔ n ∉ e.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_not {n : String} {s : List Field} (e : VExpr s .bool) :
+    n ∉ (VExpr.not e).reads ↔ n ∉ e.reads := by
+  simp [VExpr.reads]
+
 /-! ## Write locality -/
 
 /-- A write to column `n₁` does not change ANY OTHER column's read. -/
@@ -70,34 +100,34 @@ theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
   induction e with
   | col n p =>
       intro p₁ hne row v
-      have hnn : n ≠ n₁ := fun h => hne (by
-        show n₁ ∈ VExpr.reads (VExpr.col n p)
-        simp only [VExpr.reads, List.mem_cons]
-        exact Or.inl h.symm)
-      exact ColPath.get_set_neutral p p₁ hnn row v
+      have hnn : n₁ ≠ n := by
+        simpa using hne
+      exact ColPath.get_set_neutral p p₁ hnn.symm row v
   | lit _ => intro _ _ _ _; rfl
   | gt a b iha ihb =>
       intro p₁ hne row v
-      have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
-      have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
       simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
   | eq a b iha ihb =>
       intro p₁ hne row v
-      have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
-      have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
       simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
   | and a b iha ihb =>
       intro p₁ hne row v
-      have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
-      have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
       simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
   | «strlen» e ih =>
       intro p₁ hne row v
-      have he : n₁ ∉ e.reads := hne
+      have he : n₁ ∉ e.reads := by
+        simpa using hne
       simp [evalV, ih p₁ he row v]
   | not e ih =>
       intro p₁ hne row v
-      have he : n₁ ∉ e.reads := hne
+      have he : n₁ ∉ e.reads := by
+        simpa using hne
       simp [evalV, ih p₁ he row v]
 
 /-- The RAW u64 evaluator's congruence — the `.u64` slice admits
@@ -111,22 +141,18 @@ theorem VExpr.evalU_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
   | lit _ => intro _ _ _ _; rfl
   | col n p =>
       intro p₁ hne row v
-      have hnn : n ≠ n₁ := fun h => hne (by
-        show n₁ ∈ VExpr.reads (VExpr.col n p)
-        simp only [VExpr.reads, List.mem_cons]
-        exact Or.inl h.symm)
-      have := ColPath.get_set_neutral p p₁ hnn row v
+      have hnn : n₁ ≠ n := by
+        simpa using hne
+      have := ColPath.get_set_neutral p p₁ hnn.symm row v
       simp only [evalU, this]
   | «strlen» e =>
       intro p₁ hne row v
       -- the operand is a field ref (the only `.string` shape)
       cases e with
       | col n p =>
-          have hnn : n ≠ n₁ := fun h => hne (by
-            show n₁ ∈ VExpr.reads (VExpr.col n p)
-            simp only [VExpr.reads, List.mem_cons]
-            exact Or.inl h.symm)
-          have := ColPath.get_set_neutral p p₁ hnn row v
+          have hnn : n₁ ≠ n := by
+            simpa using hne
+          have := ColPath.get_set_neutral p p₁ hnn.symm row v
           simp only [evalU, this]
 
 /-- The raw BOOL evaluator's congruence — a PROOF-CARRYING DEF (the
@@ -139,33 +165,32 @@ theorem VExpr.evalBNeutral {fs : List Field} {n₁ : String} {t₁ : Ty}
   cases e with
   | col n p =>
       intro row v
-      have hnn : n ≠ n₁ := fun h => hne (by
-        show n₁ ∈ VExpr.reads (VExpr.col n p)
-        simp only [VExpr.reads, List.mem_cons]
-        exact Or.inl h.symm)
-      have := ColPath.get_set_neutral p p₁ hnn row v
+      have hnn : n₁ ≠ n := by
+        simpa using hne
+      have := ColPath.get_set_neutral p p₁ hnn.symm row v
       simp only [evalB, this]
   | gt a b =>
       intro row v
-      have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
-      have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
       simp only [evalB]
       rw [evalU_set_neutral a p₁ ha row v, evalU_set_neutral b p₁ hb row v]
   | eq a b =>
       intro row v
-      have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
-      have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
       simp only [evalB]
       rw [evalU_set_neutral a p₁ ha row v, evalU_set_neutral b p₁ hb row v]
   | and a b =>
       intro row v
-      have ha : n₁ ∉ a.reads := fun h => hne (List.mem_append.2 (Or.inl h))
-      have hb : n₁ ∉ b.reads := fun h => hne (List.mem_append.2 (Or.inr h))
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
       simp only [evalB]
       rw [evalBNeutral a p₁ ha row v, evalBNeutral b p₁ hb row v]
   | not e =>
       intro row v
-      have he : n₁ ∉ e.reads := hne
+      have he : n₁ ∉ e.reads := by
+        simpa using hne
       simp only [evalB]
       rw [evalBNeutral e p₁ he row v]
 

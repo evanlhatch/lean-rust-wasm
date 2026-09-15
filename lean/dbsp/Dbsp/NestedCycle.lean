@@ -37,6 +37,7 @@ product forms and the `feedback_ckt_*` family from operators.lean.
 
 import Dbsp.Incremental
 import Dbsp.StreamElim
+import Dbsp.Tactics
 
 namespace Dbsp
 

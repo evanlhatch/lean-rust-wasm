@@ -86,17 +86,12 @@ theorem sum_vals_zero_ge (s : Stream a) (n m : Nat) (hz : ZeroAfter s n) (hge : 
   have hdiff : m = n + (m - n) := by omega
   rw [hdiff, sum_vals_split, hzero, add_zero]
 
-theorem sum_vals_eq_helper (s : Stream a) (n1 n2 : Nat)
-    (hz1 : ZeroAfter s n1) (hz2 : ZeroAfter s n2) (hle : n1 ≤ n2) :
-    sumVals s n1 = sumVals s n2 :=
-  sum_vals_zero_ge s n1 n2 hz1 hle
-
 theorem sum_vals_eq (s : Stream a) (n1 n2 : Nat)
     (hz1 : ZeroAfter s n1) (hz2 : ZeroAfter s n2) :
     sumVals s n1 = sumVals s n2 := by
   rcases Nat.le_total n1 n2 with h | h
-  · exact sum_vals_eq_helper s n1 n2 hz1 hz2 h
-  · exact (sum_vals_eq_helper s n2 n1 hz2 hz1 h).symm
+  · exact sum_vals_zero_ge s n1 n2 hz1 h
+  · exact (sum_vals_zero_ge s n2 n1 hz2 h).symm
 
 /-- The sum of an eventually-zero stream (the source's `∫ s`).
     Noncomputable (classical choice of the bound) — every use should come

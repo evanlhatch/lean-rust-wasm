@@ -189,19 +189,18 @@ theorem Subschema.findCol?_some_of_mem :
       by_cases hfg : f = g
       · exact ⟨Field.colPath_here_of_eq hfg, by
           simp [findCol?, hfg]⟩
-      · cases List.mem_cons.mp h with
-        | inl heq => exact absurd heq hfg
-        | inr hrest =>
-            obtain ⟨p, hp⟩ := ih f hrest
-            exact ⟨ColPath.there p, by
-              simp [findCol?, hfg, hp]⟩
+      · have hrest : f ∈ rest := (List.mem_cons.mp h).resolve_left hfg
+        obtain ⟨p, hp⟩ := ih f hrest
+        exact ⟨ColPath.there p, by
+          simp [findCol?, hfg, hp]⟩
 
 theorem Subschema.findCol?_none_of_not_mem {fs : List Field} {f : Field}
     (h : f ∉ fs) : findCol? fs f = none := by
   cases fs with
   | nil => rfl
   | cons g rest =>
-      have hng : f ≠ g := fun hfg => h (by rw [hfg]; exact List.Mem.head _)
+      have hng : f ≠ g := by
+        intro hfg; apply h; rw [hfg]; exact List.Mem.head _
       have hrest : f ∉ rest := fun hm => h (List.Mem.tail g hm)
       simp [findCol?, hng, findCol?_none_of_not_mem hrest]
 
@@ -232,15 +231,14 @@ theorem Subschema.ofMem?_none_of_breaking :
   | nil => intro hmem _; cases hmem
   | cons g rest ih =>
       intro hmem hnew
-      cases List.mem_cons.mp hmem with
-      | inl heq =>
-          subst heq
-          simp [ofMem?, findCol?_none_of_not_mem hnew]
-      | inr hrest =>
-          have hn : ofMem? newFs rest = none := ih hrest hnew
-          cases hfind : findCol? newFs g with
-          | none => simp [ofMem?, hfind]
-          | some p => simp [ofMem?, hfind, hn]
+      by_cases h_eq : f = g
+      · subst h_eq
+        simp [ofMem?, findCol?_none_of_not_mem hnew]
+      · have hrest : f ∈ rest := (List.mem_cons.mp hmem).resolve_left h_eq
+        have hn : ofMem? newFs rest = none := ih hrest hnew
+        cases hfind : findCol? newFs g with
+        | none => simp [ofMem?, hfind]
+        | some p => simp [ofMem?, hfind, hn]
 
 /-! ### The item-level tie (Diff ⟷ Subschema) -/
 

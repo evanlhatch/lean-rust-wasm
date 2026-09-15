@@ -194,14 +194,12 @@ class HasCol (fs : List Field) (name : String) (t : outParam Ty) where
 /-- Head match: the queried name IS the head field's name and the
     queried type IS its type. (Priority: same-name shadowing resolves
     to the FIRST field.) -/
-@[instance 100]
-def hasColHead {n : String} {t : Ty} {fs : List Field} :
+instance (priority := 100) hasColHead {n : String} {t : Ty} {fs : List Field} :
     HasCol ({ name := n, ty := t } :: fs) n t :=
   ⟨.here⟩
 
 /-- Step: the name lives deeper — prepend `there`. -/
-@[instance]
-def hasColTail {f : Field} {fs : List Field} {n : String} {t : Ty}
+instance hasColTail {f : Field} {fs : List Field} {n : String} {t : Ty}
     [h : HasCol fs n t] : HasCol (f :: fs) n t :=
   ⟨.there h.path⟩
 
@@ -432,13 +430,11 @@ class HasCase (cs : List VariantCase) (n : String) where
 
 /-- Head match (priority: same-name shadowing resolves to the FIRST
     case — the `hasColHead` rule). -/
-@[instance 100]
-def hasCaseHead {n : String} {t : Option Ty} {cs : List VariantCase} :
+instance (priority := 100) hasCaseHead {n : String} {t : Option Ty} {cs : List VariantCase} :
     HasCase ((n, t) :: cs) n := ⟨.here⟩
 
 /-- Step: the case lives deeper. -/
-@[instance]
-def hasCaseTail {n m : String} {u : Option Ty} {cs : List VariantCase}
+instance hasCaseTail {n m : String} {u : Option Ty} {cs : List VariantCase}
     [h : HasCase cs n] : HasCase ((m, u) :: cs) n := ⟨.there h.tag⟩
 
 /-- The SOME-payload case's path: `here` exists ONLY over a
@@ -464,26 +460,21 @@ class HasPayload (cs : List VariantCase) (n : String) (t : outParam Ty) where
     head match over a `some`-payload head of its OWN type — add a
     fragment type by adding one head instance (the universe stays
     closed; the extension is additive). -/
-@[instance 100]
-def hasPayloadHead_u64 {n : String} {cs : List VariantCase} :
+instance (priority := 100) hasPayloadHead_u64 {n : String} {cs : List VariantCase} :
     HasPayload ((n, some .u64) :: cs) n .u64 := ⟨.here, .u64 0⟩
 
-@[instance 100]
-def hasPayloadHead_f64 {n : String} {cs : List VariantCase} :
+instance (priority := 100) hasPayloadHead_f64 {n : String} {cs : List VariantCase} :
     HasPayload ((n, some .f64) :: cs) n .f64 := ⟨.here, .f64 0⟩
 
-@[instance 100]
-def hasPayloadHead_bool {n : String} {cs : List VariantCase} :
+instance (priority := 100) hasPayloadHead_bool {n : String} {cs : List VariantCase} :
     HasPayload ((n, some .bool) :: cs) n .bool := ⟨.here, .bool false⟩
 
-@[instance 100]
-def hasPayloadHead_string {n : String} {cs : List VariantCase} :
+instance (priority := 100) hasPayloadHead_string {n : String} {cs : List VariantCase} :
     HasPayload ((n, some .string) :: cs) n .string := ⟨.here, .string ""⟩
 
 /-- Step: the case lives deeper (any head shape — the payload type
     rides the recursion). -/
-@[instance]
-def hasPayloadTail {n m : String} {u : Option Ty} {cs : List VariantCase}
+instance hasPayloadTail {n m : String} {u : Option Ty} {cs : List VariantCase}
     {t : Ty} [h : HasPayload cs n t] : HasPayload ((m, u) :: cs) n t :=
   ⟨.there h.path, h.miss⟩
 

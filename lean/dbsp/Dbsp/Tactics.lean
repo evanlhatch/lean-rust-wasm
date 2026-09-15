@@ -17,14 +17,17 @@ import Lean
 /-- The pointwise zset reading lemmas. -/
 register_simp_attr zset
 
-/-! ## Toolchain trap (recorded; cost an hour)
+/-- `stream_cases` — expand a function equality on `Nat` by cases.
 
-A tactic macro expanding to `cases ... with | tag => tac` does NOT expose
-the branch remainders to trailing `·` bullets at the call site — the
-`with`-branches swallow them. The working shape for "split, then let the
-caller continue per-branch" is `by_cases ... <;> first | setupA | setupB`
-— a single tactic, no internal bullets, goals exposed.
+Expands `f = g` into two goals (`t = 0` and `t = n.succ`) by applying
+`funext t; cases t`.  The caller chains the branch tactic, typically
+`stream_cases <;> simp` or `stream_cases <;> simp [extra_lemma]`.
 
-(The `zset`/`zset?` tactic macros that used to live here were removed:
-zero call sites used them as tactics — only the `zset` simp attribute
-above is consumed. `@[simp, zset]` tags remain on the pointwise lemmas.) -/
+Replaces the repeated pattern:
+```lean
+funext t
+cases t <;> simp [lemma1, lemma2]
+```
+-/
+macro "stream_cases" : tactic =>
+  `(tactic| funext t <;> cases t)

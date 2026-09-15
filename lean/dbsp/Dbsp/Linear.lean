@@ -28,6 +28,7 @@ recoverable from the op log if a future proof needs them.
 
 import Dbsp.Certs
 import Dbsp.Operators
+import Dbsp.Tactics
 import Mathlib.Algebra.Group.Prod
 import Mathlib.Tactic.Abel
 
@@ -102,8 +103,7 @@ theorem lifting_bilinear {α β γ : Type} [AddCommGroup α] [AddCommGroup β] [
 
 theorem delay_linear : Linear (@delay a _) := by
   intro x y
-  funext t
-  cases t <;> simp
+  stream_cases <;> simp
 
 /-! ## Feedback -/
 
@@ -175,9 +175,7 @@ theorem feedback_time_invariant (S : Operator a a) (hcausal : Causal S)
     have h0 : feedback S (delay s) 0 = S (delay s + delay 0) 0 := rfl
     rw [h0]
     have hds : (delay s + delay (0 : Stream a)) = delay s := by
-      funext i
-      show delay s i + delay (0 : Stream a) i = delay s i
-      cases i <;> simp
+      stream_cases <;> simp
     rw [hds, time_invariant_t hti]
     simp only [delay_zero]
   | succ n ih =>
@@ -232,8 +230,7 @@ theorem derivative_linear : Linear (@D a _) := by
 theorem derivative_time_invariant : TimeInvariant (@D a _) := by
   intro s
   show delay s - delay (delay s) = delay (s - delay s)
-  funext t
-  cases t <;> simp
+  stream_cases <;> simp
 
 theorem derivative_lti : Lti (@D a _) := ⟨derivative_linear, derivative_time_invariant⟩
 
@@ -245,9 +242,7 @@ theorem derivative_lti : Lti (@D a _) := ⟨derivative_linear, derivative_time_i
 theorem derivative_succ (s : Stream a) (t : Nat) : D s (t + 1) = s (t + 1) - s t := rfl
 
 @[simp] theorem derivative_zpp : D (0 : Stream a) = 0 := by
-  funext t
-  show (0 : Stream a) t - delay 0 t = 0
-  cases t <;> simp [delay_succ]
+  stream_cases <;> simp [D, delay_succ]
 
 /-! ## Integration -/
 

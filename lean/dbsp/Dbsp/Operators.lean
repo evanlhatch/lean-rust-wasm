@@ -23,6 +23,7 @@ its own legality argument; it is NOT covered by `fix_unique`.
 
 import Dbsp.Certs
 import Dbsp.Stream
+import Dbsp.Tactics
 
 namespace Dbsp
 
@@ -300,8 +301,7 @@ theorem time_invariant_zpp [Zero a] [Zero b] (S : Operator a b) (h : TimeInvaria
 theorem lifting_time_invariant [Zero a] [Zero b] (f : a → b) (h : f 0 = 0) :
     TimeInvariant (lifting f) := by
   intro s
-  funext t
-  cases t <;> simp [h]
+  stream_cases <;> simp [h]
 
 /-- An operator over pairs of streams applied to a pair of streams. -/
 theorem uncurryOp_intro (T : Operator2 a b c) (s1 : Stream a) (s2 : Stream b) :
@@ -356,8 +356,7 @@ theorem lifting2_time_invariant [Zero a] [Zero b] [Zero c] (f : a → b → c) :
     -- hh : uncurryOp (lifting2 f) 0 0 = delay (uncurryOp (lifting2 f) 0) 0
     exact hh
   · intro h0 s
-    funext t
-    cases t <;> simp [uncurryOp, lifting2, h0]
+    stream_cases <;> simp [uncurryOp, lifting2, h0]
 
 /-! ## The two-input agreement and circuit feedback facts
 
