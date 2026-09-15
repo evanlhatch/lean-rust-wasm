@@ -127,6 +127,46 @@ example (s δ : ZSet Nat) :
     Dbsp.Replicas.applyDeltas (Dbsp.Replicas.applyDeltas s [δ]) [-δ] = s :=
   Dbsp.Replicas.retract_is_inverse s δ
 
+/-! ## Determinism — the hash-chained event log (`Dbsp.Determinism`), executed
+
+The replay-spine laws, executed on concrete + generated logs (the theory
+is over ABSTRACT step/combine; this sweep instantiates Int/Int): the
+hot-reload replay equality + the chain-hash extension. The NEGATIVE
+CONTROL is the anti-Replicas statement: swapping the arrival order does
+NOT preserve the ordered replay — order is the artifact here (the group
+law covers delta sets, doctrine §8: protocols are sequences). -/
+
+/-- The concrete instantiation: state = Horner evaluation (`s*2 + e`) —
+    deliberately NON-commutative in the events, so the ordered replay's
+    order-sensitivity is real; the chain combine folds `h*31 + e`
+    (the classic polynomial hash, wrapping). -/
+def detStep : Int → Int → Int := fun s e => s * 2 + e
+
+def detCombine : UInt64 → Int → UInt64 := fun h e => h * 31 + e.natAbs.toUInt64
+
+/-- The determinism spine, executed (`Dbsp.Determinism`): the full-log
+    replay, the hot-reload chunking, the chain-hash extension, and the
+    tamper pin (dropping an event changes the hash). -/
+def determinismWitness : CheckResult := Id.run do
+  let log : List Int := [1, 2, 3, 4]
+  -- the replay IS the fold: sum of the events
+  if Determinism.replay detStep 0 log != 26 then
+    return .error "replay (Horner) wrong"
+  -- hot reload: checkpoint [1,2] + tail [3,4] = the full replay
+  if Determinism.replay detStep (Determinism.replay detStep 0 [1, 2]) [3, 4]
+      != Determinism.replay detStep 0 log then
+    return .error "hot-reload mismatch"
+  -- the chain hash extends from the checkpoint hash
+  if Determinism.chainHash detCombine
+      (Determinism.chainHash detCombine 7 [1, 2]) [3, 4]
+      != Determinism.chainHash detCombine 7 log then
+    return .error "chain extension mismatch"
+  -- the tamper pin: dropping an event changes the hash (detection)
+  if Determinism.chainHash detCombine 7 [1, 2, 3]
+      == Determinism.chainHash detCombine 7 [1, 2] then
+    return .error "tamper undetected"
+  .ok ()
+
 /-- The suite: every check becomes an LSpec test with the same name and the
     same Boolean outcome the hand-rolled driver gave it. -/
 def suite : TestSeq :=
@@ -134,7 +174,44 @@ def suite : TestSeq :=
   test "inverse-pair-witness" (checkPasses inversePairWitness) $
   test "cycle-incremental-witness" (checkPasses cycleIncrementalWitness) $
   test "seminaive-witness" (checkPasses seminaiveWitness) $
-  test "delay-sanity" (checkPasses delaySanity)
+  test "delay-sanity" (checkPasses delaySanity) $
+  test "determinism-witness" (checkPasses determinismWitness)
+
+namespace DetSweep
+
+open Determinism
+
+def detOk (xs ys : List Int) : Bool :=
+  replay detStep 0 (xs ++ ys) == replay detStep (replay detStep 0 xs) ys
+    && chainHash detCombine 7 (xs ++ ys)
+      == chainHash detCombine (chainHash detCombine 7 xs) ys
+
+/-- The sabotaged control: ORDER-SWAPPED replay — the CRDT convergence
+    claim is FALSE for the ordered event log (it is a delta claim, not
+    an event-chain claim). Caught for any generated pair with xs ≠ ys. -/
+def detCtrl (xs ys : List Int) : Bool :=
+  replay detStep 0 (xs ++ ys) == replay detStep 0 (ys ++ xs)
+
+instance : Arbitrary (List Int) where
+  arbitrary := Gen.listOf (Arbitrary.arbitrary : Gen Int)
+
+def suite : TestSeq :=
+  checkPlausibleIO "determinism: reload equality + chain extension (generated logs)"
+    (∀ (xs ys : List Int), detOk xs ys = true)
+    .done { numInst := 300, randomSeed := some 20261104 }
+
+def controlSuite : TestSeq :=
+  checkPlausibleIO "sabotaged: order-swapped replay (must be caught)"
+    (∀ (xs ys : List Int), detCtrl xs ys = true)
+    .done { numInst := 300, randomSeed := some 20261104 }
+
+def spec : TestKit.PropSpec :=
+  { name := "determinism spine: same-chain same-replay"
+  , suite := suite
+  , control := controlSuite
+  , controlName := "order-swap" }
+
+end DetSweep
 
 /-! ## Property sweep (with mandatory negative control)
 
@@ -171,8 +248,8 @@ def diOkCtrl (xs : List Int) : Bool :=
   let s := liftStream xs
   (List.range (xs.length + 1)).all fun t => D (I s) t == s t + 1
 
-instance : Arbitrary (List Int) where
-  arbitrary := Gen.listOf (Arbitrary.arbitrary : Gen Int)
+-- the `Arbitrary (List Int)` instance is DetSweep's (one copy — the
+-- dupDefBodies lint): both sweeps sample the same finite Int lists
 
 /-- The property: the D/I inverse pair over generated streams. -/
 def suite : TestSeq :=
@@ -201,4 +278,4 @@ def main : IO UInt32 := do
   let code ← LSpec.lspecIO (.ofList [("DbspTests", [suite])]) []
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control
-  TestKit.runSpecs [PropSweep.spec]
+  TestKit.runSpecs [PropSweep.spec, DetSweep.spec]

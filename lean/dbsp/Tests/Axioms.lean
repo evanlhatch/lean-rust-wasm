@@ -9,6 +9,10 @@ import Dbsp
 #print axioms Dbsp.distinct_incremental_ok
 #print axioms Dbsp.incrementalize_ok
 #print axioms Dbsp.staged_eq_joint
+#print axioms Dbsp.Determinism.same_chain_same_spine
+#print axioms Dbsp.Determinism.replay_append
+#print axioms Dbsp.Determinism.chainHash_append
+#print axioms Dbsp.Determinism.hash_divergence_detects
 #print axioms Dbsp.derivative_pos_counter_example
 #print axioms Dbsp.stagedN_eq_jointN
 
