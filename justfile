@@ -218,7 +218,7 @@ lean-lint: lean-build
 	run ledger Ledger LedgerFn
 	run feature-flags FeatureFlags FeatureFlagsFn
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
-	run EdgePython EdgePython Tests.Main
+	run edgepython EdgePython Tests.Main
 
 # Codegen pipeline shim — all logic lives in the forge crate.
 gen:
