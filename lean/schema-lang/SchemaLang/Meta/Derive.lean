@@ -12,9 +12,10 @@ The registry is a `SimplePersistentEnvExtension` — populated by the
 can read it HERE, at its own elaboration time, via `registeredItems`.
 
 Ownership: schema-lang owns this file. Consumers: std (the derived
-`orderErrorCases`), faults (the derived `knownTypes`). The runtime
-tie-checks stay as regression controls (derived = derived now; the
-negative controls keep them honest).
+`orderErrorCases`, `userSchema`/`userRow`), faults (the derived
+`knownTypes`), Demo + feature-flags (the derived record fields + row
+builders). The runtime tie-checks stay as regression controls
+(derived = derived now; the negative controls keep them honest).
 -/
 
 import Lean
@@ -47,6 +48,25 @@ def registeredVariant? (env : Environment) (declName : Name) :
         | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
       .error (s!"no schema item registered for `{declName}`" ++ hint)
 
+/-- The registered RECORD item's fields for a Lean structure name; a
+    variant/func/resource there is a wrong-kind reference. The
+    did-you-mean pool is the registered records' LEAN names (the
+    lookup key space). -/
+def registeredRecord? (env : Environment) (declName : Name) :
+    Except String (List Field) :=
+  match registeredItem? env declName with
+  | some (.record _ fields) => .ok fields
+  | some it =>
+      .error s!"`{declName}` is registered as `{it.name}`, not a record"
+  | none =>
+      let recordNames := (registeredItems env).filterMap fun (ln, it) =>
+        match it with | .record _ _ => some ln.toString | _ => none
+      let cands := CodegenCore.didYouMean declName.toString recordNames
+      let hint := match cands with
+        | [] => ""
+        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
+      .error (s!"no schema record registered for `{declName}`" ++ hint)
+
 /-! ## The term builders (the emitted literals, kebab-cased) -/
 
 def tyTerm : Ty → CommandElabM Term
@@ -76,6 +96,44 @@ def variantCasesTerm (cases : List VariantCase) : CommandElabM Term :=
       let tail ← variantCasesTerm rest
       `($head :: $tail)
 
+/-- A record field → its `Field` literal term (`⟨"id", .u64⟩` — the
+    anonymous-constructor spelling the hand mirrors used). -/
+def fieldTerm (f : Field) : CommandElabM Term := do
+  `((⟨$(quote f.name), $(← tyTerm f.ty)⟩))
+
+/-- The `Value`-boxing term for one field-access term, per the field's
+    schema type. The fragment is the flat scalars + `list string`
+    (every in-tree consumer); a field outside it fails HERE, loudly —
+    widening the fragment is a Derive change, not a hand mirror. -/
+def fieldValueTerm (listHelper : Name) (access : Term) : Ty → CommandElabM Term
+  | .bool => `(.bool $access)
+  | .u8 => `(.u8 $access)
+  | .u16 => `(.u16 $access)
+  | .u32 => `(.u32 $access)
+  | .u64 => `(.u64 $access)
+  | .i8 => `(.i8 $access)
+  | .i16 => `(.i16 $access)
+  | .i32 => `(.i32 $access)
+  | .i64 => `(.i64 $access)
+  | .f32 => `(.f32 $access)
+  | .f64 => `(.f64 $access)
+  | .string => `(.string $access)
+  | .list .string => `(.list ($(mkIdent listHelper) $access))
+  | t => throwError
+      "derive_schema_fields: no row-boxing for field type `{repr t}` — \
+       the fragment is the flat scalars (bool/u8–u64/i8–i64/f32/f64/string) \
+       + list string"
+
+/-- The `.cons`-chain row literal over the record's projections
+    (`.cons (.u64 (User.id u)) … .nil`), ending `.nil`. -/
+def recordRowTerm (declName listHelper : Name) (u : Ident) :
+    List Field → CommandElabM Term
+  | [] => `(.nil)
+  | f :: rest => do
+      let access ← `($(mkIdent (declName.mkStr f.name)) $u)
+      let v ← fieldValueTerm listHelper access f.ty
+      `(.cons $v $(← recordRowTerm declName listHelper u rest))
+
 /-! ## The derivations (commands) -/
 
 /-- `derive_variant_cases targetName from InductiveName` — define
@@ -94,6 +152,54 @@ def deriveVariantCasesImpl : CommandElab := fun stx => do
   | .ok cases =>
     let term ← variantCasesTerm cases
     elabCommand (← `(abbrev $(mkIdent target) : List SchemaLang.VariantCase := $term))
+
+/-- `derive_schema_fields fieldsName builderName from Record (using
+    toVList)?` — from a registered `@[schema]` structure, emit:
+
+    1. `abbrev fieldsName : List SchemaLang.Field` — the record's
+       registered field list, snapshotted at elab (`abbrev`: the
+       reducibility rule — instance search sees through).
+    2. `def builderName (u : Record) : SchemaLang.RowVals fieldsName`
+       — the row builder: one `.cons` per field, boxing each
+       projection per its schema type.
+    3. When the record carries a `list string` field, the element
+       helper: `using h` names an EXISTING `List String →
+       SchemaLang.VList .string` (std's guest-marked `toVList` — the
+       compiled lane's authority, so the derived body can ride it);
+       without a `using`, the command emits `builderName.toVList`.
+
+    Wrong-kind or unregistered names are elaboration errors
+    (did-you-mean included): the field/row mirror cannot drift because
+    it is not written. No attributes are attached — the guest-mark
+    lane applies `attribute [guest_std]` post-hoc where the MARK ORDER
+    is artifact-visible (the wasm manifest folds the registry in
+    marking order). -/
+syntax (name := deriveSchemaFields)
+  "derive_schema_fields " ident ident " from " ident (" using " ident)? : command
+
+@[command_elab deriveSchemaFields]
+def deriveSchemaFieldsImpl : CommandElab := fun stx => do
+  let fieldsName := stx[1].getId
+  let builderName := stx[2].getId
+  let declName := stx[4].getId
+  let using? : Option Name :=
+    if stx[5].isNone then none else some stx[5][1].getId
+  match registeredRecord? (← getEnv) declName with
+  | .error msg => throwError msg
+  | .ok fields => do
+    let listHelper := using?.getD (builderName ++ `toVList)
+    if using?.isNone && fields.any (·.ty == .list .string) then
+      let helper := mkIdent listHelper
+      elabCommand (← `(def $helper:ident : List String → SchemaLang.VList .string
+        | [] => .nil
+        | s :: ss => .cons (.string s) ($helper ss)))
+    let fieldTerms ← fields.mapM fieldTerm
+    elabCommand (← `(abbrev $(mkIdent fieldsName) : List SchemaLang.Field
+      := [$fieldTerms.toArray,*]))
+    let u := mkIdent `u
+    let row ← recordRowTerm declName listHelper u fields
+    elabCommand (← `(def $(mkIdent builderName) ($u : $(mkIdent declName)) :
+        SchemaLang.RowVals $(mkIdent fieldsName) := $row))
 
 /-- `derive_schema_type_names targetName` — define `targetName : List
     String` from the registry's type-position items (records +

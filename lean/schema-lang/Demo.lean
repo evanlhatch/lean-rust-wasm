@@ -15,6 +15,7 @@ referenced type before the referencing one — v1 limitation).
 -/
 
 import SchemaLang.Meta.Reflect
+import SchemaLang.Meta.Derive
 import SchemaLang.Migration
 
 -- The registration-emitted instances (`instUpdatePure.<name>`) park in
@@ -103,15 +104,18 @@ has no literal-true — the always-true idiom for `self_bump`). -/
 schema_invariant "id-positive" for User :=
   SchemaLang.VExpr.gt (SchemaLang.VExpr.colOf "id") (SchemaLang.VExpr.lit 0)
 
+-- DERIVED at elaboration from the registry
+-- (`SchemaLang.Meta.derive_schema_fields`): User's field list + the
+-- row builder (with its `list string` element helper). Not a hand
+-- mirror: renaming a User field fails THIS module's elaboration.
+derive_schema_fields userNameLenFields userNameLenRowOf from User
+
 -- The row the cited theorem pins: id 5, name "abcd" (length 4 > 3 —
--- the `name-min-length` predicate's verdict is `true`).
-def userNameLenRow :
-    SchemaLang.RowVals
-      [⟨"id", SchemaLang.Ty.u64⟩, ⟨"name", SchemaLang.Ty.string⟩,
-        ⟨"email", SchemaLang.Ty.string⟩,
-        ⟨"tags", SchemaLang.Ty.list SchemaLang.Ty.string⟩] :=
-  .cons (.u64 5) (.cons (.string "abcd")
-    (.cons (.string "e") (.cons (.list .nil) .nil)))
+-- the `name-min-length` predicate's verdict is `true`). The body is
+-- the derived builder applied to the record literal — the VALUES are
+-- the pin, the SHAPE is derived.
+def userNameLenRow : SchemaLang.RowVals userNameLenFields :=
+  userNameLenRowOf ⟨5, "abcd", "e", []⟩
 
 -- THE CITED THEOREM (the proved tier's resolver target): the
 -- `name-min-length` predicate's verdict on the pinned row, as a

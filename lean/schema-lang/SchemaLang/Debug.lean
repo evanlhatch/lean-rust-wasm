@@ -9,8 +9,10 @@ file's registry, with the imports' rows replayed) and log.
 
 - `#schema` — every registered item: Lean name → kind + compact sig
   (params/ret/delivery for funcs; field/case counts for records and
-  variants). Types are WIT-spelled via `Emit.Wit.tyWit` — never the
-  `repr` (the author reads what the emitter writes).
+  variants) + the item's provenance summary (the declaring constant's
+  first doc line, when it carried one — W7.5). Types are WIT-spelled
+  via `Emit.Wit.tyWit` — never the `repr` (the author reads what the
+  emitter writes).
 - `#world <ident>` — the EXACT bytes `worldOf` folds for that world name
   over the registered items (the WIT preview — what `witEmitter` would
   write, pre-driver-header). Any name is accepted; a misspelled name
@@ -68,6 +70,14 @@ def spanRow : FuncSig → String :=
     s!"SpanSpec \{ name: \"{kebab s.name}\", delivery: \"{del}\", fields: "
       ++ s!"&[{String.intercalate ", " fields}] }"
 
+/-- The provenance suffix for one registered item: the declaring
+    constant's first doc line when it carried one (`provenanceOf`'s
+    payload half — the decl name already leads the item line). -/
+def docSuffix (env : Environment) (leanName : Name) (it : Item) : String :=
+  let prov := SchemaLang.Meta.provenanceOf env leanName it
+  let pfx := toString leanName ++ ": "
+  if prov.startsWith pfx then " — " ++ prov.drop pfx.length else ""
+
 /-- Debug lines as a bulleted `MessageData` block (one line each). -/
 def bulletLines : List String → MessageData :=
   fun ls => ls.foldl (fun acc l => acc ++ (m!"\n  {l}" : MessageData)) (m!"" : MessageData)
@@ -80,9 +90,11 @@ syntax (name := schemaDumpCmd) "#schema" : command
 
 elab_rules : command
   | `(command| #schema) => do
-    let items := SchemaLang.Meta.registeredItems (← getEnv)
+    let env ← getEnv
+    let items := SchemaLang.Meta.registeredItems env
     logInfo (m!"registered schema items ({items.length}):"
-      ++ bulletLines (items.map fun (ln, it) => itemLine ln it))
+      ++ bulletLines (items.map fun (ln, it) =>
+        itemLine ln it ++ docSuffix env ln it))
 
 /-- `#world <ident>` — the WIT preview: the EXACT bytes `worldOf`
     folds for that world name over the registered items. -/

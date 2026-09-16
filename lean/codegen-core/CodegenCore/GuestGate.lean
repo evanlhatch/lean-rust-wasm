@@ -1,5 +1,6 @@
 import Lean
 import CodegenCore.Registry
+import CodegenCore.AttrKit
 
 /- PROVENANCE: moved verbatim from wasm-backend/WasmBackend/Check.lean
    (the guest gate + the @[guest]/@[guest_std] attributes) — the STD
@@ -141,18 +142,8 @@ match-only Nat + String allowed; IO/Task/Thunk + Nat arithmetic stay
 banned. The std runtime ITSELF is compiled with this. -/
 def checkGuestStd (decl : Name) : CoreM Unit := checkGuestAt "guest_std" .std decl
 
-initialize registerBuiltinAttribute {
-  name := `guest
-  descr := "check the def compiles for the WASM guest (elab-time: bans Nat/String/IO/Task/Thunk runtimes)"
-  applicationTime := .afterCompilation
-  add := fun decl _stx _kind => (checkGuest decl : CoreM Unit)
-}
+register_check_attribute `guest : "check the def compiles for the WASM guest (elab-time: bans Nat/String/IO/Task/Thunk runtimes)" := fun decl _stx _kind => (checkGuest decl : CoreM Unit)
 
-initialize registerBuiltinAttribute {
-  name := `guest_std
-  descr := "the guestlang-std authoring surface (match-only Nat + String OK; IO/Task/Thunk + Nat arithmetic banned)"
-  applicationTime := .afterCompilation
-  add := fun decl _stx _kind => (checkGuestStd decl : CoreM Unit)
-}
+register_check_attribute `guest_std : "the guestlang-std authoring surface (match-only Nat + String OK; IO/Task/Thunk + Nat arithmetic banned)" := fun decl _stx _kind => (checkGuestStd decl : CoreM Unit)
 
 end CodegenCore.GuestGate

@@ -35,28 +35,10 @@ namespace SchemaLang.Meta
 
 open Lean Elab Command
 
-/-! ## The registry lookups (elab-time; the Derive pattern) -/
+/-! ## The registry lookups + term builders
 
-/-- The registered RECORD item for a Lean declaration name; a
-    variant/func/resource there is a wrong-kind reference. -/
-def registeredRecord? (env : Environment) (declName : Name) :
-    Except String (List Field) :=
-  match registeredItem? env declName with
-  | some (.record _ fields) => .ok fields
-  | some it =>
-      .error s!"`{declName}` is registered as `{it.name}`, not a record"
-  | none =>
-      let cands := CodegenCore.didYouMean declName.toString (registeredNames env)
-      let hint := match cands with
-        | [] => ""
-        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
-      .error (s!"no schema item registered for `{declName}`" ++ hint)
-
-/-! ## The term builders (the emitted literals) -/
-
-/-- The `Field` literal: the registry's data, quoted verbatim. -/
-def fieldTerm : Field → CommandElabM Term
-  | ⟨name, ty⟩ => do `(⟨$(quote name), $(← tyTerm ty)⟩)
+`registeredRecord?`/`fieldTerm` live in `SchemaLang.Meta.Derive` (the
+lower module — the derive kit owns the shared builders; W2.6). -/
 
 /-- The fields list literal (the `RowVals` index — shape carried). -/
 def fieldsTerm : List Field → CommandElabM Term

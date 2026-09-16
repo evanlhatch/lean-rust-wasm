@@ -35,6 +35,7 @@ environment, and the emitters see exactly what was registered.
 
 import Lean
 import Qq
+import CodegenCore.AttrKit
 import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Invariant
@@ -285,13 +286,9 @@ def registerSchemaVariant (declName : Name) : CoreM Unit := do
     registerSchemaItem declName (.variant (schemaNameOf declName) cases)
     registerSchemaItemDoc declName
 
-/-- `@[schema]` — reflect a structure OR a non-parameterized inductive
+/- `@[schema]` — reflect a structure OR a non-parameterized inductive
     into the schema registry. -/
-initialize registerBuiltinAttribute {
-  name := `schema
-  descr := "register a structure or inductive as a schema item (the boundary universe)"
-  applicationTime := .afterCompilation
-  add := fun decl _stx _kind => do
+register_check_attribute `schema : "register a structure or inductive as a schema item (the boundary universe)" := fun decl _stx _kind => do
     let env ← getEnv
     if Lean.isStructure env decl then
       registerSchemaStruct decl
@@ -300,7 +297,6 @@ initialize registerBuiltinAttribute {
       | some (.inductInfo _) => registerSchemaVariant decl
       | _ => throwError ("@[schema] supports structures and inductives only: `"
         ++ decl.toString ++ "`")
-}
 
 /-! ## Functions — `@[schema_fn]` on a def -/
 
@@ -400,16 +396,12 @@ def registerSchemaFunc (declName : Name) (sem : FuncSem := {}) : CoreM Unit := d
     registerSchemaItem declName (.func { sig with sem })
     registerSchemaItemDoc declName
 
-/-- `@[schema_fn]` — reflect a function's SIGNATURE into the schema
+/- `@[schema_fn]` — reflect a function's SIGNATURE into the schema
     registry (params + return type; the body is not part of the spec).
     Optional ident args set the semantic fields (one ident, dot-joined
     for both axes — see `funcSemOfStx`): `@[schema_fn volatile]`,
     `@[schema_fn strict.volatile]`, … -/
-initialize registerBuiltinAttribute {
-  name := `schema_fn
-  descr := "register a function signature as a schema func item"
-  applicationTime := .afterCompilation
-  add := fun decl stx _kind => do
+register_check_attribute `schema_fn : "register a function signature as a schema func item" := fun decl stx _kind => do
     let sem ← match stx with
       | .missing => pure ({} : FuncSem)
       | _ => match funcSemOfStx stx with
@@ -417,7 +409,6 @@ initialize registerBuiltinAttribute {
         | .error msg =>
             throwError ("@[schema_fn] `" ++ decl.toString ++ "`: " ++ msg)
     registerSchemaFunc decl sem
-}
 
 /-! ## Resources — `@[schema_resource]` on an opaque type -/
 
@@ -427,15 +418,10 @@ def registerSchemaResource (declName : Name) : CoreM Unit := do
   registerSchemaItem declName (.resource (schemaNameOf declName))
   registerSchemaItemDoc declName
 
-/-- `@[schema_resource]` — register an opaque handle type as a schema
+/- `@[schema_resource]` — register an opaque handle type as a schema
     resource item (its method surface arrives as `func` items referencing
     it in their first param). -/
-initialize registerBuiltinAttribute {
-  name := `schema_resource
-  descr := "register an opaque type as a schema resource item"
-  applicationTime := .afterCompilation
-  add := fun decl _stx _kind => (registerSchemaResource decl : CoreM Unit)
-}
+register_check_attribute `schema_resource : "register an opaque type as a schema resource item" := fun decl _stx _kind => (registerSchemaResource decl : CoreM Unit)
 
 /-! ## Invariants — `schema_invariant <name> for <Record> := <term>`
 

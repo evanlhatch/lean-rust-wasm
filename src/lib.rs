@@ -28,3 +28,9 @@ pub mod delta_generated;
 // registry; codes allocated from the Lean registry, never hand-set.
 #[rustfmt::skip]
 pub mod faults_generated;
+
+// The certified dbsp circuit (lean/schema-lang Emit/Circuit) — the Lean
+// proof (`incrementalize_ok`, cited in the header) IS the correctness
+// story; steel-host's tests/circuit.rs replays it.
+#[rustfmt::skip]
+pub mod circuit_generated;

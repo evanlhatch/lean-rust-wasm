@@ -34,6 +34,7 @@ the functions that mention it.
 -/
 
 import SchemaLang.Meta.Reflect
+import SchemaLang.Meta.Derive
 
 -- the schema_update registrations here emit their instances into
 -- SchemaLang by the framework's construction (Reflect's command) — same
@@ -124,12 +125,16 @@ schema_invariant "rollout-le-100" for Flag :=
 -- the proved-erased tier on the impl side): the registered predicate
 -- `0 == 0` is vacuously true on every row; the pinned row witnesses it
 -- in the exact `validates … = true` shape the resolver demands.
-def flagSentinelRow : SchemaLang.RowVals
-    [⟨"id", SchemaLang.Ty.u64⟩, ⟨"key", SchemaLang.Ty.string⟩,
-      ⟨"enabled", SchemaLang.Ty.bool⟩, ⟨"rollout", SchemaLang.Ty.u64⟩,
-      ⟨"tags", SchemaLang.Ty.list SchemaLang.Ty.string⟩] :=
-  .cons (.u64 0) (.cons (.string "") (.cons (.bool false)
-    (.cons (.u64 0) (.cons (.list .nil) .nil))))
+-- DERIVED at elaboration from the registry
+-- (`SchemaLang.Meta.derive_schema_fields`): Flag's field list + the
+-- row builder (with its `list string` element helper). Not a hand
+-- mirror: renaming a Flag field fails THIS module's elaboration.
+-- (Names are sentinel-scoped: `flagFields` is taken by Tests/Stress's
+-- own fixture.)
+derive_schema_fields flagSentinelFields flagSentinelRowOf from Flag
+
+def flagSentinelRow : SchemaLang.RowVals flagSentinelFields :=
+  flagSentinelRowOf ⟨0, "", false, 0, []⟩
 
 theorem flag_get_zero_none :
     SchemaLang.validates

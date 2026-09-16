@@ -87,12 +87,24 @@ def watchUsers (_n : UInt64) : Async.Future (List User) :=
   [ { id := 1, name := "first", email := "1@g.dev", tags := ["a"] }
   , { id := 2, name := "second", email := "2@g.dev", tags := ["b"] } ]
 
-/-- User's schema, as the validator sees it. THE REDUCIBILITY RULE
-    (`SchemaLang.Field`): `abbrev`, not `def` — instance search sees
-    through reducibles only. -/
-abbrev userSchema : List SchemaLang.Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
-  , ⟨"tags", .list .string⟩ ]
+/-- List → VList: the tags field's Value payload (the row is fully
+    schema-typed — the strings ride along unopened, guest-legal). The
+    guest mark is applied BELOW, post-hoc: the wasm manifest folds the
+    guest-mark registry in MARKING order (the byte-tie pins it), and
+    this def must sit above the derive command while its mark must
+    keep its original slot. -/
+def toVList : List String → SchemaLang.VList .string
+  | [] => .nil
+  | s :: ss => .cons (.string s) (toVList ss)
+
+-- DERIVED at elaboration from the registry
+-- (`SchemaLang.Meta.derive_schema_fields`): `userSchema` = User's
+-- registered field list (abbrev — THE REDUCIBILITY RULE: instance
+-- search sees through reducibles only), `userRow` = the record's
+-- row builder (the values in schema order, riding the guest-marked
+-- `toVList` for the tags field). Not a hand mirror: renaming a User
+-- field fails THIS module's elaboration.
+derive_schema_fields userSchema userRow from User using toVList
 
 -- The validator's body, SCHEMA-INDEXED: `id > 0` over userSchema.
 -- The field-ref is HasCol-typed — misspell it (`"iid"`) and this
@@ -128,24 +140,12 @@ def userNameLenCheck : SchemaLang.VExpr userSchema .bool :=
 def userCompleteCheck : SchemaLang.VExpr userSchema .bool :=
   SchemaLang.VExpr.and userCheck userNameLenCheck
 
-/-- List → VList: the tags field's Value payload (the row is fully
-    schema-typed — the strings ride along unopened, guest-legal).
-    `@[guest_std]`: the guest-mark registry — the backend's manifest
-    fold compiles every marked decl (no hand-list). -/
-@[guest_std]
-def toVList : List String → SchemaLang.VList .string
-  | [] => .nil
-  | s :: ss => .cons (.string s) (toVList ss)
-
-/-- The record's values, in schema order — the row evalV consumes.
-    `@[guest_std]`: the guest-mark registry — the backend's manifest
-    fold compiles every marked decl (no hand-list). -/
-@[guest_std]
-def userRow (u : User) : SchemaLang.RowVals userSchema :=
-  .cons (.u64 u.id)
-    (.cons (.string u.name)
-      (.cons (.string u.email)
-        (.cons (.list (toVList u.tags)) .nil)))
+-- The guest marks, post-hoc, at their artifact-visible MARKING
+-- positions (the wasm manifest fold compiles every marked decl in
+-- registry order — no hand-list; the byte-tie pins the order):
+-- toVList, then userRow.
+attribute [guest_std] toVList
+attribute [guest_std] userRow
 
 -- The FIRST VALIDATOR (the record-PARAM story): a fn taking a record
 -- IN. The canonical ABI hands the guest the record FLAT (7 core

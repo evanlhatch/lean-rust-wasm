@@ -3304,14 +3304,14 @@ No registry side effects: the pins are deterministic replays.
   Order : record order (3 fields)
   Role : variant role (3 cases)
   OrderError : variant order-error (3 cases)
-  getUser : func get-user(id: u64) -> option<user> delivery=once
-  watchOrders : func watch-orders(into: order-error) -> future<list<user>> delivery=once
-  Db : resource db
-  probeVolatileFn : func probe-volatile-fn(x: u32) -> u32 delivery=once
-  probeBothAxesFn : func probe-both-axes-fn(x: option<u32>) -> option<u32> delivery=once
-  probeDefaultFn : func probe-default-fn(x: u32, y: u32) -> u32 delivery=once
-  updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once
-  updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once -/
+  getUser : func get-user(id: u64) -> option<user> delivery=once — u64 → option<user>. The body is a stub — the SIGNATURE is the spec;
+  watchOrders : func watch-orders(into: order-error) -> future<list<user>> delivery=once — an order-error stream in, a user list out (async).
+  Db : resource db — An opaque handle type: the schema records it as a resource.
+  probeVolatileFn : func probe-volatile-fn(x: u32) -> u32 delivery=once — Probe: one ident arg sets the determinism axis only.
+  probeBothAxesFn : func probe-both-axes-fn(x: option<u32>) -> option<u32> delivery=once — Probe: the dot-joined pair sets BOTH axes (either order).
+  probeDefaultFn : func probe-default-fn(x: u32, y: u32) -> u32 delivery=once — Probe: no args — the defaults. (Two params: bodies of the one-param
+  updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once — The volatile probe: a clock-reading fn (the volatilities probe
+  updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once — The pure probe: same shape, default determinism — registers clean -/
 #guard_msgs in
 #schema
 
