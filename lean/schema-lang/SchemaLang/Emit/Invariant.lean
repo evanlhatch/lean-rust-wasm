@@ -34,6 +34,7 @@ they do).
 import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Invariant
+import SchemaLang.ExprLang
 import SchemaLang.Emit.GenCtx
 import SchemaLang.Meta.Reflect
 
@@ -41,25 +42,44 @@ namespace SchemaLang.Emit.Invariant
 
 open CodegenCore.Emit (pascal snake rustIdent)
 
-/-! ## The VExpr → Rust lowering (the evalB discipline) -/
+/-! ## The VExpr → Rust lowering (the evalB discipline), written ONCE
+    against the ExprLang interface (W7.2) -/
 
-/-- The u64 operand's Rust text. `ref` renders a field ref (the
-    record's struct field — `rustIdent`-mangled). -/
-def u64Rust (ref : String → String) : {fs : List Field} → VExpr fs .u64 → String
-  | _, .lit v => s!"{v}u64"
-  | _, .col n _ => ref n
-  | _, .strlen e =>
-      -- typing: the operand is a field ref (the only `.string` shape)
-      match e with
-      | .col n _ => s!"({ref n}).len() as u64"
+/-- The u64 operand's Rust text — the EMISSION reading of the
+    `U64Node` view: the name is the rendering key, the boxed
+    projection the node carries is the evaluation readings' half
+    (ignored here). `ref` renders a field ref (the record's struct
+    field — `rustIdent`-mangled). -/
+def u64RustI (L : ExprLang) [HasU64 L] (ref : L.Ident → String)
+    (e : L.Expr .u64) : String :=
+  match HasU64.view e with
+  | .lit v => s!"{v}u64"
+  | .col n _ => ref n
+  | .strlenCol n _ => s!"({ref n}).len() as u64"
 
-/-- The boolean's Rust text. -/
-def boolRust (ref : String → String) : {fs : List Field} → VExpr fs .bool → String
-  | _, .col n _ => s!"({ref n}) as u64 == 1"
-  | _, .gt a b => s!"({u64Rust ref a} > {u64Rust ref b})"
-  | _, .eq a b => s!"({u64Rust ref a} == {u64Rust ref b})"
-  | _, .and a b => s!"({boolRust ref a} && {boolRust ref b})"
-  | _, .not a => s!"(!({boolRust ref a}))"
+/-- The boolean's Rust text ALGEBRA (children arrive pre-folded to
+    text — the fold owns the recursion). -/
+def boolRustAlg {I R : Type} (ref : I → String) :
+    BoolNode I R String String → String
+  | .col n _ => s!"({ref n}) as u64 == 1"
+  | .gt a b => s!"({a} > {b})"
+  | .eq a b => s!"({a} == {b})"
+  | .and a b => s!"({a} && {b})"
+  | .not a => s!"(!({a}))"
+
+/-- The boolean's Rust text: the fold at the emission algebras. -/
+def boolRustI (L : ExprLang) [HasU64 L] [HasBool L] (ref : L.Ident → String)
+    (e : L.Expr .bool) : String :=
+  HasBool.fold (u64RustI L ref) (boolRustAlg ref) e
+
+/-- COMPAT (W7.2 phase 1): the VExpr-specialized spellings Emit.Update
+    still rides; its port is the next consumer step. Same signatures
+    as the pre-interface defs. -/
+def u64Rust (ref : String → String) {fs : List Field} (e : VExpr fs .u64) : String :=
+  u64RustI (vexprLang fs) ref e
+
+def boolRust (ref : String → String) {fs : List Field} (e : VExpr fs .bool) : String :=
+  boolRustI (vexprLang fs) ref e
 
 /-! ## The default row — the Lean-computed test verdict -/
 
@@ -138,14 +158,14 @@ def checkFn (it : InvariantItem) : List CodegenCore.Emit.Rust.Item :=
     | none => ""
   [ .comment s!"invariant `{it.name}` on {it.schemaRef} — tier: {it.tier.render}{proofLine}"
   , .fn s!"fn {checkFnName it}(v: &{pascal it.schemaRef}) -> bool"
-      (boolRust (fun n => s!"v.{rustIdent n}") it.inv.expr) ]
+      (boolRustI (vexprLang it.inv.fields) (fun n => s!"v.{rustIdent n}") it.inv.expr) ]
 
 /-- One record → the folding validator (AND over its invariants). -/
 def validateFn (invs : List InvariantItem) (rec : String) :
     CodegenCore.Emit.Rust.Item :=
   let ref : String → String := fun n => s!"v.{rustIdent n}"
   let body := String.intercalate " && "
-    (invs.map fun it => s!"({boolRust ref it.inv.expr})")
+    (invs.map fun it => s!"({boolRustI (vexprLang it.inv.fields) ref it.inv.expr})")
   .fn s!"fn {validateFnName rec}(v: &{pascal rec}) -> bool"
     (if invs.isEmpty then "true" else body)
 

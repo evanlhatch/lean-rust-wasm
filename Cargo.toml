@@ -9,7 +9,14 @@ license = "MIT OR Apache-2.0"
 members = ["crates/forge", "crates/guest-demo", "crates/steel-host", "crates/guestlang-rt", "crates/wire", "crates/splicer-mw", "crates/lean-sys-v433", "crates/lean-ffi"]
 resolver = "2"
 
+[features]
+# W6.4: the generated value generators (src/gen_generated.rs) consume
+# arbitrary::Unstructured. Optional + self-dev-dep gated (the wire crate's
+# pattern) — no transitive arbitrary in production builds.
+arbitrary = ["dep:arbitrary"]
+
 [dependencies]
+arbitrary = { version = "1", optional = true }
 # Errors/observability: fast-observe IS the error tool. No thiserror,
 # no anyhow, no eyre — define faults with fast-observe, flow with `?`.
 fast-observe = "0.1"
@@ -38,6 +45,9 @@ serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 bolero = "0.13" # property/fuzz tests
+# Enable the crate's `arbitrary` feature for the gen smoke test
+# (tests/gen_smoke.rs) — the wire crate's self-dev-dep pattern.
+lean-rust-wasm = { path = ".", features = ["arbitrary"] }
 insta = "1" # snapshot tests
 
 [lints.rust]

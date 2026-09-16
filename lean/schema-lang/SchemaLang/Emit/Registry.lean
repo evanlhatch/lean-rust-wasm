@@ -27,6 +27,7 @@ import SchemaLang.Pipeline
 import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.Wit
 import SchemaLang.Emit.Rust
+import SchemaLang.Emit.GenRust
 import SchemaLang.Delta
 import SchemaLang.Emit.WitFixture
 import SchemaLang.Emit.Invariant
@@ -170,6 +171,7 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   [ witEmitter
   , flagsWitEmitter
   , rustEmitter
+  , genRustEmitter
   , SchemaLang.Vortex.Emit.vortexEmitter
   , SchemaLang.Vortex.Emit.extVortexEmitter
   , deltaEmitter

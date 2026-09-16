@@ -28,9 +28,14 @@ scalar leaves).
 `ScalarCtor` is the closed enumeration of the prefix-only constructors —
 the thing that grows when substrait adds a type. Add a constructor here, one
 row in `scalarGrammar`, and both directions follow.
+
+W5.3 phase 2a extends the same pattern to the REL grammar's name tokens
+(join types, set ops, sort directions) and the literal-type names: one table
+per family below, emitter renderer and decoder parser both derived from it.
 -/
 
 import Substrait.Proto.Type
+import Substrait.Proto.Rel
 
 namespace Substrait.Grammar
 
@@ -211,5 +216,265 @@ theorem TCtor.prefix_unique (t₁ t₂ : TCtor) (cs : List Char)
       | exact clash h1 h2 (by decide) (by decide)
       | (rename_i b; cases b <;> exact clash h1 h2 (by decide) (by decide))
 
+
+/-! ## The name families (W5.3 phase 2a)
+
+The rel grammar's name tokens were FOUR hand-written tables drifting in
+emitter/decoder pairs: `Emit/Text.joinTypeName` ↔ `Decode.joinTypeOfName`,
+`setOpName` ↔ `setOpOfName`, `sortDirName` ↔ `sortDirOfName`, and
+`literalTypeName` ↔ the literal suffix (read through `parseType`). Each
+family is now ONE table here: a closed enumeration of the EMIT-ABLE
+constructors (`unspecified` is excluded by construction — the emitter
+rejects it, the decoder never produces it), the `name` token function, and
+the row list. The emitter renders via `ofX` + `name`; the decoder
+exact-matches the token via `ofName` — both read the same rows.
+
+Discipline difference from the type heads: these decoders `scanIdent` and
+then EXACT-match the token, so the side condition is name-DISTINCTNESS
+(the `…_name_nodup` lemmas, by `decide`) where `TCtor` needed
+`prefix_unique`. `findName_self` is the one generic lemma every family's
+self-lookup rides — the exact-match analog of `lexCtor_self`. -/
+
+/-- Exact-match self-lookup over a name table: with name-distinct rows,
+    looking up a row's own name finds that row. -/
+theorem findName_self {α : Type} (name : α → String) (t : List α)
+    (hnodup : (t.map name).Nodup) (c : α) (hc : c ∈ t) :
+    (t.find? (fun c' => name c' == name c)) = some c := by
+  induction t with
+  | nil => simp at hc
+  | cons x xs ih =>
+    rw [List.map_cons, List.nodup_cons] at hnodup
+    rcases List.mem_cons.mp hc with rfl | hin
+    · rw [List.find?_cons, beq_self_eq_true]
+    · have hne : (name x == name c) = false := by
+        rw [beq_eq_false_iff_ne]
+        intro h
+        apply hnodup.1
+        rw [h]
+        exact List.mem_map_of_mem hin
+      rw [List.find?_cons, hne]
+      exact ih hnodup.2 hin
+
+/-- The emit-able join types: the text grammar has no `Unspecified` row
+    (the emitter rejects it, the decoder never produces it). Growing
+    substrait's join catalogue = a ctor here + a row in `joinGrammar`. -/
+inductive JoinCtor where
+  | inner | outer | left | right
+  | leftSemi | rightSemi | leftAnti | rightAnti
+  | leftSingle | rightSingle | leftMark | rightMark
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- Build the proto join type for a join ctor. -/
+def JoinCtor.toJoinType : JoinCtor → Proto.JoinType
+  | .inner => .inner | .outer => .outer | .left => .left | .right => .right
+  | .leftSemi => .leftSemi | .rightSemi => .rightSemi
+  | .leftAnti => .leftAnti | .rightAnti => .rightAnti
+  | .leftSingle => .leftSingle | .rightSingle => .rightSingle
+  | .leftMark => .leftMark | .rightMark => .rightMark
+
+/-- Recover the join ctor from a proto join type (`unspecified` → none). -/
+def JoinCtor.ofJoinType : Proto.JoinType → Option JoinCtor
+  | .inner => some .inner | .outer => some .outer | .left => some .left
+  | .right => some .right | .leftSemi => some .leftSemi
+  | .rightSemi => some .rightSemi | .leftAnti => some .leftAnti
+  | .rightAnti => some .rightAnti | .leftSingle => some .leftSingle
+  | .rightSingle => some .rightSingle | .leftMark => some .leftMark
+  | .rightMark => some .rightMark | .unspecified => none
+
+/-- ofJoinType ∘ toJoinType = some. -/
+theorem JoinCtor.ofJoinType_toJoinType (c : JoinCtor) :
+    ofJoinType c.toJoinType = some c := by
+  cases c <;> rfl
+
+/-- toJoinType ∘ ofJoinType = id where defined. -/
+theorem JoinCtor.toJoinType_ofJoinType (j : Proto.JoinType) (c : JoinCtor)
+    (h : ofJoinType j = some c) : c.toJoinType = j := by
+  cases j <;> simp [ofJoinType] at h <;> subst h <;> rfl
+
+/-- The wire token of each join ctor (`&Inner`, … — the `&` is the rel
+    header's, not the token's). -/
+def JoinCtor.name : JoinCtor → String
+  | .inner => "Inner" | .outer => "Outer" | .left => "Left" | .right => "Right"
+  | .leftSemi => "LeftSemi" | .rightSemi => "RightSemi"
+  | .leftAnti => "LeftAnti" | .rightAnti => "RightAnti"
+  | .leftSingle => "LeftSingle" | .rightSingle => "RightSingle"
+  | .leftMark => "LeftMark" | .rightMark => "RightMark"
+
+/-- The join-name table (all rows; order irrelevant — exact match plus
+    `joinGrammar_name_nodup`). -/
+def joinGrammar : List JoinCtor :=
+  [.inner, .outer, .left, .right, .leftSemi, .rightSemi, .leftAnti,
+   .rightAnti, .leftSingle, .rightSingle, .leftMark, .rightMark]
+
+theorem joinGrammar_complete (c : JoinCtor) : c ∈ joinGrammar := by
+  cases c <;> simp [joinGrammar]
+
+theorem joinGrammar_name_nodup : (joinGrammar.map JoinCtor.name).Nodup := by
+  decide
+
+/-- The decoder's exact-match lookup over the table. -/
+def JoinCtor.ofName (s : String) : Option JoinCtor :=
+  joinGrammar.find? (fun c => c.name == s)
+
+/-- Self-lookup: a row's own name parses back to it. -/
+theorem JoinCtor.ofName_self (c : JoinCtor) : ofName c.name = some c :=
+  findName_self name joinGrammar joinGrammar_name_nodup c (joinGrammar_complete c)
+
+/-- Negative control: `Unspecified` has no row, so its token does not parse. -/
+theorem JoinCtor.ofName_unspecified : ofName "Unspecified" = none := by decide
+
+/-- The emit-able set ops (no `Unspecified` row). -/
+inductive SetCtor where
+  | unionAll | unionDistinct
+  | minusPrimary | minusPrimaryAll | minusMultiset
+  | intersectionPrimary | intersectionMultiset | intersectionMultisetAll
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- Build the proto set op for a set ctor. -/
+def SetCtor.toSetOp : SetCtor → Proto.SetOp
+  | .unionAll => .unionAll | .unionDistinct => .unionDistinct
+  | .minusPrimary => .minusPrimary | .minusPrimaryAll => .minusPrimaryAll
+  | .minusMultiset => .minusMultiset
+  | .intersectionPrimary => .intersectionPrimary
+  | .intersectionMultiset => .intersectionMultiset
+  | .intersectionMultisetAll => .intersectionMultisetAll
+
+/-- Recover the set ctor from a proto set op (`unspecified` → none). -/
+def SetCtor.ofSetOp : Proto.SetOp → Option SetCtor
+  | .unionAll => some .unionAll | .unionDistinct => some .unionDistinct
+  | .minusPrimary => some .minusPrimary | .minusPrimaryAll => some .minusPrimaryAll
+  | .minusMultiset => some .minusMultiset
+  | .intersectionPrimary => some .intersectionPrimary
+  | .intersectionMultiset => some .intersectionMultiset
+  | .intersectionMultisetAll => some .intersectionMultisetAll
+  | .unspecified => none
+
+theorem SetCtor.ofSetOp_toSetOp (c : SetCtor) :
+    ofSetOp c.toSetOp = some c := by
+  cases c <;> rfl
+
+theorem SetCtor.toSetOp_ofSetOp (op : Proto.SetOp) (c : SetCtor)
+    (h : ofSetOp op = some c) : c.toSetOp = op := by
+  cases op <;> simp [ofSetOp] at h <;> subst h <;> rfl
+
+/-- The wire token of each set ctor (`&UnionAll`, …). -/
+def SetCtor.name : SetCtor → String
+  | .unionAll => "UnionAll" | .unionDistinct => "UnionDistinct"
+  | .minusPrimary => "MinusPrimary" | .minusPrimaryAll => "MinusPrimaryAll"
+  | .minusMultiset => "MinusMultiset"
+  | .intersectionPrimary => "IntersectionPrimary"
+  | .intersectionMultiset => "IntersectionMultiset"
+  | .intersectionMultisetAll => "IntersectionMultisetAll"
+
+/-- The set-op name table. -/
+def setGrammar : List SetCtor :=
+  [.unionAll, .unionDistinct, .minusPrimary, .minusPrimaryAll, .minusMultiset,
+   .intersectionPrimary, .intersectionMultiset, .intersectionMultisetAll]
+
+theorem setGrammar_complete (c : SetCtor) : c ∈ setGrammar := by
+  cases c <;> simp [setGrammar]
+
+theorem setGrammar_name_nodup : (setGrammar.map SetCtor.name).Nodup := by
+  decide
+
+/-- The decoder's exact-match lookup over the table. -/
+def SetCtor.ofName (s : String) : Option SetCtor :=
+  setGrammar.find? (fun c => c.name == s)
+
+theorem SetCtor.ofName_self (c : SetCtor) : ofName c.name = some c :=
+  findName_self name setGrammar setGrammar_name_nodup c (setGrammar_complete c)
+
+/-- Negative control: `Unspecified` has no row, so its token does not parse. -/
+theorem SetCtor.ofName_unspecified : ofName "Unspecified" = none := by decide
+
+/-- The emit-able sort directions (no `Unspecified` row). -/
+inductive SortDirCtor where
+  | ascNullsFirst | ascNullsLast | descNullsFirst | descNullsLast | clustered
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- Build the proto sort direction for a sort-dir ctor. -/
+def SortDirCtor.toSortDirection : SortDirCtor → Proto.SortDirection
+  | .ascNullsFirst => .ascNullsFirst | .ascNullsLast => .ascNullsLast
+  | .descNullsFirst => .descNullsFirst | .descNullsLast => .descNullsLast
+  | .clustered => .clustered
+
+/-- Recover the sort-dir ctor from a proto sort direction
+    (`unspecified` → none). -/
+def SortDirCtor.ofSortDirection : Proto.SortDirection → Option SortDirCtor
+  | .ascNullsFirst => some .ascNullsFirst | .ascNullsLast => some .ascNullsLast
+  | .descNullsFirst => some .descNullsFirst | .descNullsLast => some .descNullsLast
+  | .clustered => some .clustered | .unspecified => none
+
+theorem SortDirCtor.ofSortDirection_toSortDirection (c : SortDirCtor) :
+    ofSortDirection c.toSortDirection = some c := by
+  cases c <;> rfl
+
+theorem SortDirCtor.toSortDirection_of (d : Proto.SortDirection) (c : SortDirCtor)
+    (h : ofSortDirection d = some c) : c.toSortDirection = d := by
+  cases d <;> simp [ofSortDirection] at h <;> subst h <;> rfl
+
+/-- `ofSortDirection` fails only at `unspecified`. -/
+theorem SortDirCtor.eq_unspecified_of_ofSortDirection_none {d : Proto.SortDirection}
+    (h : ofSortDirection d = none) : d = .unspecified := by
+  cases d <;> simp [ofSortDirection] at h <;> rfl
+
+/-- The wire token of each sort-dir ctor (`AscNullsFirst`, … — no `&` here;
+    the sort field's `(…, &Dir)` adds it). -/
+def SortDirCtor.name : SortDirCtor → String
+  | .ascNullsFirst => "AscNullsFirst" | .ascNullsLast => "AscNullsLast"
+  | .descNullsFirst => "DescNullsFirst" | .descNullsLast => "DescNullsLast"
+  | .clustered => "Clustered"
+
+/-- The sort-direction name table. -/
+def sortDirGrammar : List SortDirCtor :=
+  [.ascNullsFirst, .ascNullsLast, .descNullsFirst, .descNullsLast, .clustered]
+
+theorem sortDirGrammar_complete (c : SortDirCtor) : c ∈ sortDirGrammar := by
+  cases c <;> simp [sortDirGrammar]
+
+theorem sortDirGrammar_name_nodup : (sortDirGrammar.map SortDirCtor.name).Nodup := by
+  decide
+
+/-- The decoder's exact-match lookup over the table. -/
+def SortDirCtor.ofName (s : String) : Option SortDirCtor :=
+  sortDirGrammar.find? (fun c => c.name == s)
+
+theorem SortDirCtor.ofName_self (c : SortDirCtor) : ofName c.name = some c :=
+  findName_self name sortDirGrammar sortDirGrammar_name_nodup c
+    (sortDirGrammar_complete c)
+
+/-- Negative control: `Unspecified` has no row, so its token does not parse. -/
+theorem SortDirCtor.ofName_unspecified : ofName "Unspecified" = none := by decide
+
+/-! ### The literal-type names
+
+The literal type suffix reuses the TYPE grammar's tokens: the nine scalar
+literal types carry their `ScalarCtor.prefix`; `null` is the one
+literal-only token. The decode side never had a separate name table — it
+reads the suffix as a full type (`scanLitSuffix` → `parseType` → `lexCtor`),
+so it was already table-driven; the drift was the EMITTER's second copy
+(`Emit/Text.literalTypeName`). `literalScalarCtor` + `literalTypeToken`
+make the sharing explicit: the emitter's token IS the scalar's prefix. -/
+
+/-- The scalar ctor behind a scalar literal type (`none` = the null
+    literal). -/
+def literalScalarCtor : Proto.LiteralType → Option ScalarCtor
+  | .bool _ => some .bool
+  | .i8 _ => some .i8
+  | .i16 _ => some .i16
+  | .i32 _ => some .i32
+  | .i64 _ => some .i64
+  | .fp32 _ => some .fp32
+  | .fp64 _ => some .fp64
+  | .string _ => some .string
+  | .binary _ => some .binary
+  | .null _ => none
+
+/-- The literal-type suffix token: the scalar's type prefix, `"null"` for
+    the null literal. -/
+def literalTypeToken (lt : Proto.LiteralType) : String :=
+  match literalScalarCtor lt with
+  | some c => ScalarCtor.prefix c
+  | none => "null"
 
 end Substrait.Grammar

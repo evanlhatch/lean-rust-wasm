@@ -3,6 +3,10 @@
 
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
+W5.3 phase 2a: `joinTypeOfName`/`setOpOfName`/`sortDirOfName` are exact-match
+lookups over the shared `Substrait.Grammar` name tables (the hand tables
+died); the per-family `parse (emit x) = some x` round trips are at the
+bottom.
 -/
 import Substrait.Decode.Expr
 
@@ -52,33 +56,21 @@ def parseRefItem : List Char → Option Nat
     | _ => none
   | _ => none
 
-/-- Join-type name → constructor (inverse of the emitter's table). -/
-def joinTypeOfName : String → Option Proto.JoinType
-  | "Inner" => some .inner | "Outer" => some .outer | "Left" => some .left
-  | "Right" => some .right | "LeftSemi" => some .leftSemi
-  | "RightSemi" => some .rightSemi | "LeftAnti" => some .leftAnti
-  | "RightAnti" => some .rightAnti | "LeftSingle" => some .leftSingle
-  | "RightSingle" => some .rightSingle | "LeftMark" => some .leftMark
-  | "RightMark" => some .rightMark | _ => none
+/-- Join-type name → constructor: the decoder half of
+    `Substrait.Grammar.joinGrammar` (exact-match lookup; row names distinct
+    by `joinGrammar_name_nodup`). -/
+def joinTypeOfName (s : String) : Option Proto.JoinType :=
+  (Grammar.JoinCtor.ofName s).map Grammar.JoinCtor.toJoinType
 
-/-- Set-op name → constructor. -/
-def setOpOfName : String → Option Proto.SetOp
-  | "UnionAll" => some .unionAll | "UnionDistinct" => some .unionDistinct
-  | "MinusPrimary" => some .minusPrimary | "MinusPrimaryAll" => some .minusPrimaryAll
-  | "MinusMultiset" => some .minusMultiset
-  | "IntersectionPrimary" => some .intersectionPrimary
-  | "IntersectionMultiset" => some .intersectionMultiset
-  | "IntersectionMultisetAll" => some .intersectionMultisetAll
-  | _ => none
+/-- Set-op name → constructor: the decoder half of
+    `Substrait.Grammar.setGrammar`. -/
+def setOpOfName (s : String) : Option Proto.SetOp :=
+  (Grammar.SetCtor.ofName s).map Grammar.SetCtor.toSetOp
 
-/-- Sort-direction name → constructor. -/
-def sortDirOfName : String → Option Proto.SortDirection
-  | "AscNullsFirst" => some .ascNullsFirst
-  | "AscNullsLast" => some .ascNullsLast
-  | "DescNullsFirst" => some .descNullsFirst
-  | "DescNullsLast" => some .descNullsLast
-  | "Clustered" => some .clustered
-  | _ => none
+/-- Sort-direction name → constructor: the decoder half of
+    `Substrait.Grammar.sortDirGrammar`. -/
+def sortDirOfName (s : String) : Option Proto.SortDirection :=
+  (Grammar.SortDirCtor.ofName s).map Grammar.SortDirCtor.toSortDirection
 
 /-- The output-clause tail: refs-only items become the emit mapping
     (identity canonicalizes to `none` — the text does not distinguish
@@ -408,6 +400,66 @@ def parseRelTree (ctx : FnCtx) : Nat → Nat → List String → Option (Proto.R
     else none
 
 end
+
+-- ── the name-family round trips (W5.3 phase 2a) ────────────────────────────
+
+/-- **Join-name round trip** (`parse (emit x) = some x`): emitter and
+    decoder read ONE table (`Grammar.joinGrammar`), so this is a table
+    lookup composed with its inverse — the per-family lemma is mechanical. -/
+theorem joinTypeOfName_joinTypeName (j : Proto.JoinType) (s : String)
+    (h : Emit.Text.joinTypeName j = .ok s) : joinTypeOfName s = some j := by
+  unfold Emit.Text.joinTypeName at h
+  cases hj : Grammar.JoinCtor.ofJoinType j with
+  | none =>
+    rw [hj] at h
+    have h' : (Except.error "cannot emit Unspecified join type in the text format"
+        : Except String String) = .ok s := h
+    cases h'
+  | some c =>
+    rw [hj] at h
+    have hs : s = c.name := (Except.ok.inj h).symm
+    subst hs
+    show (Grammar.JoinCtor.ofName c.name).map Grammar.JoinCtor.toJoinType = some j
+    rw [Grammar.JoinCtor.ofName_self]
+    exact congrArg some (Grammar.JoinCtor.toJoinType_ofJoinType j c hj)
+
+/-- **Set-op round trip** (`parse (emit x) = some x`) over
+    `Grammar.setGrammar`. -/
+theorem setOpOfName_setOpName (op : Proto.SetOp) (s : String)
+    (h : Emit.Text.setOpName op = .ok s) : setOpOfName s = some op := by
+  unfold Emit.Text.setOpName at h
+  cases hj : Grammar.SetCtor.ofSetOp op with
+  | none =>
+    rw [hj] at h
+    have h' : (Except.error "cannot emit Unspecified set op in the text format"
+        : Except String String) = .ok s := h
+    cases h'
+  | some c =>
+    rw [hj] at h
+    have hs : s = c.name := (Except.ok.inj h).symm
+    subst hs
+    show (Grammar.SetCtor.ofName c.name).map Grammar.SetCtor.toSetOp = some op
+    rw [Grammar.SetCtor.ofName_self]
+    exact congrArg some (Grammar.SetCtor.toSetOp_ofSetOp op c hj)
+
+/-- **Sort-direction round trip** (`parse (emit x) = some x`) over
+    `Grammar.sortDirGrammar`. The emitter's Sort arm throws on
+    `unspecified` before rendering, so the emit side is quantified over the
+    non-unspecified ctors; the fallback token `"Unspecified"` never parses
+    back (`Grammar.SortDirCtor.ofName_unspecified`). -/
+theorem sortDirOfName_sortDirName (d : Proto.SortDirection) (hd : d ≠ .unspecified) :
+    sortDirOfName (Emit.Text.sortDirName d) = some d := by
+  cases hj : Grammar.SortDirCtor.ofSortDirection d with
+  | none =>
+    exact absurd (Grammar.SortDirCtor.eq_unspecified_of_ofSortDirection_none hj) hd
+  | some c =>
+    have hname : Emit.Text.sortDirName d = c.name := by
+      unfold Emit.Text.sortDirName
+      rw [hj]
+    rw [hname]
+    show (Grammar.SortDirCtor.ofName c.name).map Grammar.SortDirCtor.toSortDirection = some d
+    rw [Grammar.SortDirCtor.ofName_self]
+    exact congrArg some (Grammar.SortDirCtor.toSortDirection_of d c hj)
 
 
 

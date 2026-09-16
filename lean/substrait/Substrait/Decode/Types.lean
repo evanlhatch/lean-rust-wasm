@@ -295,6 +295,25 @@ theorem parseType_scalar_nullable (c : Substrait.Grammar.ScalarCtor) (rest : Lis
     List.drop_left]
   exact withNull_nullable _ rest
 
+/-- **Literal-name round trip** (W5.3 phase 2a): a scalar literal's type
+    suffix token parses back — as a TYPE, via `parseType` — to the matching
+    scalar ctor. Both sides read ONE table: the emitter's
+    `Emit.Text.literalTypeName` is `Grammar.literalTypeToken` (the scalar's
+    own `prefix`); the decoder lexes that same prefix through `lexCtor`.
+    The `null` literal has no scalar row: its `null:` arm is a VALUE-token
+    match in `parseLiteral`, not a type suffix (unchanged). -/
+theorem parseType_literalTypeName (lt : Proto.LiteralType)
+    (c : Substrait.Grammar.ScalarCtor)
+    (h : Substrait.Grammar.literalScalarCtor lt = some c) (rest : List Char)
+    (hrest : rest.head? ≠ some '?') :
+    parseType 1 ((Emit.Text.literalTypeName lt).toList ++ rest) =
+      some (Substrait.Grammar.ScalarCtor.toPType c .required, rest) := by
+  have htok : Emit.Text.literalTypeName lt = Substrait.Grammar.ScalarCtor.prefix c := by
+    unfold Emit.Text.literalTypeName Substrait.Grammar.literalTypeToken
+    rw [h]
+  rw [htok]
+  exact parseType_scalar c rest hrest
+
 
 
 /-- `expect ">"` on a literal `>` head. -/

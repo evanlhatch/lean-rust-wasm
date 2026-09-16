@@ -1634,6 +1634,7 @@ name = "lean-rust-wasm"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "arbitrary",
  "arc-swap",
  "asyncband",
  "bolero",
@@ -1645,6 +1646,7 @@ dependencies = [
  "fs-err",
  "insta",
  "itertools",
+ "lean-rust-wasm",
  "log",
  "parking_lot",
  "serde",

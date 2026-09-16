@@ -20,6 +20,7 @@ import SchemaLang.Layout
 import SchemaLang.Gen
 import SchemaLang.Field
 import SchemaLang.Validate
+import SchemaLang.ExprLang
 import SchemaLang.Subschema
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower

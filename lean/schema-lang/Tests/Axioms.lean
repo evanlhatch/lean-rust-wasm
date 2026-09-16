@@ -54,6 +54,14 @@ import Demo
 #print axioms SchemaLang.universeCheck_sound
 #print axioms SchemaLang.universeCheck_complete
 
+-- W7.2 ExprLang: the interface's law fields and the two readings'
+-- tie theorems on the VExpr instance.
+#print axioms SchemaLang.vexprViewU64_eval
+#print axioms SchemaLang.vexprFoldBool_spec
+#print axioms SchemaLang.evalSpecI_vexpr
+#print axioms SchemaLang.evalRawI_vexpr
+#print axioms SchemaLang.validatesI_vexpr
+
 -- W3.4/W4.3: the raw lane's ONE general-index neutrality theorem (the
 -- fixed-slice `evalU_set_neutral`/`evalBNeutral` pair, collapsed) and
 -- the cascade as a `Dbsp.DeltaSystem` (disjoint-commutes + the N-update

@@ -205,12 +205,11 @@ end Ctx
 
 /-! ## Expressions (mirrors textify/expressions.rs) -/
 
-/-- The literal type-suffix name. -/
-def literalTypeName : Proto.LiteralType → String
-  | .bool _   => "boolean" | .i8 _ => "i8" | .i16 _ => "i16"
-  | .i32 _    => "i32" | .i64 _ => "i64" | .fp32 _ => "fp32"
-  | .fp64 _   => "fp64" | .string _ => "string" | .binary _ => "binary"
-  | .null _   => "null"
+/-- The literal type-suffix name — the shared table's token
+    (`Substrait.Grammar.literalTypeToken`): the nine scalar literal types
+    carry their `ScalarCtor.prefix` (the SAME table `parseType` lexes), so
+    emitter and decoder cannot drift; `null` is the literal-only token. -/
+def literalTypeName (lt : Proto.LiteralType) : String := literalTypeToken lt
 
 /-- Literal kinds whose value syntax needs no type suffix. -/
 def isDefaultForSyntax : Proto.LiteralType → Bool
@@ -359,33 +358,30 @@ partial def relWidth : Proto.Rel → Except String Nat
   | .extensionSingle _=> throw "cannot emit ExtensionSingleRel in the text format"
   | .extensionMulti _ => throw "cannot emit ExtensionMultiRel in the text format"
 
-/-- Join type display names (`&Inner`, …). -/
-def joinTypeName : Proto.JoinType → Except String String
-  | .inner => pure "Inner" | .outer => pure "Outer" | .left => pure "Left" | .right => pure "Right"
-  | .leftSemi => pure "LeftSemi" | .rightSemi => pure "RightSemi"
-  | .leftAnti => pure "LeftAnti" | .rightAnti => pure "RightAnti"
-  | .leftSingle => pure "LeftSingle" | .rightSingle => pure "RightSingle"
-  | .leftMark => pure "LeftMark" | .rightMark => pure "RightMark"
-  | .unspecified => throw "cannot emit Unspecified join type in the text format"
+/-- Join type display names (`&Inner`, …) — the emitter half of
+    `Substrait.Grammar.joinGrammar`. `unspecified` has no row and
+    hard-errors. -/
+def joinTypeName (j : Proto.JoinType) : Except String String :=
+  match JoinCtor.ofJoinType j with
+  | some c => pure c.name
+  | none => throw "cannot emit Unspecified join type in the text format"
 
-/-- Set op display names (`&UnionAll`, …). -/
-def setOpName : Proto.SetOp → Except String String
-  | .unionAll => pure "UnionAll" | .unionDistinct => pure "UnionDistinct"
-  | .minusPrimary => pure "MinusPrimary" | .minusPrimaryAll => pure "MinusPrimaryAll"
-  | .minusMultiset => pure "MinusMultiset"
-  | .intersectionPrimary => pure "IntersectionPrimary"
-  | .intersectionMultiset => pure "IntersectionMultiset"
-  | .intersectionMultisetAll => pure "IntersectionMultisetAll"
-  | .unspecified => throw "cannot emit Unspecified set op in the text format"
+/-- Set op display names (`&UnionAll`, …) — the emitter half of
+    `Substrait.Grammar.setGrammar`. `unspecified` has no row and
+    hard-errors. -/
+def setOpName (op : Proto.SetOp) : Except String String :=
+  match SetCtor.ofSetOp op with
+  | some c => pure c.name
+  | none => throw "cannot emit Unspecified set op in the text format"
 
-/-- Sort direction display name (no `&`; the caller adds it). -/
-def sortDirName : Proto.SortDirection → String
-  | .ascNullsFirst   => "AscNullsFirst"
-  | .ascNullsLast    => "AscNullsLast"
-  | .descNullsFirst  => "DescNullsFirst"
-  | .descNullsLast   => "DescNullsLast"
-  | .clustered       => "Clustered"
-  | .unspecified     => "Unspecified"  -- the caller rejects Unspecified instead
+/-- Sort direction display name (no `&`; the caller adds it) — the emitter
+    half of `Substrait.Grammar.sortDirGrammar`. `unspecified` has no row;
+    the caller rejects it before rendering, so the fallback token never
+    reaches the wire. -/
+def sortDirName (d : Proto.SortDirection) : String :=
+  match SortDirCtor.ofSortDirection d with
+  | some c => c.name
+  | none => "Unspecified"  -- the caller rejects Unspecified instead
 
 /-- A rel's output clause over its full width of indirect refs — the
     Filter/Sort/Fetch arms' shared piece (a ref-clause with no mapping).

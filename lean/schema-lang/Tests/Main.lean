@@ -7,6 +7,7 @@ WIT golden emission.
 import Lean
 import SchemaLang
 import SchemaLang.Emit.GenCtx
+import SchemaLang.Emit.GenRust
 import SchemaLang.Emit.Invariant
 import SchemaLang.Emit.Update
 import SchemaLang.Bridge
@@ -472,6 +473,77 @@ def derivesChecks : CheckResult := do
       (SchemaLang.Emit.Rust.derivesFor uni [.ty "clean"]) viaClean]
   _ ← assert (cleanOut.contains "#[derive(Clone, Debug, PartialEq, Eq)]")
     "via-clean keeps Eq"
+  .ok ()
+
+/-! ## Generator emitter (W6.4): Rust gen fns from the registry -/
+
+/-- The W6.4 phase-1 pins: the fragment gate (what generates, what
+    SKIPS LOUDLY), the emitted fn shape (budget-threaded, pool-fed,
+    field-wise), and the demo-universe sweep (EVERY record gets a fn —
+    the non-vacuity control: a fragment that skipped everything would
+    still pass the shape pins). -/
+def genRustChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
+  -- the fragment gate: scalars/string/bytes/option/list generate;
+  -- tensor/result/future/stream skip
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [] 8 .u64 == none) "u64 supported"
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [] 8 (.option (.list .string)) == none)
+    "option<list<string>> supported"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.tensor [2] .f32)).isSome)
+    "tensor skipped"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.result .u64 .string)).isSome)
+    "result skipped"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.future .u64)).isSome)
+    "future skipped"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.stream .u8)).isSome)
+    "stream skipped"
+  -- refs: resolvable records generate; variants/ghosts/cycles skip
+  let inner : Item := .record "inner" [{ name := "x", ty := .u64 }]
+  let outer : Item := .record "outer" [{ name := "i", ty := .ty "inner" }]
+  let uni := [inner, outer, demoRole]
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? uni 8 (.ty "inner") == none)
+    "record ref supported"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? uni 8 (.ty "role")).isSome)
+    "variant ref skipped"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? uni 8 (.ty "ghost")).isSome)
+    "ghost ref skipped"
+  let cycA : Item := .record "cyc-a" [{ name := "b", ty := .ty "cyc-b" }]
+  let cycB : Item := .record "cyc-b" [{ name := "a", ty := .ty "cyc-a" }]
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [cycA, cycB] 8 (.ty "cyc-a")).isSome)
+    "ref cycle skipped (fuel-bounded)"
+  -- the skip is LOUD: a comment names the record, the field, the reason
+  let tensored : Item := .record "tensored" [{ name := "t", ty := .tensor [2] .f32 }]
+  let skipOut := CodegenCore.Emit.Rust.renderModule
+    [SchemaLang.Emit.GenRust.recordGenItem [tensored] "tensored"
+      [{ name := "t", ty := .tensor [2] .f32 }]]
+  _ ← assert (skipOut.contains "gen_tensored SKIPPED") "skip marker"
+  _ ← assert (skipOut.contains "'t'") "skip names the field"
+  _ ← assert (!skipOut.contains "pub fn gen_tensored") "no fn for a skipped record"
+  -- the emitted fn shape: budget-threaded, pool-fed, field-wise
+  let out := CodegenCore.Emit.Rust.renderModule
+    (SchemaLang.Emit.GenRust.genRustItems uni)
+  _ ← assert (out.contains "pub fn gen_inner(") "inner gen fn"
+  _ ← assert (out.contains "pub fn gen_outer(") "outer gen fn"
+  _ ← assert (out.contains "gen_inner(u, max_depth.saturating_sub(1))?")
+    "ref recursion spends the budget"
+  _ ← assert (out.contains "STRING_POOL") "collision pool emitted"
+  _ ← assert (out.contains "\"inner\"") "pool carries the record names"
+  _ ← assert (out.contains "u.ratio(9, 10)?") "90/10 pool discipline"
+  _ ← assert (out.contains "if max_depth == 0") "forced leaf at 0"
+  _ ← assert (!out.contains "gen_role(") "variants get no gen fn (v1)"
+  -- the emitter: declared path, determinism, and EVERY ctx record gets
+  -- a fn (the non-vacuity sweep)
+  let files := genRustEmitter.run ctx
+  _ ← assertEq "gen-rust path" (files.head?.map (·.path))
+    (some "../../src/gen_generated.rs")
+  _ ← assertEq "gen-rust deterministic" (files.map (·.contents))
+    ((genRustEmitter.run ctx).map (·.contents))
+  let demoOut := files.head?.map (·.contents) |>.getD ""
+  let records := ctx.items.filter fun it =>
+    match it with | .record .. => true | _ => false
+  _ ← assert (!records.isEmpty) "ctx carries records (the sweep is non-vacuous)"
+  for r in records do
+    _ ← assert (demoOut.contains s!"pub fn gen_{CodegenCore.Emit.snake r.name}(")
+      s!"gen fn for record '{r.name}'"
   .ok ()
 
 /-! ## Bridge: Ty → SType -/
@@ -1842,6 +1914,41 @@ info: sorry.strlen : VExpr valUserFields Ty.u64 -/
 #guard_msgs in
 #check (SchemaLang.VExpr.strlen (SchemaLang.VExpr.colOf "nane") :
   SchemaLang.VExpr valUserFields .u64)
+
+/-! ## W7.2 — the ExprLang interface: TWO readings, written once -/
+
+/-- The probe expression, exercising EVERY bool ctor and every u64
+    leaf shape the interface exposes: `(id == 7) && !((id > 0) &&
+    (strlen name > 3))` — eq/and/not over gt/lit/col/strlenCol. -/
+def probeExpr : VExpr valUserFields .bool :=
+  .and valEq (.not (.and valPositive valNameLong))
+
+/-- The two EVALUATION readings behind the interface agree with the
+    GADT's own evaluators on the probe (the theorems
+    `evalSpecI_vexpr`/`evalRawI_vexpr`/`validatesI_vexpr` are the
+    proof half; these executed pins are the behavior half — the
+    interface is not emission-shaped-only). -/
+def exprLangChecks : CheckResult := do
+  let L := vexprLang valUserFields
+  for (id, nm) in [(0, "ab"), (1, "abcd"), (7, "ab"), (7, "abcd"), (42, "xyz")] do
+    let row := valRowName id.toUInt64 nm
+    -- reading #1: the BOXED reading through the fold ≡ evalV
+    _ ← assertEq s!"boxed reading ≡ evalV (id={id}, name={nm})"
+      (evalSpecI L probeExpr row) (evalVBool probeExpr row)
+    -- reading #2: the RAW (0/1-word) reading through the fold ≡ evalB
+    _ ← assertEq s!"raw reading ≡ evalB (id={id}, name={nm})"
+      (evalRawI L probeExpr row) (evalB probeExpr row)
+    -- the validator projection through the interface ≡ validates
+    _ ← assertEq s!"validatesI ≡ validates (id={id}, name={nm})"
+      (validatesI L probeExpr row) (validates probeExpr row)
+  -- non-vacuity: the probe DISTINGUISHES rows under both readings
+  _ ← assert (evalSpecI L probeExpr (valRowName 7 "ab")
+        != evalSpecI L probeExpr (valRowName 0 "ab"))
+    "boxed reading distinguishes rows (non-vacuous)"
+  _ ← assert (evalRawI L probeExpr (valRowName 7 "ab")
+        != evalRawI L probeExpr (valRowName 0 "ab"))
+    "raw reading distinguishes rows (non-vacuous)"
+  .ok ()
 
 /-! ## The variant family (SchemaLang.Validate's Phase 3) -/
 
@@ -3245,6 +3352,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , updGolden
      , ("lower", lowerChecks)
      , ("derives", derivesChecks)
+     , ("genRust", genRustChecks ctx)
      , reflect
      , vortexWf
      , snapGate
@@ -3265,6 +3373,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , provenance
      , ("validate", validateChecks)
      , ("strlen", strlenChecks)
+     , ("exprLang", exprLangChecks)
      , ("dsl", dslChecks)
      , ("variant", variantChecks)
      , ("invariantChecks", invariantChecks ctx.invariants)

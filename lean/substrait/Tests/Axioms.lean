@@ -42,3 +42,13 @@ import Substrait
 
 -- the decode round-trip entry point
 #print axioms Substrait.Decode.parsePlan
+
+-- W5.3 phase 2a: the name-family tables + round trips
+#print axioms Substrait.Grammar.findName_self
+#print axioms Substrait.Grammar.joinGrammar_name_nodup
+#print axioms Substrait.Grammar.setGrammar_name_nodup
+#print axioms Substrait.Grammar.sortDirGrammar_name_nodup
+#print axioms Substrait.Decode.joinTypeOfName_joinTypeName
+#print axioms Substrait.Decode.setOpOfName_setOpName
+#print axioms Substrait.Decode.sortDirOfName_sortDirName
+#print axioms Substrait.Decode.parseType_literalTypeName
