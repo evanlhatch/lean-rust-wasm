@@ -784,7 +784,7 @@ def pipelineConformanceChecks : CheckResult := do
   -- named pins: the battery ran all three checks
   _ ← assert (rs.any (·.1 == "deadlock-freedom")) "deadlock-freedom ran"
   _ ← assert (rs.any (·.1 == "guard-coverage")) "guard-coverage ran"
-  _ ← assert (rs.any (·.1 == "invariant-non-vacuous")) "invariant-non-vacuous ran"
+  _ ← assert (rs.any (·.1 == "invariant-non-vacuity")) "invariant-non-vacuity ran"
   .ok ()
 
 /-- The negative control: `pipelineDead` (a never-enabled event) must FAIL

@@ -1,14 +1,14 @@
 // GENERATED from SchemaLang.OrderMachine — the lifecycle's TYPESTATE
 // projection. Each struct = one REACHABLE state (payload = the row id,
-// v1: u64); each method = one non-`reset` row of `orderTrans` — the SAME
-// table the theorem `orderTableStep?_eq_step?` pins to the machine (the
+// v1: u64); each method = one non-`reset` row of `orderMachineTrans` — the SAME
+// table the theorem `orderMachineTableStep?_eq_step?` pins to the machine (the
 // emitter folds the table, never a hand copy; Lean pins:
 // `typestate_edges_legal`, `typestate_states_reachable`).
 // 
 // Deliberate exclusions:
 // - the `reset` edge is NOT emitted: a typestate value is consumed,
 //   never rewrapped — recovery = a fresh Cart(id).
-// - `stray` gets no struct: no orderTrans row targets it (Inv non-vacuity).
+// - `stray` gets no struct: no orderMachineTrans row targets it (Inv non-vacuity).
 // - `delivered`/`cancelled` get no methods (`terminal_only_reset`): the
 //   illegal transition is unrepresentable, not None — no Option, no panic.
 // Do not edit — regenerate.

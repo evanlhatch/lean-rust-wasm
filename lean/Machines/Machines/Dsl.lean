@@ -47,16 +47,30 @@ Requirements on the state type: `BEq` (the lookup key) and `DecidableEq`
 the exact state; keep those machines hand-written (the hand `tableStep?`
 wildcard arms are the mechanism the lookup cannot express).
 
-Deliberately NOT generated (W2.3(d), follow-up): payload-carrying EVENTS
-(`event send (v : α) …`). The Label ctors would take arguments and the
-guard/action family would become payload-indexed — a `Machines.Core`
-`EventSpec` change, not a macro change; it is the gap keeping
-Machines.Sync's five machines hand-assembled.
+Payload-carrying events (the W2.3(d) follow-up): `event: send (v : α)
+guard: … action: …` — bracketed binders after the event name become
+Label-ctor arguments and PATTERN-BIND in the guard/action/safety bodies
+(`v` is in scope in all three slots). No `Machines.Core` change: the event
+family is already label-VALUE-indexed (`Machine.event : Label → EventSpec
+State Inv`), so guard/action read the payload off the label. Two
+consequences, both mechanical:
+
+- the Label inductive takes the machine's binders (a payload type may
+  mention them — mpsc's `send (v : α)`); payload-free machines keep the
+  parameter-free Label (backward compat),
+- `labels`/`labels_complete` are NOT generated (an infinite payload type
+  has no finite enumeration) — the conformance battery's sampled variant
+  (`Machines.Testing.conformanceOver`) takes a user-supplied label list
+  instead. The `states:` clause is REJECTED on payload machines (the
+  transition table is computed from `labels`).
+
+Explicit payload binders only — the generated ctor pattern is positional.
 
 generates:
 - `counter.Label` — an inductive with one constructor per event name (see [machineAssemblePattern]).
 - `counter.spec : counter.Label → EventSpec State Inv` — the event family,
-- `counter : Machine` — the assembly.
+- `counter : Machine` — the assembly,
+- `counter.labels` + `counter.labels_complete` (payload-free machines only).
 
 ## The PO default
 
@@ -111,8 +125,10 @@ open Lean.Elab.Command (elabCommand CommandElabM)
 macro "machine_safety" : tactic => `(tactic| guestlang_solver)
 
 /-- One event clause of `machine!`. Colon-suffixed keywords so the global
-    token table is untouched. -/
-syntax machineEvent := "event:" ident "guard:" term "action:" term ("safety:" term)?
+    token table is untouched. Bracketed binders after the event name are
+    the PAYLOAD: Label-ctor arguments, pattern-bound in the guard/action/
+    safety bodies (explicit binders only — the pattern is positional). -/
+syntax machineEvent := "event:" ident bracketedBinder* "guard:" term "action:" term ("safety:" term)?
 
 -- The optional acyclicity clause: `rank:` names the STATE's rank function
 -- (a def on the state type — the theorem statements unfold it), `rewind:`
@@ -135,7 +151,9 @@ syntax machineStates := "states:" term
     machine: `machine! counter (max : Nat) where …` generates
     `counter.spec (max : Nat) : …` and `counter (max : Nat) : Machine`
     (the Label inductive and the labels list stay parameter-free — event
-    names don't depend on parameters). -/
+    names don't depend on parameters). A PAYLOAD machine (an event with
+    ctor binders) flips both: the Label takes the machine's binders (a
+    payload type may mention them) and no labels list is generated. -/
 syntax (name := machineCmd) "machine!" ident bracketedBinder* "where"
   "State:" term "Inv:" term (machineRank)? (machineStates)? machineEvent* : command
 
@@ -159,51 +177,83 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   let evs : Array Syntax := stx[10]!.getArgs
   let labelId := mkIdentFrom stx (name.getId ++ `Label)
   let specId := mkIdentFrom stx (name.getId ++ `spec)
-  let mut ctors : Array (TSyntax `Lean.Parser.Command.ctor) := #[]
-  let mut arms : Array (TSyntax `Lean.Parser.Term.matchAlt) := #[]
-  for (ev : Syntax) in evs do
-    -- machineEvent = [event:, name, guard:, g, action:, a, (safety:, s)?]
-    let evName : TSyntax `ident := ⟨ev[1]!⟩
-    let g : Term := ⟨ev[3]!⟩
-    let a : Term := ⟨ev[5]!⟩
-    ctors := ctors.push (← `(ctor| | $evName:ident))
-    -- ev[6] is the optional (safety: s) group: a null node, empty or
-    -- [safety:, term]. The term inside is at [1].
-    let optSaf : Syntax := ev[6]!
-    let saf : Term ←
-      if optSaf.getNumArgs > 0 then pure ⟨optSaf[1]!⟩
-      else `(by machine_safety)
-    let arm ← `(matchAltExpr| | .$evName:ident => (⟨$g, $a, $saf⟩ : EventSpec $sty $invty))
-    arms := arms.push (arm : TSyntax `Lean.Parser.Term.matchAlt)
   -- binder NAMES for application sites (spec is applied to them in the
   -- machine assembly). `(x : ty)` → the idents at child 1 (a null node of
   -- one or more idents; we take them all).
   let binderNames : Array (TSyntax `ident) := binders.flatMap fun b =>
     (b.raw[1]!.getArgs).map (⟨·⟩)
+  -- payload detection: any event clause carrying ctor binders.
+  -- machineEvent = [event:, name, binderGroup, guard:, g, action:, a, (safety:, s)?]
+  let hasPayload : Bool := evs.any fun ev => (ev[2]!.getArgs).size > 0
+  -- the `states:` table is computed from the generated `labels`
+  -- enumeration, which a payload machine cannot have — reject the mix.
+  if optStates.getNumArgs > 0 && hasPayload then
+    throwErrorAt stx
+      "machine!: payload-carrying events defeat the `labels` enumeration \
+       the `states:` table is computed from — drop the `states:` clause \
+       (hand-write the table stack) or keep the events payload-free"
+  let mut ctors : Array (TSyntax `Lean.Parser.Command.ctor) := #[]
+  let mut arms : Array (TSyntax `Lean.Parser.Term.matchAlt) := #[]
+  for (ev : Syntax) in evs do
+    let evName : TSyntax `ident := ⟨ev[1]!⟩
+    let evBinders : Array (TSyntax `Lean.Parser.Term.bracketedBinder) :=
+      (ev[2]!.getArgs).map (⟨·⟩)
+    let g : Term := ⟨ev[4]!⟩
+    let a : Term := ⟨ev[6]!⟩
+    ctors := ctors.push (← `(ctor| | $evName:ident $[$evBinders]*))
+    -- ev[7] is the optional (safety: s) group: a null node, empty or
+    -- [safety:, term]. The term inside is at [1].
+    let optSaf : Syntax := ev[7]!
+    let saf : Term ←
+      if optSaf.getNumArgs > 0 then pure ⟨optSaf[1]!⟩
+      else `(by machine_safety)
+    -- the payload pattern: every binder's idents, positional — the bound
+    -- names are in scope in the guard/action/safety bodies (user syntax
+    -- throughout, so hygiene carries the binding).
+    let patIds : Array (TSyntax `ident) := evBinders.flatMap fun b =>
+      (b.raw[1]!.getArgs).map (⟨·⟩)
+    let arm ← `(matchAltExpr| | .$evName:ident $patIds* =>
+      (⟨$g, $a, $saf⟩ : EventSpec $sty $invty))
+    arms := arms.push (arm : TSyntax `Lean.Parser.Term.matchAlt)
+  -- the Label type at use sites: a payload machine's Label takes the
+  -- machine's binders (a payload type may mention them — mpsc's
+  -- `send (v : α)`); a payload-free machine's stays parameter-free
+  -- (backward compat: `counterMachine.Label.increment`, no application).
+  let labelTy : Term ←
+    if hasPayload then `($labelId:ident $binderNames*) else `($labelId:ident)
+  if hasPayload then
+    elabCommand (← `(command|
+      inductive $labelId:ident $[$binders]* where $[$ctors:ctor]* deriving Repr, DecidableEq))
+  else
+    elabCommand (← `(command|
+      inductive $labelId:ident where $[$ctors:ctor]* deriving Repr, DecidableEq))
   elabCommand (← `(command|
-    inductive $labelId:ident where $[$ctors:ctor]* deriving Repr, DecidableEq))
-  elabCommand (← `(command|
-    def $specId:ident $[$binders]* : $labelId:ident → EventSpec $sty $invty $[$arms:matchAlt]*))
+    def $specId:ident $[$binders]* : $labelTy → EventSpec $sty $invty $[$arms:matchAlt]*))
   -- @[reducible]: tests/uses write `door.run ⟨0⟩ …` with concrete states;
   -- without it, `door.State` doesn't unfold and instance search fails.
   elabCommand (← `(command|
     @[reducible] def $name:ident $[$binders]* : Machine :=
-      ⟨$sty, $labelId:ident, $invty, ($specId:ident $binderNames*)⟩))
+      ⟨$sty, $labelTy, $invty, ($specId:ident $binderNames*)⟩))
   -- the full label enumeration, free with the machine (the conformance
-  -- battery in Machines.Testing consumes it)
+  -- battery in Machines.Testing consumes it). Payload machines SKIP the
+  -- generation: an infinite payload type has no finite enumeration — the
+  -- sampled battery (`Machines.Testing.conformanceOver`) takes the user's
+  -- list. (The NAME is needed unconditionally: the `states:` table below
+  -- is computed from it, and `states:` + payload is rejected above.)
   let labelsId := mkIdentFrom stx (name.getId ++ `labels)
-  let labelTerms : Array Term ← evs.mapM fun ev => do
-    let evName : TSyntax `ident := ⟨ev[1]!⟩
-    `($(mkIdentFrom ev (name.getId ++ `Label ++ evName.getId)))
-  elabCommand (← `(command|
-    def $labelsId:ident : List ($labelId:ident) := [$labelTerms,*]))
-  -- the completeness proof: every constructor is in `labels`. The
-  -- conformance battery consumes this as a PROOF PARAMETER (not a
-  -- convention) — the enumeration's totality is now checked, not assumed.
-  let completeId := mkIdentFrom stx (name.getId ++ `labels_complete)
-  elabCommand (← `(command|
-    theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
-      intro l; cases l <;> decide))
+  if !hasPayload then
+    let labelTerms : Array Term ← evs.mapM fun ev => do
+      let evName : TSyntax `ident := ⟨ev[1]!⟩
+      `($(mkIdentFrom ev (name.getId ++ `Label ++ evName.getId)))
+    elabCommand (← `(command|
+      def $labelsId:ident : List ($labelId:ident) := [$labelTerms,*]))
+    -- the completeness proof: every constructor is in `labels`. The
+    -- conformance battery consumes this as a PROOF PARAMETER (not a
+    -- convention) — the enumeration's totality is now checked, not assumed.
+    let completeId := mkIdentFrom stx (name.getId ++ `labels_complete)
+    elabCommand (← `(command|
+      theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
+        intro l; cases l <;> decide))
   -- The finite-state entourage, generated when the states clause is
   -- present (W2.3 — replaces the hand-written `flagTrans`/
   -- `flagTableStep?`/`flagTableStep?_eq_step?`/`DecidablePred` copies).

@@ -455,6 +455,26 @@ def semChecks : CheckResult := do
   | none => pure ()
   | some _ => .error "release past capacity accepted"
 
+/-- The mpsc channel over the SAMPLED conformance battery (W2.3(d)):
+    `send` carries a Nat payload, so no finite label enumeration exists
+    (machine! generates none for payload machines) — the caller supplies
+    the label sample (one per constructor shape) and the state enumeration. -/
+instance : DecidablePred (mpsc Nat).Inv :=
+  fun s => inferInstanceAs (Decidable (s.buf.length ≤ s.cap))
+
+def mpscConformance : CheckResult :=
+  TestKit.allOf (Machines.Testing.conformanceOver (mpsc Nat)
+    [.send 0, .recv, .close]
+    [⟨[], 1, false⟩, ⟨[0], 1, false⟩, ⟨[0], 1, true⟩, ⟨[0, 0], 1, false⟩])
+
+/-- NEGATIVE CONTROL for the sampled battery: over an all-closed state
+    enumeration the sampled `send` never fires — guard-coverage must catch
+    it (a vacuous battery would pass). -/
+def mpscConformanceControl : CheckResult :=
+  match Machines.Testing.guardCoverageOver (mpsc Nat) [.send 0] [⟨[], 1, true⟩] with
+  | .error _ => .ok ()
+  | .ok () => .error "dead sampled event not caught — the battery is vacuous"
+
 end SyncTest
 
 -- ── 6. LinearMachine: machines over change groups (Machines.LinearMachine) ──
@@ -894,6 +914,8 @@ def main : IO UInt32 := do
     ("sync-oneshot", SyncTest.oneshotChecks),
     ("sync-barrier", SyncTest.barrierChecks),
     ("sync-semaphore", SyncTest.semChecks),
+    ("sync-mpsc-conformance", SyncTest.mpscConformance),
+    ("sync-mpsc-conformance-control", SyncTest.mpscConformanceControl),
     ("linear-machine", LinearTest.linearSmoke)
     , ("session", SessTest.sessionChecks)
     , ("session-typed", TypedSessTest.typedChecks)

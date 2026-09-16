@@ -188,7 +188,13 @@ theorem RowVals.eqRec_eq_cast {fs gs : List Field} (h : fs = gs) (r : RowVals fs
     `SomeUpdate.applyBatch` (`F = G = List ∘ RowVals`). `RowVals.cast`
     is the `F := RowVals` transport; this is transport + guard + action
     fused, at any family — the raw `▸` generalizes the named cast the
-    same way `RowVals.eqRec_eq_cast` names it. -/
+    same way `RowVals.eqRec_eq_cast` names it.
+
+    `@[irreducible]` (W6.13 opacity discipline): consumers go through
+    the two lemma interfaces (`guardCastApply_self`/`guardCastApply_of_ne`)
+    or execute compiled — nothing in-tree unfolds the `dite`; the marks'
+    audit trail lives in the comment block at `SchemaLang.Update.SomeUpdate`. -/
+@[irreducible]
 def guardCastApply {F G : List Field → Sort v} {fs gs : List Field}
     (refuse : G fs) (apply : F gs → G gs) (x : F fs) : G fs :=
   if h : fs = gs then h ▸ apply (h ▸ x) else refuse
@@ -198,14 +204,15 @@ def guardCastApply {F G : List Field → Sort v} {fs gs : List Field}
 theorem guardCastApply_self {F G : List Field → Sort v} {fs : List Field}
     (refuse : G fs) (apply : F fs → G fs) (x : F fs) :
     guardCastApply refuse apply x = apply x := by
-  unfold guardCastApply
-  rw [dif_pos rfl]
+  simp only [guardCastApply]  -- the irreducible-safe unfold (W6.13);
+                              -- simp reduces `fs = fs` to `True` en route
+  exact dif_pos trivial
 
 /-- The mismatch case: the refusal default, untouched data. -/
 theorem guardCastApply_of_ne {F G : List Field → Sort v} {fs gs : List Field}
     (hne : fs ≠ gs) (refuse : G fs) (apply : F gs → G gs) (x : F fs) :
     guardCastApply refuse apply x = refuse := by
-  unfold guardCastApply
+  simp only [guardCastApply]  -- the irreducible-safe unfold (W6.13)
   rw [dif_neg hne]
 
 /-! ## The field resolution's ELABORATION half -/

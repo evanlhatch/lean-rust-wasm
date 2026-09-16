@@ -54,7 +54,9 @@ structure Scenario where
     to be the update's — `guardCastApply` (Validate's cast kit, W3.6)
     at `F = G = List ∘ RowVals`: data equality carries the proof, the
     update's `apply` runs on the cast rows, the result casts back; a
-    foreign row list refuses, pass-through. -/
+    foreign row list refuses, pass-through.
+    `@[irreducible]` (W6.13 — the audit block at `Update.SomeUpdate`). -/
+@[irreducible]
 def SomeUpdate.applyBatch (u : SomeUpdate) {fs : List Field}
     (rows : List (RowVals fs)) : List (RowVals fs) :=
   guardCastApply (F := fun fs => List (RowVals fs)) (G := fun fs => List (RowVals fs))

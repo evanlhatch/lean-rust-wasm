@@ -1,6 +1,6 @@
 // GENERATED from SchemaLang.Pipeline (pipelineTrans) — the forge
 // driver's stage machine. Agreement with the Lean machine is a
-// THEOREM there (tableStep?_eq_step?); do not edit — regenerate.
+// THEOREM there (pipelineTableStep?_eq_step?); do not edit — regenerate.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 

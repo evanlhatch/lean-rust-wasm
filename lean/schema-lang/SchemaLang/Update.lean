@@ -280,10 +280,43 @@ structure SomeUpdate where
   field : Field
   update : UpdateItem fields field
 
+-- W6.13 OPACITY DISCIPLINE (the schema-lang portion) — cedar's
+-- proof-stability pattern: representation projections proofs should
+-- never unfold are sealed so consumers go through the lemma interfaces.
+-- The minimal safe step, `@[irreducible]` where NO consumer unfolds:
+--
+-- MARKED irreducible:
+-- - `Validate.guardCastApply` — the cast-kit combinator; consumers are
+--   the three registry eliminators below (compiled execution only) plus
+--   its OWN lemma interface (`guardCastApply_self`/`_of_ne`, now
+--   `simp only`-unfolded). No proof unfolds the raw `dite`.
+-- - `SomeUpdate.applyRow` (below), `SomeUpdate.applyBatch` (Trace.lean),
+--   `InvariantItem.checkOn` (Invariant.lean) — the existential wrappers'
+--   eliminators; consumers are runtime asserts (irreducibility is an
+--   elaborator hint — compiled code reduces regardless).
+--
+-- LEFT TRANSPARENT, with reason:
+-- - `RowVals.cast` — its own interface lemmas (`cast_rfl` by `rfl`, the
+--   `@[simp] cast_eq_cast` bridge to elaborator-inserted `▸`) must see
+--   through it; sealing it breaks the bridge it names.
+-- - `UpdateItem.applyRow`/`apply` — the cascade composition proofs
+--   (Tests' `cascade_two_commute` pin, TickCascade) `simp [...]`-unfold
+--   them BY DESIGN; their unfold set IS the proof interface.
+-- - The structure projections (`SomeUpdate.fields/.field/.update`,
+--   `SchemaInvariant.fields/.expr`, `InvariantItem.inv`) — per-projection
+--   opacity needs the module system (`private`), the W5.4 step; the
+--   emitters (Emit.Update/Emit.Invariant) are legitimate representation
+--   consumers.
+-- - `tickRows`/`tickTrace`/`runScenario` (Trace.lean) — the ORACLE;
+--   replay consumers evaluate it and no lemma interface exists to hide
+--   it behind yet.
+
 /-- Execute against a row whose field list CLAIMS to be the update's —
     `guardCastApply` (Validate's cast kit, W3.6): the data equality
     carries the proof, the update's `applyRow` runs on the cast row,
-    the result casts back; a foreign row passes through untouched. -/
+    the result casts back; a foreign row passes through untouched.
+    `@[irreducible]` (W6.13 — see the block above). -/
+@[irreducible]
 def SomeUpdate.applyRow (u : SomeUpdate) {fs : List Field}
     (row : RowVals fs) : RowVals fs :=
   guardCastApply row u.update.applyRow row
@@ -309,24 +342,21 @@ def TickState.rank : TickState → Nat
   | .idle => 0 | .settled => 1 | .cascaded => 2
   | .resolved => 3 | .committed => 4 | .stale => 0
 
+-- W2.3: the `states:` clause makes machine! generate the entourage this
+-- file used to hand-write — `tickStates`, `tickTrans` (the transition
+-- table, computed from the machine), `tickTableStep?` + the agreement
+-- theorem `tickTableStep?_eq_step?`, and the `DecidablePred tick.Inv`
+-- instance (same names as the deleted hand copies).
 machine! tick where
   State: TickState
   Inv: fun s => s ≠ .stale
   rank: TickState.rank rewind: reset
+  states: [.idle, .settled, .cascaded, .resolved, .committed, .stale]
   event: settle guard: (fun s => s = .idle) action: (fun _ _ => .settled)
   event: cascade guard: (fun s => s = .settled) action: (fun _ _ => .cascaded)
   event: resolve guard: (fun s => s = .cascaded) action: (fun _ _ => .resolved)
   event: commit guard: (fun s => s = .resolved) action: (fun _ _ => .committed)
   event: reset guard: (fun _ => true) action: (fun _ _ => .idle)
-
-instance : DecidablePred tick.Inv := fun s =>
-  match s with
-  | .stale => isFalse (fun h => h rfl)
-  | .idle => isTrue (fun h => TickState.noConfusion h)
-  | .settled => isTrue (fun h => TickState.noConfusion h)
-  | .cascaded => isTrue (fun h => TickState.noConfusion h)
-  | .resolved => isTrue (fun h => TickState.noConfusion h)
-  | .committed => isTrue (fun h => TickState.noConfusion h)
 
 /-- Committed is terminal: only `reset` leaves it (a committed tick is
     history — the journal, not mutable state). -/
@@ -344,33 +374,12 @@ theorem tick_happy : tick.run .idle [.settle, .cascade, .resolve, .commit]
              (.resolve, .resolved), (.commit, .committed)], .committed) :=
   rfl
 
-/-- The emitted table (the driver's data — the `Machine.matchArms`
-    discipline). -/
-def tickTrans : List (tick.Label × TickState × TickState) :=
-  [ (.settle, .idle, .settled)
-  , (.cascade, .settled, .cascaded)
-  , (.resolve, .cascaded, .resolved)
-  , (.commit, .resolved, .committed)
-  , (.reset, .idle, .idle)
-  , (.reset, .settled, .idle)
-  , (.reset, .cascaded, .idle)
-  , (.reset, .resolved, .idle)
-  , (.reset, .committed, .idle)
-  , (.reset, .stale, .idle) ]
-
-/-- The structural reading (the emission theorem's subject). -/
-def tickTableStep? : tick.Label → TickState → Option TickState
-  | .settle, .idle => some .settled
-  | .cascade, .settled => some .cascaded
-  | .resolve, .cascaded => some .resolved
-  | .commit, .resolved => some .committed
-  | .reset, _ => some .idle
-  | _, _ => none
-
-/-- The emitted table IS the machine. -/
-theorem tickTableStep?_eq_step? (e : tick.Label) (s : TickState) :
-    tickTableStep? e s = tick.step? s e := by
-  cases s <;> cases e <;> simp [tickTableStep?, tick, tick.spec]
+-- The emitted table (the driver's data — the `Machine.matchArms`
+-- discipline) is machine!-GENERATED (W2.3): `tickTrans` (computed from
+-- `step?` over the enumerated space, label-major — the deleted hand
+-- copy's exact rows), `tickTableStep?` (the structural reading), and
+-- `tickTableStep?_eq_step?` (the table IS the machine, over the
+-- enumerated states).
 
 end SchemaLang
 

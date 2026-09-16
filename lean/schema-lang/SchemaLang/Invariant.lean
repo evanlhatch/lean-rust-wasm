@@ -148,6 +148,7 @@ instance : Inhabited InvariantItem :=
     cast is kernel-level — no `lcProof`, the axiom gate's finding),
     `validates` runs on the cast row; a row for another schema executes
     as `false` (type mismatch = refusal). -/
+@[irreducible]  -- W6.13 (the audit block at `SchemaLang.Update.SomeUpdate`)
 def InvariantItem.checkOn {fs : List Field} (it : InvariantItem) (row : RowVals fs) : Bool :=
   guardCastApply (G := fun _ => Bool) false (validates it.inv.expr) row
 

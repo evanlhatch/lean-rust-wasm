@@ -50,7 +50,7 @@ were registered here but never byte-tied there):
 
 1. `pipelineEmitter` — the stage machine as Rust (`PipelineStage` enum +
    `step` fn), mirroring `Pipeline.pipelineTrans` — the table
-   `tableStep?_eq_step?` proves IS the machine. forge steps its own
+   `pipelineTableStep?_eq_step?` proves IS the machine. forge steps its own
    phases through it; an illegal transition aborts the driver (the
    proved `rank_advances`/`reject_out_of_order` govern the Rust side).
 2. `forgeJobsEmitter` — the job manifest (`package`, `exe`, `outputs`).
@@ -78,9 +78,9 @@ def pipelineEventRust : pipeline.Label → String
   | .tie => "Tie" | .reset => "Reset"
 
 /-- The Rust expression for a CONCRETE pipeline state. `failed` carries
-    arbitrary strings — data can't wildcard it; `tableStep?` handles it
-    structurally and so does the arm fold below (it never reaches this
-    function). -/
+    arbitrary strings — data can't wildcard it; `pipelineTableStep?`
+    handles the enumerated representative and the arm fold below
+    wildcards the rest (it never reaches this function). -/
 def pipelineStateRust : PipelineState → String
   | .idle => "Idle" | .reflecting => "Reflecting" | .checked => "Checked"
   | .emitted => "Emitted" | .tied => "Tied"
@@ -94,13 +94,13 @@ def pipelineRenderings : Machine.Renderings PipelineState pipeline.Label where
   event := fun e => "PipelineEvent::" ++ pipelineEventRust e
 
 /-- The `step` match arms, folded by the GENERIC fold (`Machine.matchArms`)
-    from the PROVED `pipelineTrans` table (not a hand copy of it): one
-    arm per non-`reset` row, and — when the `reset` rows send EVERY
+    from the PROVED `pipelineTrans` table (machine!-generated, W2.3):
+    one arm per non-`reset` row, and — when the `reset` rows send EVERY
     concrete (non-`failed`) state to the same target, which is also the
-    structural `failed` arm's target (`tableStep?`: only `reset`
-    recovers from `failed`) — a single wildcard arm. The wildcard
-    collapse is checked against the table by `matchArms` itself, so the
-    emitted Rust stays a function of the proved data. -/
+    structural `failed` arm's target (`pipelineTableStep?`: only `reset`
+    recovers from the enumerated `failed`) — a single wildcard arm. The
+    wildcard collapse is checked against the table by `matchArms`
+    itself, so the emitted Rust stays a function of the proved data. -/
 def pipelineArms : List String :=
   Machine.matchArms pipelineRenderings pipelineTrans (some .reset)
     [.idle, .reflecting, .checked, .emitted, .tied]
@@ -109,13 +109,14 @@ def pipelineArms : List String :=
     `step` fn, mirroring `Pipeline.pipelineTrans` (+ the structural
     `failed` arm the table can't express — data can't wildcard strings;
     the wildcard fold above covers it exactly when the table justifies
-    it). Consumed by forge; the proved agreement (`tableStep?_eq_step?`)
-    makes the generated Rust the machine, not a sketch of it. -/
+    it). Consumed by forge; the proved agreement
+    (`pipelineTableStep?_eq_step?`) makes the generated Rust the
+    machine, not a sketch of it. -/
 def pipelineRust : String :=
   CodegenCore.Emit.Rust.renderModule
     ([ .comment "GENERATED from SchemaLang.Pipeline (pipelineTrans) — the forge"
     , .comment "driver's stage machine. Agreement with the Lean machine is a"
-    , .comment "THEOREM there (tableStep?_eq_step?); do not edit — regenerate."
+    , .comment "THEOREM there (pipelineTableStep?_eq_step?); do not edit — regenerate."
     , .raw ""
     , .raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
     , .enum "PipelineStage" []
@@ -156,7 +157,7 @@ def pipelineRust : String :=
 def pipelineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "pipeline"
   style := .doubleSlash
-  specSource := "SchemaLang.Pipeline (pipelineTrans + tableStep?_eq_step?)"
+  specSource := "SchemaLang.Pipeline (pipelineTrans + pipelineTableStep?_eq_step?)"
   outputs := ["../../src/pipeline_generated.rs"]
   run _ctx :=
     [{ path := "../../src/pipeline_generated.rs"

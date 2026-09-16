@@ -1,6 +1,6 @@
-// GENERATED from SchemaLang.OrderMachine (orderTrans + orderTableStep?_eq_step?) — the lifecycle machine.
+// GENERATED from SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?) — the lifecycle machine.
 // Agreement with the Lean machine is a THEOREM there
-// (orderTableStep?_eq_step?); do not edit — regenerate.
+// (orderMachineTableStep?_eq_step?); do not edit — regenerate.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 

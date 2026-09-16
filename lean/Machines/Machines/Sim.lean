@@ -62,7 +62,7 @@ variable [DecidableEq Pid]
 
 /-- An in-flight message: the sender, the receiver, and the event to
     fire at the receiver — the payload travels INSIDE the label (e.g.
-    `Sync.MpscEvent.send v` carries `v`; the Core's `Label` is the wire
+    `Sync.mpsc.Label.send v` carries `v`; the Core's `Label` is the wire
     vocabulary, exactly as `Machine.run` consumes it). -/
 structure Msg (m : Machine) (Pid : Type) where
   src : Pid

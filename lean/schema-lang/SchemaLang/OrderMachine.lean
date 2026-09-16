@@ -17,10 +17,10 @@ Proved here:
 - `terminal_only_reset` — `delivered`/`cancelled` are TERMINAL: only
   `reset` leaves them (the lifecycle cannot silently reopen).
 - `reject_*` — out-of-order and double-fire are observably rejected.
-- `orderTableStep?_eq_step?` — the emitted Rust table IS the machine (the
-  same discipline that governs the pipeline driver).
+- `orderMachineTableStep?_eq_step?` — the emitted Rust table IS the machine
+  (the same discipline that governs the pipeline driver).
 
-Consumption: `SchemaLang.Emit.Machine` folds `orderTrans` into Rust
+Consumption: `SchemaLang.Emit.Machine` folds `orderMachineTrans` into Rust
 (`src/order_machine_generated.rs`); steel-host's test replays the
 lifecycle trace against the generated step fn. The battery
 (`conformance`) sweeps the full state space; the pipelineDead machine
@@ -62,36 +62,31 @@ def OrderStatus.rank : OrderStatus → Nat
   | .cart => 0 | .placed => 1 | .shipped => 2
   | .delivered => 3 | .cancelled => 3 | .stray => 0
 
+-- W2.3: the `states:` clause makes machine! generate the entourage this
+-- file used to hand-write — `orderMachineStates` (the state space),
+-- `orderMachineTrans` (the transition table, computed from the machine),
+-- `orderMachineTableStep?` + the agreement theorem
+-- `orderMachineTableStep?_eq_step?`, and the `DecidablePred
+-- orderMachine.Inv` instance. The hand copies are deleted below.
 machine! orderMachine where
   State: OrderStatus
   Inv: fun s => s ≠ .stray
   rank: OrderStatus.rank rewind: reset
+  states: [.cart, .placed, .shipped, .delivered, .cancelled, .stray]
   event: place guard: (fun s => s = .cart) action: (fun _ _ => .placed)
   event: ship guard: (fun s => s = .placed) action: (fun _ _ => .shipped)
   event: deliver guard: (fun s => s = .shipped) action: (fun _ _ => .delivered)
   event: cancel guard: (fun s => s = .cart || s = .placed) action: (fun _ _ => .cancelled)
   event: reset guard: (fun _ => true) action: (fun _ _ => .cart)
 
-instance : DecidablePred orderMachine.Inv := fun s =>
-  match s with
-  | .stray => isFalse (fun h => h rfl)
-  | .cart => isTrue (fun h => OrderStatus.noConfusion h)
-  | .placed => isTrue (fun h => OrderStatus.noConfusion h)
-  | .shipped => isTrue (fun h => OrderStatus.noConfusion h)
-  | .delivered => isTrue (fun h => OrderStatus.noConfusion h)
-  | .cancelled => isTrue (fun h => OrderStatus.noConfusion h)
-
-/-- The full state space for the conformance battery — the stray state
-    included (that's the point: the invariant is FALSE on it, the
-    non-vacuity check has something to see, and no transition reaches
-    it). -/
-def orderStates : List OrderStatus :=
-  [.cart, .placed, .shipped, .delivered, .cancelled, .stray]
-
 /-- The conformance battery: deadlock-freedom (reset is always
-    enabled), guard coverage, invariant non-vacuity. -/
+    enabled), guard coverage, invariant non-vacuity over
+    `orderMachineStates` — the stray state included (that's the point:
+    the invariant is FALSE on it, the non-vacuity check has something to
+    see, and no transition reaches it). The state space and the
+    `DecidablePred orderMachine.Inv` instance are machine!-generated. -/
 def orderConformance : List (String × TestKit.CheckResult) :=
-  Machines.Testing.conformance orderMachine orderMachine.labels orderStates
+  Machines.Testing.conformance orderMachine orderMachine.labels orderMachineStates
     orderMachine.labels_complete
 
 /-! ## The proved discipline -/
@@ -133,40 +128,16 @@ theorem delivered_step_none (l : orderMachine.Label)
 
 /-! ## The emitted table — the driver's data
 
-The transition DATA the emitter folds (`Emit.Machine.matchArms`
-generates the Rust match from these rows). The DATA and the structural
-`orderTableStep?` below are two readings of one machine — the theorem pins
-the structural reading to the machine; the emitter's wildcard-check +
-the Rust-side replay test guard the data reading.
+machine!-generated (W2.3): `orderMachineTrans` is the transition DATA
+the emitter folds (`Emit.Machine.matchArms` generates the Rust match
+from its rows — computed from `step?` over the enumerated space,
+label-major, the deleted hand copy's exact row order including the
+`reset`-from-`stray` row), `orderMachineTableStep?` is the structural
+reading, and `orderMachineTableStep?_eq_step?` pins the structural
+reading to the machine over the enumerated states (all six — the
+theorem is membership-qualified and every `OrderStatus` is a member).
+The emitter's wildcard-check + the Rust-side replay test guard the
+data reading.
 -/
-
-def orderTrans : List (orderMachine.Label × OrderStatus × OrderStatus) :=
-  [ (.place, .cart, .placed)
-  , (.ship, .placed, .shipped)
-  , (.deliver, .shipped, .delivered)
-  , (.cancel, .cart, .cancelled)
-  , (.cancel, .placed, .cancelled)
-  , (.reset, .cart, .cart)
-  , (.reset, .placed, .cart)
-  , (.reset, .shipped, .cart)
-  , (.reset, .delivered, .cart)
-  , (.reset, .cancelled, .cart)
-  , (.reset, .stray, .cart) ]
-
-/-- The structural reading (the theorem's subject). -/
-def orderTableStep? : orderMachine.Label → OrderStatus → Option OrderStatus
-  | .place, .cart => some .placed
-  | .ship, .placed => some .shipped
-  | .deliver, .shipped => some .delivered
-  | .cancel, .cart => some .cancelled
-  | .cancel, .placed => some .cancelled
-  | .reset, _ => some .cart
-  | _, _ => none
-
-/-- The emitted table IS the machine. -/
-theorem orderTableStep?_eq_step? (e : orderMachine.Label) (s : OrderStatus) :
-    orderTableStep? e s = orderMachine.step? s e := by
-  cases s <;> cases e <;>
-    simp [orderTableStep?, orderMachine, orderMachine.spec]
 
 end SchemaLang

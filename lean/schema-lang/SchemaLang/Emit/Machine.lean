@@ -6,8 +6,9 @@ was the precedent (its `pipelineArms` now folds through this module's
 `matchArms`); this module is the GENERAL fold — any Machines machine
 whose states/events
 have Rust renderings gets an emitted `step` fn, generated from the
-PROVED trans table (the `orderTableStep?_eq_step?` discipline: the data is
-pinned to the machine by a theorem before the emitter touches it).
+PROVED trans table (the `orderMachineTableStep?_eq_step?` discipline: the
+data is pinned to the machine by a theorem before the emitter touches
+it).
 
 The wildcard-collapse check (one event firing from EVERY concrete state
 to the SAME target → a single wildcard arm, the `reset` edge) is
@@ -83,7 +84,7 @@ def moduleRust {S E : Type} [BEq S] [BEq E] [Inhabited S] (r : Renderings S E)
   renderModule
     ([ Item.comment s!"GENERATED from {specSource} — the lifecycle machine."
      , Item.comment "Agreement with the Lean machine is a THEOREM there"
-     , Item.comment "(orderTableStep?_eq_step?); do not edit — regenerate."
+     , Item.comment "(orderMachineTableStep?_eq_step?); do not edit — regenerate."
      , Item.raw ""
      , Item.raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
      , Item.enum stateEnum [] (concrete.map r.state)
@@ -124,9 +125,9 @@ def orderRenderings : Renderings OrderStatus orderMachine.Label where
 
 def orderMachineRust : String :=
   moduleRust orderRenderings
-    "SchemaLang.OrderMachine (orderTrans + orderTableStep?_eq_step?)"
+    "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
     "OrderStatus" "OrderEvent"
-    orderTrans (some .reset) orderStates
+    orderMachineTrans (some .reset) orderMachineStates
     [ (.place, .cart, .placed)
     , (.ship, .placed, .shipped)
     , (.deliver, .shipped, .delivered) ]
@@ -137,7 +138,7 @@ def orderMachineRust : String :=
 def orderMachineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "order-machine"
   style := .doubleSlash
-  specSource := "SchemaLang.OrderMachine (orderTrans + orderTableStep?_eq_step?)"
+  specSource := "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
   outputs := ["../../src/order_machine_generated.rs"]
   run _ctx :=
     [{ path := "../../src/order_machine_generated.rs"

@@ -2,8 +2,9 @@
 # SchemaLang.Emit.Typestate — the order lifecycle's TYPESTATE projection
 
 The flatland row "machine! = enum state column + edge updates ⇒ Rust
-typestate": from the SAME proved `orderTrans` table the enum-machine
-emitter (`Emit.Machine`) folds, this module emits the typestate
+typestate": from the SAME proved `orderMachineTrans` table the
+enum-machine emitter (`Emit.Machine`) folds, this module emits the
+typestate
 projection — one newtype struct per REACHABLE state (the payload = the
 row identity, v1: the u64 order id), transitions as METHODS on the
 source state returning the target DIRECTLY.
@@ -22,8 +23,9 @@ Driving decisions (deliberate exclusions):
   Cart` would be a rewrap that erases the state's identity (the enum
   projection in `Emit.Machine` keeps reset; this one does not).
   Recovery in v1 = construct a fresh `Cart(id)`.
-- `stray` gets NO struct: no `orderTrans` row targets it (the machine
-  `Inv`'s non-vacuity — an unreachable state is unrepresentable).
+- `stray` gets NO struct: no `orderMachineTrans` row targets it (the
+  machine `Inv`'s non-vacuity — an unreachable state is
+  unrepresentable).
 - `delivered`/`cancelled` get NO methods (`terminal_only_reset`): the
   table has no non-reset rows from them, so no `impl` is emitted.
 - No `Option`, no panic: every emitted method returns its target
@@ -58,12 +60,13 @@ def eventMethod : orderMachine.Label → String
   | .place => "place" | .ship => "ship" | .deliver => "deliver"
   | .cancel => "cancel" | .reset => "reset"
 
-/-- The edges the typestate folds: every non-`reset` row of `orderTrans`
-    — the SAME table the theorem `orderTableStep?_eq_step?` proves IS
-    `orderMachine.step?`. No hand copy: the emitter's rows cannot drift
-    from the machine's (a `reset` row is filtered, never re-typed). -/
+/-- The edges the typestate folds: every non-`reset` row of
+    `orderMachineTrans` — the SAME table the theorem
+    `orderMachineTableStep?_eq_step?` proves IS `orderMachine.step?`.
+    No hand copy: the emitter's rows cannot drift from the machine's
+    (a `reset` row is filtered, never re-typed). -/
 def typestateEdges : List (orderMachine.Label × OrderStatus × OrderStatus) :=
-  orderTrans.filter (fun (e, _, _) => !(e == .reset))
+  orderMachineTrans.filter (fun (e, _, _) => !(e == .reset))
 
 /-- The emitted states: `cart` (the initial state) plus every folded row
     target, table order, deduped. `stray` is a target of NO row, so it
@@ -72,12 +75,12 @@ def typestateStates : List OrderStatus :=
   (.cart :: (typestateEdges.map fun (_, _, t) => t)).eraseDups
 
 /-- LEGALITY PIN: every folded row is a `some` step of the PROVED table
-    (`orderTableStep?`, pinned to the machine by
-    `orderTableStep?_eq_step?`) — no emitted method can represent an
-    illegal firing, which is why the generated methods return their
+    (`orderMachineTableStep?`, pinned to the machine by
+    `orderMachineTableStep?_eq_step?`) — no emitted method can represent
+    an illegal firing, which is why the generated methods return their
     target directly (no Option, no panic). -/
 theorem typestate_edges_legal :
-    (typestateEdges.map fun (e, f, _) => orderTableStep? e f).all
+    (typestateEdges.map fun (e, f, _) => orderMachineTableStep? e f).all
       Option.isSome = true := rfl
 
 /-- REACHABILITY PIN: every emitted struct's state is `cart` or a row
@@ -86,7 +89,7 @@ theorem typestate_edges_legal :
     emitted structs are exactly the machine's reachable set. -/
 theorem typestate_states_reachable :
     typestateStates.all
-      (fun s => (s == .cart) || orderTrans.any (fun (_, _, t) => t == s))
+      (fun s => (s == .cart) || orderMachineTrans.any (fun (_, _, t) => t == s))
       = true := rfl
 
 /-! ## The Rust AST -/
@@ -144,15 +147,15 @@ def testModule : CodegenCore.Emit.Rust.Item :=
 def typestateItems : List CodegenCore.Emit.Rust.Item :=
   [ .comment "GENERATED from SchemaLang.OrderMachine — the lifecycle's TYPESTATE"
   , .comment "projection. Each struct = one REACHABLE state (payload = the row id,"
-  , .comment "v1: u64); each method = one non-`reset` row of `orderTrans` — the SAME"
-  , .comment "table the theorem `orderTableStep?_eq_step?` pins to the machine (the"
+  , .comment "v1: u64); each method = one non-`reset` row of `orderMachineTrans` — the SAME"
+  , .comment "table the theorem `orderMachineTableStep?_eq_step?` pins to the machine (the"
   , .comment "emitter folds the table, never a hand copy; Lean pins:"
   , .comment "`typestate_edges_legal`, `typestate_states_reachable`)."
   , .comment ""
   , .comment "Deliberate exclusions:"
   , .comment "- the `reset` edge is NOT emitted: a typestate value is consumed,"
   , .comment "  never rewrapped — recovery = a fresh Cart(id)."
-  , .comment "- `stray` gets no struct: no orderTrans row targets it (Inv non-vacuity)."
+  , .comment "- `stray` gets no struct: no orderMachineTrans row targets it (Inv non-vacuity)."
   , .comment "- `delivered`/`cancelled` get no methods (`terminal_only_reset`): the"
   , .comment "  illegal transition is unrepresentable, not None — no Option, no panic."
   , .comment "Do not edit — regenerate."
@@ -171,7 +174,7 @@ def typestateRust : String := renderModule typestateItems
 def typestateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "typestate"
   style := .doubleSlash
-  specSource := "SchemaLang.OrderMachine (orderTrans + orderTableStep?_eq_step?)"
+  specSource := "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
   outputs := ["../../src/order_typestate_generated.rs"]
   run _ctx :=
     [{ path := "../../src/order_typestate_generated.rs"
