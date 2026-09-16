@@ -1,8 +1,7 @@
 /-
 # Dbsp.Stream — streams and agreement
 
-Ports tchajed/database-stream-processing-theory `src/stream.lean` (Lean 3)
-to Lean 4 (flatland's notes/lean/lean-v3.md Part 3). Streams are functions of time;
+Ports tchajed/database-stream-processing-theory `src/stream.lean` (Lean 3) (see [flatlandPortLineage]). Streams are functions of time;
 `agree_upto` is the workhorse equivalence the fixpoint theorems are proved
 through.
 
@@ -12,9 +11,17 @@ a bridge theorem — flatland's notes/lean/SPEC-core.md §7.1; the classical cho
 source needs evaporates for us).
 -/
 
+import Batteries
 import Dbsp.Lint
 import Mathlib.Algebra.Group.Pi.Basic
 import Mathlib.Algebra.Notation.Prod
+
+library_note flatlandPortLineage /--
+  Ports of tchajed/database-stream-processing-theory from Lean 3 to Lean 4.
+  The design reference is flatland's notes/lean/lean-v3.md Part 3 (the model-side
+  DBSP semantics and the delta-theory calculus). Every file whose header says
+  `(Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3)` is such a port.
+-/
 
 namespace Dbsp
 

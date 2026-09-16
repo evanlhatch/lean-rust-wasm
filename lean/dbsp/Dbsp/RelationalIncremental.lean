@@ -2,8 +2,7 @@
 # Dbsp.RelationalIncremental — incremental forms of the relational ops
 
 Ports tchajed/database-stream-processing-theory
-`src/relational_incremental.lean` (Lean 3) to Lean 4 (flatland's notes/lean/lean-v3.md
-Part 3).
+`src/relational_incremental.lean` (Lean 3) (see [flatlandPortLineage]).
 
 The theorems:
 

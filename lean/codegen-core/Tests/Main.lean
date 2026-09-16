@@ -318,6 +318,48 @@ def dataRegistryChecks : CheckResult := do
     | .error _ => .error "old item lost after insert"
   .ok ()
 
+/-! ## CodedRegistry (W7.4 follow-up)
+
+A CodedRegistry extends DataRegistry with position-derived codes (`codePrefix`
++ index). The `codesNodup` default (`by decide`) ensures a literal with
+colliding codes fails to elaborate — only positive checks ship here. -/
+
+/-- A small concrete coded registry (string items are their own names). -/
+def codeColorReg : CodedRegistry String where
+  items := ["red", "green", "blue"]
+  nameOf := id
+  codePrefix := "C"
+  start := 10
+
+/-- Compile-time law: the codes-length theorem on the concrete registry. -/
+theorem codeColorReg_codes_length :
+    codeColorReg.codes.length = codeColorReg.items.length :=
+  codeColorReg.codes_length
+
+/-- Compile-time proof: the `codesNodup` default discharges by `decide`. -/
+theorem codeColorReg_codesNodup :
+    (codeColorReg.codes.map (·.2)).Nodup := by
+  exact codeColorReg.codesNodup
+
+def codedRegistryChecks : CheckResult := do
+  -- codes match the codePrefix-index shape
+  let expectedCodes := [("red", "C10"), ("green", "C11"), ("blue", "C12")]
+  _ ← assertEq "codes match prefix+index shape"
+    codeColorReg.codes expectedCodes
+  -- name lookup works (inherited from DataRegistry)
+  _ ← match codeColorReg.lookup? "green" with
+    | .ok g => assertEq "coded lookup hit" g "green"
+    | .error miss => .error s!"unexpected coded miss: {miss.got}"
+  _ ← match codeColorReg.lookup? "gren" with
+    | .error miss =>
+      if miss.got == "gren" && miss.didYouMean.contains "green" then .ok ()
+      else .error s!"bad coded miss payload: {miss.got} {miss.didYouMean}"
+    | .ok _ => .error "expected miss for 'gren' in coded registry"
+  -- codes-length law holds
+  _ ← assertEq "coded codes.length = items.length"
+    codeColorReg.codes.length codeColorReg.items.length
+  .ok ()
+
 /-! ## Validation (W7.18) — error-ACCUMULATING applicative
 
 The accumulation contract as executable checks (the laws are compile-side:
@@ -419,6 +461,7 @@ def main : IO UInt32 := do
   , ("enumerable", enumerableChecks)
   , ("emitter-law", emitterLawChecks)
   , ("data-registry", dataRegistryChecks)
+  , ("coded-registry", codedRegistryChecks)
   , ("validation", validationChecks)
     ]
   if code != 0 then return code

@@ -468,4 +468,28 @@ theorem universeCheck_complete {items : List Item} :
     WellFormed items → universeCheck items = [] :=
   universeCheck_eq_nil_iff.mpr
 
+/-! ## W7.9 phase 2 — the evidence rides the type -/
+
+/-- The CHECKED universe: the item list bundled with its `WellFormed`
+    evidence. A driver discharges ONCE (the executable `universeCheck`
+    + `universeCheck_sound`); consumers quantify over the bundle —
+    well-formedness is carried BY THE TYPE, not by a comment or a
+    defensive re-check. `abbrev` (reducible): instance search and
+    unfolding see through it (the RowVals discipline). -/
+abbrev CheckedUniverse := { items : List Item // WellFormed items }
+
+/-- Inversion, the record-field async arm: a `WellFormed` universe's
+    record fields are async-free AT EVERY DEPTH (the `ItemWf.record`
+    arm projected out of the universe fold). W7.9's emitter consumers
+    (the Vortex lowering, first) read their per-field evidence through
+    this projection. -/
+theorem WellFormed.noAsync_of_record_field {items : List Item}
+    (hwf : WellFormed items) {n : String} {fields : List Field}
+    (hit : Item.record n fields ∈ items) {f : Field} (hf : f ∈ fields) :
+    NoAsyncTy f.ty := by
+  cases hwf with
+  | mk hitems _ =>
+      cases hitems _ hit with
+      | record hna _ _ => exact hna f hf
+
 end SchemaLang

@@ -27,6 +27,7 @@ struct array column-wise via `IntoArray`.
 
 import CodegenCore
 import SchemaLang.Item
+import SchemaLang.Wf
 import SchemaLang.Emit.GenCtx
 import SchemaLang.Vortex.DType
 import SchemaLang.Vortex.Lower
@@ -146,18 +147,158 @@ def refSem (items : List SchemaLang.Item) : Nat → VortexSem
             else none
         | _ => none) |>.head?
 
-/-- Every record of the universe, lowered: (registry name, struct
-    fields). Registration order; records whose lowering fails (an
-    unresolved ref) are skipped. -/
-def recordDTypes (items : List SchemaLang.Item) (fuel : Nat := 8) :
+/-- The sem-parameterized record-table spine — the checked and
+    unchecked views share it (`recordDTypes` instantiates `sem` with
+    the fuel-bounded self-semantics). -/
+private def recordDTypesWith (sem : VortexSem) (items : List SchemaLang.Item) :
     List (String × StructFields) :=
-  let sem := refSem items fuel
   items.filterMap fun it =>
     match it with
     | .record n fields =>
         (lowerFields sem .nonNullable (fields.map fun f => (f.name, f.ty)))
           |>.map fun fs => (n, fs)
     | _ => none
+
+/-- Every record of the universe, lowered: (registry name, struct
+    fields). Registration order; records whose lowering fails (an
+    unresolved ref) are skipped. -/
+def recordDTypes (items : List SchemaLang.Item) (fuel : Nat := 8) :
+    List (String × StructFields) :=
+  recordDTypesWith (refSem items fuel) items
+
+/-! ## W7.9 phase 2 — the checked universe view
+
+The emitter consumes a `CheckedUniverse` (`{ items // WellFormed items
+}` — the well-formedness evidence riding the type, discharged once by
+`GenCtx.checkedItems?` through `universeCheck_sound`). On the checked
+path the fold's per-field `banAsync` evidence comes from the evidence
+bundle, so `Ty.lowerChecked`'s async arms — the header's "defensive
+skip" — are unrepresentable (`Bool.noConfusion`, not a fallback
+`none`). `recordDTypesChecked_eq` certifies the bytes are the
+unchecked path's own; `checked_field_ne_future`/`_ne_stream` are the
+impossibility stated against the emitter's input. -/
+
+/-- The checked record-table worker: the evidence is the per-record
+    field banAsync lookup, projected ONCE from the `WellFormed` bundle
+    at `recordDTypesChecked` and threaded through the recursion (the
+    membership wall: a `filterMap` lambda carries no membership proof,
+    so the fold is structural here). -/
+private def recordDTypesCheckedGo (sem : VortexSem) :
+    (items : List SchemaLang.Item) →
+    (∀ n fields, SchemaLang.Item.record n fields ∈ items →
+      ∀ f, f ∈ fields → f.ty.banAsync = true) →
+    List (String × StructFields)
+  | [], _ => []
+  | it :: rest, hev =>
+      match
+        (match it with
+        | .record n fields =>
+            (lowerFieldsChecked sem .nonNullable
+              (fields.map fun f => (f.name, f.ty))
+              (fun p hp => by
+                rcases List.mem_map.mp hp with ⟨f, hf, rfl⟩
+                exact hev n fields List.mem_cons_self f hf))
+              |>.map fun fs => (n, fs)
+        | _ => none)
+        with
+      | none =>
+          recordDTypesCheckedGo sem rest
+            (fun n fields hit => hev n fields (List.mem_cons_of_mem _ hit))
+      | some x =>
+          x :: recordDTypesCheckedGo sem rest
+            (fun n fields hit => hev n fields (List.mem_cons_of_mem _ hit))
+
+/-- Every record of a CHECKED universe, lowered — the emitter's input.
+    The per-field banAsync evidence is the `WellFormed` bundle's
+    record-field arm (`WellFormed.noAsync_of_record_field`) read
+    through the checker bridge (`banAsync_iff_noAsyncTy`). -/
+def recordDTypesChecked (cu : SchemaLang.CheckedUniverse) (fuel : Nat := 8) :
+    List (String × StructFields) :=
+  recordDTypesCheckedGo (refSem cu.val fuel) cu.val
+    (fun _n _fields hit _f hf =>
+      SchemaLang.banAsync_iff_noAsyncTy.mpr
+        (cu.property.noAsync_of_record_field hit hf))
+
+/-- The worker agrees with the shared spine, item list by item list. -/
+theorem recordDTypesCheckedGo_eq (sem : VortexSem) :
+    (items : List SchemaLang.Item) →
+    (hev : ∀ n fields, SchemaLang.Item.record n fields ∈ items →
+      ∀ f, f ∈ fields → f.ty.banAsync = true) →
+    recordDTypesCheckedGo sem items hev =
+    items.filterMap fun it =>
+      match it with
+      | .record n fields =>
+          (lowerFields sem .nonNullable (fields.map fun f => (f.name, f.ty)))
+            |>.map fun fs => (n, fs)
+      | _ => none
+  | [], _ => rfl
+  | it :: rest, hev => by
+      have ih := recordDTypesCheckedGo_eq sem rest
+        (fun n fields hit => hev n fields (List.mem_cons_of_mem _ hit))
+      cases it with
+      | record n fields =>
+          -- case-split the lowering scrutinee FIRST: both sides'
+          -- compiler-generated matchers (`recordDTypesCheckedGo.match_3`
+          -- vs `List.filterMap.match_1`) iota-reduce on a concrete
+          -- ctor; with a stuck scrutinee the two private splitters
+          -- are syntactically distinct and no rfl/simp bridge exists.
+          cases hL : lowerFields sem .nonNullable
+              (fields.map fun f => (f.name, f.ty)) with
+          | none =>
+              simp only [recordDTypesCheckedGo, List.filterMap_cons,
+                lowerFieldsChecked_eq_lowerFields, hL, Option.map, ih]
+          | some fs =>
+              simp only [recordDTypesCheckedGo, List.filterMap_cons,
+                lowerFieldsChecked_eq_lowerFields, hL, Option.map, ih]
+      | variant n cases =>
+          simp only [recordDTypesCheckedGo, List.filterMap_cons, ih]
+      | func s =>
+          simp only [recordDTypesCheckedGo, List.filterMap_cons, ih]
+      | resource n =>
+          simp only [recordDTypesCheckedGo, List.filterMap_cons, ih]
+
+/-- BYTES PRESERVED (the theorem half of the byte-tie): the checked
+    record table IS the unchecked one — the evidence changes nothing
+    computational. -/
+theorem recordDTypesChecked_eq (cu : SchemaLang.CheckedUniverse) (fuel : Nat := 8) :
+    recordDTypesChecked cu fuel = recordDTypes cu.val fuel :=
+  recordDTypesCheckedGo_eq _ _ _
+
+/-- The deep form: every field type of a checked record is async-free
+    at EVERY depth (`Ty.banAsync` — the checker vocabulary the
+    lowering consumes). -/
+theorem checked_field_banAsync (cu : SchemaLang.CheckedUniverse)
+    {n : String} {fields : List SchemaLang.Field}
+    (hit : SchemaLang.Item.record n fields ∈ cu.val)
+    {f : SchemaLang.Field} (hf : f ∈ fields) : f.ty.banAsync = true :=
+  SchemaLang.banAsync_iff_noAsyncTy.mpr (cu.property.noAsync_of_record_field hit hf)
+
+/-- THE IMPOSSIBILITY THEOREM: on a checked universe the emitter's
+    "defensive skip" (the header's `future`/`stream` → `none` arms)
+    cannot fire from the record table — a field type of a checked
+    record is never `future`. The case is discharged BY the
+    `WellFormed` evidence: `NoAsyncTy (.future a)` is an empty family
+    (`nomatch` on the projected evidence). -/
+theorem checked_field_ne_future (cu : SchemaLang.CheckedUniverse)
+    {n : String} {fields : List SchemaLang.Field}
+    (hit : SchemaLang.Item.record n fields ∈ cu.val)
+    {f : SchemaLang.Field} (hf : f ∈ fields) {a : SchemaLang.Ty} :
+    f.ty ≠ SchemaLang.Ty.future a := by
+  intro heq
+  have hna := cu.property.noAsync_of_record_field hit hf
+  rw [heq] at hna
+  nomatch hna
+
+/-- The `stream` twin. -/
+theorem checked_field_ne_stream (cu : SchemaLang.CheckedUniverse)
+    {n : String} {fields : List SchemaLang.Field}
+    (hit : SchemaLang.Item.record n fields ∈ cu.val)
+    {f : SchemaLang.Field} (hf : f ∈ fields) {a : SchemaLang.Ty} :
+    f.ty ≠ SchemaLang.Ty.stream a := by
+  intro heq
+  have hna := cu.property.noAsync_of_record_field hit hf
+  rw [heq] at hna
+  nomatch hna
 
 /-! ## The module -/
 
@@ -177,17 +318,38 @@ def recordItems (rec : String × StructFields) : List CodegenCore.Emit.Rust.Item
       s!"std::sync::LazyLock::new(|| {dtypeRust dtype})"
   , intoVortexImpl n fs ]
 
-/-- The Vortex emitter plugin: dtype constants + IntoVortex impls. -/
+/-- The Vortex emitter plugin: dtype constants + IntoVortex impls.
+
+    W7.9 phase 2: the item universe is consumed through the CHECKED
+    view (`GenCtx.checkedItems?` — the executable check discharged
+    once into `WellFormed`, the evidence riding the type). The checked
+    fold's async arms are unrepresentable
+    (`checked_field_ne_future`/`_ne_stream`); the bytes are the
+    unchecked path's own (`recordDTypesChecked_eq` + the byte-tie
+    gate). The `none` arm is the pre-evidence fallback for callers
+    that never ran the check (test fixtures) — the paths agree, so
+    either way the output is identical.
+
+    FOLLOW-UP (W7.9 phase 3): migrate the remaining `Emitter GenCtx`
+    consumers — Emit/Wit.lean, Emit/Rust.lean, Emit/Invariant.lean,
+    Emit/Update.lean, Emit/Machine.lean, Emit/Typestate.lean,
+    Emit/Circuit.lean, Docs — onto `ctx.checkedItems?`; each defensive
+    partiality (unresolved-ref skips, `filterMap` drops) gets the same
+    treatment: the impossibility as a theorem, the bytes pinned by an
+    `_eq` agreement theorem. ONE pattern proven here, not a sweep. -/
 def vortexEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "vortex"
   style := .doubleSlash
   specSource := "Demo.lean"
   outputs := ["../../src/vortex_generated.rs"]
   run ctx :=
+    let table := match ctx.checkedItems? with
+      | some cu => recordDTypesChecked cu
+      | none => recordDTypes ctx.items
     [ { path := "../../src/vortex_generated.rs"
         contents :=
           CodegenCore.Emit.Rust.renderModule
-            (useItems ++ (recordDTypes ctx.items).flatMap recordItems) }
+            (useItems ++ table.flatMap recordItems) }
     ]
 
 end SchemaLang.Vortex.Emit

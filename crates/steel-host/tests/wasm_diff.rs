@@ -64,6 +64,71 @@ fn code_section(w: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
+/// W6.3 phase 1: the Lean oracle's `CompareMode` mirror — errors
+/// compare by IDENTITY, never by rendered strings. Every row in the
+/// current manifest binds `Full` (the wire carries expected VALUES
+/// only; `Ignore`/`Identity` land with the phase-2 verdict wire, see
+/// Oracle.lean's PHASE-2 NOTE). The truth table below mirrors
+/// `CompareMode.compare` arm-for-arm.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CompareMode {
+    /// Errors waive: an error on either side passes.
+    Ignore,
+    /// Compare error identity only — payloads never read.
+    Identity,
+    /// Compare identity AND payload, byte-for-byte (today's behavior).
+    Full,
+}
+
+/// One side of a comparison: a rendered value or an error identity.
+/// The replay's only error identity today is a TRAP (payload-free —
+/// the oracle never reads a trap's message). Mirrors `Oracle.Outcome`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Outcome {
+    Value(String),
+    Trap,
+}
+
+/// The mode truth table (mirrors `Oracle.CompareMode.compare`; the
+/// Lean side pins every arm with #guard, `compare_mode_truth_table`
+/// pins this mirror).
+fn compare(mode: CompareMode, expected: &Outcome, got: &Outcome) -> bool {
+    use CompareMode::*;
+    use Outcome::*;
+    match (mode, expected, got) {
+        (Ignore, Trap, _) | (Ignore, _, Trap) => true,
+        (Ignore, Value(a), Value(b)) => a == b,
+        (Identity, Trap, Trap) => true,
+        (Identity, Value(_), Value(_)) => true,
+        (Identity, _, _) => false,
+        (Full, Value(a), Value(b)) => a == b,
+        (Full, _, _) => false,
+    }
+}
+
+#[test]
+fn compare_mode_truth_table() {
+    use CompareMode::*;
+    use Outcome::*;
+    let va = Value("42".into());
+    let vb = Value("43".into());
+    // FULL: values byte-compare; any error involvement fails.
+    assert!(compare(Full, &va, &va));
+    assert!(!compare(Full, &va, &vb));
+    assert!(!compare(Full, &va, &Trap));
+    assert!(!compare(Full, &Trap, &Trap));
+    // IDENTITY: error-ness compares; value payloads never read. (The
+    // replay's single error identity is Trap, so Trap==Trap passes.)
+    assert!(compare(Identity, &Trap, &Trap));
+    assert!(compare(Identity, &va, &vb));
+    assert!(!compare(Identity, &va, &Trap));
+    // IGNORE: an error on either side waives.
+    assert!(compare(Ignore, &Trap, &va));
+    assert!(compare(Ignore, &va, &Trap));
+    assert!(compare(Ignore, &va, &va));
+    assert!(!compare(Ignore, &va, &vb));
+}
+
 /// The canonical serialization of a component Val — MUST match the
 /// Lean oracle's `resultOf` rendering byte-for-byte (the diff compares
 /// strings). Formats: u64 → decimal; bool → 1/0; string → itself;
@@ -296,8 +361,12 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect()
         };
-        let expected = row["expected"].as_str().expect("expected");
-        let gotStr = if f == "watch-counts" || f == "watch-users" {
+        // W6.3 ph1: every row binds Full today (the wire carries no
+        // mode column yet — Oracle.lean's `modeOf` is the Lean-side
+        // binding; this constant is its mirror until phase 2).
+        let mode = CompareMode::Full;
+        let expected = Outcome::Value(row["expected"].as_str().expect("expected").to_string());
+        let got: Outcome = if f == "watch-counts" || f == "watch-users" {
             // the STREAM rows: the call + the drain in ONE event loop —
             // the consumer must be a background task while the loop
             // pumps the guest's pending write (a post-call drain never
@@ -333,25 +402,37 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .await??;
             let items = out.lock().unwrap();
-            format!(
+            Outcome::Value(format!(
                 "({})",
                 items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
-            )
+            ))
         } else {
             match rt.call(f, &args).await {
                 Ok(results) => match results.into_iter().next() {
-                    Some(other) => ser_val(&other),
-                    None => "?".into(),
+                    Some(other) => Outcome::Value(ser_val(&other)),
+                    None => Outcome::Value("?".into()),
                 },
                 Err(e) => {
-                    failures.push(format!("{f} {:?}: TRAP {e}", row["args"]));
+                    // the replay's error identity: Trap (payload-free).
+                    // Under Full this always fails; Ignore/Identity
+                    // rows decide through the mode once the wire
+                    // carries them (phase 2).
+                    if !compare(mode, &expected, &Outcome::Trap) {
+                        failures.push(format!("{f} {:?}: TRAP {e}", row["args"]));
+                    }
                     continue;
                 }
             }
         };
-        if gotStr != expected {
+        if !compare(mode, &expected, &got) {
+            let Outcome::Value(exp) = &expected else {
+                unreachable!("manifest expecteds are values")
+            };
+            let Outcome::Value(got_str) = &got else {
+                unreachable!("non-trap outcomes are values")
+            };
             failures.push(format!(
-                "{f} {:?}: expected {expected}, got {gotStr}",
+                "{f} {:?}: expected {exp}, got {got_str}",
                 row["args"]
             ));
         }

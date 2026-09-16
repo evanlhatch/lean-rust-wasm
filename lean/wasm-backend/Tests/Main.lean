@@ -96,6 +96,70 @@ def oracleDiffSpec : DiffSpec := ⟨"oracle rejects sabotaged rows",
   , corrupt "arity sabotage" (fun rs => ("double", ["3", "4"]) :: rs) rows oracleRowsResolve
       ["'double' expects 1 args", "got 2"] ]⟩
 
+/-! ## W6.3: error-equivalence modes + identity-driven rejection
+
+`resolveOutcome` carries the error IDENTITY (an `ErrorId` ctor) separate
+from the payload; `CompareMode.compare` is the truth table the Rust
+replay mirrors arm-for-arm. The pins: identity never reads payloads,
+full reads everything, ignore waives errors. -/
+
+-- Test fixtures: two value outcomes + the two resolution-error
+-- identities (eA1/eA2 share `arityDrift` with DIFFERENT payloads).
+def vA : Outcome := { error := none, payload := "42" }
+def vB : Outcome := { error := none, payload := "43" }
+def eU : Outcome := resolveOutcome "doble" ["3"]        -- unknownFn
+def eA1 : Outcome := resolveOutcome "double" ["3", "4"] -- arityDrift
+def eA2 : Outcome := resolveOutcome "total" ["1"]       -- arityDrift, other payload
+
+-- FULL: today's behavior — values byte-compare; errors need identity
+-- AND payload; a kind mismatch fails.
+#guard CompareMode.compare .full vA vA
+#guard !CompareMode.compare .full vA vB
+#guard !CompareMode.compare .full eA1 eA2  -- same identity, payload differs
+#guard !CompareMode.compare .full eU eA1   -- identity differs
+#guard !CompareMode.compare .full vA eU    -- kind mismatch
+
+-- IDENTITY: error ctors compare; payloads (error OR value) never read.
+#guard CompareMode.compare .identity eA1 eA2
+#guard !CompareMode.compare .identity eU eA1
+#guard CompareMode.compare .identity vA vB
+#guard !CompareMode.compare .identity vA eU
+
+-- IGNORE: an error on either side waives; values still byte-compare.
+#guard CompareMode.compare .ignore eU vA
+#guard CompareMode.compare .ignore vA eA1
+#guard CompareMode.compare .ignore eU eA1
+#guard CompareMode.compare .ignore vA vA
+#guard !CompareMode.compare .ignore vA vB
+
+-- `resolve` keeps its byte-exact string surface through the
+-- `resolveOutcome` reroute (the original DiffSpec's pins still bite).
+#guard resolve "doble" ["3"] == .error "oracle row: unknown fn 'doble'"
+#guard resolve "double" ["3", "4"] == .error "oracle row: 'double' expects 1 args, got 2"
+#guard resolve "double" ["3"] == .ok "6"
+
+-- Every row in today's universe binds `.full` (no error rows on the
+-- wire yet — phase 2 makes `modeOf` a real column).
+#guard rowUniverse.all (fun (fn, _) => modeOf fn == .full)
+
+/-- Identity-driven rejection: the check reads the structured error
+    identity and the message DERIVES from the ctor — the corruption
+    pins name the ctor, not a free-form payload substring. -/
+def oracleRowsIdentities (rs : List Probe) : CheckResult :=
+  allOf (rs.map fun (fn, args) =>
+    (s!"row {fn} {args}", match (resolveOutcome fn args).error with
+      | none => .ok ()
+      | some id => .error s!"row '{fn}' rejected: {id}"))
+
+/-- The identity DiffSpec: same sabotage rows as `oracleDiffSpec`,
+    pinned by error IDENTITY. -/
+def oracleIdentitySpec : DiffSpec := ⟨"oracle rejects sabotaged rows by error identity",
+  oracleRowsIdentities rows,
+  [ corrupt "unknown fn" (fun rs => ("doble", ["3"]) :: rs) rows oracleRowsIdentities
+      ["unknownFn", "doble"]
+  , corrupt "arity sabotage" (fun rs => ("double", ["3", "4"]) :: rs) rows oracleRowsIdentities
+      ["arityDrift", "double"] ]⟩
+
 open Plausible
 open Plausible.Gen
 open WasmBackend.Wat
@@ -211,7 +275,7 @@ def watPropSpec : TestKit.PropSpec :=
 -- point runs the oracle DiffSpec (plus its own vacuous-control demo), and
 -- the WAT printer PropSpec.
 def main : IO UInt32 := do
-  let code ← runDiffs [oracleDiffSpec]
+  let code ← runDiffs [oracleDiffSpec, oracleIdentitySpec]
   if code != 0 then return code
   -- Negative control for the control: an identity "corruption" must be
   -- flagged (proves the runner can't go vacuously green here either).

@@ -39,6 +39,7 @@ import CodegenCore
 import SchemaLang.Item
 import SchemaLang.Invariant
 import SchemaLang.Update
+import SchemaLang.Wf
 
 namespace SchemaLang.Emit
 
@@ -64,6 +65,25 @@ structure GenCtx where
     and ignore the invariant/update lanes. -/
 def GenCtx.itemsOnly (items : List Item) : GenCtx :=
   { items := items, invariants := [], updates := [] }
+
+/-- The CHECKED view of the item universe (W7.9 phase 2). DESIGN
+    CHOICE (the order offered the alternative of the DRIVER computing
+    the checked universe once and the ctx carrying it): the view is a
+    pure projection on the ctx instead. Reason: every existing
+    `Emitter GenCtx` literal keeps compiling — no structure-field
+    change (the `roots` lane, `itemsOnly`, and the seven emitter
+    literals are untouched), and "discharge once" is a `let` at the
+    consumer (`match ctx.checkedItems? with ...`), not a driver
+    reshaping. The discharge itself is the bridge: the executable
+    authority (`universeCheck`, the `SchemaDiag` source tooling reads)
+    transports into the reasoning authority (`WellFormed`) via
+    `universeCheck_sound`. `none` = the registry is ill-formed —
+    emitters on this view keep their pre-evidence fallback; DIAGNOSES
+    stay `universeCheck`'s job, not this view's. -/
+def GenCtx.checkedItems? (ctx : GenCtx) : Option CheckedUniverse :=
+  if h : universeCheck ctx.items = [] then
+    some ⟨ctx.items, universeCheck_sound h⟩
+  else none
 
 /-- Group named items by the name's ROOT namespace (`Name.getRoot`):
     order-preserving both ways — roots by first occurrence, items in

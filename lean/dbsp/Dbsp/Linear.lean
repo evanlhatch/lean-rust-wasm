@@ -1,8 +1,7 @@
 /-
 # Dbsp.Linear — linearity, differentiation, integration
 
-Ports tchajed/database-stream-processing-theory `src/linear.lean` (Lean 3)
-to Lean 4 (flatland's notes/lean/lean-v3.md Part 3). Requires the streams to carry an
+Ports tchajed/database-stream-processing-theory `src/linear.lean` (Lean 3) (see [flatlandPortLineage]). Requires the streams to carry an
 `AddCommGroup` (mathlib Pi instances, see `Dbsp.Stream`).
 
 The crown jewels — the D/I inverse pair:

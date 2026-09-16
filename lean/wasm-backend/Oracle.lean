@@ -18,6 +18,26 @@ too, so this module's row surface IS the emitter's; `resolve` is new
 New rows APPEND ONLY — the existing rows' bytes are the byte-tie
 invariant, never spliced.
 
+W6.3 (phase 1) added, bytes unchanged: the `Probe`/`ProbeBatch`
+structure (the row universe's context-sharing made explicit — every
+batch names the ONE demo-component context its probes are fired at),
+and the `CompareMode`/`ErrorId`/`Outcome` comparison contract
+(`resolve` now routes through `resolveOutcome` — same messages, plus
+error IDENTITY as a ctor). Verified: oracle manifest sha256
+b1e13749f5e25f27317f0c7b6ada65b2d6567638efd6aa59f9c6ed5e553c5d18
+before AND after.
+
+PHASE-2 NOTE (W6.3, NOT YET LANDED): the target oracle shape emits
+VERDICTS, not expecteds — the replay request carries the row + its
+batch context, Lean answers a judgment through `CompareMode.compare`,
+and error-equivalence modes ride the wire per row (`modeOf` becomes a
+real column, `.ignore`/`.identity` rows become expressible). BLOCKED
+on the host replay contract: steel-host's wasm_diff still PULLS
+target/diff.json and string-compares host-side; until it SENDS rows
+and CONSUMES verdicts, the manifest format is byte-frozen (the hash
+above) and the mode/batch structure binds Lean-side + as a Rust-side
+mirror (`CompareMode` in wasm_diff.rs) only.
+
 Ownership: this module owns the row universe + row resolution; the
 script owns only the emission loop. Deliberately excluded: the component
 replay itself (steel-host, Rust-side), and `just wasm-compile`'s
@@ -41,8 +61,30 @@ set_option linter.guestlang.packageNamespace false -- because these decl names k
 def u64s : List UInt64 :=
   ((List.range 20).map (fun i => (i * 7 + 3) % 100)).map (fun n => n.toUInt64)
 
-/-- The manifest rows: (fn, args) pairs the differential gate replays. -/
-def rows : List (String × List String) :=
+/-- One probe: a single cheap replay (fn + flat arg strings) fired at a
+    shared context. The wire row IS this pair — byte-frozen. -/
+abbrev Probe := String × List String
+
+/-- A probe batch (cedar-drt's amortized probes, W6.3): ONE expensive
+    context (the instantiated demo component the Rust replay builds
+    once) × N cheap probes fired at it. Every batch below names the
+    SAME context — the u64s grid, both LCG sweeps, the boundary sweep
+    and the Gen supplement all replay against the one demo-component
+    instance. The batching is the phase-2 host contract's shape (the
+    replay amortizes instantiation over the batch); today it is
+    structure-only — the emitted row bytes are unchanged. -/
+structure ProbeBatch where
+  /-- The context the batch's probes share (documentary until phase 2
+      puts it on the wire). -/
+  context : String
+  /-- The probes fired at the context. -/
+  probes : List Probe
+
+/-- The grid batch: the fixed u64s input grid × the demo fns, plus the
+    hand-pinned validator duels. -/
+def gridBatch : ProbeBatch where
+  context := "demo-component"
+  probes :=
   (u64s.map fun a => ("double", [toString a]))
   ++ (u64s.map fun a => ("is-big", [toString a]))
   ++ (u64s.map fun a => ("adder", [toString a, toString (a + 3)]))
@@ -84,6 +126,10 @@ def rows : List (String × List String) :=
   ++ [("user-complete", ["1", "ab", "1@g.dev", "a"])]
   ++ (u64s.map fun a => ("user-complete", [toString a, "first", "1@g.dev", "a,b"]))
 
+/-- The manifest rows: (fn, args) pairs the differential gate replays
+    (the grid batch's probes — the byte-tie surface, unchanged). -/
+def rows : List Probe := gridBatch.probes
+
 -- THE FUZZ SUPPLEMENT: a deterministic LCG drives RANDOM scalar rows —
 -- the authority stays LEAN (the expected = resultOf's evals on the
 -- random args); the engines must agree on inputs the fixed grid never
@@ -106,6 +152,10 @@ def fuzzRows : Nat → UInt64 → List (String × List String)
         | _ => ("pick", [if s2 % 2 == 0 then "1" else "0", toString (s3 % 100), toString (s4 % 100)])
       row :: fuzzRows n s4
 
+/-- The fuzz supplement as a batch (same shared context). -/
+def fuzzBatch (n : Nat) (seed : UInt64) : ProbeBatch :=
+  ⟨"demo-component", fuzzRows n seed⟩
+
 -- THE BOUNDARY SWEEP: the u64 fns at 0, 1, 2, 2^k and 2^k±1 (k = 31,
 -- 32, 63) — the grid's mod-1000 and the LCG's small residues never
 -- visit the wrap/limit surface. The adder/pick args are COMPLEMENTS
@@ -125,6 +175,10 @@ def boundaryRows : List (String × List String) :=
   ++ (bounds.map fun a =>
     ("pick", [if a % 2 == 0 then "1" else "0", toString a, toString (maxU - a)]))
   ++ (bounds.map fun a => ("total", [toString a, toString a, toString a]))
+
+/-- The boundary sweep as a batch (same shared context). -/
+def boundaryBatch : ProbeBatch :=
+  ⟨"demo-component", boundaryRows⟩
 
 -- THE SWEEP SUPPLEMENT: a second LCG (splitmix-style — seed, then two
 -- advances per row) over the fns the first fuzz skips (str-len-demo,
@@ -147,6 +201,10 @@ def sweepRows : Nat → UInt64 → List (String × List String)
         | 7 => ("str-len-demo", [toString (s2 % 1000)])
         | _ => ("watch-counts", [toString (s2 % 1000)])
       row :: sweepRows n s3
+
+/-- The sweep supplement as a batch (same shared context). -/
+def sweepBatch (n : Nat) (seed : UInt64) : ProbeBatch :=
+  ⟨"demo-component", sweepRows n seed⟩
 
 -- ── THE GEN SUPPLEMENT (Plausible) ───────────────────────────────────
 -- Edge rows from Plausible `Gen` combinators: the nesting/shape edges
@@ -280,11 +338,17 @@ def genEdgeRow : Gen (String × List String) := do
     let x ← genU64
     pure ("pick", [b, a, x])
 
+/-- The pinned batches BEFORE the Gen supplement — one context, four
+    probe batches (the amortized structure: the replay instantiates
+    once, fires all four). -/
+def preGenBatches : List ProbeBatch :=
+  [gridBatch, fuzzBatch 200 0x5EED, boundaryBatch, sweepBatch 120 0xA11CE]
+
 /-- The pinned universe BEFORE the Gen supplement — the filter's
     reference (a generated row equal to one of these is dropped, never
     duplicated). -/
-def preGen : List (String × List String) :=
-  rows ++ fuzzRows 200 0x5EED ++ boundaryRows ++ sweepRows 120 0xA11CE
+def preGen : List Probe :=
+  preGenBatches.flatMap (·.probes)
 
 /-- The Gen driver: `n` draws, each at seed `seed + k`, kept if fresh
     (not already in `acc` or the pinned universe). The count of KEPT
@@ -302,13 +366,17 @@ def genRowsInto (acc : List (String × List String)) :
 
 /-- The Gen supplement (the emitter appends this — appended, never
     spliced). -/
-def genRows (n seed : Nat) : List (String × List String) :=
+def genRows (n seed : Nat) : List Probe :=
   (genRowsInto [] n seed).reverse
 
+/-- The Gen supplement as a batch (same shared context). -/
+def genBatch (n seed : Nat) : ProbeBatch :=
+  ⟨"demo-component", genRows n seed⟩
+
 /-- The manifest's full replay list — the emitter's row universe, the
-    Gen supplement appended last. -/
-def rowUniverse : List (String × List String) :=
-  preGen ++ genRows 130 0xBEA57
+    Gen supplement's batch appended last. -/
+def rowUniverse : List Probe :=
+  (preGenBatches ++ [genBatch 130 0xBEA57]).flatMap (·.probes)
 
 /-- The expected-result fold (Lean's semantics is the authority). "?" is
     unreachable for well-formed rows — `resolve` guards fn/arity first. -/
@@ -368,15 +436,89 @@ def arityOf : String → Option Nat
   | "user-valid" | "user-complete" => some 4
   | _ => none
 
+-- ── W6.3: error-equivalence modes + structured resolution ──────────
+-- The comparison contract (cedar-drt's ErrorComparisonMode): errors
+-- compare by IDENTITY (a ctor), never by rendered strings. Phase 1
+-- binds the mode at `modeOf` + `CompareMode.compare`; the wire stays
+-- byte-frozen (see the header's PHASE-2 NOTE).
+
+/-- How a row's outcome is compared against the replay. -/
+inductive CompareMode where
+  /-- Errors waive: an error on either side passes (known-divergence
+      waivers; both-sides-error = pass). -/
+  | ignore
+  /-- Compare error IDENTITY (the ctor) only — payloads never read,
+      for errors OR values. -/
+  | identity
+  /-- Compare everything: identity AND payload, byte-for-byte
+      (today's behavior — every row in the current universe). -/
+  | full
+deriving BEq, Repr
+
+/-- The error identity an outcome can carry. Resolution failures are
+    Lean-side (`resolveOutcome`); `trap` is the REPLAY side's only
+    identity today (the Rust mirror — a wasmtime trap carries no
+    payload the oracle may read). -/
+inductive ErrorId where
+  | unknownFn | arityDrift | trap
+deriving BEq, Repr
+
+/-- The identity's display form — the CTOR name, so error messages
+    derived from it name the identity (the corruption pins match on
+    this, never on a free-form payload). -/
+instance : ToString ErrorId where
+  toString
+    | .unknownFn => "unknownFn"
+    | .arityDrift => "arityDrift"
+    | .trap => "trap"
+
+/-- One side of a comparison: a value (rendered payload) or an error
+    (identity + payload — the payload read by `.full` only). -/
+structure Outcome where
+  /-- The error identity (`none` = a value outcome). -/
+  error : Option ErrorId
+  /-- The rendered payload: the value's ser form, or the error's
+      message. -/
+  payload : String
+
+/-- The mode's truth table (the Rust replay's `compare` mirrors this
+    arm-for-arm; Tests pin every arm). -/
+def CompareMode.compare (mode : CompareMode) (expected got : Outcome) : Bool :=
+  match mode, expected.error, got.error with
+  | .ignore, some _, _ => true
+  | .ignore, _, some _ => true
+  | .ignore, none, none => expected.payload == got.payload
+  | .identity, some e, some f => e == f
+  | .identity, none, none => true
+  | .identity, _, _ => false
+  | .full, some e, some f => e == f && expected.payload == got.payload
+  | .full, none, none => expected.payload == got.payload
+  | .full, _, _ => false
+
+/-- The per-row mode binding. Every fn in today's universe is `.full`:
+    the wire carries expected VALUES only — there are no error rows to
+    waive or identity-compare yet (phase 2 makes this a real column). -/
+def modeOf (_ : String) : CompareMode := .full
+
 /-- Structured row resolution: unknown fn or arity drift is an error
-    NAMING the row context (the gate's corruption negatives pin this). -/
-def resolve (fn : String) (args : List String) : Except String String :=
+    carrying its IDENTITY as a ctor plus the row-context message (the
+    gate's corruption negatives pin both — by ctor, not by string). -/
+def resolveOutcome (fn : String) (args : List String) : Outcome :=
   match arityOf fn with
-  | none => .error s!"oracle row: unknown fn '{fn}'"
+  | none => { error := some .unknownFn, payload := s!"oracle row: unknown fn '{fn}'" }
   | some n =>
     if args.length != n then
-      .error s!"oracle row: '{fn}' expects {n} args, got {args.length}"
-    else .ok (resultOf fn args)
+      { error := some .arityDrift
+      , payload := s!"oracle row: '{fn}' expects {n} args, got {args.length}" }
+    else { error := none, payload := resultOf fn args }
+
+/-- The string-surface resolver (the DiffSpec's original contract —
+    byte-identical messages, now routed through `resolveOutcome`). -/
+def resolve (fn : String) (args : List String) : Except String String :=
+  let o := resolveOutcome fn args
+  match o.error with
+  | none => .ok o.payload
+  | some _ => .error o.payload
 
 /-- One manifest row as JSON (values via Lean.Json for escaping; the
     skeleton keeps the byte format — `mkObj` sorts keys, forbidden). -/

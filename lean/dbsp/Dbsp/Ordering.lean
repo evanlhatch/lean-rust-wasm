@@ -1,8 +1,7 @@
 /-
 # Dbsp.Ordering — monotone streams and the derivative landmine
 
-Ports tchajed/database-stream-processing-theory `src/ordering.lean` (Lean 3,
-79 lines) to Lean 4 (flatland's notes/lean/lean-v3.md Part 3).
+Ports tchajed/database-stream-processing-theory `src/ordering.lean` (Lean 3, 79 lines) (see [flatlandPortLineage]).
 
 The content is one theorem and one counterexample:
 

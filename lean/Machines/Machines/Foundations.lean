@@ -14,6 +14,15 @@ serve neither the kit nor the Dag.
 import Mathlib.Tactic.Linter.FlexibleLinter
 import Mathlib.Tactic.Linter.Style
 import CodegenCore.Kit
+import Batteries
+
+library_note machineAssemblePattern /--
+  The veil Assemble pattern: a generated inductive for `Machine.Label` means
+  proofs case-split and execution enumerate the SAME generated set of labels;
+  they cannot drift. This is the two-projections core: Projection 1 (executable:
+  `step?`, `run`) and Projection 2 (proof: `tr`) both consume the same labels,
+  so execution and verification stay aligned.
+-/
 
 namespace Machines
 

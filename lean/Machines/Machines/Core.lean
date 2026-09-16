@@ -31,9 +31,7 @@ structure EventSpec (S : Type) (Inv : S → Prop) where
   safety : ∀ s h, Inv s → Inv (action s h)
 
 /-- A machine: state type, event labels, invariant, and the event family.
-    `Label` should be a generated inductive over event names so proofs
-    case-split and execution enumerates the SAME set (the veil Assemble
-    pattern). -/
+    `Label` should be an inductive over event names — see [machineAssemblePattern]. -/
 structure Machine where
   State : Type
   Label : Type

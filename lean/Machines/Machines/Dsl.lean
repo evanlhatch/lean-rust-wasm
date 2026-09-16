@@ -54,9 +54,7 @@ guard/action family would become payload-indexed — a `Machines.Core`
 Machines.Sync's five machines hand-assembled.
 
 generates:
-- `counter.Label` — an inductive with one constructor per event name (the
-  veil Assemble pattern: proofs case-split and execution enumerates the
-  SAME generated set; they cannot drift),
+- `counter.Label` — an inductive with one constructor per event name (see [machineAssemblePattern]).
 - `counter.spec : counter.Label → EventSpec State Inv` — the event family,
 - `counter : Machine` — the assembly.
 
