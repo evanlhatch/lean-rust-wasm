@@ -1,16 +1,27 @@
 import Lean
 import CodegenCore.Registry
 import CodegenCore.AttrKit
+import LintKit.GuestBan
 
 /- PROVENANCE: moved verbatim from wasm-backend/WasmBackend/Check.lean
    (the guest gate + the @[guest]/@[guest_std] attributes) — the STD
    package (lean/std) needs the attributes and requiring the BACKEND
    from it is a lake-require cycle (the backend's GenMain imports the
    std oleans). The gate is codegen-layer infrastructure: both the
-   backend and the std package require codegen-core. -/
+   backend and the std package require codegen-core.
+
+   W7.13: the PURE predicate (`Ban`/`bannedAt?`/`checkExprAt`/`checkExpr`/
+   `reasons`) moved verbatim to `LintKit.GuestBan` — ONE `DeclCheck`
+   (`LintKit.GuestBan.guestBanCheck`) now mounts BOTH ways: as the
+   attribute GATE here (hard elab error, via `CodegenCore.mountAsGate`)
+   and as the `linter.guestlang.guestBan` env-LINT (a report) in
+   LintKit's runner. This module keeps the attributes, the guest-mark
+   registry, and re-exports the predicate surface (`export` below) so
+   downstream (`WasmBackend.Check`'s re-export, the wasm-backend #guard
+   pins) sees no change. -/
 
 /-!
-# WasmBackend.Check — `@[guest]`: elab-time guest-compatibility
+# CodegenCore.GuestGate — `@[guest]`: elab-time guest-compatibility
 
 The earliest possible correctness gate: a `@[guest]` def is scanned at
 ELABORATION (`.afterCompilation` — the same mechanism as `@[schema]`)
@@ -22,12 +33,19 @@ runtime the guest does not have:
 - `IO.*` / `Task.*` / `Thunk.*` — host capabilities, not guest code
 
 The PREDICATE is pure (`checkExpr : Expr → List String`) — unit-testable
-(Tests/Main.lean: positive + negative controls). The attribute handler
-renders the violations into the elaboration error AT THE DECL — `lake
-build` fails before any emitter runs. No proofs, no LCNF: a one-pass
-Expr scan. The backend's `unsupported` throw then only ever fires for
-constructs the scan can't see (LCNF-only shapes like `jmp`) — belt and
-suspenders.
+(wasm-backend's Tests/Main.lean: positive + negative controls). The
+attribute handler renders the violations into the elaboration error AT
+THE DECL — `lake build` fails before any emitter runs. No proofs, no
+LCNF: a one-pass Expr scan. The backend's `unsupported` throw then only
+ever fires for constructs the scan can't see (LCNF-only shapes like
+`jmp`) — belt and suspenders.
+
+The predicate + the shared `DeclCheck` live in `LintKit.GuestBan` (the
+lint mount needs them in LintKit; only codegen-core → LintKit is a legal
+import direction). BOUNDARY: the guest-mark registry write and the
+"applies to defs only" misuse error stay HERE, in the attribute handler
+— a pure `Name → Environment → List DeclDiag` check cannot modify the
+env, and a lint sweeping every decl kind has no "wrong kind" failure.
 
 Coverage note: the scan is SYNTACTIC (constants in the elaborated
 term). It over-approximates: `if n == 0` on Nat bans even when the
@@ -38,66 +56,10 @@ namespace CodegenCore.GuestGate
 
 open Lean
 
-/-- The BAN LEVEL: strict (the app-authoring surface) vs std (the
-    guestlang-std authoring surface — match-only Nat is fine: the LCNF
-    for a match on Nat = ctor dispatch on the zero/succ object, no GMP
-    arithmetic; Nat ARITHMETIC consts stay banned). String opens up in
-    std mode too (the std runtime implements it). -/
-inductive Ban where
-  | strict | std
-
-/-- Banned root namespaces → the reason (shown in the error). -/
-def bannedAt? (level : Ban) (n : Name) : Option String :=
-  let root := n.getRoot
-  if root == `IO then some "IO is a host capability — guest functions must be pure over guestlang-std's WASI layer"
-  else if root == `Task then some "Task is the host scheduler — not guest code"
-  else if root == `Thunk then some "Thunk (laziness) needs heap + scheduler — not guest code"
-  else if root == `Nat then
-    match level with
-    | .strict => some "Nat is bignum (GMP) — the guest has fixed-width integers only (use UInt64/Int64)"
-    | .std =>
-      -- match-only Nat is std-legal; ARITHMETIC is GMP — banned
-      let s := n.toString
-      let arith := ["Nat.add", "Nat.sub", "Nat.mul", "Nat.div", "Nat.mod",
-        "Nat.pred", "Nat.pow", "Nat.gcd", "Nat.log2"].any (fun op => s == op || s.startsWith (op ++ "."))
-      if arith then some "Nat arithmetic is GMP — std code may only MATCH on Nat (zero/succ patterns)"
-      else none
-  else if root == `String then
-    match level with
-    | .strict => some "String runtime lands with guestlang-std — not yet compilable"
-    | .std => none
-  else none
-
-/-- PURE predicate: every banned constant root in the Expr, in scan
-order, deduped. The testable core of the `@[guest]`/`@[guest_std]`
-gates. Scan = core's memoized `Expr.getUsedConstants` REVERSED: the
-original hand-fold visited argument-before-function / body-before-type
-(reverse pre-order — e.g. `f Nat.x` lists `"Nat"` before `"IO"` for
-`IO.println (Nat.add ..)`), and the #guard tests pin that order. -/
-def checkExprAt (level : Ban) (e : Expr) (acc : List String := []) : List String :=
-  e.getUsedConstants.toList.reverse.foldl (init := acc) fun a n =>
-    match (bannedAt? level n).map fun _ => n.getRoot.toString with
-    | some h => if a.contains h then a else a ++ [h]
-    | none => a
-
-/-- The strict predicate (the `@[guest]` surface). -/
-def checkExpr (e : Expr) (acc : List String := []) : List String :=
-  checkExprAt .strict e acc
-
-/-- Rendered reason for each violation (for the elab error), at the
-    attribute's OWN ban level — the `@[guest_std]` error used to render
-    STRICT reasons (bug 0.5). Violations are ROOTS: at `.std` a `Nat`
-    root can only have come from ARITHMETIC (match-only Nat is legal),
-    so the reason is the arithmetic one, not the strict bignum one. -/
-def reasons (level : Ban) (violations : List String) : String :=
-  String.intercalate "\n" (violations.map fun v =>
-    let why? := match level, v with
-      | .std, "Nat" =>
-        some "Nat arithmetic is GMP — std code may only MATCH on Nat (zero/succ patterns)"
-      | _, _ => bannedAt? level v.toName
-    match why? with
-    | some why => s!"- `{v}` — {why}"
-    | none => s!"- `{v}`")
+-- The predicate surface, re-homed in LintKit.GuestBan (W7.13) — the
+-- historical names keep resolving (WasmBackend.Check re-exports them;
+-- the wasm-backend #guard pins use them via `open`).
+export LintKit.GuestBan (Ban bannedAt? checkExprAt checkExpr reasonLine reasons)
 
 /-- The guest-mark registry: every decl that PASSED a `@[guest]`/`@[guest_std]`
     check, append-only, replayed from oleans at import (the mkRegistryExt
@@ -116,19 +78,20 @@ def guestMarkedDecls (env : Environment) : List Name :=
 def recordGuestMark (decl : Name) : CoreM Unit :=
   modifyEnv fun env => guestMarkExt.addEntry env decl
 
-/-- The shared attribute check: scan the def's type + value at the
-    attribute's ban level; mark on pass. The two attributes (`@[guest]`
-    / `@[guest_std]`) are one code path with the level as the parameter
-    (the `@[guest_std]` error used to render STRICT reasons — bug 0.5 —
-    the level-pinned `reasons` is the fix, and it lives in the shared
-    body). -/
+/-- The shared attribute check: the GATE mount of
+    `LintKit.GuestBan.guestBanCheck` — scan the def's type + value at the
+    attribute's ban level, hard-fail on diags; mark on pass. The two
+    attributes (`@[guest]`/`@[guest_std]`) are one code path with the level
+    as the parameter (the `@[guest_std]` error used to render STRICT
+    reasons — bug 0.5 — the level-pinned `reasonLine` is the fix, and it
+    lives in the shared check). GATE-SIDE, outside the shared check (the
+    boundary): the "applies to defs only" misuse error and the guest-mark
+    registry write. -/
 def checkGuestAt (attrName : String) (level : Ban) (decl : Name) : CoreM Unit := do
   let env ← getEnv
   match env.find? decl with
-  | some (.defnInfo di) =>
-      let violations := checkExprAt level di.type (checkExprAt level di.value [])
-      if !violations.isEmpty then
-        throwError s!"`@{attrName}` function `{decl}` is not guest-compilable:\n{reasons level violations}"
+  | some (.defnInfo _) =>
+      mountAsGate (LintKit.GuestBan.guestBanCheck attrName level) decl
       recordGuestMark decl
   | some _ =>
       throwError s!"`@{attrName}` applies to defs only: `{decl.toString}`"

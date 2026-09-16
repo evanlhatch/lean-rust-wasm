@@ -17,6 +17,7 @@ that DO import LintKit get stock `lake lint --builtin-lint` integration for
 free (snapshots recorded, per-decl opt-outs honored by core).
 -/
 import LintKit.AxiomAllowlist
+import LintKit.GuestBan
 import LintKit.RecursiveSimpEqns
 import LintKit.DupDefBodies
 import LintKit.PackageNamespace
@@ -61,7 +62,11 @@ meta def guestlangLinters : Array (NamedEnvLinter × Lean.Option Bool) := #[
   ({ toEnvLinter := packageNamespaceLinter
      optName := `linter.guestlang.packageNamespace
      declName := ``LintKit.packageNamespaceLinter },
-   linter.guestlang.packageNamespace)
+   linter.guestlang.packageNamespace),
+  ({ toEnvLinter := GuestBan.guestBanLinter
+     optName := `linter.guestlang.guestBan
+     declName := ``LintKit.GuestBan.guestBanLinter },
+   linter.guestlang.guestBan)
 ]
 
 /-- Per-declaration enablement (the runner's replacement for core's

@@ -173,6 +173,41 @@ theorem RowVals.eqRec_eq_cast {fs gs : List Field} (h : fs = gs) (r : RowVals fs
 @[simp] theorem RowVals.cast_eq_cast {fs gs : List Field} (h : fs = gs)
     (r : RowVals fs) : RowVals.cast h r = (h ▸ r : RowVals gs) := rfl
 
+/-- The eq-guarded application combinator (W3.6) — the existential-GADT
+    + decidable-index + guarded-cast pattern, ONCE. The registry's
+    existential wrappers store a field list `gs` and a GADT value
+    indexed by it; a caller holds data in the family `F fs`. Given the
+    refusal default, the on-match action `F gs → G gs`, and the
+    caller-side data: the `DecidableEq` guard carries the field-list
+    equality as data, the action runs on the cast data, and its result
+    casts BACK into the caller's family `G fs`; a mismatched field list
+    refuses (the row/list passes through, the Bool verdict is `false`).
+    The three registry sites are one-line instances:
+    `SomeUpdate.applyRow` (`F = G = RowVals`), `InvariantItem.checkOn`
+    (`G := fun _ => Bool` — the constant family, no cast-back content),
+    `SomeUpdate.applyBatch` (`F = G = List ∘ RowVals`). `RowVals.cast`
+    is the `F := RowVals` transport; this is transport + guard + action
+    fused, at any family — the raw `▸` generalizes the named cast the
+    same way `RowVals.eqRec_eq_cast` names it. -/
+def guardCastApply {F G : List Field → Sort v} {fs gs : List Field}
+    (refuse : G fs) (apply : F gs → G gs) (x : F fs) : G fs :=
+  if h : fs = gs then h ▸ apply (h ▸ x) else refuse
+
+/-- The match case, at the reflexive guard: both casts collapse and the
+    action runs on the data itself. -/
+theorem guardCastApply_self {F G : List Field → Sort v} {fs : List Field}
+    (refuse : G fs) (apply : F fs → G fs) (x : F fs) :
+    guardCastApply refuse apply x = apply x := by
+  unfold guardCastApply
+  rw [dif_pos rfl]
+
+/-- The mismatch case: the refusal default, untouched data. -/
+theorem guardCastApply_of_ne {F G : List Field → Sort v} {fs gs : List Field}
+    (hne : fs ≠ gs) (refuse : G fs) (apply : F gs → G gs) (x : F fs) :
+    guardCastApply refuse apply x = refuse := by
+  unfold guardCastApply
+  rw [dif_neg hne]
+
 /-! ## The field resolution's ELABORATION half -/
 
 /-- `HasCol` — `HasField`'s companion: the SAME two-parameter-class
@@ -276,17 +311,19 @@ def evalV : VExpr s t → RowVals s → Value t
       | .bool b => .bool (!b)
       | _ => .bool false
 
-/-- The RAW string length: the (ptr,len) pair's SECOND half. The Lean
-    body (`String.length` → chars) is the oracle ONLY — the decl is
-    never a compile target (unmarked, and the root name falls outside
-    every target's namespace fold), so the compiled callers' `call
-    $string_len` resolves to the SPLICED RUNTIME's primitive (the
-    `i32.load offset=8` on the string object) — the same name
-    resolution the `GuestlangStd.strlen`/`strcat` intrinsics ride
-    (`GuestlangStd.Intrinsic.ofName?`). The root NAME IS THE CONTRACT (`string_len`
-    below, outside the namespace). Byte-length ≠ char-length off
-    ASCII (the StrOps v1 stance). -/
-@[nolint linter.guestlang.dupDefBodies "deliberate mirror of root `string_len` (below): the namespaced copy is the oracle compiled into evalRaw's strlen arm (`$SchemaLang.string_len`); the ROOT copy is the spliced-runtime wire-up contract — identical bodies keep oracle == contract"]
+/-- The RAW string length: the (ptr,len) pair's SECOND half. THE ONE
+    DEFINITION (W6.10 dedup): the Lean body (`String.length` → chars)
+    is the oracle ONLY — the decl is never a compile target (unmarked),
+    so the compiled callers' `call $string_len` resolves to the SPLICED
+    RUNTIME's primitive (the `i32.load offset=8` on the string object).
+    THIS name is the one `GuestlangStd.Intrinsic.ofName?` maps to the
+    `.strlen` ctor (whose `runtimeName` is the emitted `$string_len`
+    symbol) — the same name resolution the
+    `GuestlangStd.strlen`/`strcat` intrinsics ride. The ROOT
+    `string_len` (below, outside the namespace) is the transparent
+    `abbrev` alias marking the runtime contract — oracle == contract by
+    reduction, one body. Byte-length ≠ char-length off ASCII (the
+    StrOps v1 stance). -/
 def string_len (s : String) : UInt64 := s.length.toUInt64
 
 /-- Bool → the 0/1 u64 the raw evaluator computes in (constant arms —
@@ -852,19 +889,19 @@ private def unexpVExprNot : Lean.PrettyPrinter.Unexpander
 -- name (the compiled `call $string_len` contract — see its doc).
 end SchemaLang
 
-/-- The RAW string length: the (ptr,len) pair's SECOND half. The Lean
-    body (`String.length` → chars) is the oracle ONLY — the decl is
-    never a compile target (unmarked, and the root name falls outside
-    every target's namespace fold), so the compiled callers' `call
-    $string_len` resolves to the SPLICED RUNTIME's primitive (the
-    `i32.load offset=8` on the string object) — the same name
-    resolution the `GuestlangStd.strlen`/`strcat` intrinsics ride
-    (`GuestlangStd.Intrinsic.ofName?`). ROOT NAME IS THE CONTRACT: a namespaced
-    name emits prefixed in the LCNF (`$SchemaLang.string_len`) and
-    would NOT resolve (the `unknown func` lesson). Byte-length ≠
-    char-length off ASCII (the StrOps v1 stance). -/
-@[nolint linter.guestlang.dupDefBodies "deliberate mirror of `SchemaLang.string_len` (above): the ROOT name is the `call $string_len` runtime splice contract (a namespaced name emits prefixed and fails to resolve — the `unknown func` lesson); identical bodies by design"]
-def string_len (s : String) : UInt64 := s.length.toUInt64
+/-- The runtime-splice CONTRACT name, as a transparent alias of the
+    ONE definition (`SchemaLang.string_len`, above — W6.10 dedup; the
+    `abbrev` keeps oracle == contract by reduction, and the
+    dupDefBodies linter skips reducible aliases by design). ROOT NAME
+    IS THE CONTRACT: the emitted `call $string_len` resolves to the
+    SPLICED RUNTIME's primitive over the guest string layout (the
+    `i32.load offset=8` len slot); a namespaced FALLBACK emission would
+    be prefixed (`$SchemaLang.string_len`) and would NOT resolve — the
+    `unknown func` lesson (the compiled path actually rides
+    `GuestlangStd.Intrinsic.ofName?` on the namespaced name, whose
+    `runtimeName` IS this root spelling). Byte-length ≠ char-length
+    off ASCII (the StrOps v1 stance). -/
+abbrev string_len : String → UInt64 := SchemaLang.string_len
 
 namespace SchemaLang
 

@@ -1,10 +1,13 @@
 /-
 # Faults Tests
 
-wellFormed (resolution + Nodup), allocation count preservation (the
-kernel-checked obligation), guest/host code-space disjointness (0.4),
-retry policy, emit determinism + pins, the emitter audit (1.6: run ⊆
-declared outputs), and the knownTypes tie to the schema universe (1.8).
+wellFormed (resolution), framework well-formedness (name uniqueness +
+code collision-freedom via `CodedRegistry`'s `by decide` proof fields —
+the elab-time negative controls are `#guard_msgs` below), allocation
+count preservation (the kernel-checked obligation), guest/host
+code-space disjointness (0.4), retry policy, emit determinism + pins,
+the emitter audit (1.6: run ⊆ declared outputs), the knownTypes tie to
+the schema universe (1.8), and the derived diag-kind block.
 
 Run: `lake build FaultsTests && .lake/build/bin/FaultsTests`
 -/
@@ -16,23 +19,59 @@ import TestKit
 
 open Faults TestKit
 
+/-! ## Elaboration-time negative controls (the framework's rejections)
+
+The registry's well-formedness is in the TYPE now, so the controls are
+elaboration failures, not Bool checks. -/
+
+-- Attribute-level dup rejection: `notFound` is already registered by
+-- `Faults.Spec.Demo` (the extension replays imports, so the cross-module
+-- duplicate is caught HERE, at this def's elaboration).
+/--
+error: `fault`: failure-mode name `notFound` already registered at `Faults.Spec.notFound` — names must be unique
+-/
+#guard_msgs (error) in
+@[fault] def dupNotFound : FailureModeItem :=
+  { name := "notFound", display := "d", category := .content
+  , advice := "a", payload := [] }
+
+-- The decide-default dup rejection: a coded-registry literal with a
+-- duplicate name cannot discharge `nodup` — the literal fails to
+-- elaborate (there is no runtime path to reject). An `example`, not a
+-- `def`: the failed decide closes with a sorry, and a NAMED declaration
+-- would leave a sorryAx the axiom gate rightly flags.
+/-- error: Tactic `decide` proved that the proposition -/
+#guard_msgs (error, substring := true) in
+example : CodegenCore.CodedRegistry FailureModeItem :=
+  { items := [Spec.notFound, Spec.notFound], nameOf := (·.name)
+  , codePrefix := "E", start := 100 }
+
+-- The diag-kind derive rejects a non-inductive target (a structure IS
+-- an inductive, so the control uses a theorem).
+/--
+error: `allocate_length` is not an inductive type
+-/
+#guard_msgs (error) in
+derive_ctor_kinds badKinds badKind from Faults.allocate_length
+
 def registryChecks : CheckResult := do
-  _ ← assertEq "demo wellFormed" (universeWellFormed Spec.knownTypes Spec.apiFaults) true
+  _ ← assertEq "demo wellFormed"
+      (universeWellFormed Spec.knownTypes Spec.apiFaults.toDataRegistry) true
   -- unknown payload ref rejected (schema universe is the type authority)
-  let broken : List FailureModeItem :=
-    [ { name := "bad", display := "d", category := .content, advice := "a"
-      , payload := [("x", .ty "nonexistent")] } ]
+  let broken : CodegenCore.DataRegistry FailureModeItem :=
+    { items := [ { name := "bad", display := "d", category := .content, advice := "a"
+                 , payload := [("x", .ty "nonexistent")] } ]
+    , nameOf := (·.name) }
   _ ← assertEq "unknown ref rejected" (universeWellFormed Spec.knownTypes broken) false
   -- a REAL schema ref resolves (knownTypes names are the registry's)
-  let referencing : List FailureModeItem :=
-    [ { name := "orderFailed", display := "order failed: {err}"
-      , category := .content, advice := "inspect the order error"
-      , payload := [("err", .ty "OrderError")] } ]
+  let referencing : CodegenCore.DataRegistry FailureModeItem :=
+    { items := [ { name := "orderFailed", display := "order failed: {err}"
+                 , category := .content, advice := "inspect the order error"
+                 , payload := [("err", .ty "OrderError")] } ]
+    , nameOf := (·.name) }
   _ ← assertEq "schema ref resolves" (universeWellFormed Spec.knownTypes referencing) true
-  -- dup names rejected
-  _ ← assertEq "dup rejected" (namesUnique (Spec.apiFaults ++ Spec.apiFaults)) false
   -- allocation preserves count (the kernel-checked obligation, executed)
-  _ ← assertEq "alloc count" (allocate Spec.apiFaults).length Spec.apiFaults.length
+  _ ← assertEq "alloc count" Spec.apiFaults.codes.length Spec.apiFaults.items.length
   .ok ()
 
 /-- 0.4: the guest/host code spaces are disjoint BY CONSTRUCTION — the
@@ -42,17 +81,21 @@ def registryChecks : CheckResult := do
     ever passes, the disjointness checks are vacuous. -/
 def allocationChecks : CheckResult := do
   _ ← assertEq "guest/host codes disjoint"
-      (decide ((allocate Spec.apiFaults ++ allocateHost Spec.apiFaults Spec.hostFaults).map (·.2)).Nodup)
+      (decide ((Spec.apiFaults.codes ++ Spec.hostFaults.codes).map (·.2)).Nodup)
       true
+  -- the host start is DERIVED from the guest registry's size
+  _ ← assertEq "host start derived" Spec.hostFaults.start (100 + Spec.apiFaults.items.length)
   -- 15 guests push codes past the old hardcoded E110 start; the computed
   -- start still clears them
-  let oversized := List.replicate 15 Spec.apiFaults.head!
+  let oversized := List.replicate 15 Spec.apiFaults.items.head!
+  let bigGuestCodes := CodegenCore.allocateCodes "E" 100 oversized
+  let bigHostCodes := CodegenCore.allocateCodes "E" (100 + oversized.length) Spec.hostFaults.items
   _ ← assertEq "disjoint past old E110 start"
-      (decide ((allocate oversized ++ allocateHost oversized Spec.hostFaults).map (·.2)).Nodup)
+      (decide ((bigGuestCodes ++ bigHostCodes).map (·.2)).Nodup)
       true
   -- negative control: the OLD allocation scheme collides here
   _ ← assertEq "colliding start caught (control)"
-      (decide ((allocate oversized ++ CodegenCore.allocateCodes "E" 110 Spec.hostFaults).map (·.2)).Nodup)
+      (decide ((bigGuestCodes ++ CodegenCore.allocateCodes "E" 110 Spec.hostFaults.items).map (·.2)).Nodup)
       false
   .ok ()
 
@@ -65,7 +108,7 @@ def policyChecks : CheckResult := do
   .ok ()
 
 def emitChecks : CheckResult := do
-  let items := Emit.Rust.faultModule "OrderError" (allocate Spec.apiFaults)
+  let items := Emit.Rust.faultModule "OrderError" Spec.apiFaults.codes
   let out := CodegenCore.Emit.Rust.renderModule items
   -- determinism: same input, same bytes
   _ ← assertEq "deterministic" out (CodegenCore.Emit.Rust.renderModule items)
@@ -144,8 +187,12 @@ def knownTypesChecks (typeNames : List String) : CheckResult := do
     E-code universe): a fault payload's unresolved type renders the
     closed-world suggestion (via `Ty.check` → `CodegenCore.didYouMean`),
     and the elaboration diagnostics resolve THEIR E-codes from the same
-    allocation schedule (single lookup). Negative control: the lookup is
-    keyed on the constructor kind — a sabotaged kind misses. -/
+    allocation schedule (single lookup). The kinds list is DERIVED from
+    `SchemaDiag`'s constructors — the full-list pin here is the
+    regression control on constructor order (a `SchemaDiag` edit shifts
+    the E-code block; the byte-tie and this pin both go loud). Negative
+    control: the lookup is keyed on the constructor kind — a sabotaged
+    kind misses. -/
 def diagCodeChecks : CheckResult := do
   -- the faults error path: did-you-mean reaches the payload diagnostics
   let broken : FailureModeItem :=
@@ -154,6 +201,12 @@ def diagCodeChecks : CheckResult := do
   let ds := broken.diagnose Spec.knownTypes
   _ ← assertEq "diagnose nonempty" ds.isEmpty false
   _ ← assertEq "diagnose did-you-mean" (ds.any fun d => d.contains "did you mean") true
+  -- the derived kinds: exactly the constructor list, in order
+  _ ← assertEq "schema-diag kinds (ctor order pinned)"
+    Faults.Emit.schemaDiagKinds
+    [ "unknownRef", "dupName", "asyncField", "nonBoundaryType"
+    , "notAStructure", "noCtor", "binderMismatch", "multiPayload"
+    , "reservedWord", "volatileInPureContext" ]
   -- the schema-diag block: allocated AFTER the fault registries (4 + 4)
   _ ← assertEq "schema-diag codes start E108"
     ((Faults.Emit.schemaDiagCodes.map (·.2)).head?.getD "") "E108"

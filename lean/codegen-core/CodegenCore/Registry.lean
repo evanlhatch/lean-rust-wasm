@@ -24,6 +24,8 @@ be tested purely, without an environment.
 import Lean
 
 open Lean
+open Lean.Elab.Command
+open Lean.Parser.Term
 
 namespace CodegenCore
 
@@ -111,5 +113,56 @@ theorem allocateCodes_length {α : Type} (pre : String) (start : Nat)
     (items : List α) :
     (allocateCodes pre start items).length = items.length := by
   simp [allocateCodes]
+
+/-! ## Ctor-kind derivation (the diag-kind pattern, W7.4)
+
+A registry of diagnostic kinds keyed by an inductive's constructors was
+historically TWO hand mirrors: the constructor-name list (the allocation
+key order) and the kind function (a hand `match`). Both are derived here
+from `getConstInfoInduct` at elaboration: the kind list is the
+constructor list, and the kind function is a match over ALL constructors
+— exhaustiveness is compiler-enforced at every build, so the mirror
+cannot drift. First consumer: faults' E-code block for
+`SchemaLang.SchemaDiag`. -/
+
+/-- The constructor's short name (last component — schema-lang
+    `ctorNameOf`'s trick, robust to namespaced ctors). -/
+def ctorShortName (ctor : Name) : String :=
+  (String.splitOn ctor.toString ".").getLast!
+
+/-- `derive_ctor_kinds kindsName fnName from InductiveName` — define
+
+    1. `def kindsName : List String` — the constructor short names, in
+       declaration order (the allocation/lookup key order).
+    2. `def fnName : InductiveName → String` — the kind function, a
+       generated match over every constructor.
+
+    Parameterized or indexed inductives are rejected (the generated
+    match binds no type arguments). An unknown or non-inductive name is
+    an elaboration error — the derivation cannot silently go stale. -/
+syntax (name := deriveCtorKinds)
+  "derive_ctor_kinds " ident ident " from " ident : command
+
+@[command_elab deriveCtorKinds]
+def deriveCtorKindsImpl : CommandElab := fun stx => do
+  let kindsName := stx[1].getId
+  let fnName := stx[2].getId
+  let indName := stx[4].getId
+  let indVal ← getConstInfoInduct indName
+  if indVal.numParams != 0 || indVal.numIndices != 0 then
+    throwError "derive_ctor_kinds: `{indName}` has parameters or indices — \
+      the generated match binds no type arguments"
+  let kinds := indVal.ctors.map ctorShortName
+  let kindsTerm : Term := quote kinds
+  elabCommand (← `(def $(mkIdent kindsName) : List String := $kindsTerm))
+  let alts : Array (TSyntax ``matchAlt) ← indVal.ctors.toArray.mapM fun ctor => do
+    let cinfo ← getConstInfoCtor ctor
+    let holes : Array Term :=
+      (List.replicate (cinfo.numParams + cinfo.numFields) (← `(_))).toArray
+    let pat : Term ← `(@$(mkIdent ctor):ident $holes:term*)
+    `(matchAltExpr| | $pat:term => $(quote (ctorShortName ctor)))
+  let d := mkIdent `d
+  elabCommand (← `(def $(mkIdent fnName) : $(mkIdent indName) → String
+    := fun $d => match $d:ident with $alts:matchAlt*))
 
 end CodegenCore

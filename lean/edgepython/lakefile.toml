@@ -23,6 +23,11 @@ roots = ["WasmBackend.Wat"]
 name = "EdgeGen"
 roots = ["GenMain"]
 
+# TestKit: PropSpec with mandatory negative controls for the parity sweep.
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
 [[lean_exe]]
 name = "EdgePythonTests"
 root = "Tests.Main"

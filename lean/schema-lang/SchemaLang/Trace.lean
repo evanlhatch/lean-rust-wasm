@@ -51,14 +51,14 @@ structure Scenario where
   ticks : List (List SomeUpdate)
 
 /-- A batch update applied to a whole row list whose field list CLAIMS
-    to be the update's — the same guarded-cast discipline as
-    `SomeUpdate.applyRow` (data equality carries the proof; a foreign
-    row list refuses, pass-through). -/
+    to be the update's — `guardCastApply` (Validate's cast kit, W3.6)
+    at `F = G = List ∘ RowVals`: data equality carries the proof, the
+    update's `apply` runs on the cast rows, the result casts back; a
+    foreign row list refuses, pass-through. -/
 def SomeUpdate.applyBatch (u : SomeUpdate) {fs : List Field}
     (rows : List (RowVals fs)) : List (RowVals fs) :=
-  if h : fs = u.fields then
-    (h ▸ u.update.apply (h ▸ rows) : List (RowVals fs))
-  else rows
+  guardCastApply (F := fun fs => List (RowVals fs)) (G := fun fs => List (RowVals fs))
+    rows u.update.apply rows
 
 /-- One tick: the batch folds over the rows in registration order
     (v1's acyclic single-pass cascade — TickCascade's substrate). First

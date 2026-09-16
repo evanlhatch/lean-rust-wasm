@@ -281,14 +281,12 @@ structure SomeUpdate where
   update : UpdateItem fields field
 
 /-- Execute against a row whose field list CLAIMS to be the update's —
-    the same guarded-cast discipline as `InvariantItem.checkOn` (data
-    equality carries the proof; a foreign row refuses, `false`). -/
+    `guardCastApply` (Validate's cast kit, W3.6): the data equality
+    carries the proof, the update's `applyRow` runs on the cast row,
+    the result casts back; a foreign row passes through untouched. -/
 def SomeUpdate.applyRow (u : SomeUpdate) {fs : List Field}
     (row : RowVals fs) : RowVals fs :=
-  if h : fs = u.fields then
-    -- the named cast (Validate's kit): greppable, proof-irrelevant
-    RowVals.cast h.symm (u.update.applyRow (RowVals.cast h row))
-  else row
+  guardCastApply row u.update.applyRow row
 
 /-! ## The tick — the four phases as a machine (SPEC §7, v1) -/
 

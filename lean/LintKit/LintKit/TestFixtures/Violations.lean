@@ -43,6 +43,16 @@ def dupTwo (m : Nat) : Nat := m + 41
 (both root at `LintKit` but live in different modules). -/
 def dupCrossA (y : Nat) : Nat := y + 99
 
+/-- Planted (guestBan): IO is a host capability — banned at BOTH ban
+levels. NOT `@[guest]`-marked: the attribute is the GATE mount (it would
+hard-fail this fixture's build); the linter is the REPORT mount over the
+same `guestBanCheck`. -/
+def evilIo : IO Unit := IO.println "planted"
+
+/-- Planted (guestBan): direct Nat ARITHMETIC — GMP, banned even at the
+std level (match-only Nat is std-legal; `Nat.add` is not a match). -/
+def evilNatArith : Nat := Nat.add 40 2
+
 end LintKit.TestFixtures.Violations
 
 /-- Planted (packageNamespace): helper parked in a CORE namespace —

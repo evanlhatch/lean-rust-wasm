@@ -142,13 +142,13 @@ instance : Inhabited InvariantItem :=
 -- data), so the cast is representation-true — same fields, same
 -- order ⇒ the same `RowVals` tree. A mismatched row refuses (false)
 -- rather than misreads.
-/-- The safe executor: the row's field list must EQUAL the wrapper's
-    (the `DecidableEq` guard carries the proof; the `▸` cast is
-    kernel-level — no `lcProof`, the axiom gate's finding). A row for
-    another schema executes as `false` (type mismatch = refusal). -/
+/-- The safe executor: the row's field list must EQUAL the wrapper's —
+    `guardCastApply` (Validate's cast kit, W3.6) at the constant family
+    `fun _ => Bool`: the `DecidableEq` guard carries the proof (the `▸`
+    cast is kernel-level — no `lcProof`, the axiom gate's finding),
+    `validates` runs on the cast row; a row for another schema executes
+    as `false` (type mismatch = refusal). -/
 def InvariantItem.checkOn {fs : List Field} (it : InvariantItem) (row : RowVals fs) : Bool :=
-  if h : fs = it.inv.fields then
-    validates it.inv.expr (RowVals.cast h row)
-  else false
+  guardCastApply (G := fun _ => Bool) false (validates it.inv.expr) row
 
 end SchemaLang

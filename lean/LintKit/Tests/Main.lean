@@ -38,7 +38,10 @@ def expected : Array (Name × Array Name) := #[
     `LintKit.TestFixtures.Cross.dupCrossB]),
   (`linter.guestlang.packageNamespace, #[
     `List.badNs,
-    `Substrait.strayFromLintKit])
+    `Substrait.strayFromLintKit]),
+  (`linter.guestlang.guestBan, #[
+    `LintKit.TestFixtures.Violations.evilIo,
+    `LintKit.TestFixtures.Violations.evilNatArith])
 ]
 
 unsafe def run : M Unit := do
@@ -50,11 +53,12 @@ unsafe def run : M Unit := do
       { module := `LintKit.TestFixtures.Cross }]
     {} (trustLevel := 1024) (loadExts := true)
   let roots := #[`LintKit.TestFixtures]
-  -- recursiveSimpEqns is default-OFF tree-wide (see its option's comment);
-  -- the fixtures enable it via the CLI-override path, which is also the
-  -- override path's own test.
+  -- recursiveSimpEqns and guestBan are default-OFF tree-wide (see their
+  -- options' comments); the fixtures enable them via the CLI-override path,
+  -- which is also the override path's own test.
   let cfg : DriverConfig := {
-    overrides := ({} : NameMap Bool).insert `linter.guestlang.recursiveSimpEqns true }
+    overrides := ({} : NameMap Bool).insert `linter.guestlang.recursiveSimpEqns true
+      |>.insert `linter.guestlang.guestBan true }
   let (findings, _) ← (do
       let decls ← packageDecls (← getEnv) roots
       runLintersOnDecls decls cfg).toIO

@@ -23,8 +23,14 @@ namespace Faults.Emit
 
 open CodegenCore.Emit
 
-/-- The spec a faults emitter consumes: a failure-mode registry. -/
-abbrev FaultsSpec := List FailureModeItem
+/-- The spec a faults emitter consumes: a coded failure-mode registry
+    (name uniqueness + code collision-freedom in the type, W7.4). -/
+abbrev FaultsSpec := CodegenCore.CodedRegistry FailureModeItem
+
+/-- The empty registry (the forge-jobs emitter consumes no fault
+    registry — it emits the driver manifest). -/
+def noFaults : FaultsSpec :=
+  { items := [], nameOf := (·.name), codePrefix := "E", start := 100 }
 
 /-- The guest emitter: `OrderError` + `init_guest`, from `Spec.apiFaults`. -/
 def guestEmitter : Emitter FaultsSpec where
@@ -34,7 +40,7 @@ def guestEmitter : Emitter FaultsSpec where
   outputs := ["../../src/faults_generated.rs"]
   run items :=
     [ { path := "../../src/faults_generated.rs"
-      , contents := Rust.renderModule (Rust.faultModule "OrderError" (allocate items)) } ]
+      , contents := Rust.renderModule (Rust.faultModule "OrderError" items.codes) } ]
 
 /-- The host emitter: `HostFault` + `init_host`, from `Spec.hostFaults`. -/
 def hostEmitter : Emitter FaultsSpec where
@@ -44,7 +50,7 @@ def hostEmitter : Emitter FaultsSpec where
   outputs := ["../../src/host_faults_generated.rs"]
   run items :=
     [ { path := "../../src/host_faults_generated.rs"
-      , contents := Rust.renderModule (Rust.faultModule "HostFault" (allocateHost Spec.apiFaults items) (guest? := false)) } ]
+      , contents := Rust.renderModule (Rust.faultModule "HostFault" items.codes (guest? := false)) } ]
 
 /-- The emitters (order = write order). -/
 def emitters : List (Emitter FaultsSpec) := [guestEmitter, hostEmitter]
@@ -91,10 +97,10 @@ def forgeJobsEmitter : Emitter FaultsSpec where
 /-- Pair each emitter with the spec it consumes (faults has two spec
     sources, so the driver runs each with its own registry). The
     forge-jobs emitter consumes no fault registry — it emits the driver
-    manifest — so it pairs with the empty list. -/
+    manifest — so it pairs with the empty registry. -/
 def jobs : List (Emitter FaultsSpec × FaultsSpec) :=
   [(guestEmitter, Spec.apiFaults), (hostEmitter, Spec.hostFaults)
-   , (forgeJobsEmitter, [])]
+   , (forgeJobsEmitter, noFaults)]
 
 /-! ## The schema-elaboration block (the ONE E-code universe, completed)
 
@@ -109,31 +115,20 @@ hand-set), allocated by the SAME `CodegenCore.allocateCodes` over the
 diag-kind names. Append-only registry ⇒ stable codes, CI byte-tie
 enforces. -/
 
-/-- The `SchemaDiag` constructor names — the allocation AND lookup key
-    order (one list; the render resolves by a single `lookup`). -/
-def schemaDiagKinds : List String :=
-  [ "unknownRef", "dupName", "asyncField", "nonBoundaryType"
-  , "notAStructure", "noCtor", "binderMismatch", "multiPayload"
-  , "reservedWord", "volatileInPureContext" ]
+-- The `SchemaDiag` kinds + kind function, DERIVED at elaboration from
+-- the inductive's actual constructor list (`CodegenCore.Registry`'s
+-- `derive_ctor_kinds` — the hand mirror is deleted; a `SchemaDiag` edit
+-- re-derives both, and the generated match stays total by compiler-
+-- enforced exhaustiveness). The derived constructor DECLARATION ORDER
+-- is the allocation/lookup key order — the byte-tie and the Tests'
+-- E108/E109 pins are the regression controls on its stability.
+derive_ctor_kinds schemaDiagKinds schemaDiagKind from SchemaLang.SchemaDiag
 
 /-- The schema-diag E-codes: same allocator, same space, after the
     fault registries. -/
 def schemaDiagCodes : List (String × String) :=
   CodegenCore.allocateCodes "E"
-    (100 + Spec.apiFaults.length + Spec.hostFaults.length) schemaDiagKinds
-
-/-- A diag's kind name (the lookup key — the constructor, spelled). -/
-def schemaDiagKind : SchemaLang.SchemaDiag → String
-  | .unknownRef .. => "unknownRef"
-  | .dupName .. => "dupName"
-  | .asyncField .. => "asyncField"
-  | .nonBoundaryType .. => "nonBoundaryType"
-  | .notAStructure .. => "notAStructure"
-  | .noCtor .. => "noCtor"
-  | .binderMismatch .. => "binderMismatch"
-  | .multiPayload .. => "multiPayload"
-  | .reservedWord .. => "reservedWord"
-  | .volatileInPureContext .. => "volatileInPureContext"
+    (100 + Spec.apiFaults.items.length + Spec.hostFaults.items.length) schemaDiagKinds
 
 /-- The coded render: the diag + its E-code — the cross-ref is ONE
     lookup into `schemaDiagCodes` (no second allocation to drift). -/

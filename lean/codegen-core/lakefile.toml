@@ -14,6 +14,14 @@ testDriver = "CodegenCoreTests"
 name = "TestKit"
 path = "../TestKit"
 
+# LintKit (first in lean_pkgs, zero requires — no cycle): the shared
+# decl-check shape (W7.13) — GuestGate's ban check is defined there so the
+# SAME check mounts as the @[guest] attribute gate here and as the
+# linter.guestlang.guestBan env-lint in LintKit's runner.
+[[require]]
+name = "LintKit"
+path = "../LintKit"
+
 [[lean_lib]]
 name = "CodegenCore"
 roots = ["CodegenCore"]

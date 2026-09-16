@@ -3,6 +3,8 @@
    pure text lints + the runner shared by the `guestlang-lint` exe and the
    self-tests. -/
 import LintKit.Basic
+import LintKit.DeclCheck
+import LintKit.GuestBan
 import LintKit.AxiomAllowlist
 import LintKit.RecursiveSimpEqns
 import LintKit.DupDefBodies

@@ -96,10 +96,123 @@ def oracleDiffSpec : DiffSpec := ⟨"oracle rejects sabotaged rows",
   , corrupt "arity sabotage" (fun rs => ("double", ["3", "4"]) :: rs) rows oracleRowsResolve
       ["'double' expects 1 args", "got 2"] ]⟩
 
+open Plausible
+open Plausible.Gen
+open WasmBackend.Wat
+
+/-! ## WAT printer property sweep (PropSpec) — pinning invariants on the renderer
+
+Generator: small modules (1 func + export + memory) with depth-bounded
+structural instructions. NO `raw` items (the raw-free invariant is a real
+pin: if the escape hatch is NEVER used, the emitter text is fully typed).
+
+Invariants:
+1. Determinism: same module → same rendered bytes (a pure-function pin).
+2. Parenthesis balance: every rendered WAT form has a balanced paren count
+   (no parser-fatal structural errors from the renderer).
+-/
+
+/-- Count occurrences of character `c` in string `s`. -/
+def countChar (c : Char) (s : String) : Nat :=
+  (s.toList.filter (· == c)).length
+
+/-- WAT module wrapper for Plausible generation. -/
+structure WatModule where
+  m : WasmBackend.Wat.Module
+
+instance : Repr WatModule where
+  reprPrec wm _ := s!"WatModule #{wm.m.items.length} items"
+
+instance : Shrinkable WatModule where
+  shrink _ := []
+
+/-- A flat (non-structural) instruction generator — never block/loop/if_. -/
+def genFlatInstr : Gen Instr :=
+  -- `frequency fallback alternatives`: pick from weighted list, fallback on drop
+  Gen.frequency (pure Instr.drop) [
+    (3, do let n ← Gen.resize (fun _ => 255) Gen.chooseNat; pure (Instr.i32const n)),
+    (2, do let n ← Gen.resize (fun _ => 255) Gen.chooseNat; pure (Instr.i64const n)),
+    (2, pure (Instr.localget "x")),
+    (2, pure (Instr.localset "x")),
+    (1, pure (Instr.call "f")),
+    (1, Instr.op <$> (Gen.oneOf #[pure Op.i32add, pure Op.i64add, pure Op.i32sub,
+      pure Op.i64sub, pure Op.i32mul, pure Op.i64mul, pure Op.i64eq, pure Op.i64ltu]))
+  ]
+
+/-- Structural instruction: block/loop/if_ with recursively generated body. -/
+def genStructuralInstr (bodyGen : Gen (List Instr)) : Gen Instr :=
+  Gen.frequency (pure Instr.drop) [
+    (3, Instr.block "b" <$> bodyGen),
+    (3, Instr.loop "l" <$> bodyGen),
+    (2, pure (Instr.if_ none [] [])),
+    (2, do
+      let thenI ← bodyGen
+      let elseI ← bodyGen
+      pure (Instr.if_ none thenI elseI))
+  ]
+
+/-- Generate a list of instructions with bounded depth for structural forms. -/
+partial def genInstrs (depth : Nat) : Gen (List Instr) := do
+  let len ← Gen.resize (fun _ => 5) Gen.chooseNat
+  let mut xs : List Instr := []
+  for _ in [0:len] do
+    if depth == 0 then
+      xs := (← genFlatInstr) :: xs
+    else
+      xs := (← Gen.frequency genFlatInstr
+        [(7, genFlatInstr), (3, genStructuralInstr (genInstrs (depth-1)))]) :: xs
+  pure xs.reverse
+
+/-- A function with a depth-bounded body. -/
+def genWatFunc : Gen Func := do
+  let name ← Gen.oneOf #[pure "f0", pure "f1", pure "test"]
+  let body ← genInstrs 3
+  pure { name := name
+       , params := [{ name := some "x", ty := "i64" }]
+       , result := some "i64"
+       , locals := []
+       , body := body ++ [Instr.unreach] }
+
+instance : Arbitrary WatModule where
+  arbitrary := do
+    let f ← genWatFunc
+    let modName := f.name
+    pure { m := { items :=
+      [WasmBackend.Wat.Item.func f,
+       WasmBackend.Wat.Item.export { name := modName, desc := .func modName },
+       WasmBackend.Wat.Item.memory 1] } }
+
+/-- Positive property: determinism (same input = same output) + paren balance. -/
+def watPropTest : TestSeq :=
+  checkPlausibleIO "WAT printer invariants"
+    (∀ (wm : WatModule),
+      let s := wm.m.render
+      s == wm.m.render ∧
+      countChar '(' s == countChar ')' s)
+    .done { numInst := 200, randomSeed := some 42 }
+
+/-- Sabotaged negative control: "left paren count equals right paren count + 1" —
+    FALSE (the counts are equal, every time). The sampler MUST catch this. -/
+def watControl : TestSeq :=
+  checkPlausibleIO "sabotage: left parens == right parens + 1 (must be caught)"
+    (∀ (wm : WatModule),
+      let s := wm.m.render
+      countChar '(' s == countChar ')' s + 1)
+    .done { numInst := 200, randomSeed := some 42 }
+
+/-- The PropSpec: property passes, control is caught. -/
+def watPropSpec : TestKit.PropSpec :=
+  { name := "WAT printer property sweep"
+  , suite := watPropTest
+  , control := watControl
+  , controlName := "parens counting left==right+1 (must be caught)" }
+
 -- #guard-driven (elab-time) for the `@[guest]` predicate; the exe entry
--- point runs the oracle DiffSpec (plus its own vacuous-control demo).
+-- point runs the oracle DiffSpec (plus its own vacuous-control demo), and
+-- the WAT printer PropSpec.
 def main : IO UInt32 := do
   let code ← runDiffs [oracleDiffSpec]
+  if code != 0 then return code
   -- Negative control for the control: an identity "corruption" must be
   -- flagged (proves the runner can't go vacuously green here either).
   let (vacOk, vacVerdict) := (⟨"identity control",
@@ -109,4 +222,9 @@ def main : IO UInt32 := do
   if vacOk then
     IO.eprintln "FAIL: identity corruption not flagged"
     return 1
-  return code
+  -- WAT printer PropSpec
+  let propCode ← TestKit.runSpecs [watPropSpec]
+  if propCode != 0 then
+    IO.eprintln "FAIL: WAT printer sweep failed"
+    return propCode
+  return 0
