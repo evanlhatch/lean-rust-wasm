@@ -31,7 +31,11 @@ stays with the attributes. Census run:
 
 The option is declared at top level (see LintKit.Basic's header note).
 -/
-import LintKit.DeclCheck
+module
+
+public import LintKit.DeclCheck
+
+public meta section
 
 open Lean Meta Linter EnvLinter
 

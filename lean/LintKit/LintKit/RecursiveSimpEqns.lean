@@ -17,7 +17,11 @@ gated. Opt out per site:
 
 The option is declared at top level (see LintKit.Basic's header note).
 -/
-import LintKit.Basic
+module
+
+public import LintKit.Basic
+
+public meta section
 
 open Lean Meta Linter EnvLinter
 
@@ -27,7 +31,7 @@ register_option linter.guestlang.recursiveSimpEqns : Bool := {
   -- 64, Machines 7, dbsp 8, wasm-backend 4) and the dominant cluster is
   -- DELIBERATE — doctrine §8: substrait's Decode proofs consume raw
   -- equation lemmas (`parseType.eq_*`), and fuel-based runners
-  -- (`Machine.run`, `iterateBounded`, …) keep equations out of simp to
+  -- (`Machine.run`, …) keep equations out of simp to
   -- avoid simp loops. Far past the "handful of nolint sites" bar for
   -- default-on. Run explicitly as a census:
   --   guestlang-lint --enable=linter.guestlang.recursiveSimpEqns <roots>

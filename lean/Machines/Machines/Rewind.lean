@@ -28,8 +28,14 @@ ChangeSet.revert — `revert_left` discharges from Change.lean's revert law
 (the olds-match side condition holds by the journal's construction).
 -/
 
-import Machines.Core
-import Dbsp.ChangeSpec
+module
+
+public import Machines.Core
+public import Dbsp.ChangeSpec
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines
 
@@ -271,3 +277,5 @@ theorem rewind_suffix (m : RewindableMachine)
 end RewindableMachine
 
 end Machines
+
+end -- @[expose] public section

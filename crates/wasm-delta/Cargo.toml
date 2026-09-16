@@ -1,0 +1,12 @@
+[package]
+name = "wasm-delta"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Host-side persistence for the schema-lang delta/trace model: append-only delta log, inversion in the log"
+
+# Zero external dependencies by design: the wire format is the Lean-side
+# codec (SchemaLang.Codec / CodecValue / Trace), ported byte-exact; the
+# durable backend is std::fs. The sled/redb embedded-KV follow-up is a
+# named decision in the crate docs (src/lib.rs).
+[dependencies]

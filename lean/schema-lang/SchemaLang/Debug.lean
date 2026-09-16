@@ -31,10 +31,14 @@ The span-row rendering deliberately DUPLICATES the GenMain fold's shape
 instead of importing it — GenMain is a driver exe, not a library.
 -/
 
-import Lean
-import SchemaLang.Item
-import SchemaLang.Emit.Wit
-import SchemaLang.Meta.Reflect
+module
+
+public import Lean
+public meta import SchemaLang.Item
+public meta import SchemaLang.Emit.Wit
+public import SchemaLang.Meta.Reflect
+
+public meta section
 
 namespace SchemaLang.Debug
 

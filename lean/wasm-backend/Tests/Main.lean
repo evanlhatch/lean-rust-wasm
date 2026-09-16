@@ -142,6 +142,72 @@ def eA2 : Outcome := resolveOutcome "total" ["1"]       -- arityDrift, other pay
 -- wire yet — phase 2 makes `modeOf` a real column).
 #guard rowUniverse.all (fun (fn, _) => modeOf fn == .full)
 
+/-! ## W6.3 phase 2: verdicts (first-divergence) + schema surface + coverage
+
+`CompareMode.verdict` answers the same truth table as `compare` but a
+FAIL carries the first-divergence witness (both outcomes, the CLASS as
+a ctor, the first payload offset). `schemaSigs` is the signature table
+`arityOf` now looks up; the coverage discipline: every export has ≥1
+feature AND ≥1 manifest row. -/
+
+-- arityOf's table-lookup refactor is behavior-identical to the
+-- phase-1 pattern match (every arity + the unknown case pinned).
+#guard arityOf "double" == some 1
+#guard arityOf "order-error-valid" == some 2
+#guard arityOf "total" == some 3
+#guard arityOf "user-valid" == some 4
+#guard arityOf "watch-users" == some 1
+#guard arityOf "doble" == none
+#guard schemaSigs.length == 15
+#guard schemaSigs.eraseDups.length == schemaSigs.length
+
+-- VERDICT truth arms: pass → no divergence; fail → the class names
+-- the divergence KIND (a ctor), never a string.
+#guard (CompareMode.verdict .full vA vA).divergence == none
+#guard (CompareMode.verdict .full vA vB).divergence.map (·.category) == some .valueMismatch
+#guard (CompareMode.verdict .full vA eU).divergence.map (·.category) == some .expectedValueGotError
+#guard (CompareMode.verdict .full eU vA).divergence.map (·.category) == some .expectedErrorGotValue
+#guard (CompareMode.verdict .full eU eA1).divergence.map (·.category) == some .errorIdentityMismatch
+#guard (CompareMode.verdict .full eA1 eA2).divergence.map (·.category) == some .errorPayloadMismatch
+-- IDENTITY mode: payloads never read — vA vs vB passes; the error
+-- arms classify by identity only.
+#guard (CompareMode.verdict .identity vA vB).divergence == none
+#guard (CompareMode.verdict .identity eA1 eA2).divergence == none
+#guard (CompareMode.verdict .identity eU eA1).divergence.map (·.category) == some .errorIdentityMismatch
+-- IGNORE mode: errors waive — the only reachable failure class is
+-- valueMismatch.
+#guard (CompareMode.verdict .ignore eU vA).divergence == none
+#guard (CompareMode.verdict .ignore vA vB).divergence.map (·.category) == some .valueMismatch
+
+-- The witness carries BOTH outcomes + the first payload offset.
+#guard (CompareMode.verdict .full vA vB).divergence.map (·.payloadDiffAt) == some (some 1)
+#guard (CompareMode.verdict .full eU eA1).divergence.map (·.payloadDiffAt) == some (some 12)
+  -- ^ error-identity divergence: the witness still locates the payloads'
+  --   first differing char (the common "oracle row: " prefix is 12 chars)
+#guard firstDiffAt "abc".toList "abd".toList 0 == some 2
+#guard firstDiffAt "abc".toList "abc".toList 0 == none
+#guard firstDiffAt "abc".toList "ab".toList 0 == some 2
+
+-- The verdict JSON names the class + echoes the schema surface (the
+-- schema hash's preimage — Lean owns the string, consumers sha256 it).
+#guard jsonVerdict (CompareMode.verdict .full vA vB) ==
+  "{\"ok\": false, \"category\": \"valueMismatch\", \"expected\": {\"error\": null, \"payload\": \"42\"}, \"observed\": {\"error\": null, \"payload\": \"43\"}, \"payload_diff_at\": 1, \"schema\": \"" ++ schemaSurface ++ "\"}"
+#guard jsonVerdict ⟨none⟩ ==
+  "{\"ok\": true, \"schema\": \"" ++ schemaSurface ++ "\"}"
+
+-- The schema surface is canonical: fn/arity, comma-joined, WIT order.
+#guard schemaSurface.takeWhile (· != ',') == "double/1"
+#guard (schemaSurface.splitOn ",").length == 15
+
+-- THE COVERAGE DISCIPLINE (verified-ledger: every feature row has a
+-- test): every export has ≥1 feature AND ≥1 manifest row; every row's
+-- fn is a known export.
+#guard schemaSigs.all (fun (f, _) => !(featuresOf f).isEmpty)
+#guard schemaSigs.all (fun (f, _) => rowUniverse.any (fun (g, _) => g == f))
+#guard rowUniverse.all (fun (f, _) => (arityOf f).isSome)
+-- The batch table covers the whole universe (counts sum).
+#guard (batchTable.map (·.2.1)).foldl (· + ·) 0 == rowUniverse.length
+
 /-- Identity-driven rejection: the check reads the structured error
     identity and the message DERIVES from the ctor — the corruption
     pins name the ctor, not a free-form payload substring. -/

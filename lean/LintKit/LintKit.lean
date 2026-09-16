@@ -2,12 +2,14 @@
    Phase 6). Umbrella: options + `@[nolint]` + the four env-linters + the
    pure text lints + the runner shared by the `guestlang-lint` exe and the
    self-tests. -/
-import LintKit.Basic
-import LintKit.DeclCheck
-import LintKit.GuestBan
-import LintKit.AxiomAllowlist
-import LintKit.RecursiveSimpEqns
-import LintKit.DupDefBodies
-import LintKit.PackageNamespace
-import LintKit.TextLints
-import LintKit.Runner
+module
+
+public import LintKit.Basic
+public import LintKit.DeclCheck
+public import LintKit.GuestBan
+public import LintKit.AxiomAllowlist
+public import LintKit.RecursiveSimpEqns
+public import LintKit.DupDefBodies
+public import LintKit.PackageNamespace
+public import LintKit.TextLints
+public import LintKit.Runner

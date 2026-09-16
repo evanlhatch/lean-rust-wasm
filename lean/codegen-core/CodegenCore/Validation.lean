@@ -18,6 +18,9 @@ tests only; converting these is follow-up work):
   structured ok/errs reading.
 - QLang's error-accumulating Query steps (qlang QLang/Query.lean).
 -/
+module
+
+@[expose] public section
 
 namespace CodegenCore
 

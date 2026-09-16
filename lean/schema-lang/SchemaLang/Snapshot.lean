@@ -37,7 +37,11 @@ Ownership: the ONLY encoder/decoder of the snapshot format. The
 nothing else writes `goldens/universe.snapshot`.
 -/
 
-import SchemaLang.Diff
+module
+
+public import SchemaLang.Diff
+
+@[expose] public section
 
 namespace SchemaLang
 
@@ -83,7 +87,7 @@ def nameOk (s : String) : Bool :=
     arm is unreachable from `parseTyText`). Returns the type and the
     unconsumed rest. Errors are LOUD — a snapshot that doesn't parse is
     a gate failure, not a skip. -/
-private def parseTy : Nat → List Char → Except String (Ty × List Char)
+def parseTy : Nat → List Char → Except String (Ty × List Char)
   | 0, _ => .error "snapshot: parse fuel exhausted (malformed nesting)"
   | fuel + 1, cs =>
       let (kw, rest) := cs.span Char.isAlphanum
@@ -194,7 +198,7 @@ def render (items : List Item) : String :=
 
 /-- The partially-accumulated open item during a parse fold
     (member lists reversed until `close`). -/
-private inductive Open where
+inductive Open where
   | record (n : String) (fields : List Field)
   | variant (n : String) (cases : List VariantCase)
   | func (n : String) (params : List (String × Ty)) (ret : Option Ty)
@@ -203,7 +207,7 @@ private inductive Open where
 
 /-- Close the open item (member order restored). A func without `ret`
     is malformed — the writer always emits one. -/
-private def Open.close : Open → Except String Item
+def Open.close : Open → Except String Item
   | .record n fs => .ok (.record n fs.reverse)
   | .variant n cs => .ok (.variant n cs.reverse)
   | .func n ps (some r) sem =>
@@ -216,10 +220,10 @@ private def Open.close : Open → Except String Item
 
 /-- The fold state: closed items (reversed) plus the currently open
     item, if any. -/
-private abbrev State := Except String (List Item × Option Open)
+abbrev State := Except String (List Item × Option Open)
 
 /-- One line onto the fold state; the first error sticks. -/
-private def parseLine (st : State) (line : String) : State := do
+def parseLine (st : State) (line : String) : State := do
   let (done, cur?) ← st
   -- close the open item (if any) and start `o`
   let restart (o : Open) : State := do

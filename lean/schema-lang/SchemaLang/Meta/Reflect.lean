@@ -32,14 +32,18 @@ Registration: a `SimplePersistentEnvExtension` replayed from oleans at
 import — the driver (`forge gen`) imports the demo module, reads the
 environment, and the emitters see exactly what was registered.
 -/
+module
 
-import Lean
-import Qq
-import CodegenCore.AttrKit
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Invariant
-import SchemaLang.Update
+public import Lean
+public import Qq
+public import CodegenCore.AttrKit
+public import CodegenCore
+public meta import SchemaLang.Ty
+public meta import SchemaLang.Item
+public meta import SchemaLang.Invariant
+public meta import SchemaLang.Update
+
+public meta section
 
 namespace SchemaLang.Meta
 
@@ -844,8 +848,13 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
 
 end SchemaLang.Meta
 
+end -- public meta section
+
 /- The async boundary markers (WASI 0.3): the ONE copy. The reifier
-    (`tyOfExpr?`) matches these BY NAME - do not move into a namespace. -/
+    (`tyOfExpr?`) matches these BY NAME - do not move into a namespace.
+    NON-meta + exposed (W5.4): Demo's non-meta defs elaborate
+    `[] : Async.Future (List User)` by unfolding `Future`. -/
+@[expose] public section
 namespace Async
 def Future (a : Type) : Type := a
 /- Same marker shape as `Future` (the boundary marker pair). -/

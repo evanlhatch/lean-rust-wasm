@@ -141,6 +141,36 @@ def registryCheck : CheckResult := do
   | .error e => throw s!"registry find failed: {e}"
   | .ok t => assertEq "table-name" t.name "units"
 
+/-- Shadowing rebinding: re-declaring a table name REPLACES the old binding
+    (last-binding-wins = prepend semantics). After adding a same-named table
+    with a DIFFERENT schema, lookups return the new schema only. -/
+def shadowRebindCheck : CheckResult := do
+  let reg1 := Registry.empty.add (tableS "units" [("x", .i32, true), ("y", .i64, false)])
+  let reg := reg1.add (tableS "units" [("a", .i32, false)])
+  let t ← reg.find "units"
+  _ ← assertEq "rebind-name" t.name "units"
+  _ ← assertEq "rebind-col-count" t.schema.length 1
+  _ ← assertEq "rebind-col-names" (t.schema.names) ["a"]
+  .ok ()
+
+/-- Negative control: the OLD binding is gone — a column that existed only
+    in the shadowed schema now fails with unknown-column error. -/
+def shadowNegCheck : CheckResult := do
+  let reg1 := Registry.empty.add (tableS "units" [("x", .i32, true), ("y", .i64, false)])
+  let reg := reg1.add (tableS "units" [("a", .i32, false)])
+  let schema ← reg.schema "units"  -- the NEW schema
+  expectErrorContaining ["no column `health`"] (compile schema (col "health"))
+
+/-- Distinct-name control: no shadowing when table names differ;
+    both tables resolve independently (harness is not vacuous). -/
+def distinctNamesCheck : CheckResult := do
+  let reg1 := Registry.empty.add (tableS "units" [("health", .i32, true), ("regen", .i32, true)])
+  let reg := reg1.add (tableS "players" [("name", .string, false), ("level", .i32, false)])
+  let t ← reg.find "units"
+  _ ← assertEq "distinct-units-name" t.name "units"
+  let t' ← reg.find "players"
+  assertEq "distinct-players-name" t'.name "players"
+
 def main : IO UInt32 :=
   TestKit.mainOfChecks "QLang" [
     ("edit-distance", editDistanceChecks),
@@ -155,5 +185,8 @@ def main : IO UInt32 :=
     ("failed-projection", failedProjectionCheck),
     ("sort-fetch", sortFetchCheck),
     ("bad-sort-key", badSortKeyCheck),
-    ("registry", registryCheck)
+    ("registry", registryCheck),
+    ("shadow-rebind", shadowRebindCheck),
+    ("shadow-neg", shadowNegCheck),
+    ("distinct-names", distinctNamesCheck)
   ]

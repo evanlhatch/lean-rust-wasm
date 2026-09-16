@@ -19,7 +19,11 @@ cutoff-bounded DP the compiler's own did-you-mean uses); dedup is core
 `List.eraseDups`. Name lists are small; the cutoff bounds the work.
 -/
 
-import Lean.Data.EditDistance
+module
+
+public import Lean.Data.EditDistance
+
+@[expose] public section
 
 namespace CodegenCore
 

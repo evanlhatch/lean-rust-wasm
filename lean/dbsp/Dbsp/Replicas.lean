@@ -28,8 +28,14 @@ broadcast. Causal ordering is the transport's job (the wRPC layer);
 the CRDT claim is exactly: ordering does not matter for convergence.
 -/
 
-import Dbsp.ZSet
-import Mathlib.Tactic.Abel
+module
+
+public import Dbsp.ZSet
+public import Mathlib.Tactic.Abel
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp.Replicas
 
@@ -84,3 +90,5 @@ theorem retract_is_inverse (s : ZSet A) (δ : ZSet A) :
   abel
 
 end Dbsp.Replicas
+
+end -- @[expose] public section

@@ -14,9 +14,14 @@ fail when the referenced type isn't registered first (register the
 referenced type before the referencing one — v1 limitation).
 -/
 
-import SchemaLang.Meta.Reflect
-import SchemaLang.Meta.Derive
-import SchemaLang.Migration
+module
+
+public import SchemaLang.Meta.Reflect
+public import SchemaLang.Meta.Derive
+public import SchemaLang.Migration
+public import SchemaLang.Validate
+
+@[expose] public section
 
 -- The registration-emitted instances (`instUpdatePure.<name>`) park in
 -- the FRAMEWORK's namespace by construction (Reflect's command emits

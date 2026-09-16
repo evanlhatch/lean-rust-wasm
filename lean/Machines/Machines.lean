@@ -1,15 +1,17 @@
 /- Machines — the guarded state-machine framework (flatland's notes/lean/TOOLKIT.md §2.4). -/
-import Machines.Tactics
-import Machines.Foundations
-import Machines.Core
-import Machines.Session
-import Machines.Convergent
-import Machines.Refine
-import Machines.LinearMachine
-import Machines.Rewind
-import Machines.Compose
-import Machines.Trace
-import Machines.Dsl
-import Machines.Testing
-import Machines.Sync
-import Machines.Sim
+module
+
+public import Machines.Tactics
+public import Machines.Foundations
+public import Machines.Core
+public import Machines.Session
+public import Machines.Convergent
+public import Machines.Refine
+public import Machines.LinearMachine
+public import Machines.Rewind
+public import Machines.Compose
+public import Machines.Trace
+public import Machines.Dsl
+public import Machines.Testing
+public import Machines.Sync
+public import Machines.Sim

@@ -91,11 +91,14 @@ BOTH lanes; the validator pattern = the registered compiled fn, the
 GADT = the scalar-condition story (Phase 3's family = the SPEC-side
 story, the strlen precedent).
 -/
+module
 
-import Lean
-import SchemaLang.Field
-import CodegenCore.GuestGate
-import LintKit
+public import Lean
+public import SchemaLang.Field
+public import CodegenCore.GuestGate
+public import LintKit
+
+@[expose] public section
 
 -- the `[inv| …]` DSL's syntax category parks in Lean's namespace BY
 -- DESIGN (`declare_syntax_cat vexpr` — a syntax cat cannot live in a
@@ -688,11 +691,11 @@ scoped syntax "[inv| " vexpr " ]" : term
 
 open Lean in
 /-- The string literal as a `Term` (the colOf argument). -/
-private def strLitTerm (s : String) : Term := ⟨Syntax.mkStrLit s⟩
+private meta def strLitTerm (s : String) : Term := ⟨Syntax.mkStrLit s⟩
 
 open Lean in
 /-- The schema index out of an operand's type (`VExpr s t` → `s`). -/
-private def vexprSchemaOf? (ty : Expr) : Option Expr :=
+private meta def vexprSchemaOf? (ty : Expr) : Option Expr :=
   match ty with
   | .app (.app _ s) _ => some s
   | _ => none
@@ -701,7 +704,7 @@ open Lean Elab Meta Term in
 /-- Force the operand's type INDEX (the ctor's requirement — this pins
 the field-ref's type BEFORE the postponed instance synth runs, so the
 misspelling error renders the CONCRETE type, never a raw mvar). -/
-private def forceIndex (s : Expr) (t : Expr) (e : Expr) : TermElabM Unit := do
+private meta def forceIndex (s : Expr) (t : Expr) (e : Expr) : TermElabM Unit := do
   let te ← inferType e
   let want := mkAppN (mkConst ``SchemaLang.VExpr) #[s, t]
   unless (← isDefEq te want) do
@@ -710,7 +713,7 @@ private def forceIndex (s : Expr) (t : Expr) (e : Expr) : TermElabM Unit := do
 open Lean Elab Meta Term in
 /-- Unify the operands' types (this THREADS the schema mvar through the
 node — the `mkAppM` role) and return the schema. -/
-private def unifyOperands (a b : Expr) : TermElabM Expr := do
+private meta def unifyOperands (a b : Expr) : TermElabM Expr := do
   let ta ← inferType a
   let tb ← inferType b
   unless (← isDefEq ta tb) do
@@ -723,7 +726,7 @@ open Lean Elab Term in
 /-- The field-ref leaf, shared by the ident and `strlen` arms: the
 REAL term elaborator on quoted `colOf` syntax (see `elabVExpr`'s doc
 for why the leaf cannot ride `mkAppM`). -/
-private def elabFieldLeaf (n : TSyntax `ident) : TermElabM Expr := do
+private meta def elabFieldLeaf (n : TSyntax `ident) : TermElabM Expr := do
   Term.elabTerm (← `(SchemaLang.VExpr.colOf $(strLitTerm n.getId.toString))) none
 
 open Lean Elab Meta Term in
@@ -736,7 +739,7 @@ fails against the still-open schema metavariable even for CORRECT
 spellings; the real elaborator POSTPONES the instance search until the
 expected type names the schema. The gate is unchanged: a misspelled
 field fails to synthesize `HasCol` HERE. -/
-partial def elabVExpr : TSyntax `vexpr → TermElabM Expr
+meta partial def elabVExpr : TSyntax `vexpr → TermElabM Expr
   | `(vexpr| $n:ident) => elabFieldLeaf n
   | `(vexpr| $v:num) => do
       let e ← Term.elabTerm v (some (mkConst ``UInt64))
@@ -799,7 +802,7 @@ scoped elab "[inv| " e:vexpr " ]" : term => elabVExpr e
 open Lean in
 /-- A node's precedence, from its delaborated syntax (the splice
 decision's input; unknown shapes count as atoms — conservative). -/
-private def vexprPrec? : TSyntax `vexpr → Option Nat
+private meta def vexprPrec? : TSyntax `vexpr → Option Nat
   | `(vexpr| $_ > $_) => some 60
   | `(vexpr| $_ == $_) => some 60
   | `(vexpr| $_ && $_) => some 50
@@ -812,13 +815,13 @@ open Lean in
 when the child's top node binds looser than the position demands (the
 right-nested-chain rule — the re-parsed tree must be the SAME tree;
 left splices at the parent's own precedence flatten safely). -/
-private def vexprSplice (min : Nat) (e : TSyntax `vexpr) :
+private meta def vexprSplice (min : Nat) (e : TSyntax `vexpr) :
     Lean.PrettyPrinter.UnexpandM (TSyntax `vexpr) :=
   if (vexprPrec? e).getD 100 >= min then pure e else `(vexpr| ($e))
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.colOf]
-private def unexpVExprColOf : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprColOf : Lean.PrettyPrinter.Unexpander
   | `($(_) $s:str) => do
       let t ← (`([inv| $(mkIdent s.getString.toName):ident ]) :
         Lean.PrettyPrinter.UnexpandM (TSyntax `term))
@@ -827,7 +830,7 @@ private def unexpVExprColOf : Lean.PrettyPrinter.Unexpander
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.lit]
-private def unexpVExprLit : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprLit : Lean.PrettyPrinter.Unexpander
   | `($(_) $n:num) => do
       let t ← (`([inv| $n:num ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
       return t.raw
@@ -838,7 +841,7 @@ private def unexpVExprLit : Lean.PrettyPrinter.Unexpander
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.strlen]
-private def unexpVExprStrlen : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprStrlen : Lean.PrettyPrinter.Unexpander
   | `($(_) [inv| $n:ident ]) => do
       let t ← (`([inv| strlen($n:ident) ]) : Lean.PrettyPrinter.UnexpandM (TSyntax `term))
       return t.raw
@@ -846,7 +849,7 @@ private def unexpVExprStrlen : Lean.PrettyPrinter.Unexpander
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.gt]
-private def unexpVExprGt : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprGt : Lean.PrettyPrinter.Unexpander
   | `($(_) [inv| $a:vexpr ] [inv| $b:vexpr ]) => do
       let a' ← vexprSplice 60 a
       let b' ← vexprSplice 61 b
@@ -856,7 +859,7 @@ private def unexpVExprGt : Lean.PrettyPrinter.Unexpander
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.eq]
-private def unexpVExprEq : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprEq : Lean.PrettyPrinter.Unexpander
   | `($(_) [inv| $a:vexpr ] [inv| $b:vexpr ]) => do
       let a' ← vexprSplice 60 a
       let b' ← vexprSplice 61 b
@@ -866,7 +869,7 @@ private def unexpVExprEq : Lean.PrettyPrinter.Unexpander
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.and]
-private def unexpVExprAnd : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprAnd : Lean.PrettyPrinter.Unexpander
   | `($(_) [inv| $a:vexpr ] [inv| $b:vexpr ]) => do
       let a' ← vexprSplice 50 a
       let b' ← vexprSplice 51 b
@@ -876,7 +879,7 @@ private def unexpVExprAnd : Lean.PrettyPrinter.Unexpander
 
 open Lean in
 @[app_unexpander SchemaLang.VExpr.not]
-private def unexpVExprNot : Lean.PrettyPrinter.Unexpander
+meta def unexpVExprNot : Lean.PrettyPrinter.Unexpander
   -- the De Morgan shape (`||`'s elaboration) renders back as `||`:
   -- the `!`s are stripped and the operands re-spliced at `||`'s
   -- operand positions

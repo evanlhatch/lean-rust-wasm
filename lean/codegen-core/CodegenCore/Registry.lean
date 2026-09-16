@@ -21,7 +21,11 @@ add, concatenate on import — boring on purpose, the bus-factor rule) can
 be tested purely, without an environment.
 -/
 
-import Lean
+module
+
+public import Lean
+
+@[expose] public section
 
 open Lean
 open Lean.Elab.Command
@@ -127,7 +131,7 @@ cannot drift. First consumer: faults' E-code block for
 
 /-- The constructor's short name (last component — schema-lang
     `ctorNameOf`'s trick, robust to namespaced ctors). -/
-def ctorShortName (ctor : Name) : String :=
+meta def ctorShortName (ctor : Name) : String :=
   (String.splitOn ctor.toString ".").getLast!
 
 /-- `derive_ctor_kinds kindsName fnName from InductiveName` — define
@@ -144,7 +148,7 @@ syntax (name := deriveCtorKinds)
   "derive_ctor_kinds " ident ident " from " ident : command
 
 @[command_elab deriveCtorKinds]
-def deriveCtorKindsImpl : CommandElab := fun stx => do
+meta def deriveCtorKindsImpl : CommandElab := fun stx => do
   let kindsName := stx[1].getId
   let fnName := stx[2].getId
   let indName := stx[4].getId

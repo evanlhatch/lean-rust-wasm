@@ -15,7 +15,11 @@ The discipline this enforces:
   (LSpec's `@[test_driver]` registration).
 -/
 
-import LSpec
+module
+
+public import LSpec
+
+@[expose] public section
 
 namespace TestKit
 

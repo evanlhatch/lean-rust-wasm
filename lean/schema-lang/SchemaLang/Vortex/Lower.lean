@@ -26,9 +26,13 @@ it); the lowering ADDS nullability based on context. A top-level
 `.option t` becomes nullable; everything inside it stays as lowered.
 -/
 
-import SchemaLang.Item
-import SchemaLang.Ty
-import SchemaLang.Vortex.DType
+module
+
+public import SchemaLang.Item
+public import SchemaLang.Ty
+public import SchemaLang.Vortex.DType
+
+@[expose] public section
 
 namespace SchemaLang.Vortex
 

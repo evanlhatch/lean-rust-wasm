@@ -20,17 +20,23 @@ and support lemmas. The source's `flatmap` is not ported: in mathlib
 go straight to `mapDomain` (its sum-over-support expansion is `ZSet.map_apply`).
 -/
 
-import Dbsp.Tactics
-import Mathlib.Data.Finsupp.Defs
-import Mathlib.Algebra.Group.Finsupp
-import Mathlib.Algebra.Order.Group.Int
-import Mathlib.Data.Finsupp.Basic
-import Mathlib.Data.Finsupp.Single
-import Mathlib.Data.Finsupp.Indicator
-import Mathlib.Algebra.BigOperators.Finsupp.Basic
-import Mathlib.Algebra.Order.BigOperators.Group.Finset
-import Mathlib.Algebra.Order.Ring.Int
-import Mathlib.Tactic.NormNum
+module
+
+public import Dbsp.Tactics
+public import Mathlib.Data.Finsupp.Defs
+public import Mathlib.Algebra.Group.Finsupp
+public import Mathlib.Algebra.Order.Group.Int
+public import Mathlib.Data.Finsupp.Basic
+public import Mathlib.Data.Finsupp.Single
+public import Mathlib.Data.Finsupp.Indicator
+public import Mathlib.Algebra.BigOperators.Finsupp.Basic
+public import Mathlib.Algebra.Order.BigOperators.Group.Finset
+public import Mathlib.Algebra.Order.Ring.Int
+public import Mathlib.Tactic.NormNum
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -242,3 +248,5 @@ end
 end Dbsp
 
 attribute [zset] Finsupp.add_apply Finsupp.sub_apply Finsupp.neg_apply Finsupp.zero_apply
+
+end -- @[expose] public section

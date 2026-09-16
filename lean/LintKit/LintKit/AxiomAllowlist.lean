@@ -16,7 +16,11 @@ Opt out per site with `@[nolint linter.guestlang.axiomAllowlist "reason"]`.
 
 The option is declared at top level (see LintKit.Basic's header note).
 -/
-import LintKit.Basic
+module
+
+public import LintKit.Basic
+
+public meta section
 
 open Lean Meta Linter EnvLinter
 

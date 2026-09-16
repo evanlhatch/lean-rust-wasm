@@ -18,10 +18,14 @@ builders). The runtime tie-checks stay as regression controls
 (derived = derived now; the negative controls keep them honest).
 -/
 
-import Lean
-import SchemaLang.Meta.Reflect
-import CodegenCore.Emit.Core
-import CodegenCore.DidYouMean
+module
+
+public import Lean
+public import SchemaLang.Meta.Reflect
+public import CodegenCore.Emit.Core
+public import CodegenCore.DidYouMean
+
+public meta section
 
 namespace SchemaLang.Meta
 

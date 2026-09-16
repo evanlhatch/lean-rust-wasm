@@ -45,9 +45,13 @@ header predicted). Deliberate exclusions: no `Decidable` instance for
 Vortex projection is the Rust executor's job (see `vortexSelect`).
 -/
 
-import SchemaLang.Diff
-import SchemaLang.Validate
-import SchemaLang.Vortex.DType
+module
+
+public import SchemaLang.Diff
+public import SchemaLang.Validate
+public import SchemaLang.Vortex.DType
+
+@[expose] public section
 
 namespace SchemaLang
 

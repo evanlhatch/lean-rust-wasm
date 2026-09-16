@@ -20,7 +20,13 @@ abstract run over the interpreted labels, ending in related states — the
 oracle-level statement: observed concrete behavior is explained abstractly.
 -/
 
-import Machines.Core
+module
+
+public import Machines.Core
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines
 
@@ -82,3 +88,5 @@ theorem Machine.Refines.run_sim (r : c.Refines a) :
     simp only [List.map_cons, Machine.run, hastep, harun]
 
 end Machines
+
+end -- @[expose] public section

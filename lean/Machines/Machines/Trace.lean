@@ -24,7 +24,13 @@ Trace-type moves (rewind, merge, replay-equality) are their own modules;
 this one only owns the deadlock predicates.
 -/
 
-import Machines.Compose
+module
+
+public import Machines.Compose
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines
 
@@ -69,3 +75,5 @@ theorem deadlockFree_comp_inr (m1 m2 : Machine) (h2 : m2.DeadlockFree) :
 end Machine
 
 end Machines
+
+end -- @[expose] public section

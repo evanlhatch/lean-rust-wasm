@@ -9,6 +9,12 @@ so any downstream package adds its own closer without editing this file.
 (Sync.lean: latch countDown, semaphore acquire/release).
 -/
 
+module
+
+-- Elaboration-time only: syntax + the open ladder live in a
+-- `public meta section` so downstream packages extend the rungs (W5.4).
+public meta section
+
 /-- The open discharge solver. The DEFAULT ladder below is today's
     `machine_safety` chain; a package adds a rung with its own
     `macro_rules` against the same syntax, no edit here:
@@ -39,3 +45,5 @@ macro "guard_omega" Inv:ident : tactic =>
              unfold $Inv at hinv ⊢
              simp only at hinv ⊢
              omega))
+
+end -- public meta section

@@ -20,9 +20,13 @@ bon, serde land with the faults/tabular packages). Names pre-mangled via
 `Emit.pascal`/`rustIdent` — the AST never case-converts.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Rust
 

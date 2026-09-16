@@ -54,13 +54,24 @@ structure; this hub only imports):
   inversion ladder.
 - `Substrait.Decode.Expr` — the literal/expression parsers and their
   inversion ladder.
-- `Substrait.Decode.Rel` — the relation line-tree parsers.
-- `Substrait.Decode.Plan` — the plan driver and the parser-layer
-  inversion theorems.
+- `Substrait.Decode.Rel` — the relation line-tree parsers and the
+  line-shape pairings (`splitOnPipe_self`, `indentOf_indentUnits`,
+  `drop_indentUnits`).
+- `Substrait.Decode.Plan` — the plan driver, the parser-layer inversion
+  theorems, and the W5.3-phase-2b line inversions (extension entries,
+  version header, Root names).
 - `Substrait.Decode.Typed` — the typed `decodeExpr`/`decodeArgs` and
   the expression re-encode theorem.
 - `Substrait.Decode.TypedRel` — the size facts, the typed `decodeRel`,
   and the rel re-encode capstone.
+
+W5.3 phase 2b: the LINE-SHAPE grammar (separators, keywords, section
+markers, the indent rule, extension-block kinds, cast failure behaviors,
+the binary sentinel) is single-sourced in `Substrait.Grammar` — every
+`expect`/`startsWith` site here and every `++`-chain in `Emit.Text` names
+the same constant. Resistant sites (char-level `match` patterns, the
+`null`/`true`/`false` value words, `relWidth` vs `relWidthD`) are noted at
+their definitions and in the `Substrait.Grammar` header.
 -/
 import Substrait.Decode.Basic
 import Substrait.Decode.Types

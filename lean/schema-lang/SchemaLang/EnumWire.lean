@@ -35,10 +35,14 @@ versioned envelope's fingerprint; `BreakingMain` is the gate).
 
 -/
 
-import Lean
-import SchemaLang.Codec
-import Plausible
-import TestKit
+module
+
+public import Lean
+public import SchemaLang.Codec
+public import Plausible
+public import TestKit
+
+@[expose] public section
 
 namespace SchemaLang.EnumWire
 
@@ -46,14 +50,14 @@ open Lean Elab Command
 
 /-- Elaborate ONE generated declaration (source text → parsed command →
     elabCommand). Parse errors are internal (the generator wrote them). -/
-def elabGenerated (src : String) : CommandElabM Unit := do
+meta def elabGenerated (src : String) : CommandElabM Unit := do
   match Lean.Parser.runParserCategory (← getEnv) `command src with
   | .ok stx => elabCommand stx
   | .error e =>
       throwError "declare_enum_wire: internal: generated code failed to parse\n{e}"
 
 /-- The generated declarations, in order (each entry is one command). -/
-def generatedSources (n : String) (ctors : Array String) : Array String :=
+meta def generatedSources (n : String) (ctors : Array String) : Array String :=
   let k := ctors.size
   let first := ctors[0]!
   let indAlts := String.intercalate " " (ctors.toList.map (fun c => s!"| {c}"))
@@ -93,9 +97,9 @@ def generatedSources (n : String) (ctors : Array String) : Array String :=
   s!"instance : Plausible.Shrinkable {n} where\n  shrink e := if e == {n}.{first} then [] else [{n}.{first}]",
   -- (d) the PropSpec with the MANDATORY negative control
   s!"def {n}.wireSabotage (e : {n}) : Bool :=\n  {n}.ofTag? ({n}.toTag e + 1) == some e",
-  s!"def {n}.wireSuite : LSpec.TestSeq :=\n  LSpec.checkPlausibleIO \"enum wire: decode? ∘ encode = some (round trip)\"\n    (∀ (e : {n}), {n}.roundTrips e = true)\n    .done \{ numInst := 256, randomSeed := some 20261104 }",
-  s!"def {n}.wireControl : LSpec.TestSeq :=\n  LSpec.checkPlausibleIO \"sabotaged: tag+1 corruption (must be caught)\"\n    (∀ (e : {n}), {n}.wireSabotage e = true)\n    .done \{ numInst := 256, randomSeed := some 20261104 }",
-  s!"def {n}.wirePropSpec : TestKit.PropSpec :=\n  \{ name := \"enum wire: {n} decode∘encode round trip\"\n  , suite := {n}.wireSuite\n  , control := {n}.wireControl\n  , controlName := \"tag+1 sabotage\" }"
+  s!"meta def {n}.wireSuite : LSpec.TestSeq :=\n  LSpec.checkPlausibleIO \"enum wire: decode? ∘ encode = some (round trip)\"\n    (∀ (e : {n}), {n}.roundTrips e = true)\n    .done \{ numInst := 256, randomSeed := some 20261104 }",
+  s!"meta def {n}.wireControl : LSpec.TestSeq :=\n  LSpec.checkPlausibleIO \"sabotaged: tag+1 corruption (must be caught)\"\n    (∀ (e : {n}), {n}.wireSabotage e = true)\n    .done \{ numInst := 256, randomSeed := some 20261104 }",
+  s!"meta def {n}.wirePropSpec : TestKit.PropSpec :=\n  \{ name := \"enum wire: {n} decode∘encode round trip\"\n  , suite := {n}.wireSuite\n  , control := {n}.wireControl\n  , controlName := \"tag+1 sabotage\" }"
   ]
 
 /-- `declare_enum_wire <Name> where <ctor> | ... | <ctor>` — generate the
@@ -106,7 +110,7 @@ syntax (name := declareEnumWire) "declare_enum_wire " ident " where "
   ident (" | " ident)* : command
 
 @[command_elab declareEnumWire]
-def declareEnumWireImpl : CommandElab := fun stx => do
+meta def declareEnumWireImpl : CommandElab := fun stx => do
   let n := stx[1].getId.toString
   let mut ctors : Array String := #[stx[3].getId.toString]
   for rep in stx[4].getArgs do

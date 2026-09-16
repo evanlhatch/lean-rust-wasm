@@ -20,9 +20,15 @@ from passes ≤ n. The cascade's kernel wiring is strict BY CONSTRUCTION
 its own legality argument; it is NOT covered by `fix_unique`.
 -/
 
-import Dbsp.Certs
-import Dbsp.Stream
-import Dbsp.Tactics
+module
+
+public import Dbsp.Certs
+public import Dbsp.Stream
+public import Dbsp.Tactics
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -414,3 +420,5 @@ theorem feedback_ckt_causal [Zero b] (F : Operator b b) (hstrict : Strict F)
         exact ih (agree_upto_weaken s1 s2 (n + 1) n heq (Nat.le_succ n))
 
 end Dbsp
+
+end -- @[expose] public section

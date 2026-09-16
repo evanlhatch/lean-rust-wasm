@@ -10,9 +10,16 @@ Excluded: `Rel → Ckt` lowering (W4.5); `par`/`feedback` fold to Node
 data with a general evaluator, but the demo circuit is scalar.
 -/
 
-import CodegenCore
-import Dbsp.Circuit
-import SchemaLang.Emit.GenCtx
+module
+
+public import CodegenCore
+public import Dbsp.Circuit
+public import SchemaLang.Emit.GenCtx
+public meta import Dbsp.Circuit
+-- native_decide's generated meta defs reference these instances (W5.4).
+public meta import Mathlib.Algebra.Group.Int.Defs
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Circuit
 
@@ -85,21 +92,12 @@ theorem orderTotalCkt_incrementalize_ok :
 
 /-! ## The certificate pin (the Dbsp.Certs CI mechanism)
 
-The emitted Rust header CITES `Dbsp.incrementalize_ok`; this command is
-the citation's enforcement — the name must be a `@[cert]`-registered
-theorem whose type is defeq to the required shape, checked at
-elaboration of THIS module (certification drift = build error). -/
-
-#check_cert Dbsp.incrementalize_ok :
-  ∀ {Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Type}
-    {a b : Type} [AddCommGroup a] [AddCommGroup b]
-    {denoteF : Dbsp.CktDenote Func} (isLinear : Dbsp.IsLinearOracle Func)
-    (_isLinearOk : ∀ {a b : Type} [AddCommGroup a] [AddCommGroup b] (f : Func a b),
-      isLinear _ _ f = true → ∀ x y : a,
-        denoteF _ _ f (x + y) = denoteF _ _ f x + denoteF _ _ f y)
-    (f : Dbsp.Ckt Func a b),
-    Dbsp.Ckt.denote denoteF (Dbsp.incrementalize isLinear f) =
-      Dbsp.incremental (Dbsp.Ckt.denote denoteF f)
+The emitted Rust header CITES `Dbsp.incrementalize_ok`; the citation's
+enforcement (`#check_cert`) lives in `Tests/Main.lean` — W5.4: under the
+module system an imported theorem's `ConstantInfo` is not `isTheorem`
+during a module file's elaboration (Dbsp.Certs' deferred-kind lesson),
+so the pin runs in the non-module Tests file (certification drift = test
+build error). -/
 
 /-! ## The fold: circuit structure → Rust -/
 

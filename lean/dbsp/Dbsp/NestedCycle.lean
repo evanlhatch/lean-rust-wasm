@@ -35,9 +35,15 @@ theorem, and duplicating the unary flow): the sprod/`integral_sprod`
 product forms and the `feedback_ckt_*` family from operators.lean.
 -/
 
-import Dbsp.Incremental
-import Dbsp.StreamElim
-import Dbsp.Tactics
+module
+
+public import Dbsp.Incremental
+public import Dbsp.StreamElim
+public import Dbsp.Tactics
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -421,3 +427,5 @@ theorem cycle2_incremental (T : Operator2 a (Stream b) (Stream b))
 end Cycle
 
 end Dbsp
+
+end -- @[expose] public section

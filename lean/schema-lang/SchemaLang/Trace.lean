@@ -31,8 +31,12 @@ GADT note: rows ride `RowVals` directly (no nested `List (Value t)`
 inside a GADT — the VList lesson applies unchanged).
 -/
 
-import SchemaLang.Update
-import SchemaLang.CodecValue
+module
+
+public import SchemaLang.Update
+public import SchemaLang.CodecValue
+
+@[expose] public section
 
 namespace SchemaLang
 

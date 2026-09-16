@@ -3,20 +3,18 @@ import CodegenCore.GuestGate
 # GuestlangStd.StrOps — the string intrinsics: ONE closed universe
 
 Cedar's ExtFun pattern (notes/studies/cedar-study.md C1): ONE closed
-inductive + ONE total `call` + ONE `runtimeName` — every consumer (the
-wasm backend's emit arm, the manifest fold) folds the same
-constructors; adding an intrinsic = one ctor, and exhaustiveness
-forces every consumer. The named wrappers (`strlen`/`strcat`) keep the
-existing signatures/usages AND the oracle bodies verbatim; `call`
-delegates to them.
+inductive + total metadata folds (`ofName?`/`runtimeName`/
+`resultWasmTy`) — every consumer (the wasm backend's emit arm, the
+manifest fold) folds the same constructors; adding an intrinsic = one
+ctor, and exhaustiveness forces every consumer. The named wrappers
+(`strlen`/`strcat`) keep the existing signatures/usages AND the
+oracle bodies verbatim.
 
-Why not the reverse (bodies in `call`, wrappers delegating)? LCNF's
-inlineDefs unfolds the tiny wrapper bodies and constant-folds
-`String.append` on literal arguments — the baseline WAT has ZERO
-`call $string_cat` (every demo strcat site folds to a string
-constant). Routing the wrappers through the dependent `call` broke
-that fold and changed the emitted bytes (W6.10 is byte-invariant), so
-the delegation direction is pinned: wrappers own the bodies.
+The wrappers own the bodies: LCNF's inlineDefs unfolds the tiny
+wrapper bodies and constant-folds `String.append` on literal
+arguments — the baseline WAT has ZERO `call $string_cat` (every demo
+strcat site folds to a string constant). The emitted bytes are pinned
+(W6.10 is byte-invariant).
 
 This module stays core-only (CodegenCore.GuestGate alone) so the
 backend can import it without the schema-lang closure.
@@ -29,12 +27,6 @@ inductive Intrinsic
   | strlen
   | strcat
   deriving DecidableEq, Repr
-
-/-- The intrinsic's Lean signature (reducible: defeq checks at the
-    `call` consumer sites see through it). -/
-abbrev Intrinsic.Sig : Intrinsic → Type
-  | .strlen => String → UInt64
-  | .strcat => String → String → String
 
 /-- The runtime primitive spellings — the ONE place they exist (the
     emitted `call $string_len` / `call $string_cat` resolve to the
@@ -70,12 +62,5 @@ def strlen (s : String) : UInt64 := s.length.toUInt64
     runs (`memory.copy`). Real body = the oracle. -/
 @[guest_std]
 def strcat (a b : String) : String := a ++ b
-
-/-- The oracle semantics — the TOTAL fold over the closed set. The
-    arms are the named wrappers above (the bodies stay on the wrappers:
-    the header's inlineDefs/constant-fold pinning). -/
-def Intrinsic.call : (i : Intrinsic) → i.Sig
-  | .strlen => _root_.GuestlangStd.strlen
-  | .strcat => _root_.GuestlangStd.strcat
 
 end GuestlangStd

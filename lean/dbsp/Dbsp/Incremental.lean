@@ -27,7 +27,13 @@ The source's nested-stream machinery (`strict2`, `causal_nested`,
 `Dbsp.NestedCycle`.
 -/
 
-import Dbsp.Linear
+module
+
+public import Dbsp.Linear
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -47,7 +53,9 @@ theorem incremental_unfold (Q : Operator a b) (s : Stream a) :
 
 /-! ## The inversion: incremental forms are a bijection on operators -/
 
-private def incrementalInv (Q : Operator a b) : Operator a b := I ∘ Q ∘ D
+-- W5.4: was `private`; the inversion theorems' SIGNATURES name it, and
+-- private names cannot appear in public signatures under the module system.
+def incrementalInv (Q : Operator a b) : Operator a b := I ∘ Q ∘ D
 
 theorem incremental_inversion_l :
     Function.LeftInverse (@incrementalInv a b _ _) (@incremental a b _ _) := by
@@ -241,3 +249,5 @@ theorem incremental_sprod (f : Operator (a × b) c) (s1 : Stream a) (s2 : Stream
   rw [integral_sprod]
 
 end Dbsp
+
+end -- @[expose] public section

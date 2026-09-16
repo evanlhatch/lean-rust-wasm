@@ -27,10 +27,16 @@ engine-side obligations: they are why the engine's per-pass operator
 satisfies these strictness hypotheses, not part of this theorem.
 -/
 
-import Dbsp.Certs
-import Dbsp.Linear
-import Mathlib.Data.Fin.Tuple.Basic
-import Mathlib.Logic.Function.Basic
+module
+
+public import Dbsp.Certs
+public import Dbsp.Linear
+public import Mathlib.Data.Fin.Tuple.Basic
+public import Mathlib.Logic.Function.Basic
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -244,3 +250,5 @@ def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream 
 end NBlock
 
 end Dbsp
+
+end -- @[expose] public section

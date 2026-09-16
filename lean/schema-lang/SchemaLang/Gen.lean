@@ -42,9 +42,13 @@ property needs to compare values, so the equality rides with the
 generators.
 -/
 
-import SchemaLang.CodecValue
-import SchemaLang.Trace
-import Plausible
+module
+
+public import SchemaLang.CodecValue
+public import SchemaLang.Trace
+public import Plausible
+
+@[expose] public section
 
 namespace SchemaLang
 

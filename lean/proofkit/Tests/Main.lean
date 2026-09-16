@@ -19,7 +19,7 @@ open Proofkit SchemaLang TestKit
 /-- The Update PO slots, demonstrated: BOTH class fields omitted — the
     autoParam defaults (`by decide`, the ladder's first rung) discharge
     over the derived reads. No hand proofs at the instance sites. -/
-def poFields : List Field :=
+abbrev poFields : List Field :=
   [{ name := "id", ty := .u64 }, { name := "count", ty := .u64 }]
 
 def updReset : UpdateItem poFields ⟨"id", .u64⟩ :=

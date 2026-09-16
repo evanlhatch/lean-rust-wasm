@@ -31,7 +31,11 @@ the GADT is kernel-forbidden); the `VList ↔ List (Value t)` pair here is
 plain functions, which the kernel accepts.
 -/
 
-import SchemaLang.Codec
+module
+
+public import SchemaLang.Codec
+
+@[expose] public section
 
 namespace SchemaLang
 

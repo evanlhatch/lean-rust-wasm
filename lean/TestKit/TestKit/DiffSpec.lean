@@ -26,7 +26,11 @@ replacement for structured diagnostics, doctrine §4). The discipline is
 ≥2 corruptions per gate; an EMPTY corruption list is flagged vacuous.
 -/
 
-import TestKit.Harness
+module
+
+public import TestKit.Harness
+
+@[expose] public section
 
 namespace TestKit
 

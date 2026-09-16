@@ -33,11 +33,15 @@ consumed by DBSP-side tooling, not the gateway world. A distinct
 artifact its own one-writer claim.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Emit.Wit
-import SchemaLang.Emit.Rust
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Emit.Wit
+public import SchemaLang.Emit.Rust
+
+@[expose] public section
 
 namespace SchemaLang
 

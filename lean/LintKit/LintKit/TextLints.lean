@@ -15,7 +15,11 @@ Both are pure `String → Array TextFinding`, unit-tested in LintKit's own
 Tests with positive and negative controls. The options are declared at top
 level (see LintKit.Basic's header note).
 -/
-import LintKit.Basic
+module
+
+public import LintKit.Basic
+
+public meta section
 
 open Lean
 

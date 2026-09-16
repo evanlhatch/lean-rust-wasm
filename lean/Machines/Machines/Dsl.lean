@@ -105,10 +105,16 @@ guard, action, invariant, and (when needed) one named tactic block.
   every subsequent arm becomes a redundant alternative.
 -/
 
-import Machines.Core
-import Machines.Tactics
-import Lean
-import Mathlib.Tactic.FinCases
+module
+
+public import Machines.Core
+public import Machines.Tactics
+public import Lean
+public import Mathlib.Tactic.FinCases
+
+-- W5.4 module discipline: the entire DSL layer is elaboration-time
+-- (syntax + the machine! command elaborator) → `public meta section`.
+public meta section
 
 namespace Machines.Dsl
 
@@ -350,3 +356,5 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
 @[command_elab machineCmd] def elabMachine : Lean.Elab.Command.CommandElab := elabMachineImpl
 
 end Machines.Dsl
+
+end -- public meta section

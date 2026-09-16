@@ -24,7 +24,13 @@ These are READINGS: the proofs are one-liners because the work was done in
 Linear/Incremental. The value is the named surface the engine cites.
 -/
 
-import Dbsp.Circuit
+module
+
+public import Dbsp.Circuit
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -70,9 +76,6 @@ abbrev hotreload_incrementalize_ok := @incrementalize_ok
     (I (Journal s) + I (Journal δ) - I (Journal δ)) t = I (Journal s) t := by
   simp [Pi.add_apply, Pi.sub_apply]
 
-/- Future: the well-foundedness reasoning for termination certificates
-   (Convergent.lean) can use Cslib.Foundations.Relation.Confluence's
-   WellFounded.ofTransGen / WellFounded.iff_transGen to simplify
-   trans-gen well-foundedness proofs. -/
-
 end Dbsp
+
+end -- @[expose] public section

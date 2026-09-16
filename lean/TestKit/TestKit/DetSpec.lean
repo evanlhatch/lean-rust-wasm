@@ -17,7 +17,11 @@ PASSES is vacuous — louder than a failure, because the suite then proves
 nothing.
 -/
 
-import TestKit.Harness
+module
+
+public import TestKit.Harness
+
+@[expose] public section
 
 namespace TestKit
 

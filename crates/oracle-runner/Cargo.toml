@@ -1,0 +1,26 @@
+[package]
+name = "oracle-runner"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# W6.3 phase 2: the differential oracle's host-side driver + debug loop.
+# Dev tooling — never shipped into a guest or a host production path.
+[dependencies]
+steel-host = { path = "../steel-host" }
+wasmtime = { version = "47", default-features = false, features = [
+  "async",
+  "component-model",
+  "component-model-async",
+  "cranelift",
+  "pooling-allocator",
+  "runtime",
+  "std",
+  "threads",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde_json = "1"
+# The schema hash (sha256 of the oracle's canonical schema-surface
+# string) — already in the workspace lock via wasmtime.
+sha2 = "0.10"

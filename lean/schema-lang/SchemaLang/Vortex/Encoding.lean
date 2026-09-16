@@ -54,7 +54,11 @@ lane does not model (Part 10 containment puts the byte format in Rust,
 not Lean). The SPEC-level retention theorems here are the proof of
 record; the duel joins when a wire codec for a concrete `Repr` lands.
 -/
-import SchemaLang.Vortex.DType
+module
+
+public import SchemaLang.Vortex.DType
+
+@[expose] public section
 
 namespace SchemaLang.Vortex
 

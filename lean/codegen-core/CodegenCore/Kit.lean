@@ -3,8 +3,10 @@
 
 The agreement-theorem vocabulary (lean-cohesion-plan §0): laws attach to
 SHAPES, not instances. Moved from Machines.Foundations (the Dag STAYS there).
-Core-only by design: mathlib's `Function.iterate` becomes the local `iterateN`.
 -/
+module
+
+@[expose] public section
 
 namespace CodegenCore
 
@@ -16,27 +18,6 @@ structure Iso (A B : Type) where
   to_inv : ∀ b, to (inv b) = b
   inv_to : ∀ a, inv (to a) = a
 
-namespace Iso
-
-def refl : Iso A A := ⟨_root_.id, _root_.id, fun _ => rfl, fun _ => rfl⟩
-
-def symm (i : Iso A B) : Iso B A where
-  to := i.inv; inv := i.to
-  to_inv := i.inv_to; inv_to := i.to_inv
-
-/-- Isos compose; the laws compose with them. -/
-def trans (i₁ : Iso A B) (i₂ : Iso B C) : Iso A C where
-  to := i₂.to ∘ i₁.to
-  inv := i₁.inv ∘ i₂.inv
-  to_inv := fun c => by
-    show i₂.to (i₁.to (i₁.inv (i₂.inv c))) = c
-    rw [i₁.to_inv, i₂.to_inv]
-  inv_to := fun a => by
-    show i₁.inv (i₂.inv (i₂.to (i₁.to a))) = a
-    rw [i₂.inv_to, i₁.inv_to]
-
-end Iso
-
 /-- Partial correspondence: decode may fail; encode is a section.
     The law is one-ended (`decode∘encode = id`): the wire may have
     non-canonical encodings, but everything we emit decodes back. -/
@@ -44,20 +25,6 @@ structure PartialIso (A B : Type) where
   decode : A → Option B
   encode : B → A
   decode_encode : ∀ b, decode (encode b) = some b
-
-namespace PartialIso
-
-/-- Partial isos compose through `Option.bind`. -/
-def trans (p₁ : PartialIso A B) (p₂ : PartialIso B C) : PartialIso A C where
-  decode := fun a => (p₁.decode a).bind p₂.decode
-  encode := p₁.encode ∘ p₂.encode
-  decode_encode := by
-    intro c
-    show ((p₁.decode (p₁.encode (p₂.encode c))).bind p₂.decode) = some c
-    rw [p₁.decode_encode]
-    exact p₂.decode_encode c
-
-end PartialIso
 
 /-- Abstraction: the representation determines its semantics (`outParam`).
     No inverse exists; the law lives on operations (`ReprOp`). -/
@@ -134,55 +101,67 @@ def isComplete (c : CheckedProp α) : Bool :=
 
 end CheckedProp
 
-/-- Bounded iteration's witness type. mathlib's `Function.iterate` (`^[n]`)
-    is NOT core; the kit is core-only, so the five-line local iterate it is.
-    Tail shape (`iterateN f (n+1) x = iterateN f n (f x)` definitionally) —
-    the step lemma is `rfl`. -/
-def iterateN (f : α → α) : Nat → α → α
-  | 0, x => x
-  | n + 1, x => iterateN f n (f x)
+/-! ## Obligation — every checkable fact as data (the canon row)
 
-@[simp] theorem iterateN_zero (f : α → α) (x : α) : iterateN f 0 x = x := rfl
+The Strata pattern: obligations are RECORDED as data; pluggable
+backends discharge them. The tier is a BACKEND ASSIGNMENT, not a
+property of the fact (lean-doctrine: kernel proof / decide / generated
+runtime check / oracle sweep). Replaces: hand-wired per-lane checks,
+"armed but unfired" registrations (an obligation whose discharge is
+`none` is the gap, as data), ad-hoc diag renderings. Deliberately OUT
+(phase 1): assumptions (no consumer yet). Core-only: `Name`/`String`
+are prelude types — nothing schema-shaped crosses this line. -/
 
-@[simp] theorem iterateN_succ (f : α → α) (n : Nat) (x : α) :
-    iterateN f (n + 1) x = iterateN f n (f x) := rfl
+/-- The discharge tier: WHICH backend discharges the obligation.
+    Generalizes schema-lang's `Invariant.Tier` ladder
+    (`boundaryCheck`/`proved`/`oracleCovered` → `generatedCheck`/
+    `provedAtElab`/`oracleSwept`) and adds the `decidableNow` rung the
+    doctrine row names (a decide/grind discharge at elaboration or CI). -/
+inductive Obligation.Tier where
+  | provedAtElab
+  | decidableNow
+  | generatedCheck
+  | oracleSwept
+deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- Iterate `step` from `init`, stopping when `converged` holds; `none`
-    when fuel runs out. The cap is a tripwire, not semantics. Soundness
-    attaches ONCE here: a returned value is an iterate of the initial value
-    AND passes the convergence check; callers discharge `converged`-
-    soundness (the check implies fixpoint) at instantiation. -/
-def iterateBounded (step : α → α) (converged : α → Bool) : Nat → α → Option α
-  | 0, _ => none
-  | fuel + 1, x => if converged x then some x else iterateBounded step converged fuel (step x)
+/-- The tier's rendering (emitted doc comments + test pins). -/
+def Obligation.Tier.render : Obligation.Tier → String
+  | .provedAtElab => "proved-at-elab"
+  | .decidableNow => "decidable-now"
+  | .generatedCheck => "generated-check"
+  | .oracleSwept => "oracle-swept"
 
--- the @[simp] equation set for the recursive def (the package discipline).
-@[simp] theorem iterateBounded_zero (step : α → α) (converged : α → Bool) (init : α) :
-    iterateBounded step converged 0 init = none := rfl
+instance : ToString Obligation.Tier := ⟨Obligation.Tier.render⟩
 
-@[simp] theorem iterateBounded_succ (step : α → α) (converged : α → Bool) (fuel : Nat) (init : α) :
-    iterateBounded step converged (fuel + 1) init =
-      if converged init then some init else iterateBounded step converged fuel (step init) := rfl
+/-- The discharge's EVIDENCE: which backend artifact carries it — a
+    cited kernel theorem, a decide result, a generated check fn (at an
+    artifact path), an oracle row reference. -/
+inductive Obligation.Evidence where
+  | citedProof (thm : Lean.Name)
+  | decided (result : Bool)
+  | generatedCheck (artifact fn : String)
+  | oracleRow (ref : String)
+deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- Soundness: a returned value is an iterate and passes the check. -/
-theorem iterateBounded_sound {step : α → α} {converged : α → Bool} :
-    ∀ fuel init y, iterateBounded step converged fuel init = some y →
-      ∃ n, y = iterateN step n init ∧ converged y = true := by
-  intro fuel
-  induction fuel with
-  | zero => intro init y h; simp [iterateBounded] at h
-  | succ fuel ih =>
-    intro init y h
-    rw [iterateBounded] at h
-    by_cases hconv : converged init = true
-    · rw [if_pos hconv] at h
-      have : init = y := Option.some.inj h
-      subst this
-      exact ⟨0, rfl, hconv⟩
-    · rw [if_neg hconv] at h
-      obtain ⟨n, hn, hc⟩ := ih (step init) y h
-      refine ⟨n + 1, ?_, hc⟩
-      calc y = iterateN step n (step init) := hn
-        _ = iterateN step (n + 1) init := rfl
+instance : ToString Obligation.Evidence := ⟨reprStr⟩
+
+/-- The evidence's tier: every evidence shape belongs to exactly one
+    backend. A discharge whose evidence's `.tier` differs from the
+    obligation's tier is mis-wired — checkable as data. -/
+def Obligation.Evidence.tier : Obligation.Evidence → Obligation.Tier
+  | .citedProof _ => .provedAtElab
+  | .decided _ => .decidableNow
+  | .generatedCheck _ _ => .generatedCheck
+  | .oracleRow _ => .oracleSwept
+
+/-- A checkable fact as data: the label, the computed discharge tier,
+    the lane's own payload row, and the declaring declaration.
+    Registration COMPUTES the tier; backends READ it. -/
+structure Obligation (α : Type) where
+  label : String
+  tier : Obligation.Tier
+  payload : α
+  provenance : Lean.Name
+deriving Inhabited
 
 end CodegenCore

@@ -43,7 +43,13 @@ The schema-typed consumer (`P := SchemaLang.Ty`) is
 (W4.1c landed; the string-bridge aliases are gone).
 -/
 
-import Machines.Core
+module
+
+public import Machines.Core
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines.Session
 
@@ -246,3 +252,5 @@ instance instIsDualOf {P : Type} (p : TProtocol P) : IsDualOf (tdual p) p :=
   ⟨rfl⟩
 
 end Machines.Session
+
+end -- @[expose] public section

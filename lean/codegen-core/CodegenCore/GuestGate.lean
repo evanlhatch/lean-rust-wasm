@@ -1,7 +1,11 @@
-import Lean
-import CodegenCore.Registry
-import CodegenCore.AttrKit
-import LintKit.GuestBan
+module
+
+public meta import Lean
+public meta import CodegenCore.Registry
+public meta import CodegenCore.AttrKit
+public meta import LintKit.GuestBan
+
+public meta section
 
 /- PROVENANCE: moved verbatim from wasm-backend/WasmBackend/Check.lean
    (the guest gate + the @[guest]/@[guest_std] attributes) — the STD

@@ -23,8 +23,12 @@ enforcement. The default sabotage (`sabotageFirstByte`) increments byte 0
 byte is uninformative, and let the vacuity flag judge the choice.
 -/
 
-import CodegenCore.Kit
-import TestKit
+module
+
+public meta import CodegenCore.Kit
+public meta import TestKit
+
+public meta section
 
 namespace CodegenCore
 

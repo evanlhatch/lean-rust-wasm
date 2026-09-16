@@ -84,7 +84,7 @@ def parseTypeList : Nat → Nat → List Char → Option (List Proto.PType × Li
     match parseType tfuel cs with
     | none => none
     | some (t, r1) =>
-      match expect ", " r1 with
+      match expect Grammar.sepTok r1 with
       | some r2 => match parseTypeList lfuel tfuel r2 with
         | some (ts, r3) => some (t :: ts, r3)
         | none => none
@@ -104,9 +104,9 @@ def parseType : Nat → List Char → Option (Proto.PType × List Char)
     | some .decimal =>
       match scanNat (cs.drop 8) with
       | some (p, r1) =>
-        match expect "," r1 with
+        match expect Grammar.commaTok r1 with
         | some r2 => match scanNat r2 with
-          | some (s, r3) => match expect ">" r3 with
+          | some (s, r3) => match expect Grammar.gtTok r3 with
             | some r4 => withNull (.decimal p s) r4
             | none => none
           | none => none
@@ -114,15 +114,15 @@ def parseType : Nat → List Char → Option (Proto.PType × List Char)
       | none => none
     | some .list =>
       match parseType fuel (cs.drop 5) with
-      | some (e, r1) => match expect ">" r1 with
+      | some (e, r1) => match expect Grammar.gtTok r1 with
         | some r2 => withNull (.list e) r2
         | none => none
       | none => none
     | some .map =>
       match parseType fuel (cs.drop 4) with
-      | some (k, r1) => match expect ", " r1 with
+      | some (k, r1) => match expect Grammar.sepTok r1 with
         | some r2 => match parseType fuel r2 with
-          | some (v, r3) => match expect ">" r3 with
+          | some (v, r3) => match expect Grammar.gtTok r3 with
             | some r4 => withNull (.map k v) r4
             | none => none
           | none => none
@@ -131,11 +131,11 @@ def parseType : Nat → List Char → Option (Proto.PType × List Char)
     | some .struct =>
       -- the emitter prints `struct<>` for the empty field list; parseTypeList
       -- needs ≥1 element, so the empty case is peeled off here
-      match expect ">" (cs.drop 7) with
+      match expect Grammar.gtTok (cs.drop 7) with
       | some r2 => withNull (.struct []) r2
       | none =>
         match parseTypeList (cs.length + 1) fuel (cs.drop 7) with
-        | some (fs, r1) => match expect ">" r1 with
+        | some (fs, r1) => match expect Grammar.gtTok r1 with
           | some r2 => withNull (.struct fs) r2
           | none => none
         | none => none

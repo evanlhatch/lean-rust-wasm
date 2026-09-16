@@ -1,5 +1,8 @@
 name = "GuestlangStd"
-defaultTargets = ["GuestlangStd"]
+defaultTargets = ["GuestlangStd", "GuestlangStdTests"]
+
+# LSpec's @[test_driver]-registered runner for `lake test`.
+testDriver = "GuestlangStdTests"
 
 # The COMPILED stdlib + the guest implementations of the schema's
 # functions. Depends on schema-lang (the TYPES — Demo's records) and
@@ -25,6 +28,14 @@ path = "../codegen-core"
 name = "LintKit"
 path = "../LintKit"
 
+[[require]]
+name = "TestKit"
+path = "../TestKit"
+
 [[lean_lib]]
 name = "GuestlangStd"
 roots = ["GuestlangStd"]
+
+[[lean_exe]]
+name = "GuestlangStdTests"
+root = "Tests.Main"

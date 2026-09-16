@@ -49,14 +49,23 @@ Driving decisions:
   page — the same choice `SchemaLang.Docs` made.
 -/
 
-import Lean
-import SchemaLang.Item
-import SchemaLang.Diff
-import SchemaLang.Validate
-import SchemaLang.Session
-import SchemaLang.Emit.GenCtx
-import Machines.Session
-import Machines.Sim
+module
+
+public import Lean
+-- `import all` (W5.4): module-mode oleans carry module docstrings at the
+-- server/private level only (`Lean.DocString.Extension.moduleDocExt`
+-- exports `exported := #[]`); a plain import's exported level leaves
+-- `Lean.getModuleDoc?` empty and the capture renders gap markers. The
+-- private level includes them, and `import all` selects it.
+import all SchemaLang.Item
+import all SchemaLang.Diff
+import all SchemaLang.Validate
+import all SchemaLang.Session
+public import SchemaLang.Emit.GenCtx
+import all Machines.Session
+import all Machines.Sim
+
+public meta section
 
 open Lean Elab Term
 
@@ -75,7 +84,7 @@ def moduleDocBlock (env : Lean.Environment) (mod : Lean.Name) : Option String :=
     Pure over the extraction results — this is the function the negative
     controls exercise (empty manifest, doc-less module) without needing
     an environment. -/
-def pageOf (mods : List (Lean.Name × Option String)) : String :=
+meta def pageOf (mods : List (Lean.Name × Option String)) : String :=
   let intro :=
     "# Lean internals — module documentation\n\n" ++
     "Generated from the elaborated environment (`Lean.getModuleDoc?`) at the\n" ++
@@ -90,7 +99,7 @@ def pageOf (mods : List (Lean.Name × Option String)) : String :=
   (String.intercalate "\n\n" (intro :: secs)) ++ "\n"
 
 /-- The extraction: fold the manifest over the environment. -/
-def moduleDocsOf (env : Lean.Environment) (mods : List Lean.Name) : String :=
+meta def moduleDocsOf (env : Lean.Environment) (mods : List Lean.Name) : String :=
   pageOf (mods.map fun m => (m, moduleDocBlock env m))
 
 /-! ## The manifest (data — extensible by one line) -/
@@ -118,7 +127,7 @@ replay broke and the page would be a list of gap markers. Fail the
 build with the diagnosis instead. (A doc comment cannot sit between
 `open … in` and `elab` — this is a block comment.)
 -/
-private def capturePage : TermElabM Expr := do
+private meta def capturePage : TermElabM Expr := do
   let env ← getEnv
   match Lean.getModuleDoc? env `SchemaLang.Item with
   | none =>
@@ -128,6 +137,12 @@ private def capturePage : TermElabM Expr := do
   | some _ => return .lit (.strVal (moduleDocsOf env internalsModules))
 
 elab "capturedInternalsPage" : term => capturePage
+
+end SchemaLang.ModuleDocs
+end -- public meta section
+
+@[expose] public section
+namespace SchemaLang.ModuleDocs
 
 /-- The captured page — plain data by the time the emitter reads it. -/
 def internalsPage : String := capturedInternalsPage

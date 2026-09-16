@@ -5,8 +5,12 @@
   env-lint via `LintKit.mountAsLinter`.
 -/
 
-import Lean
-import LintKit.DeclCheck
+module
+
+public import Lean
+public import LintKit.DeclCheck
+
+@[expose] public section
 
 open Lean
 open Lean.Elab

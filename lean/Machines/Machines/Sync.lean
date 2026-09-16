@@ -34,9 +34,15 @@ so no Core change was needed); the hand-written `MpscEvent`/`mpscSpec`
 (assembler-side) copies are gone, replaced by `mpsc.Label`/`mpsc.spec`.
 -/
 
-import Machines.Core
-import Machines.Tactics
-import Machines.Dsl
+module
+
+public import Machines.Core
+public import Machines.Tactics
+public import Machines.Dsl
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines.Sync
 
@@ -303,3 +309,5 @@ theorem latch_blocked_wait_unblocks (cap : Nat) (s : LatchState)
   · simp [Machine.enabled, latch, latch.spec, hone]
 
 end Machines.Sync
+
+end -- @[expose] public section

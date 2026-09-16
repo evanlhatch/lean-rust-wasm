@@ -32,10 +32,23 @@ row in `scalarGrammar`, and both directions follow.
 W5.3 phase 2a extends the same pattern to the REL grammar's name tokens
 (join types, set ops, sort directions) and the literal-type names: one table
 per family below, emitter renderer and decoder parser both derived from it.
+
+W5.3 phase 2b adds the LINE-SHAPE grammar (the last section below): the
+separators, keywords, section markers, and indent rule as shared `abbrev`
+tokens, plus the `ExtKind` (extension block) and `CastFbCtor` (cast failure
+behavior) mini-tables. The decoder's `expect`/`startsWith` sites and the
+emitter's `++`-chains both name these constants; the generic prefix kit
+(`expect_self`) plus the per-shape inversion lemmas in `Decode.Plan` prove
+the pairing. Deliberately still hand-coded (resistant sites, noted there):
+char-level `match` patterns (quoted escapes, `'_'`, `'@'`, `'.'`, `'('`,
+`'$'`), the literal value words `null`/`true`/`false` (pattern-matched in
+`parseLiteral`), and `relWidth` vs `relWidthD` (partial-`Except` vs fueled
+structural — the agreement is sweep-witnessed, not proved).
 -/
 
 import Substrait.Proto.Type
 import Substrait.Proto.Rel
+import Substrait.Proto.Plan
 
 namespace Substrait.Grammar
 
@@ -476,5 +489,270 @@ def literalTypeToken (lt : Proto.LiteralType) : String :=
   match literalScalarCtor lt with
   | some c => ScalarCtor.prefix c
   | none => "null"
+
+/-! ## The line shapes (W5.3 phase 2b)
+
+Phase 2a single-sourced the ENUMERATED name tokens. The remaining
+hand-mirror was the LINE-SHAPE grammar: separators, keywords, section
+markers, and the indent rule, spelled inline on both sides —
+`Emit/Text.lean` wrote `" => "`/`"  "`/`"Filter["` in `++`-chains while
+`Decode/*` re-spelled them at `expect`/`startsWith`/`drop` sites. Those
+literals now live HERE, once.
+
+Everything in this section is an `abbrev` (reducible): the decoder's
+`expect tok` / `startsWith … tok` and the emitter's `… ++ tok ++ …` both
+unfold to the same literal, so the pre-existing inversion proofs (which
+already compute through the literals) keep working, and the generic prefix
+kit (`Decode.expect_self` / `Decode.startsWith_self`) IS the pairing lemma —
+the decoder consumes exactly what the emitter writes because both sides name
+THIS constant. Character-level `match` patterns (quoted escapes, `_`, `'@'`,
+the `'.'`-dotted names, the `'('`/`'$'` heads, the nullability `'?'` of
+`withNull`, `splitTopLevel`'s `',' ' '` pair) cannot consume a constant —
+those stay literal, noted at their sites. -/
+
+/-- The `", "` item separator (type arguments, call arguments, column lists,
+    grouping keys). -/
+abbrev sepTok : String := ", "
+
+/-- The implicit output clause ` => ` (leading space included — the emitter's
+    `outputClause` returns the whole clause; the decoder `expect`s the whole
+    token). -/
+abbrev arrowTok : String := " => "
+
+/-- Read's explicit-output clause ` +> `. -/
+abbrev plusArrowTok : String := " +> "
+
+/-- The explicit-emit mapping pipe ` |> ` (the `+>` tail). -/
+abbrev pipeTok : String := " |> "
+
+/-- The cast arrow `::`. -/
+abbrev castTok : String := "::"
+
+/-- The `if_then` pair arrow ` -> `. -/
+abbrev ifArrowTok : String := " -> "
+
+/-- The `if_then` else arm `_ -> `. -/
+abbrev ifElseTok : String := "_ -> "
+
+/-- The empty-group / empty-schema marker `_` (aggregate/fetch group args,
+    Read's missing-schema column list). The decoder's `['_']` char test in
+    `parseReadCols` cannot consume a constant — the string-level uses are
+    the shareable ones. -/
+abbrev emptyGroupTok : String := "_"
+
+/-- The empty-group clause `_ => ` (aggregate/fetch headers with no groups) —
+    the decoder-side scan of the fusion `emptyGroupTok ++ arrowTok`. -/
+abbrev emptyGroupArrowTok : String := "_ => "
+
+/-- The emitter writes `_` then the ` => ` clause; the decoder scans the
+    fusion. The two spellings agree — THE pairing fact of the empty-group
+    lane. -/
+theorem emptyGroupTok_arrowTok : emptyGroupTok ++ arrowTok = emptyGroupArrowTok := rfl
+
+/-- The enum-token prefix `&` (`&Inner`, `&UnionAll`, `&AscNullsFirst`). -/
+abbrev ampTok : String := "&"
+
+/-- The sort-field direction separator `, &`. -/
+abbrev sortAmpTok : String := ", &"
+
+/-- The named-argument `=` (Fetch's `limit=`/`offset=`). -/
+abbrev eqTok : String := "="
+
+/-- Fetch's argument names (the emitter writes `name=value`; the decoder
+    `lookup`s the names). -/
+abbrev fetchLimitName : String := "limit"
+abbrev fetchOffsetName : String := "offset"
+
+/-- The type-ascription colon `:` (named columns, literal/call suffixes,
+    extension entries). -/
+abbrev colonTok : String := ":"
+
+/-- The extension-entry colon-space `: ` (the entry lines' name separator;
+    the decoder consumes it as `colonTok` + one dropped char — see
+    `parseUrnEntry`). -/
+abbrev colonSpTok : String := ": "
+
+/-- The two spellings of the entry colon agree. -/
+theorem colonTok_sp : colonTok ++ " " = colonSpTok := rfl
+
+/-- The field-ref sigil `$`. -/
+abbrev dollarTok : String := "$"
+
+/-- The parameterized-type close `>`. -/
+abbrev gtTok : String := ">"
+
+/-- The decimal's inner separator `,` — no space, the ONE place `sepTok`
+    does not apply (the decoder's decimal arm expects exactly this). -/
+abbrev commaTok : String := ","
+
+/-- The version/dotted-name dot `.`. The dotted-table-name decoder matches
+    the `'.'` CHAR (a resistant pattern site); the version line's
+    `expect dotTok` consumes this constant. -/
+abbrev dotTok : String := "."
+
+/-- Call/grouping parens. -/
+abbrev lparenTok : String := "("
+abbrev rparenTok : String := ")"
+
+/-- The rel-header keywords (the emitter's `relLines` writes them; the
+    decoder's `parseHeader`/`parsePlanRels` `startsWith`-matches and drops
+    `kw*.length`). -/
+abbrev kwRead : String := "Read["
+abbrev kwFilter : String := "Filter["
+abbrev kwProject : String := "Project["
+abbrev kwAggregate : String := "Aggregate["
+abbrev kwSort : String := "Sort["
+abbrev kwFetch : String := "Fetch["
+abbrev kwJoin : String := "Join["
+abbrev kwSet : String := "Set["
+abbrev kwCross : String := "Cross["
+abbrev kwRoot : String := "Root["
+/-- The if_then call head. -/
+abbrev kwIfThen : String := "if_then("
+
+/-- The plan section markers. -/
+abbrev sectionExtensions : String := "=== Extensions"
+abbrev sectionPlan : String := "=== Plan"
+/-- The version header prefix (trailing space included). -/
+abbrev versionPfx : String := "=== Version "
+/-- The URNs block header. -/
+abbrev urnsHeader : String := "URNs:"
+
+/-- The indent unit: two spaces per rel-nesting level. The emitter
+    accumulates it (`indent ++ indentUnit` in `relLines`/`relationsLines`);
+    the decoder counts it (`ind + indentUnit.length` in `parseRelTree`);
+    the extension entries are indented by one unit. -/
+abbrev indentUnit : String := "  "
+
+/-- URN entry prefix (`  @`) and declaration entry prefix (`  #`). -/
+abbrev urnEntryPfx : String := indentUnit ++ "@"
+abbrev declEntryPfx : String := indentUnit ++ "#"
+/-- The optional version sub-lines' prefixes. -/
+abbrev producerPfx : String := indentUnit ++ "producer: "
+abbrev gitHashPfx : String := indentUnit ++ "git_hash: "
+
+/-- The binary-literal value sentinel `{{binary}}` (the emitter renders every
+    binary payload as this — `show_literal_binaries=false` — and the decoder
+    scans it back). NOT a name-table row: a VALUE sentinel, not a token
+    family (exactly one row, carries no payload) — shared here so the two
+    spellings cannot drift. -/
+abbrev binarySentinel : String := "{{binary}}"
+
+/-! ### The extension-declaration kinds (the `=== Extensions` block table)
+
+The three declaration kinds were mirrored THREE ways: the emitter's
+`declKindNum` (decl → 0/1/2) plus the literal block headers, and the
+decoder's `kindOf` if-chain (header → 0/1/2). One table now: the kind, its
+block header, its `Ctx` number. -/
+
+/-- The extension-declaration kinds: the `=== Extensions` section's three
+    blocks. -/
+inductive ExtKind where
+  | function | extType | typeVariation
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- The block header line of each kind. -/
+def ExtKind.header : ExtKind → String
+  | .function => "Functions:"
+  | .extType => "Types:"
+  | .typeVariation => "Type Variations:"
+
+/-- The kind's number in the emitter's `Ctx.extensions` tuples. -/
+def ExtKind.num : ExtKind → Nat
+  | .function => 0 | .extType => 1 | .typeVariation => 2
+
+/-- The declaration of a kind (the decoder's `parseDeclEntry` target). -/
+def ExtKind.toDecl (k : ExtKind) (urnRef anchor : Nat) (nm : String) :
+    Proto.ExtensionDeclaration :=
+  match k with
+  | .function => .function urnRef anchor nm
+  | .extType => .extType urnRef anchor nm
+  | .typeVariation => .typeVariation urnRef anchor nm
+
+/-- The kind of a declaration (the emitter's `declKindNum`, ctor-indexed). -/
+def ExtKind.ofDecl : Proto.ExtensionDeclaration → ExtKind
+  | .function _ _ _ => .function
+  | .extType _ _ _ => .extType
+  | .typeVariation _ _ _ => .typeVariation
+
+/-- ofDecl ∘ toDecl = id. -/
+theorem ExtKind.ofDecl_toDecl (k : ExtKind) (u a : Nat) (nm : String) :
+    ofDecl (k.toDecl u a nm) = k := by
+  cases k <;> rfl
+
+/-- The kind table. -/
+def extKindGrammar : List ExtKind := [.function, .extType, .typeVariation]
+
+theorem extKindGrammar_complete (k : ExtKind) : k ∈ extKindGrammar := by
+  cases k <;> simp [extKindGrammar]
+
+theorem extKindGrammar_header_nodup : (extKindGrammar.map ExtKind.header).Nodup := by
+  decide
+
+theorem extKindGrammar_num_nodup : (extKindGrammar.map ExtKind.num).Nodup := by
+  decide
+
+/-- The decoder's block-header lookup over the table. -/
+def ExtKind.ofHeader (l : String) : Option ExtKind :=
+  extKindGrammar.find? (fun k => k.header == l)
+
+/-- Self-lookup: a kind's own header parses back to it. -/
+theorem ExtKind.ofHeader_self (k : ExtKind) : ofHeader k.header = some k :=
+  findName_self header extKindGrammar extKindGrammar_header_nodup k
+    (extKindGrammar_complete k)
+
+/-- The kind-number lookup (the `Ctx` tuples' inverse). -/
+def ExtKind.ofNum (n : Nat) : Option ExtKind :=
+  extKindGrammar.find? (fun k => k.num == n)
+
+theorem ExtKind.ofNum_self (k : ExtKind) : ofNum k.num = some k := by
+  cases k <;> rfl
+
+/-- Negative control: no kind has the empty header (the decoder's block loop
+    stops at the first non-header line). -/
+theorem ExtKind.ofHeader_empty : ExtKind.ofHeader "" = none := by decide
+
+/-! ### The cast failure-behavior tokens
+
+The cast suffix `(e)::?t` / `(e)::!t` was a hand-mirrored pair: the
+emitter's `match fb with | .returnNull => "?" | .throwException => "!"`,
+the decoder's char match. Two emit-able rows (`unspecified` has no text
+form — the decoder rejects the bare `::t`), one table. -/
+
+/-- The emit-able cast failure behaviors. -/
+inductive CastFbCtor where
+  | returnNull | throwException
+deriving Repr, BEq, DecidableEq, Inhabited
+
+/-- Build the proto cast failure behavior for a ctor. -/
+def CastFbCtor.toBehavior : CastFbCtor → Proto.CastFailureBehavior
+  | .returnNull => .returnNull
+  | .throwException => .throwException
+
+/-- Recover the ctor from a proto behavior (`unspecified`/`unspecified`-like
+    rows → none — they are unemittable). -/
+def CastFbCtor.ofBehavior : Proto.CastFailureBehavior → Option CastFbCtor
+  | .returnNull => some .returnNull
+  | .throwException => some .throwException
+  | _ => none
+
+/-- ofBehavior ∘ toBehavior = some. -/
+theorem CastFbCtor.ofBehavior_toBehavior (c : CastFbCtor) :
+    ofBehavior c.toBehavior = some c := by
+  cases c <;> rfl
+
+/-- The wire token (`?` / `!`). -/
+def CastFbCtor.token : CastFbCtor → String
+  | .returnNull => "?"
+  | .throwException => "!"
+
+/-- The cast-failure table. -/
+def castFbGrammar : List CastFbCtor := [.returnNull, .throwException]
+
+theorem castFbGrammar_complete (c : CastFbCtor) : c ∈ castFbGrammar := by
+  cases c <;> simp [castFbGrammar]
+
+theorem castFbGrammar_token_nodup : (castFbGrammar.map CastFbCtor.token).Nodup := by
+  decide
 
 end Substrait.Grammar

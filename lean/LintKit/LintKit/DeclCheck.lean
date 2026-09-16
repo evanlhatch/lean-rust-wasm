@@ -19,8 +19,12 @@ Deliberate exclusions: the check is PURE — both mounts supply the
 environment. Side effects a gate needs beyond the verdict (e.g. GuestGate's
 guest-mark registry write) stay in the attribute handler, outside the check.
 -/
-import Lean
-import LintKit.Basic
+module
+
+public meta import Lean
+public import LintKit.Basic
+
+public meta section
 
 open Lean Meta Linter EnvLinter
 

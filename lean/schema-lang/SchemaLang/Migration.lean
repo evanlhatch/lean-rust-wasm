@@ -26,7 +26,11 @@ breaking change needs one; the verdict machinery below is exercised in
 `Tests/Main.lean` (`migrationChecks`).
 -/
 
-import SchemaLang.Diff
+module
+
+public import SchemaLang.Diff
+
+@[expose] public section
 
 namespace SchemaLang
 

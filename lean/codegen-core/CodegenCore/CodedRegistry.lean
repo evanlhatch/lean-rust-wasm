@@ -16,8 +16,12 @@ byte-tie pins the emitted bytes).
 First consumer: faults' E-code allocation (`E100 + position`).
 -/
 
-import CodegenCore.DataRegistry
-import CodegenCore.Registry
+module
+
+public import CodegenCore.DataRegistry
+public import CodegenCore.Registry
+
+@[expose] public section
 
 namespace CodegenCore
 

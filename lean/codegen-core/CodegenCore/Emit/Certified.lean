@@ -21,7 +21,11 @@ field + `Emitter.runCertified` — new certified emitters should be plain
 field, so both views agree.
 -/
 
-import CodegenCore.Emit.Core
+module
+
+public import CodegenCore.Emit.Core
+
+@[expose] public section
 
 namespace CodegenCore.Emit
 

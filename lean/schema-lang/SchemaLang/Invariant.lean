@@ -32,8 +32,12 @@ VExpr (Validate's closed fragment governs — extend THERE, not here);
 no emission logic (Emit.Invariant owns it).
 -/
 
-import Lean
-import SchemaLang.Validate
+module
+
+public import Lean
+public import SchemaLang.Validate
+
+@[expose] public section
 
 namespace SchemaLang
 

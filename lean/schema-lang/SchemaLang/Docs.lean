@@ -31,10 +31,14 @@ Driving decisions:
   the same determinism discipline as the WIT world.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Emit.Wit
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Emit.Wit
+
+@[expose] public section
 
 namespace SchemaLang.Docs
 

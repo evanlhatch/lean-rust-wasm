@@ -29,7 +29,11 @@ v1 payloads are plain types).
 -/
 
 
-import Lean
+module
+
+public import Lean
+
+@[expose] public section
 open Lean
 
 namespace SchemaLang

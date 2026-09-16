@@ -9,7 +9,11 @@ a uniform argv parser so all gate exes accept `--check` / `--update` /
 core-only packages (lakefile comment) can require TestKit.
 -/
 
-import TestKit.Harness
+module
+
+public import TestKit.Harness
+
+@[expose] public section
 
 namespace TestKit.GateKit
 

@@ -1,45 +1,48 @@
 /- SchemaLang — the schema language: types, items, resolution, diff,
    emission, codecs, schema-indexed fields, reification, linearity,
    Vortex lowering. -/
-import SchemaLang.Ty
-import SchemaLang.Item
-import SchemaLang.Wf
-import SchemaLang.Diff
-import SchemaLang.Migration
-import SchemaLang.Snapshot
-import SchemaLang.Emit.Wit
-import SchemaLang.Emit.Rust
-import SchemaLang.Delta
-import SchemaLang.Emit.Registry
-import SchemaLang.Docs
-import SchemaLang.ModuleDocs
-import SchemaLang.Codec
-import SchemaLang.EnumWire
-import SchemaLang.CodecValue
-import SchemaLang.Layout
-import SchemaLang.Gen
-import SchemaLang.Field
-import SchemaLang.Validate
-import SchemaLang.ExprLang
-import SchemaLang.Subschema
-import SchemaLang.Vortex.DType
-import SchemaLang.Vortex.Lower
-import SchemaLang.Vortex.Emit
-import SchemaLang.Vortex.ExtDType
-import SchemaLang.Vortex.Encoding
-import SchemaLang.Vortex.Batch
-import SchemaLang.Vortex.DataFusion
-import SchemaLang.Pipeline
-import SchemaLang.OrderMachine
-import SchemaLang.Emit.Machine
-import SchemaLang.Meta.Derive
-import SchemaLang.Meta.Gen
-import SchemaLang.Invariant
-import SchemaLang.Emit.Invariant
-import SchemaLang.Update
-import SchemaLang.TickCascade
-import SchemaLang.Emit.Update
-import SchemaLang.Emit.Typestate
-import SchemaLang.Trace
-import SchemaLang.Session
-import SchemaLang.Debug
+module
+
+public import SchemaLang.Ty
+public import SchemaLang.Item
+public import SchemaLang.Wf
+public import SchemaLang.Diff
+public import SchemaLang.Migration
+public import SchemaLang.Snapshot
+public import SchemaLang.Emit.Wit
+public import SchemaLang.Emit.Rust
+public import SchemaLang.Delta
+public import SchemaLang.Emit.Registry
+public import SchemaLang.Docs
+public import SchemaLang.ModuleDocs
+public import SchemaLang.Codec
+public import SchemaLang.EnumWire
+public import SchemaLang.CodecValue
+public import SchemaLang.Layout
+public import SchemaLang.Gen
+public import SchemaLang.Field
+public import SchemaLang.Validate
+public import SchemaLang.ExprLang
+public import SchemaLang.Subschema
+public import SchemaLang.Vortex.DType
+public import SchemaLang.Vortex.Lower
+public import SchemaLang.Vortex.Emit
+public import SchemaLang.Vortex.ExtDType
+public import SchemaLang.Vortex.Encoding
+public import SchemaLang.Vortex.Batch
+public import SchemaLang.Vortex.DataFusion
+public import SchemaLang.Pipeline
+public import SchemaLang.OrderMachine
+public import SchemaLang.Emit.Machine
+public import SchemaLang.Meta.Derive
+public import SchemaLang.Meta.Gen
+public import SchemaLang.Invariant
+public import SchemaLang.Emit.Invariant
+public import SchemaLang.Obligation
+public import SchemaLang.Update
+public import SchemaLang.TickCascade
+public import SchemaLang.Emit.Update
+public import SchemaLang.Emit.Typestate
+public import SchemaLang.Trace
+public import SchemaLang.Session
+public import SchemaLang.Debug

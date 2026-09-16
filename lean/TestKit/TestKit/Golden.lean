@@ -11,7 +11,11 @@ CI regenerates and diffs; a mismatch is drift, not a test you skip. The
 `--update` path exists for deliberate changes only.
 -/
 
-import TestKit.Harness
+module
+
+public import TestKit.Harness
+
+@[expose] public section
 
 namespace TestKit.Golden
 

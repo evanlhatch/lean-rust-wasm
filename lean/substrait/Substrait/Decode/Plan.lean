@@ -3,6 +3,14 @@
 
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
+W5.3 phase 2b: the extensions/version line shapes read the shared
+`Substrait.Grammar` tokens and the `ExtKind` block table (`kindOf`'s
+if-chain is `ExtKind.ofHeader`; `parseDeclEntry` takes the kind row); the
+char-headed entry bodies are top-level (`parseUrnEntryBody`/
+`parseDeclEntryBody`/`parseDeclEntryAt` — the `withNull` discipline) so the
+row inversions `parseUrnEntry_urnLine` / `parseDeclEntry_declLine` /
+`parseVersion_versionLines` / `parseRootNames_emitted` reduce by equation
+lemma.
 -/
 import Substrait.Decode.Rel
 
@@ -10,79 +18,82 @@ namespace Substrait.Decode
 
 -- ── the plan driver ─────────────────────────────────────────────────────────
 
-/-- `@  1: urn` — a URN entry (anchors right-justified to width 3). -/
-def parseUrnEntry (cs : List Char) : Option Proto.SimpleExtensionUrn :=
-  let cs := cs.dropWhile (· == ' ')
-  match cs with
+/-- The `'@'`-headed URN entry body — top-level so the equation lemmas
+    exist (the `withNull` discipline: the inversion proofs reduce it via
+    `parseUrnEntryBody.eq_1`). The row shape is the emitter's
+    `Emit.Text.urnLine` (inverted by `parseUrnEntry_urnLine` below). -/
+def parseUrnEntryBody : List Char → Option Proto.SimpleExtensionUrn
   | '@' :: rest =>
-    let rest := rest.dropWhile (· == ' ')
-    match scanNat rest with
-    | some (a, r1) =>
-      match expect ":" r1 with
-      | some r2 => some { extensionUrnAnchor := a, urn := String.ofList (r2.drop 1) }
+      match scanNat (rest.dropWhile (· == ' ')) with
+      | some (a, r1) =>
+        match expect Grammar.colonTok r1 with
+        | some r2 => some { extensionUrnAnchor := a, urn := String.ofList (r2.drop 1) }
+        | none => none
       | none => none
-    | none => none
   | _ => none
 
-/-- `#  1 @  1: name` — a declaration entry. -/
-def parseDeclEntry (kind : Nat) (cs : List Char) : Option Proto.ExtensionDeclaration :=
-  let cs := cs.dropWhile (· == ' ')
-  match cs with
-  | '#' :: rest =>
-    let rest := rest.dropWhile (· == ' ')
-    match scanNat rest with
-    | some (anchor, r1) =>
-      let r1 := r1.dropWhile (· == ' ')
-      match r1 with
-      | '@' :: r2 =>
-        let r2 := r2.dropWhile (· == ' ')
-        match scanNat r2 with
-        | some (urnRef, r3) =>
-          match expect ":" r3 with
-          | some r4 =>
-            let nm := String.ofList (r4.drop 1)
-            match kind with
-            | 0 => some (.function urnRef anchor nm)
-            | 1 => some (.extType urnRef anchor nm)
-            | _ => some (.typeVariation urnRef anchor nm)
-          | none => none
+/-- `@  1: urn` — a URN entry (anchors right-justified to width 3): skip
+    leading spaces, then the body. -/
+def parseUrnEntry (cs : List Char) : Option Proto.SimpleExtensionUrn :=
+  parseUrnEntryBody (cs.dropWhile (· == ' '))
+
+/-- The mid-entry `'@'` (the urn-reference separator of a declaration
+    entry) — top-level for the equation lemmas. -/
+def parseDeclEntryAt (kind : Grammar.ExtKind) (anchor : Nat) :
+    List Char → Option Proto.ExtensionDeclaration
+  | '@' :: r2 =>
+      match scanNat (r2.dropWhile (· == ' ')) with
+      | some (urnRef, r3) =>
+        match expect Grammar.colonTok r3 with
+        | some r4 => some (kind.toDecl urnRef anchor (String.ofList (r4.drop 1)))
         | none => none
-      | _ => none
-    | none => none
+      | none => none
   | _ => none
+
+/-- The `'#'`-headed declaration entry body — top-level for the equation
+    lemmas (inverted by `parseDeclEntry_declLine` below). -/
+def parseDeclEntryBody (kind : Grammar.ExtKind) :
+    List Char → Option Proto.ExtensionDeclaration
+  | '#' :: rest =>
+      match scanNat (rest.dropWhile (· == ' ')) with
+      | some (anchor, r1) => parseDeclEntryAt kind anchor (r1.dropWhile (· == ' '))
+      | none => none
+  | _ => none
+
+/-- `#  1 @  1: name` — a declaration entry, built via the shared
+    `Grammar.ExtKind` table row. -/
+def parseDeclEntry (kind : Grammar.ExtKind) (cs : List Char) : Option Proto.ExtensionDeclaration :=
+  parseDeclEntryBody kind (cs.dropWhile (· == ' '))
 
 /-- The extensions section: URN entries, then Functions/Types/Type
     Variations blocks. Returns the plan fields and the FnCtx. -/
 def parseExtensions : List String → Option (List Proto.SimpleExtensionUrn × List Proto.ExtensionDeclaration × FnCtx × List String)
   | [] => none
-  | "URNs:" :: rest =>
-    let urns := rest.takeWhile (fun l => l.startsWith "  @")
-    let urnVals := urns.map (parseUrnEntry ·.toList)
-    if urnVals.any (· == none) then none
-    else parseDeclBlocks [] [] (rest.length + 1) (rest.drop urns.length) |>.map fun (ds, rest') =>
-      (urnVals.filterMap id, ds, fnCtxOf ds, rest')
-  | rest => parseDeclBlocks [] [] (rest.length + 1) rest |>.map fun (ds, rest') =>
+  | l :: rest =>
+    if l == Grammar.urnsHeader then
+      let urns := rest.takeWhile (fun l => l.startsWith Grammar.urnEntryPfx)
+      let urnVals := urns.map (parseUrnEntry ·.toList)
+      if urnVals.any (· == none) then none
+      else parseDeclBlocks [] [] (rest.length + 1) (rest.drop urns.length) |>.map fun (ds, rest') =>
+        (urnVals.filterMap id, ds, fnCtxOf ds, rest')
+    else parseDeclBlocks [] [] ((l :: rest).length + 1) (l :: rest) |>.map fun (ds, rest') =>
       ([], ds, fnCtxOf ds, rest')
 where
   /-- The function declarations → (name, anchor) pairs — the FnCtx both
       sections build (one helper, used twice). -/
   fnCtxOf (ds : List Proto.ExtensionDeclaration) : FnCtx :=
     ds.filterMap fun d => match d with | .function _ a n => some (n, a) | _ => none
-  /-- The block header → its declaration kind number (0 = functions, 1 =
-      types, 2 = type variations) — one table instead of three arms. -/
-  kindOf (l : String) : Option Nat :=
-    if l == "Functions:" then some 0
-    else if l == "Types:" then some 1
-    else if l == "Type Variations:" then some 2
-    else none
+  /-- The block loop: the header line → its `Grammar.ExtKind` row (the SAME
+      table the emitter's `kindSection` renders from), then that kind's
+      entries. -/
   parseDeclBlocks (acc : List Proto.ExtensionDeclaration) (curKind : List Proto.ExtensionDeclaration) :
       Nat → List String → Option (List Proto.ExtensionDeclaration × List String)
     | 0, _ => none
     | bfuel + 1, l :: rest =>
-      match kindOf l with
+      match Grammar.ExtKind.ofHeader l with
       | none => some (acc, l :: rest)
       | some k =>
-          let es := rest.takeWhile (fun l => l.startsWith "  #")
+          let es := rest.takeWhile (fun l => l.startsWith Grammar.declEntryPfx)
           let vs := es.map (parseDeclEntry k ·.toList)
           if vs.any (· == none) then none
           else parseDeclBlocks (acc ++ vs.filterMap id) curKind bfuel (rest.drop es.length)
@@ -91,22 +102,24 @@ where
 /-- The `=== Version X.Y.Z` header plus optional producer/git_hash lines. -/
 def parseVersion : List String → Option (Proto.Version × List String)
   | l :: rest =>
-    match expect "=== Version " l.toList with
+    match expect Grammar.versionPfx l.toList with
     | some r1 =>
       match scanNat r1 with
-      | some (mj, r2) => match expect "." r2 with
+      | some (mj, r2) => match expect Grammar.dotTok r2 with
         | some r3 => match scanNat r3 with
-          | some (mn, r4) => match expect "." r4 with
+          | some (mn, r4) => match expect Grammar.dotTok r4 with
             | some r5 => match scanNat r5 with
               | some (pt, []) =>
                 let producer := match rest with
                   | p :: _ =>
-                    if p.startsWith "  producer: " then [p.drop 12] else []
+                    if p.startsWith Grammar.producerPfx then
+                      [p.drop Grammar.producerPfx.length] else []
                   | _ => []
                 let afterP := if producer.isEmpty then rest else rest.drop 1
                 let git := match afterP with
                   | g :: _ =>
-                    if g.startsWith "  git_hash: " then [g.drop 12] else []
+                    if g.startsWith Grammar.gitHashPfx then
+                      [g.drop Grammar.gitHashPfx.length] else []
                   | _ => []
                 let afterG := if git.isEmpty then afterP else afterP.drop 1
                 some ({ majorNumber := mj, minorNumber := mn, patchNumber := pt
@@ -119,24 +132,32 @@ def parseVersion : List String → Option (Proto.Version × List String)
     | none => none
   | [] => none
 
+/-- The `Root[names]` line's name list (the `withClause` row shape: the
+    emitter writes `kwRoot ++ sep sepTok (names.map name) ++ "]"`; the
+    takeWhile strips the closing `]` — a quoted name containing `]` splits
+    wrongly, the documented v0 limitation). Inverted by
+    `parseRootNames_emitted` below. -/
+def parseRootNames (cs : List Char) : Option (List String) :=
+  let inner := (cs.drop Grammar.kwRoot.length).takeWhile (· ≠ ']')
+  let names := (splitTopLevel inner 0 []).map fun item =>
+    (scanName item).map (·.1)
+  if names.any (· == none) then none else some (names.filterMap id)
+
 /-- The `=== Plan` body: plan rels separated by blank lines. A `Root[…]`
-    line takes an indented child. -/
+    line takes an indented child (one `Grammar.indentUnit`). -/
 def parsePlanRels (ctx : FnCtx) : Nat → List String → Option (List Proto.PlanRel)
   | _, [] => some []
   | 0, _ => none
   | fuel + 1, "" :: rest => parsePlanRels ctx fuel rest
   | fuel + 1, l :: rest =>
-    if l.startsWith "Root[" then
-      -- names between Root[ and ]
-      let inner := (l.toList.drop 5).takeWhile (· ≠ ']')
-      let names := (splitTopLevel inner 0 []).map fun item =>
-        (scanName item).map (·.1)
-      if names.any (· == none) then none
-      else
-        match parseRelTree ctx (rest.length + 1) 2 rest with
+    if l.startsWith Grammar.kwRoot then
+      match parseRootNames l.toList with
+      | none => none
+      | some names =>
+        match parseRelTree ctx (rest.length + 1) Grammar.indentUnit.length rest with
         | some (input, rest') =>
           (parsePlanRels ctx fuel rest').map
-            (.root (names.filterMap id) input :: ·)
+            (.root names input :: ·)
         | none => none
     else
       match parseRelTree ctx (rest.length + 1) 0 (l :: rest) with
@@ -154,25 +175,29 @@ def parsePlan (text : String) : Option Proto.Plan := do
     | _ => lines
   let (version, rest1) := match lines with
     | l :: _ =>
-      if l.startsWith "=== Version" then
+      if l.startsWith Grammar.versionPfx then
         match parseVersion lines with
         | some (v, r) => (some v, r)
         | none => (none, lines)
       else (none, lines)
     | [] => (none, [])
   match rest1 with
-  | "=== Extensions" :: rest2 =>
-    let (urns, decls, fctx, rest3) ← parseExtensions rest2
-    let rest4 := match rest3 with | "" :: r => r | r => r
-    match rest4 with
-    | "=== Plan" :: rest5 =>
-      let rels ← parsePlanRels fctx (rest5.length + 1) rest5
-      some { version, extensionUrns := urns, extensions := decls, relations := rels }
-    | _ => none
-  | "=== Plan" :: rest2 =>
-    let rels ← parsePlanRels [] (rest2.length + 1) rest2
-    some { version, extensionUrns := [], extensions := [], relations := rels }
-  | _ => none
+  | l1 :: rest2 =>
+    if l1 == Grammar.sectionExtensions then
+      let (urns, decls, fctx, rest3) ← parseExtensions rest2
+      let rest4 := match rest3 with | "" :: r => r | r => r
+      match rest4 with
+      | l2 :: rest5 =>
+        if l2 == Grammar.sectionPlan then
+          let rels ← parsePlanRels fctx (rest5.length + 1) rest5
+          some { version, extensionUrns := urns, extensions := decls, relations := rels }
+        else none
+      | [] => none
+    else if l1 == Grammar.sectionPlan then
+      let rels ← parsePlanRels [] (rest2.length + 1) rest2
+      some { version, extensionUrns := [], extensions := [], relations := rels }
+    else none
+  | [] => none
 
 /-! ## relations: the inversion theorems (the last parser layer) -/
 
@@ -432,6 +457,536 @@ theorem splitAppend_map_parseNamedCol
     rw [htext]
     rw [parseNamedCol_emitted (cols[i]'hi).1 t (cols[i]'hi).2 [] hemit (by simp)]
     rw [if_neg hlast]
+
+-- ── the bindings/line-shape inversions (W5.3 phase 2b) ────────────────────
+
+/-- A digit-headed text is not a space-headed text (Nat decimal forms). -/
+private theorem toString_head_ne_space (n : Nat) : (toString n).toList.head? ≠ some ' ' := by
+  cases hn : (toString n).toList with
+  | nil => simp
+  | cons c cs =>
+    simp only [List.head?_cons]
+    have hd := toString_head_isDigit n c cs hn
+    intro hcontra
+    rw [Option.some.inj hcontra] at hd
+    exact absurd hd (by decide)
+
+/-- Dropping leading spaces of a Nat's decimal text changes nothing. -/
+private theorem dropWhile_toString (n : Nat) :
+    (toString n).toList.dropWhile (· == ' ') = (toString n).toList := by
+  have hd := toString_head_ne_space n
+  cases hs : (toString n).toList with
+  | nil => rfl
+  | cons c cs =>
+    rw [List.dropWhile_cons_of_neg]
+    rw [hs] at hd
+    simp only [List.head?_cons] at hd
+    intro hc
+    exact hd (by simp [beq_iff_eq.mp hc])
+
+/-- The emitter's space repetition, list-form. -/
+private theorem replicate_space (k : Nat) :
+    (Emit.Text.replicate " " k).toList = List.replicate k ' ' := by
+  have step : ∀ (pre : String) (n : Nat),
+      (List.range n).foldl (fun acc _ => acc ++ " ") pre =
+        pre ++ String.ofList (List.replicate n ' ') := by
+    intro pre n
+    induction n generalizing pre with
+    | zero =>
+      show pre = pre ++ String.ofList (List.replicate 0 ' ')
+      rw [List.replicate_zero, String.ofList_nil, String.append_empty]
+    | succ n ih =>
+      rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, ih pre,
+        String.append_assoc]
+      congr 1
+      rw [List.replicate_succ', String.ofList_append]
+  unfold Emit.Text.replicate
+  rw [step "" k]
+  simp [String.toList_ofList]
+
+/-- The right-justified anchor field, space-stripped, with a tail: the
+    padding is exactly the leading-space run the decoder's `dropWhile`
+    consumes, leaving the digits. -/
+private theorem rightJustify_dropWhile_append (a : Nat) (tail : List Char) :
+    ((Emit.Text.rightJustify 3 a).toList ++ tail).dropWhile (· == ' ') =
+      (toString a).toList ++ tail := by
+  unfold Emit.Text.rightJustify
+  by_cases h : (toString a).length ≥ 3
+  · rw [if_pos h]
+    cases hs : (toString a).toList with
+    | nil => exact (toString_toList_ne_nil a hs).elim
+    | cons c cs =>
+      rw [List.cons_append, List.dropWhile_cons_of_neg]
+      have hd := toString_head_isDigit a c cs hs
+      intro hc
+      rw [beq_iff_eq.mp hc] at hd
+      exact absurd hd (by decide)
+  · rw [if_neg h, String.toList_append, replicate_space, List.append_assoc]
+    rw [List.dropWhile_append_of_pos (fun x hx => by
+      rw [List.mem_replicate] at hx
+      rw [hx.2]
+      rfl)]
+    cases hs : (toString a).toList with
+    | nil => exact (toString_toList_ne_nil a hs).elim
+    | cons c cs =>
+      rw [List.cons_append, List.dropWhile_cons_of_neg]
+      have hd := toString_head_isDigit a c cs hs
+      intro hc
+      rw [beq_iff_eq.mp hc] at hd
+      exact absurd hd (by decide)
+
+/-- `expect colonTok` on a literal `:` head. -/
+private theorem expect_colon (rest : List Char) :
+    expect Grammar.colonTok (':' :: rest) = some rest := by
+  have h : (':' :: rest) = Grammar.colonTok.toList ++ rest := by
+    rw [show Grammar.colonTok.toList = [':'] from by decide]
+    rfl
+  rw [h]
+  exact expect_self _ _
+
+/-- `expect dotTok` on a literal `.` head. -/
+private theorem expect_dot (rest : List Char) :
+    expect Grammar.dotTok ('.' :: rest) = some rest := by
+  have h : ('.' :: rest) = Grammar.dotTok.toList ++ rest := by
+    rw [show Grammar.dotTok.toList = ['.'] from by decide]
+    rfl
+  rw [h]
+  exact expect_self _ _
+
+/-- The version dots' tail is not a digit (scanNat stops there). -/
+private theorem notDigitHead_dot (rest : List Char) : notDigitHead ('.' :: rest) :=
+  Or.inr ⟨'.', rest, rfl, by decide⟩
+
+/-- The entry colon tail is not a digit. -/
+private theorem notDigitHead_colon (rest : List Char) : notDigitHead (':' :: rest) :=
+  Or.inr ⟨':', rest, rfl, by decide⟩
+
+/-- The `" @"` separator tail is not a digit. -/
+private theorem notDigitHead_space (rest : List Char) : notDigitHead (' ' :: rest) :=
+  Or.inr ⟨' ', rest, rfl, by decide⟩
+
+/-- A prefix-glued line starts with its prefix (`String.startsWith` bridge
+    to the list prefix relation). -/
+theorem startsWith_append (pre s : String) : (pre ++ s).startsWith pre = true := by
+  rw [String.startsWith_string_iff, String.toList_append]
+  exact ⟨s.toList, rfl⟩
+
+/-- A prefix clash at a concrete index: the pattern's `i`-th char differs
+    from the target's, so no prefix relation. -/
+private theorem not_prefix_of_getElem_clash {p s : List Char} {i : Nat} {c d : Char}
+    (hp : p[i]? = some c) (hs : s[i]? = some d) (hcd : c ≠ d) : ¬ p <+: s := by
+  rintro ⟨t, ht⟩
+  obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.mp hp
+  have h := congrArg (fun l => l[i]?) ht
+  rw [List.getElem?_append_left hlt, hp, hs] at h
+  exact hcd (Option.some.inj h)
+
+/-- The producer/git prefixes clash at the third char (`p` vs `g`): a
+    `git_hash` line is never mistaken for a `producer` line. -/
+theorem gitHash_ne_producerPfx (s : String) :
+    (Grammar.gitHashPfx ++ s).startsWith Grammar.producerPfx = false := by
+  rw [String.startsWith_string_eq_false_iff]
+  exact not_prefix_of_getElem_clash (i := 2) (c := 'p') (d := 'g') (by decide)
+    (by
+      rw [String.toList_append,
+        show Grammar.gitHashPfx.toList = [' ', ' ', 'g', 'i', 't', '_', 'h', 'a', 's', 'h', ':', ' ']
+          from by decide]
+      rfl)
+    (by decide)
+
+/-- Dropping a string prefix at the Slice level recovers the suffix
+    (`parseVersion`'s `p.drop pfx.length` reads; the count is stated
+    separately so length-normalizing simp sets can instantiate it). -/
+theorem dropPrefix_copy (pre s : String) (n : Nat) (hn : n = pre.length) :
+    ((pre ++ s).drop n).copy = s := by
+  apply String.toList_inj.mp
+  rw [String.toList_copy_drop, String.toList_append, hn]
+  exact List.drop_left
+
+/-- **The URN-entry inversion** (`parse (emit x) = some x`, row level): the
+    emitter's `urnLine` parses back to the URN declaration. Both sides read
+    the shared row shape (`Grammar.urnEntryPfx`/`colonSpTok` +
+    `Emit.Text.rightJustify 3`). -/
+theorem parseUrnEntry_urnLine (a : Nat) (urn : String) :
+    parseUrnEntry (Emit.Text.urnLine a urn).toList =
+      some { extensionUrnAnchor := a, urn := urn } := by
+  have hline : (Emit.Text.urnLine a urn).toList =
+      ' ' :: ' ' :: '@' :: ((Emit.Text.rightJustify 3 a).toList ++
+        (':' :: ' ' :: urn.toList)) := by
+    rw [Emit.Text.urnLine]
+    repeat rw [String.toList_append]
+    rw [show Grammar.indentUnit.toList = [' ', ' '] from by decide]
+    rw [show ("@".toList) = ['@'] from by decide]
+    rw [show Grammar.colonSpTok.toList = [':', ' '] from by decide]
+    simp [List.append_assoc]
+  unfold parseUrnEntry
+  rw [hline]
+  rw [List.dropWhile_cons_of_pos (by decide), List.dropWhile_cons_of_pos (by decide),
+    List.dropWhile_cons_of_neg (by decide)]
+  rw [parseUrnEntryBody.eq_1]
+  rw [rightJustify_dropWhile_append]
+  rw [scanNat_of_toString a (':' :: ' ' :: urn.toList) (notDigitHead_colon _)]
+  dsimp only
+  rw [expect_colon]
+  dsimp only
+  simp [String.ofList_toList]
+
+/-- **The declaration-entry inversion** (`parse (emit x) = some x`, row
+    level): the emitter's `declLine` parses back to the declaration built
+    from the shared `Grammar.ExtKind` row. -/
+theorem parseDeclEntry_declLine (k : Grammar.ExtKind) (u a : Nat) (nm : String) :
+    parseDeclEntry k (Emit.Text.declLine u a nm).toList = some (k.toDecl u a nm) := by
+  have hline : (Emit.Text.declLine u a nm).toList =
+      ' ' :: ' ' :: '#' :: ((Emit.Text.rightJustify 3 a).toList ++
+        (' ' :: '@' :: ((Emit.Text.rightJustify 3 u).toList ++
+          (':' :: ' ' :: nm.toList)))) := by
+    rw [Emit.Text.declLine]
+    repeat rw [String.toList_append]
+    rw [show Grammar.indentUnit.toList = [' ', ' '] from by decide]
+    rw [show ("#".toList) = ['#'] from by decide]
+    rw [show (" @".toList) = [' ', '@'] from by decide]
+    rw [show Grammar.colonSpTok.toList = [':', ' '] from by decide]
+    simp [List.append_assoc]
+  unfold parseDeclEntry
+  rw [hline]
+  rw [List.dropWhile_cons_of_pos (by decide), List.dropWhile_cons_of_pos (by decide),
+    List.dropWhile_cons_of_neg (by decide)]
+  rw [parseDeclEntryBody.eq_1]
+  rw [rightJustify_dropWhile_append]
+  rw [scanNat_of_toString a _ (notDigitHead_space _)]
+  dsimp only
+  rw [List.dropWhile_cons_of_pos (by decide), List.dropWhile_cons_of_neg (by decide)]
+  rw [parseDeclEntryAt.eq_1]
+  rw [rightJustify_dropWhile_append]
+  rw [scanNat_of_toString u (':' :: ' ' :: nm.toList) (notDigitHead_colon _)]
+  dsimp only
+  rw [expect_colon]
+  dsimp only
+  simp [String.ofList_toList]
+
+/-- **The version-header inversion**: the emitter's `versionLines` parse back
+    to the version. The producer/git sub-lines are presence-conditional; the
+    side conditions say the FOLLOWING lines (the extensions section or the
+    `=== Plan` marker) never masquerade as a version sub-line the emitter
+    did not write. -/
+theorem parseVersion_versionLines (v : Proto.Version) (rest : List String)
+    (hboth : v.producer = "" → v.gitHash = "" → ∀ p, rest.head? = some p →
+      p.startsWith Grammar.producerPfx = false ∧ p.startsWith Grammar.gitHashPfx = false)
+    (hgit : v.gitHash = "" → ∀ p, rest.head? = some p →
+      p.startsWith Grammar.gitHashPfx = false) :
+    parseVersion (Emit.Text.versionLines v ++ rest) = some (v, rest) := by
+  obtain ⟨mj, mn, pt, prod, git⟩ := v
+  show parseVersion (Emit.Text.versionLines ⟨mj, mn, pt, prod, git⟩ ++ rest) =
+    some (⟨mj, mn, pt, prod, git⟩, rest)
+  have hheader : (Grammar.versionPfx ++ toString mj ++ Grammar.dotTok ++ toString mn ++
+        Grammar.dotTok ++ toString pt).toList =
+      Grammar.versionPfx.toList ++ ((toString mj).toList ++
+        ('.' :: (toString mn).toList) ++ ('.' :: (toString pt).toList)) := by
+    rw [String.toList_append, String.toList_append, String.toList_append,
+      String.toList_append, String.toList_append]
+    rw [show Grammar.dotTok.toList = ['.'] from by decide]
+    simp [List.append_assoc]
+  have hvl : Emit.Text.versionLines ⟨mj, mn, pt, prod, git⟩ =
+      (Grammar.versionPfx ++ toString mj ++ Grammar.dotTok ++ toString mn ++ Grammar.dotTok ++
+        toString pt) ::
+        ((if prod.isEmpty then [] else [Grammar.producerPfx ++ prod]) ++
+          (if git.isEmpty then [] else [Grammar.gitHashPfx ++ git])) := by
+    rfl
+  rw [hvl, List.cons_append]
+  unfold parseVersion
+  dsimp only
+  rw [hheader]
+  rw [expect_self]
+  dsimp only
+  rw [List.append_assoc]
+  rw [scanNat_of_toString mj ('.' :: (toString mn).toList ++ '.' :: (toString pt).toList)
+    (notDigitHead_dot _)]
+  dsimp only
+  rw [List.cons_append]
+  rw [expect_dot]
+  dsimp only
+  rw [scanNat_of_toString mn ('.' :: (toString pt).toList) (notDigitHead_dot _)]
+  dsimp only
+  rw [expect_dot]
+  dsimp only
+  have hpt := scanNat_of_toString pt ([] : List Char) (Or.inl rfl)
+  rw [List.append_nil] at hpt
+  rw [hpt]
+  dsimp only
+  -- the producer/git sub-lines
+  by_cases hp : prod.isEmpty <;> by_cases hg : git.isEmpty
+  · -- both absent: the first following line must not masquerade
+    rw [if_pos hp, if_pos hg]
+    have hp' : prod = "" := String.isEmpty_iff.mp hp
+    have hg' : git = "" := String.isEmpty_iff.mp hg
+    subst hp'
+    subst hg'
+    simp only [List.nil_append]
+    cases rest with
+    | nil => rfl
+    | cons p ps =>
+      obtain ⟨hpp, hpg⟩ := hboth rfl rfl p rfl
+      simp [hpp, hpg]
+  · -- git present, producer absent: the git line survives the producer check
+    -- (the prefixes clash — `gitHash_ne_producerPfx`), then parses
+    rw [if_pos hp, if_neg hg]
+    have hp' : prod = "" := String.isEmpty_iff.mp hp
+    subst hp'
+    simp only [List.nil_append, List.singleton_append]
+    simp [gitHash_ne_producerPfx, startsWith_append, dropPrefix_copy, String.length_append]
+  · -- producer present, git absent: the producer line parses; the following
+    -- line must not masquerade as a git line
+    rw [if_neg hp, if_pos hg]
+    have hg' : git = "" := String.isEmpty_iff.mp hg
+    subst hg'
+    simp only [List.append_nil, List.singleton_append]
+    cases rest with
+    | nil => simp [startsWith_append, dropPrefix_copy, String.length_append]
+    | cons p ps =>
+      simp [hgit rfl p rfl, startsWith_append, dropPrefix_copy, String.length_append]
+  · -- both present: producer then git, in order
+    rw [if_neg hp, if_neg hg]
+    simp only [List.singleton_append]
+    simp [startsWith_append, dropPrefix_copy, String.length_append]
+
+-- ── the Root-names inversion (W5.3 phase 2b — the `withClause` row shape) ──
+
+/-- Alpha characters differ from any non-alpha character (the bracket/
+    separator targets are all non-alpha). -/
+private theorem isAlpha_ne (c t : Char) (hc : c.isAlpha = true) (ht : t.isAlpha = false) :
+    c ≠ t := by
+  intro e
+  rw [e] at hc
+  rw [ht] at hc
+  exact absurd hc (by decide)
+
+/-- Digit characters differ from any non-digit character. -/
+private theorem isDigit_ne (c t : Char) (hc : c.isDigit = true) (ht : t.isDigit = false) :
+    c ≠ t := by
+  intro e
+  rw [e] at hc
+  rw [ht] at hc
+  exact absurd hc (by decide)
+
+/-- An identifier character is `plainChar` (no `splitTopLevel` split, no
+    depth change, and not the header-closing `]`). -/
+private theorem isIdentChar_plain {c : Char} (h : Emit.Text.isIdentChar c = true) :
+    plainChar c := by
+  unfold Emit.Text.isIdentChar at h
+  rw [Bool.or_eq_true, Bool.or_eq_true] at h
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
+    rcases h with (hα | hd) | hu
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+  · exact isAlpha_ne c _ hα (by decide)
+  · exact isDigit_ne c _ hd (by decide)
+  · rw [beq_iff_eq.mp hu]; decide
+
+/-- The emitter's `name` of an identifier is the identifier. -/
+private theorem name_of_identifier {n : String} (h : Emit.Text.isIdentifier n = true) :
+    Emit.Text.name n = n := by
+  unfold Emit.Text.name
+  rw [if_pos h]
+
+/-- All chars of an identifier's emitted name are plain. -/
+private theorem identChars_plain {n : String} (h : Emit.Text.isIdentifier n = true) :
+    Plain (Emit.Text.name n).toList := by
+  rw [name_of_identifier h]
+  unfold Emit.Text.isIdentifier at h
+  intro a ha
+  cases hnl : n.toList with
+  | nil => rw [hnl] at h; simp at h
+  | cons c rest =>
+    rw [hnl] at h
+    simp only [Bool.and_eq_true] at h
+    obtain ⟨hc, htail⟩ := h
+    rw [hnl] at ha
+    rcases List.mem_cons.mp ha with rfl | hin
+    · exact isIdentChar_plain (by unfold Emit.Text.isIdentChar; rw [hc]; rfl)
+    · exact isIdentChar_plain (List.all_eq_true.mp htail a hin)
+
+/-- The name map over identifiers is the identity. -/
+private theorem map_name_of_identifiers {names : List String}
+    (h : ∀ n ∈ names, Emit.Text.isIdentifier n = true) :
+    names.map Emit.Text.name = names := by
+  induction names with
+  | nil => rfl
+  | cons x xs ih =>
+    rw [List.map_cons, name_of_identifier (h x (by simp)),
+      ih (fun y hy => h y (by simp [hy]))]
+
+/-- If every string in a list and the separator all avoid a char, the
+    `sep`-joined text avoids it. -/
+private theorem sep_all_ne {d : String} {xs : List String} {c : Char}
+    (hd : ∀ a ∈ d.toList, a ≠ c) (hxs : ∀ x ∈ xs, ∀ a ∈ x.toList, a ≠ c) :
+    ∀ a ∈ (Emit.Text.sep d xs).toList, a ≠ c := by
+  induction xs with
+  | nil =>
+    intro a ha
+    have h1 : (Emit.Text.sep d ([] : List String)) = "" := by
+      simp [Emit.Text.sep, String.intercalate_nil]
+    rw [h1] at ha
+    simp at ha
+  | cons x xs ih =>
+    intro a ha
+    cases xs with
+    | nil =>
+      have h1 : Emit.Text.sep d [x] = x := by
+        simp [Emit.Text.sep, String.intercalate_singleton]
+      rw [h1] at ha
+      exact hxs x (by simp) a ha
+    | cons y ys =>
+      have h1 : Emit.Text.sep d (x :: y :: ys) = x ++ d ++ Emit.Text.sep d (y :: ys) :=
+        sep_cons d x (by simp)
+      rw [h1, String.toList_append, String.toList_append] at ha
+      have h2 := List.mem_append.mp ha
+      rcases h2 with hx2 | hrest
+      · have h3 := List.mem_append.mp hx2
+        rcases h3 with hxx | hdd
+        · exact hxs x (by simp) a hxx
+        · exact hd a hdd
+      · exact ih (fun z hz => hxs z (by simp [hz])) a hrest
+
+/-- No `]` inside the `sep`-joined identifier names (the takeWhile boundary
+    is exactly the header close). -/
+private theorem sep_identifiers_ne_rbracket {names : List String}
+    (h : ∀ n ∈ names, Emit.Text.isIdentifier n = true) :
+    ∀ a ∈ (Emit.Text.sep Grammar.sepTok (names.map Emit.Text.name)).toList, a ≠ ']' := by
+  apply sep_all_ne (by decide)
+  intro x hx
+  rw [List.mem_map] at hx
+  obtain ⟨n, hn, rfl⟩ := hx
+  intro a ha
+  exact (identChars_plain (h n hn) a ha).2.2.2.2.2.2
+
+/-- A lone plain item splits to itself. -/
+private theorem splitTopLevel_single_plain (x : List Char) (hx : Plain x) :
+    splitTopLevel x 0 [] = [x] := by
+  have h := splitTopLevel_plain_prefix x ([] : List Char) [] hx
+  rw [List.append_nil] at h
+  rw [h]
+  rw [splitTopLevel.eq_1]
+  simp
+
+/-- `splitTopLevel` over the joined identifier names recovers the names'
+    char lists (nonempty — the empty join splits to `[[]]`, the empty-item
+    corner). -/
+private theorem splitTopLevel_identifiers {names : List String}
+    (h : ∀ n ∈ names, Emit.Text.isIdentifier n = true) :
+    names ≠ [] →
+    splitTopLevel (Emit.Text.sep Grammar.sepTok (names.map Emit.Text.name)).toList 0 [] =
+      names.map (·.toList) := by
+  rw [map_name_of_identifiers h]
+  induction names with
+  | nil => intro hne; exact (hne rfl).elim
+  | cons x xs ih =>
+    intro _
+    cases xs with
+    | nil =>
+      have hsep : Emit.Text.sep Grammar.sepTok [x] = x := by
+        simp [Emit.Text.sep, String.intercalate_singleton]
+      rw [hsep]
+      rw [splitTopLevel_single_plain x.toList (by
+        have hxp := identChars_plain (h x (by simp))
+        rw [name_of_identifier (h x (by simp))] at hxp
+        exact hxp)]
+      rfl
+    | cons y ys =>
+      have hsep : Emit.Text.sep Grammar.sepTok (x :: y :: ys) =
+          x ++ Grammar.sepTok ++ Emit.Text.sep Grammar.sepTok (y :: ys) :=
+        sep_cons Grammar.sepTok x (by simp)
+      rw [hsep, String.toList_append, String.toList_append]
+      rw [show Grammar.sepTok.toList = [',', ' '] from by decide]
+      rw [List.append_assoc]
+      rw [splitTopLevel_comma_head x.toList _ (by
+        have hxp := identChars_plain (h x (by simp))
+        rw [name_of_identifier (h x (by simp))] at hxp
+        exact hxp)]
+      rw [ih (fun z hz => h z (by simp [hz])) (by simp)]
+      rfl
+
+/-- An identifier's bare text scans back to it (the `rest = []` form of
+    `scanName_name`). -/
+private theorem scanName_ident_self {n : String} (h : Emit.Text.isIdentifier n = true) :
+    (scanName n.toList).map (·.1) = some n := by
+  have h1 := scanName_name n ([] : List Char) (Or.inl rfl)
+  rw [name_of_identifier h, List.append_nil] at h1
+  rw [h1]
+  rfl
+
+/-- takeWhile over the header-closing `]`: a `]`-free inner text is kept,
+    the close is dropped. -/
+private theorem takeWhile_rbracket_stop (inner tail : List Char)
+    (h : ∀ a ∈ inner, a ≠ ']') :
+    (inner ++ ']' :: tail).takeWhile (· ≠ ']') = inner := by
+  rw [List.takeWhile_append_of_pos (fun a ha => by
+    have h' := h a ha
+    -- the code's predicate is `fun x => decide (x ≠ ']')`
+    show (decide (a ≠ ']')) = true
+    rw [decide_eq_true_eq]
+    exact h')]
+  rw [List.takeWhile_cons_of_neg (by decide)]
+  rw [List.append_nil]
+
+/-- **The Root-name inversion** (`parse (emit x) = some x` for the
+    `withClause` row shape): the emitter's `Root[n, …]` line yields the
+    names back, for nonempty bare-identifier name lists (empty `Root[]` is
+    rejected by the decoder, and a quoted name containing `]` splits wrongly
+    — both documented v0 limitations at `parseRootNames`). -/
+theorem parseRootNames_emitted (names : List String) (hne : names ≠ [])
+    (hident : ∀ n ∈ names, Emit.Text.isIdentifier n = true) :
+    parseRootNames ((Grammar.kwRoot ++ Emit.Text.sep Grammar.sepTok (names.map Emit.Text.name) ++
+      "]").toList) = some names := by
+  have hdrop : ((Grammar.kwRoot ++ Emit.Text.sep Grammar.sepTok (names.map Emit.Text.name) ++
+        "]").toList.drop Grammar.kwRoot.length) =
+      (Emit.Text.sep Grammar.sepTok (names.map Emit.Text.name)).toList ++ [']'] := by
+    repeat rw [String.toList_append]
+    rw [show ("]" : String).toList = [']'] from by decide]
+    rw [List.append_assoc]
+    exact List.drop_left
+  unfold parseRootNames
+  rw [hdrop]
+  rw [takeWhile_rbracket_stop _ [] (fun a ha => sep_identifiers_ne_rbracket hident a ha)]
+  simp only []
+  rw [splitTopLevel_identifiers hident hne]
+  have hmap : ((names.map (·.toList)).map fun item => (scanName item).map (·.1)) =
+      names.map (fun n => (some n : Option String)) := by
+    rw [List.map_map]
+    apply List.map_congr_left
+    intro x hx
+    exact scanName_ident_self (hident x hx)
+  rw [hmap]
+  have hany : (names.map (fun n => (some n : Option String))).any (· == none) = false := by
+    rw [List.any_eq_false]
+    intro x hx
+    rw [List.mem_map] at hx
+    obtain ⟨y, -, rfl⟩ := hx
+    have hb : ((some y : Option String) == none) = false := by rfl
+    rw [hb]
+    exact (by decide : ¬ (false = true))
+  rw [hany]
+  have hfilter : (names.map (fun n => (some n : Option String))).filterMap id = names := by
+    induction names with
+    | nil => rfl
+    | cons x xs ih => simp [ih]
+  rw [hfilter]
+  rfl
 
 -- ── the typed layer: Proto.Expression → Typed.Expr ──────────────────────
 

@@ -31,10 +31,16 @@ All `_ok` theorems need `[DecidableEq]` on the sorts involved, exactly as
 in the source; `fromSet`/`toSet` are the finset↔zset bridge.
 -/
 
-import Dbsp.ZSet
-import Dbsp.Linear
-import Mathlib.Tactic.Abel
-import Mathlib.Tactic.Ring
+module
+
+public import Dbsp.ZSet
+public import Dbsp.Linear
+public import Mathlib.Tactic.Abel
+public import Mathlib.Tactic.Ring
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -587,3 +593,5 @@ end ZSet
 end
 
 end Dbsp
+
+end -- @[expose] public section

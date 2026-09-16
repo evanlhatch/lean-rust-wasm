@@ -1,16 +1,18 @@
 /- CodegenCore — the registry/emitter core (the buf machinery). -/
-import CodegenCore.Registry
-import CodegenCore.DataRegistry
-import CodegenCore.CodedRegistry
-import CodegenCore.DidYouMean
-import CodegenCore.Emit.Core
-import CodegenCore.Emit.Certified
-import CodegenCore.Emit.Rust
-import CodegenCore.Enumerable
-import CodegenCore.AttrKit
-import CodegenCore.GuestGate
-import CodegenCore.Kit
-import CodegenCore.RoundTrip
-import CodegenCore.Validation
+module
+
+public import CodegenCore.Registry
+public import CodegenCore.DataRegistry
+public import CodegenCore.CodedRegistry
+public import CodegenCore.DidYouMean
+public import CodegenCore.Emit.Core
+public import CodegenCore.Emit.Certified
+public import CodegenCore.Emit.Rust
+public import CodegenCore.Enumerable
+public import CodegenCore.AttrKit
+public import CodegenCore.GuestGate
+public import CodegenCore.Kit
+public import CodegenCore.RoundTrip
+public import CodegenCore.Validation
 
 

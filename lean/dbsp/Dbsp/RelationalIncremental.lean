@@ -21,8 +21,14 @@ collapses over mathlib's `Finsupp.mapDomain` (see `Dbsp.ZSet`'s header), so
 `map_incremental` covers both.
 -/
 
-import Dbsp.Relational
-import Dbsp.Incremental
+module
+
+public import Dbsp.Relational
+public import Dbsp.Incremental
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -74,11 +80,12 @@ theorem distinct_incremental_ok :
   show D (lifting ZSet.distinct (I d)) t = lifting2 ZSet.distinctH (delay (I d)) d t
   cases t with
   | zero =>
-    show ZSet.distinct (I d 0) - ZSet.distinct (delay (I d) 0)
-       = ZSet.distinctH (delay (I d) 0) (d 0)
-    rw [integral_0]
-    show ZSet.distinct (d 0) - ZSet.distinct 0 = ZSet.distinctH 0 (d 0)
-    rw [ZSet.distinct_0, sub_zero]
+    -- W5.4 module discipline: the old `show` relied on `ZSet.distinct 0 ≡ 0`
+    -- by kernel-unfolding through mathlib's `Finsupp.onFinsetSupport`, whose
+    -- body is NOT exposed. The `show` now matches the exposed reduction
+    -- (`delay _ 0 → 0`) and `sub_zero` discharges the subtraction.
+    show ZSet.distinct (I d 0) - 0 = ZSet.distinctH 0 (d 0)
+    rw [integral_0, sub_zero]
     ext x
     rw [ZSet.distinctH_apply, ZSet.distinct_apply]
     simp [ZSet.distinctHAt, Finsupp.zero_apply]
@@ -140,3 +147,5 @@ theorem equiJoin_incremental (π1 : A → C) (π2 : B → C) :
   · exact lifting_bilinear _ (ZSet.equiJoin_bilinear π1 π2)
 
 end Dbsp
+
+end -- @[expose] public section

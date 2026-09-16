@@ -41,12 +41,16 @@ columns, list columns, and non-.col value shapes are not lowerable yet
 (additive — extend `valueRust`, the universe stays closed).
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Update
-import SchemaLang.Emit.Invariant
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Meta.Reflect
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Update
+public import SchemaLang.Emit.Invariant
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Meta.Reflect
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Update
 

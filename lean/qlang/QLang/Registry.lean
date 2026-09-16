@@ -6,6 +6,8 @@ lineage's `FlatlandDsl.Schema` (trimmed to what a query language needs —
 no emit-mapping helpers, no `columnIndex`/`nameAt`: ordinals are resolved
 inside `QLang.DExpr.compileCol`).
 
+canon: notes/canon.md Part 1 (the environment row — shadowing rebinding is deliberate).
+
 Column *names* resolve to *positional ordinals* (the Substrait `$n` field
 references) at compile time; resolution failure is an `Except String` —
 never a panic.

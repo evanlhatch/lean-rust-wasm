@@ -23,10 +23,21 @@ Registration is attribute-first (`@[schema]`/`@[schema_fn]`/
 `CodegenCore.mkRegistryExt`; the emitters read the replayed registry.
 -/
 
-import SchemaLang.Ty
-import SchemaLang.EnumWire
-import CodegenCore.Emit.Core
-import CodegenCore.DidYouMean
+module
+
+public import SchemaLang.Ty
+public import SchemaLang.EnumWire
+public import CodegenCore.Emit.Core
+public import CodegenCore.DidYouMean
+public meta import TestKit.PropSpec
+
+-- `declare_enum_wire` emits `meta def` PropSpecs (they embed LSpec's meta
+-- `checkPlausibleIO`) that reference the same module's generated non-meta
+-- codec decls; core's phase check allows that only under this option
+-- (Lean.Compiler.LCNF.Visibility.checkMeta).
+set_option compiler.relaxedMetaCheck true
+
+@[expose] public section
 
 namespace SchemaLang
 

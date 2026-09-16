@@ -748,6 +748,49 @@ def runChecks : TestKit.CheckM Unit := do
       ((Decode.parseExpr (txt.length + 1) fnCtx txt.toList).isSome)
       s!"expression '{txt}' must parse with given fnCtx")
 
+  -- 9.8. Float literal round-trip (W5.3 phase-2a fp-literal fix).
+  --    Previously `parseLiteral` had no float arm — `toString 1.5` scanned
+  --    as int "1" with ".5" unconsumed.  Verify both direct parseLiteral
+  --    and the full emit∘parse round-trip for fp32/fp64, plus a negative
+  --    control: a text with "." but no valid float suffix is rejected.
+  let testFloatLiterals : List (String × Proto.Literal) :=
+    [ ("1.5", { literalType := .fp64 1.5, nullable := false })
+    , ("-3.25", { literalType := .fp64 (-3.25), nullable := false })
+    , ("0.5:fp32", { literalType := .fp32 0.5, nullable := false })
+    , ("-0.25:fp32?", { literalType := .fp32 (-0.25), nullable := true })
+    , ("1.5:fp64?", { literalType := .fp64 1.5, nullable := true })
+    , ("0.0", { literalType := .fp64 0.0, nullable := false })
+    ]
+  for (txt, expected) in testFloatLiterals do
+    TestKit.check s!"float round-trip: {txt}" (TestKit.assert
+      (match Decode.parseLiteral txt.toList with
+       | some (lit, []) => lit == expected
+       | _ => false)
+      s!"parseLiteral '{txt}' must recover {repr expected}")
+  -- Negative control: "1.5:i32" has a non-float suffix — must be rejected.
+  TestKit.check "float rejects non-float suffix" (TestKit.assert
+    ((Decode.parseLiteral "1.5:i32".toList).isNone)
+    "'1.5:i32' must NOT parse (i32 is not a float type)")
+
+  -- 9.9. Emit+parse full round-trip (Emit.Text.literal → parseLiteral).
+  let testRoundTrip : List Proto.Literal :=
+    [ { literalType := .fp64 3.14, nullable := false }
+    , { literalType := .fp64 3.14, nullable := true }
+    , { literalType := .fp32 3.14, nullable := false }
+    , { literalType := .fp32 3.14, nullable := true }
+    , { literalType := .fp64 0.0, nullable := false }
+    , { literalType := .fp64 (-0.5), nullable := false }
+    ]
+  for lit in testRoundTrip do
+    match Emit.Text.literal lit with
+    | .error em => TestKit.errorAbort "float emit" s!"emit failed: {em}"
+    | .ok txt =>
+      TestKit.check s!"float emit∘parse: {txt}" (TestKit.assert
+        (match Decode.parseLiteral txt.toList with
+         | some (lit', []) => lit' == lit
+         | _ => false)
+        s!"emit '{txt}' then parse must recover original {repr lit}")
+
   -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers
 
   -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers

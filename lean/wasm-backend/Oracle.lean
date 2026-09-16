@@ -27,16 +27,23 @@ error IDENTITY as a ctor). Verified: oracle manifest sha256
 b1e13749f5e25f27317f0c7b6ada65b2d6567638efd6aa59f9c6ed5e553c5d18
 before AND after.
 
-PHASE-2 NOTE (W6.3, NOT YET LANDED): the target oracle shape emits
-VERDICTS, not expecteds — the replay request carries the row + its
-batch context, Lean answers a judgment through `CompareMode.compare`,
-and error-equivalence modes ride the wire per row (`modeOf` becomes a
-real column, `.ignore`/`.identity` rows become expressible). BLOCKED
-on the host replay contract: steel-host's wasm_diff still PULLS
-target/diff.json and string-compares host-side; until it SENDS rows
-and CONSUMES verdicts, the manifest format is byte-frozen (the hash
-above) and the mode/batch structure binds Lean-side + as a Rust-side
-mirror (`CompareMode` in wasm_diff.rs) only.
+W6.3 (phase 2) landed, bytes unchanged: the VERDICT layer —
+`DivergenceClass`/`Divergence`/`Verdict` + `CompareMode.verdict` (the
+first-divergence triple: both outcomes + the category as a CTOR +
+the first payload offset), the `schemaSigs` signature table
+(`arityOf` is now its lookup — same answers, pinned), the canonical
+`schemaSurface` string, and the `featuresOf`/batch coverage tables.
+The driver (OracleMain) gained ADDITIVE subcommands — `schema-surface`,
+`coverage`, `verdict FN ARG... --observed VALUE|@trap` — the no-arg
+manifest bytes are still the frozen hash above. The host side of the
+debug loop is crates/oracle-runner (probe --compare verdict, explain,
+all mirroring this module arm-for-arm). SCHEMA-HASH DECISION: the
+manifest hash covers the manifest BYTES, so the schema hash CANNOT be
+a manifest field — it lives in the verdict JSON's `schema` echo (the
+surface string; consumers sha256 it) and in COVERAGE.md's header.
+STILL OPEN (a later phase): the replay REQUEST carrying row + batch
+context with Lean answering over the wire, and `modeOf` becoming a
+real column (`.ignore`/`.identity` rows on the wire).
 
 Ownership: this module owns the row universe + row resolution; the
 script owns only the emission loop. Deliberately excluded: the component
@@ -425,16 +432,31 @@ def resultOf (fn : String) (args : List String) : String :=
     s!"({ser})"
   | _, _ => "?"
 
+/-- W6.3 phase 2: the schema surface the oracle compares against — the
+    demo world's replayed-export signature table (export name × the
+    manifest's FLAT-ARG arity — record/variant args ride the flat
+    convention, so `user-valid` is 4). Canonical order = the row
+    universe's FIRST-OCCURRENCE order (the grid batch's order) — the
+    Rust replay derives the same string from any manifest by walking
+    rows in order, so the schema hash compares across the boundary
+    without a shared table. (`watch-orders` is exported by the world
+    but not replayed — the oracle's surface is the 15 replayed fns.)
+    THE single source of truth for "what's being compared": `arityOf`
+    is its lookup, `schemaSurface` its canonical rendering, the
+    coverage table's fn column draws from it. Behavior is
+    byte-identical to the phase-1 match (Tests pin every arity + the
+    unknown case). -/
+def schemaSigs : List (String × Nat) :=
+  [ ("double", 1), ("is-big", 1), ("adder", 2), ("double-area", 1)
+  , ("run-paps", 1), ("total", 3), ("pick", 3), ("str-len-demo", 1)
+  , ("greet", 1), ("get-user", 1), ("watch-counts", 1), ("watch-users", 1)
+  , ("user-valid", 4), ("order-error-valid", 2), ("user-complete", 4) ]
+
 /-- The manifest's fn surface with arities (must agree with `resultOf`'s
-    patterns — the DiffSpec's arity corruption pins this). -/
-def arityOf : String → Option Nat
-  | "double" | "is-big" | "double-area" | "run-paps"
-  | "str-len-demo" | "greet" | "get-user"
-  | "watch-counts" | "watch-users" => some 1
-  | "adder" | "order-error-valid" => some 2
-  | "total" | "pick" => some 3
-  | "user-valid" | "user-complete" => some 4
-  | _ => none
+    patterns — the DiffSpec's arity corruption pins this). The lookup
+    over `schemaSigs` — same answers as the phase-1 pattern match. -/
+def arityOf (fn : String) : Option Nat :=
+  (schemaSigs.find? (·.1 == fn)).map (·.2)
 
 -- ── W6.3: error-equivalence modes + structured resolution ──────────
 -- The comparison contract (cedar-drt's ErrorComparisonMode): errors
@@ -480,6 +502,7 @@ structure Outcome where
   /-- The rendered payload: the value's ser form, or the error's
       message. -/
   payload : String
+deriving BEq
 
 /-- The mode's truth table (the Rust replay's `compare` mirrors this
     arm-for-arm; Tests pin every arm). -/
@@ -526,3 +549,189 @@ def jsonRow (fn : String) (args : List String) (expected : String) : String :=
   "{" ++ "\"fn\": " ++ (Lean.Json.str fn).compress ++ ", \"args\": [" ++
     String.intercalate "," (args.map fun a => (Lean.Json.str a).compress) ++
     "], \"expected\": " ++ (Lean.Json.str expected).compress ++ "}"
+
+-- ── W6.3 phase 2: verdicts, not rows ───────────────────────────────
+-- The comparison's answer is a JUDGMENT: pass, or the first-divergence
+-- witness (observed vs expected vs the divergence CLASS — a ctor,
+-- never a string). The Lean side owns the classification; the Rust
+-- replay (steel-host wasm_diff, crates/oracle-runner) mirrors it
+-- arm-for-arm — same discipline as the phase-1 CompareMode mirror.
+
+/-- The divergence class. A mismatch always names ONE of these; the
+    payload strings ride along as witness, never as identity. -/
+inductive DivergenceClass where
+  /-- Both sides values, payloads differ. -/
+  | valueMismatch
+  /-- Expected a value, the replay errored (today: a trap). -/
+  | expectedValueGotError
+  /-- Expected an error, the replay produced a value. -/
+  | expectedErrorGotValue
+  /-- Both sides errored, different identities. -/
+  | errorIdentityMismatch
+  /-- Same error identity, payloads differ (`.full` mode only —
+      `.identity` never reads payloads). -/
+  | errorPayloadMismatch
+deriving BEq, Repr
+
+/-- The class's display form — the CTOR name (the corruption pins match
+    on this, never on a free-form payload). -/
+instance : ToString DivergenceClass where
+  toString
+    | .valueMismatch => "valueMismatch"
+    | .expectedValueGotError => "expectedValueGotError"
+    | .expectedErrorGotValue => "expectedErrorGotValue"
+    | .errorIdentityMismatch => "errorIdentityMismatch"
+    | .errorPayloadMismatch => "errorPayloadMismatch"
+
+/-- The first char offset at which two rendered payloads differ (`none`
+    = identical). Char-wise (the ser forms are ASCII today). -/
+def firstDiffAt : List Char → List Char → Nat → Option Nat
+  | [], [], _ => none
+  | [], _ :: _, n => some n
+  | _ :: _, [], n => some n
+  | a :: as, b :: bs, n => if a == b then firstDiffAt as bs (n + 1) else some n
+
+/-- The first-divergence witness: both outcomes, the class, and the
+    first payload offset where the rendered forms part (`none` when the
+    payloads agree — the divergence is then in the error IDENTITY). -/
+structure Divergence where
+  expected : Outcome
+  observed : Outcome
+  category : DivergenceClass
+  payloadDiffAt : Option Nat
+deriving BEq
+
+/-- The verdict: pass, or the first divergence. -/
+structure Verdict where
+  divergence : Option Divergence
+
+/-- The classification of a FAILED comparison — total over the failure
+    arms of every mode (`.ignore` fails only on value/value, so
+    `.valueMismatch` is its only reachable class). -/
+def classify (expected observed : Outcome) : DivergenceClass :=
+  match expected.error, observed.error with
+  | none, none => .valueMismatch
+  | none, some _ => .expectedValueGotError
+  | some _, none => .expectedErrorGotValue
+  | some e, some f => if e == f then .errorPayloadMismatch else .errorIdentityMismatch
+
+/-- The mode's verdict (the Bool `compare` decides pass/fail; a fail is
+    classified — same truth table, richer answer). -/
+def CompareMode.verdict (mode : CompareMode) (expected observed : Outcome) : Verdict :=
+  if mode.compare expected observed then ⟨none⟩
+  else ⟨some ⟨expected, observed, classify expected observed,
+    firstDiffAt expected.payload.toList observed.payload.toList 0⟩⟩
+
+/-- The schema surface's canonical rendering (`fn/arity`, comma-joined,
+    WIT order). The SCHEMA HASH the verdicts + COVERAGE echo is sha256
+    OF THIS STRING — the hashing lives in the consumers
+    (oracle-runner, COVERAGE.md's header); Lean owns the canonical
+    string, never the digest. -/
+def schemaSurface : String :=
+  String.intercalate "," (schemaSigs.map fun (f, n) => s!"{f}/{n}")
+
+/-- One outcome as JSON (the verdict wire's leaves). -/
+def jsonOutcome (o : Outcome) : String :=
+  "{\"error\": " ++ (match o.error with
+    | none => "null"
+    | some e => (Lean.Json.str (toString e)).compress) ++
+    ", \"payload\": " ++ (Lean.Json.str o.payload).compress ++ "}"
+
+/-- The verdict as JSON — the phase-2 wire's answer shape. Additive
+    echo: the schema SURFACE STRING (hash it consumer-side) so a
+    verdict always names the schema it was judged under — the manifest
+    hash covers the manifest bytes and stays frozen, so the echo lives
+    HERE (the verdict output), not in the manifest. -/
+def jsonVerdict (v : Verdict) : String :=
+  match v.divergence with
+  | none => "{\"ok\": true, \"schema\": " ++ (Lean.Json.str schemaSurface).compress ++ "}"
+  | some d =>
+    "{\"ok\": false, \"category\": " ++ (Lean.Json.str (toString d.category)).compress ++
+    ", \"expected\": " ++ jsonOutcome d.expected ++
+    ", \"observed\": " ++ jsonOutcome d.observed ++
+    ", \"payload_diff_at\": " ++ (match d.payloadDiffAt with
+      | none => "null" | some n => toString n) ++
+    ", \"schema\": " ++ (Lean.Json.str schemaSurface).compress ++ "}"
+
+-- ── W6.3 phase 2: the feature → test discipline (COVERAGE.md) ─────
+-- verified-ledger's discipline: every schema feature row has a test,
+-- every test names the features it exercises. The table below is the
+-- single source; the driver renders COVERAGE.md from it + the row
+-- universe's counts; Tests pin the discipline (every export has ≥1
+-- feature, every export has ≥1 row).
+
+/-- The schema features each export's rows exercise. The validator
+    negatives are NAMED (the refusal rows are the point of those
+    exports — see gridBatch's comments). -/
+def featuresOf : String → List String
+  | "double" => ["u64-scalar", "wrapping-arith"]
+  | "is-big" => ["u64-scalar", "bool-result", "threshold-branch"]
+  | "adder" => ["u64-scalar", "multi-arg", "closure-pap", "wrapping-arith"]
+  | "double-area" => ["u64-scalar", "ctor-dispatch", "object-lifecycle"]
+  | "pick" => ["bool-arg", "escaping-closure", "branchy-closure"]
+  | "run-paps" => ["closure-pap", "closures-in-list", "multi-apply"]
+  | "total" => ["u64-scalar", "multi-arg", "curried-closure", "tail-recursion"]
+  | "get-user" => ["option-result", "record-result", "list-of-string", "sentinel-none"]
+  | "greet" => ["string-result", "canonical-abi-return-area"]
+  | "str-len-demo" => ["string-intrinsic", "runtime-dependent-branch"]
+  | "watch-counts" => ["stream-u64", "async-lift"]
+  | "watch-users" => ["stream-record", "async-lift"]
+  | "user-valid" => ["record-arg", "validator", "negative-gate:id-zero"]
+  | "user-complete" => ["record-arg", "validator", "strlen-gate", "tags-count-gate"]
+  | "order-error-valid" => ["variant-arg", "validator", "negative-empty-cart", "f64-payload-arm"]
+  | _ => []
+
+/-- The batch table for COVERAGE.md: name, probe count, the feature the
+    batch adds BEYOND the grid. -/
+def batchTable : List (String × Nat × String) :=
+  [ ("grid", gridBatch.probes.length,
+     "the fixed u64s grid × all 15 exports + the pinned validator negatives")
+  , ("fuzz", (fuzzBatch 200 0x5EED).probes.length,
+     "LCG-driven off-grid scalars — the engines must agree on inputs the grid never visits (wrap boundary)")
+  , ("boundary", boundaryBatch.probes.length,
+     "u64 limits 0/1/2/2^31/2^32±1/2^63±1/max, adder/pick complement pairs")
+  , ("sweep", (sweepBatch 120 0xA11CE).probes.length,
+     "second LCG over the fns the first fuzz skips (str-len-demo, watch-counts)")
+  , ("gen", (genBatch 130 0xBEA57).probes.length,
+     "Plausible edge rows: nested-id sentinels, the \"a,,b\" splitOn edge, length boundaries, off-grid u64 leaves") ]
+
+/-- COVERAGE.md's content (the emitter is PURE — the driver writes the
+    file). GENERATED; do not hand-edit. -/
+def coverageMd : String :=
+  let rowCount (f : String) : Nat := (rowUniverse.filter fun (g, _) => g == f).length
+  let perExport := schemaSigs.map fun (f, n) =>
+    s!"| `{f}` | {n} | {rowCount f} | {String.intercalate ", " ((featuresOf f).map fun s => s!"`{s}`")} |"
+  let batches := batchTable.map fun (name, count, note) =>
+    s!"| `{name}` | {count} | {note} |"
+  String.intercalate "\n" (
+  [ "# COVERAGE — the oracle's feature → test map"
+  , ""
+  , "GENERATED by `lake exe oracle coverage` (lean/wasm-backend) — do not hand-edit."
+  , ""
+  , "Schema surface (the canonical string the verdict schema hash is sha256 of):"
+  , ""
+  , s!"`{schemaSurface}`"
+  , ""
+  , "## Per-export coverage"
+  , ""
+  , "| export | arity | manifest rows | schema features exercised |"
+  , "| --- | --- | --- | --- |" ]
+  ++ perExport ++
+  [ ""
+  , "## Batch coverage (one shared context, five probe batches)"
+  , ""
+  , "| batch | probes | adds |"
+  , "| --- | --- | --- |" ]
+  ++ batches ++
+  [ ""
+  , "## Negative controls"
+  , ""
+  , "- `user-valid` id=0 — the validator MUST refuse (Lean says false, the wasm must agree)"
+  , "- `order-error-valid` empty-cart / invalid-item(0) — the documented variant negatives"
+  , "- `user-complete` strlen(3/4) + tags-count gates — the boundary flips"
+  , "- the DiffSpec corruption rows (unknown fn, arity drift) — Lean-side rejection is observed"
+  , "- steel-host's flipped-instruction sabotage — the gate demonstrably catches a wrong engine"
+  , ""
+  , "Discipline: every export above has ≥1 feature and ≥1 manifest row; every feature"
+  , "names its export. Pinned Lean-side (Tests/Main.lean guards) — a vacuous row or an"
+  , "unfeatureable export fails the build." ])

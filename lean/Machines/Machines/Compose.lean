@@ -33,7 +33,13 @@ interleaving/step-relation — the event family is a function, so the
 composite is deterministic; a scheduler model lives in its own module later.
 -/
 
-import Machines.Core
+module
+
+public import Machines.Core
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines
 
@@ -176,3 +182,5 @@ theorem compose_run_inr (ls : List m2.Label) :
 end Machine
 
 end Machines
+
+end -- @[expose] public section

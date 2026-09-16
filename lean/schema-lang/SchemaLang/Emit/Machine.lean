@@ -16,11 +16,15 @@ CHECKED against the table here — the generated match cannot claim a
 wildcard the table does not justify.
 -/
 
-import CodegenCore
-import SchemaLang.Emit.GenCtx
-import Machines.Core
-import SchemaLang.Pipeline
-import SchemaLang.OrderMachine
+module
+
+public import CodegenCore
+public import SchemaLang.Emit.GenCtx
+public import Machines.Core
+public import SchemaLang.Pipeline
+public import SchemaLang.OrderMachine
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Machine
 

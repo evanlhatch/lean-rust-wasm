@@ -25,9 +25,13 @@ The conformance battery (Machines.Testing.conformance) sweeps the full
 FAIL guard coverage — the battery is not vacuous).
 -/
 
-import Machines.Dsl
-import Machines.Testing
-import SchemaLang.Item
+module
+
+public import Machines.Dsl
+public import Machines.Testing
+public import SchemaLang.Item
+
+@[expose] public section
 
 open Machines.Dsl
 

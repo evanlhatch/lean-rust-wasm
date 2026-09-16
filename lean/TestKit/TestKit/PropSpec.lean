@@ -20,8 +20,12 @@ The property suites are `LSpec.TestSeq`s built with `checkPlausibleIO`
 (seeded, shrinking) — see Substrait/Tests for the reference instance.
 -/
 
-import LSpec
-import TestKit.Harness
+module
+
+public import LSpec
+public import TestKit.Harness
+
+@[expose] public section
 
 namespace TestKit
 

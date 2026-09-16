@@ -33,12 +33,18 @@ Deliberately absent: what a location is, how mutations are encoded, where
 batches come from. Those are instance/emitter concerns.
 -/
 
-import Mathlib.Data.Finsupp.Defs
-import Mathlib.Data.Finsupp.Single
-import Mathlib.Algebra.Group.Finsupp
-import Mathlib.Algebra.Order.Ring.Int
-import Mathlib.Tactic.Ring
-import Dbsp.ChangeSpec
+module
+
+public import Mathlib.Data.Finsupp.Defs
+public import Mathlib.Data.Finsupp.Single
+public import Mathlib.Algebra.Group.Finsupp
+public import Mathlib.Algebra.Order.Ring.Int
+public import Mathlib.Tactic.Ring
+public import Dbsp.ChangeSpec
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -205,3 +211,5 @@ example :
       ⟨fun y hy => (List.not_mem_nil hy).elim, List.Pairwise.nil⟩
 
 end Dbsp
+
+end -- @[expose] public section

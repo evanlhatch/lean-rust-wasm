@@ -33,9 +33,13 @@ the same row model the validators execute over, so the oracle reading
 and the compiled reading share one semantics.
 -/
 
-import SchemaLang.Item
-import Machines.Dsl
-import SchemaLang.Validate
+module
+
+public import SchemaLang.Item
+public import Machines.Dsl
+public import SchemaLang.Validate
+
+@[expose] public section
 
 namespace SchemaLang
 

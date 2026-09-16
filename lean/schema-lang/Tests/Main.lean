@@ -2187,6 +2187,28 @@ def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
   _ ← assertEq "tierOf none = boundaryCheck" (SchemaLang.tierOf none) .boundaryCheck
   _ ← assertEq "tierOf some = proved" (SchemaLang.tierOf (some `t)) .proved
   _ ← assertEq "tier render" (SchemaLang.Tier.render .boundaryCheck) "boundary-check"
+  -- W7.1: the obligation view — the registered rows enumerate as
+  -- obligations, the ladder's rungs map to discharge tiers, and every
+  -- computed-tier obligation DISCHARGES (the theorem, witnessed)
+  let obs := invs.map SchemaLang.InvariantItem.obligation
+  _ ← assertEq "obligation labels enumerate" (obs.map (·.label))
+    ["id-positive", "name-min-length"]
+  _ ← assertEq "obligation tiers map"
+    (obs.map (·.tier))
+    [CodegenCore.Obligation.Tier.generatedCheck, .provedAtElab]
+  _ ← assertEq "computed-tier obligations discharge"
+    (obs.map (fun o => (SchemaLang.SchemaObligation.discharge o).isSome)) [true, true]
+  _ ← assertEq "proved row's evidence is the citation"
+    (SchemaLang.SchemaObligation.discharge obs[1]!)
+    (some (.citedProof `userNameLenProved))
+  _ ← assertEq "boundary row's evidence is the emitted check fn"
+    (SchemaLang.SchemaObligation.discharge obs[0]!)
+    (some (.generatedCheck "../../src/invariants_generated.rs" "check_id_positive"))
+  -- negative control: a hand-set proved tier WITHOUT the citation is
+  -- the loud gap — discharge refuses, it does not fabricate evidence
+  let bogus := { obs[0]! with tier := CodegenCore.Obligation.Tier.provedAtElab }
+  _ ← assertEq "citation-less proved tier discharges to NONE (the loud gap)"
+    (SchemaLang.SchemaObligation.discharge bogus) none
   -- the happy registration's verdicts, on demo rows (the hand mirrors)
   _ ← assertEq "inv-id-positive: happy row passes"
     (validates invIdPositiveMirror (invRow 5 "abcd")) true
@@ -3532,3 +3554,20 @@ world gatway {
   SpanSpec { name: "upd-pure-fn", delivery: "once", fields: &[("x", "u64")] } -/
 #guard_msgs in
 #spans
+
+/-! ## The circuit certificate pin (moved from `SchemaLang.Emit.Circuit`, W5.4)
+
+Under the module system an imported theorem's `ConstantInfo` is not
+`isTheorem` during a module file's elaboration, so the `#check_cert` pin
+runs here (this file is not a module; drift = test build error). -/
+
+#check_cert Dbsp.incrementalize_ok :
+  ∀ {Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Type}
+    {a b : Type} [AddCommGroup a] [AddCommGroup b]
+    {denoteF : Dbsp.CktDenote Func} (isLinear : Dbsp.IsLinearOracle Func)
+    (_isLinearOk : ∀ {a b : Type} [AddCommGroup a] [AddCommGroup b] (f : Func a b),
+      isLinear _ _ f = true → ∀ x y : a,
+        denoteF _ _ f (x + y) = denoteF _ _ f x + denoteF _ _ f y)
+    (f : Dbsp.Ckt Func a b),
+    Dbsp.Ckt.denote denoteF (Dbsp.incrementalize isLinear f) =
+      Dbsp.incremental (Dbsp.Ckt.denote denoteF f)

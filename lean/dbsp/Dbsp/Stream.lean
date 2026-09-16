@@ -11,10 +11,16 @@ a bridge theorem — flatland's notes/lean/SPEC-core.md §7.1; the classical cho
 source needs evaporates for us).
 -/
 
-import Batteries
-import Dbsp.Lint
-import Mathlib.Algebra.Group.Pi.Basic
-import Mathlib.Algebra.Notation.Prod
+module
+
+public import Batteries
+public import Dbsp.Lint
+public import Mathlib.Algebra.Group.Pi.Basic
+public import Mathlib.Algebra.Notation.Prod
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 library_note flatlandPortLineage /--
   Ports of tchajed/database-stream-processing-theory from Lean 3 to Lean 4.
@@ -74,3 +80,5 @@ theorem agree_upto_weaken (s s' : Stream a) (n n' : Nat)
   fun t ht => h t (Nat.le_trans ht hnn')
 
 end Dbsp
+
+end -- @[expose] public section

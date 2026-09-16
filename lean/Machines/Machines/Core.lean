@@ -19,6 +19,12 @@ leads_to/wf1) is deferred — `Machines.Live` was removed as a dead
 vocabulary seed with no consumers (recoverable via the op log).
 -/
 
+module
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (step?/run must reduce across module boundaries for rfl/decide proofs).
+@[expose] public section
+
 namespace Machines
 
 /-- An event: a decidable guard, an action that REQUIRES the guard's proof,
@@ -175,3 +181,5 @@ theorem run_preserves (init : m.State) (hinit : m.Inv init)
 end Machine
 
 end Machines
+
+end -- @[expose] public section

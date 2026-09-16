@@ -35,7 +35,13 @@ means equal hashes do NOT prove equal chains — the module only claims
 the sound direction, detection, never hash-equality-as-identity).
 -/
 
-import Dbsp.Replicas
+module
+
+public import Dbsp.Replicas
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp.Determinism
 
@@ -120,3 +126,5 @@ theorem hash_divergence_detects (combine : UInt64 → Event → UInt64)
   exact h (he ▸ rfl)
 
 end Dbsp.Determinism
+
+end -- @[expose] public section

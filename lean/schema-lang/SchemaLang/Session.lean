@@ -24,9 +24,13 @@ The instance is the gateway conversation with REAL Tys: `get-user`
 `order-error`, receives `stream<user>`).
 -/
 
-import Machines.Session
-import SchemaLang.Ty
-import SchemaLang.Emit.Wit
+module
+
+public import Machines.Session
+public import SchemaLang.Ty
+public import SchemaLang.Emit.Wit
+
+@[expose] public section
 
 namespace SchemaLang
 

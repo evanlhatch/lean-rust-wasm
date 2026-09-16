@@ -47,8 +47,14 @@ the Core's `enabled` is the only notion of pending work. A blocked
 delivery is a no-op (conservation), not a stuck step.
 -/
 
-import Machines.Core
-import Dbsp.Replicas
+module
+
+public import Machines.Core
+public import Dbsp.Replicas
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines.Sim
 
@@ -548,3 +554,5 @@ theorem zset_deliver_order_irrelevant {A : Type} (s δ₁ δ₂ : ZSet A) (src b
   rw [h1, h2, Dbsp.Replicas.two_replica_converge s δ₁ δ₂]
 
 end Machines.Sim
+
+end -- @[expose] public section

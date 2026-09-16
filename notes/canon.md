@@ -36,13 +36,15 @@ Z-sets).
 | cascade pass | = | pregel round = semi-naive iteration = `fix` step | `seminaive_equiv`, `fix_unique` |
 | recursive query | = | least fixed point | `fix_eq`, `fix_unique` |
 | tick | = | Mealy machine (cascade = combinational settle) | machine theory (Part 2) |
-| order-freedom | = | confluence | cslib `Relation.Confluence` (Newman; `RightUnique.to_confluent`) |
-| refinement / conformance | = | simulation (trace inclusion) | cslib `IsSimulation`, `sim_trace` |
+| order-freedom | = | confluence | `batch_order_irrelevant` (direct ZSet-fold proof, Dbsp/Replicas.lean); confluence-via-cslib (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
+| refinement / conformance | = | simulation (trace inclusion) | the oracle conformance machinery (`CompareMode`/`Verdict`, wasm-backend/Oracle.lean); simulation-via-cslib `IsSimulation`/`sim_trace` (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
 | observational equivalence | = | bisimulation | cslib `IsBisimulation` |
 | conservation law | = | linear equality over stocks | `linarith` discharge |
 | floored stock / budget / quota | = | a canonically-ordered value with monus (nonneg BY CONSTRUCTION) | the monus lemma set |
 | tech tree / schedule / dependency graph | = | DAG = partial order (dangling edges unrepresentable: `Dag n` is Fin-indexed) | acyclicity by `decide`; reachability = a fixpoint |
 | registry replay (oleans) | = | event sourcing (append on add, concat on import) | determinism of the fold |
+| a registry (closed, authored) | = | `CodegenCore.DataRegistry` — uniqueness in the type, a duplicate is an elaboration failure | `lookup?_ok_unique` / `lookup?_miss` |
+| an environment (open, runtime authoring) | = | `QLang.Registry` — re-declaring a name IS rebinding (last-binding-wins); NOT a DataRegistry (qlang audit 2026-09-16: deliberate divergence, distinct row) | the rebinding semantics is currently unpinned — a shadowing test is the named follow-up |
 | schema evolution | = | snapshot = partial I; `Diff` = D of the schema-event stream; migration = the delta transformer; breaking gate = "the old log replays through the new universe" | the whole event-sourcing row |
 
 ## Part 2 — the machine rows

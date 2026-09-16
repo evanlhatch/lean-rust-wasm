@@ -10,7 +10,11 @@ argument. Lookup misses carry `didYouMean` suggestions (closed world: errors
 enumerate the valid space). Core-only (no mathlib).
 -/
 
-import CodegenCore.DidYouMean
+module
+
+public import CodegenCore.DidYouMean
+
+@[expose] public section
 
 namespace CodegenCore
 

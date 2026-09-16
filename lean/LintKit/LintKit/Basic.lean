@@ -20,7 +20,11 @@ Deliberate exclusions: no LSpec/mathlib (core-only so any package may import
 it); the driver lives in `LintKit.Runner`, not here, so this module stays
 cheap to import at a nolint site.
 -/
-import Lean
+module
+
+public meta import Lean
+
+public meta section
 
 open Lean Meta
 

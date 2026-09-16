@@ -1,8 +1,8 @@
 /-
 # Machines.Foundations — the Fin-indexed DAG + kit re-export
 
-The correspondence kit (`Iso`/`PartialIso`/`Denotes`/`ReprOp`/`CheckedProp`/
-`iterateBounded`) moved to `CodegenCore.Kit` (W1.1: the kit needs zero
+The correspondence kit (`Iso`/`PartialIso`/`Denotes`/`ReprOp`/`CheckedProp`)
+moved to `CodegenCore.Kit` (W1.1: the kit needs zero
 mathlib; this package has it). Re-exported below so the `Machines.` names
 keep working for downstream. What STAYS here: the `Dag` with decidable
 acyclicity (Machines-owned; `Fin n` indexing makes dangling edges
@@ -11,10 +11,14 @@ The two mathlib LINTER imports register the package's lint config — they
 serve neither the kit nor the Dag.
 -/
 
-import Mathlib.Tactic.Linter.FlexibleLinter
-import Mathlib.Tactic.Linter.Style
-import CodegenCore.Kit
-import Batteries
+module
+
+public import Mathlib.Tactic.Linter.FlexibleLinter
+public import Mathlib.Tactic.Linter.Style
+public import CodegenCore.Kit
+public import Batteries
+
+@[expose] public section
 
 library_note machineAssemblePattern /--
   The veil Assemble pattern: a generated inductive for `Machine.Label` means
@@ -31,13 +35,9 @@ namespace Machines
     `export` — core Lean 4 has no `export` command): reducible, so instance
     search and anonymous constructors see through them (the AGENTS.md
     abbrev rule). Dotted names do NOT unfold aliases, so the member names
-    (`Denotes.abs`, `Iso.trans`, …) get their own one-line aliases. -/
+    (`Denotes.abs`, …) get their own one-line aliases. -/
 abbrev Iso := CodegenCore.Iso
-abbrev Iso.refl := @CodegenCore.Iso.refl
-abbrev Iso.symm := @CodegenCore.Iso.symm
-abbrev Iso.trans := @CodegenCore.Iso.trans
 abbrev PartialIso := CodegenCore.PartialIso
-abbrev PartialIso.trans := @CodegenCore.PartialIso.trans
 abbrev Denotes := CodegenCore.Denotes
 abbrev Denotes.abs := @CodegenCore.Denotes.abs
 abbrev ReprOp := @CodegenCore.ReprOp
@@ -47,9 +47,6 @@ abbrev CheckedProp := CodegenCore.CheckedProp
 abbrev CheckedProp.ofComplete := @CodegenCore.CheckedProp.ofComplete
 abbrev CheckedProp.check_iff := @CodegenCore.CheckedProp.check_iff
 abbrev CheckedProp.isComplete := @CodegenCore.CheckedProp.isComplete
-abbrev iterateN := @CodegenCore.iterateN
-abbrev iterateBounded := @CodegenCore.iterateBounded
-abbrev iterateBounded_sound := @CodegenCore.iterateBounded_sound
 
 /-! ## The Fin-indexed DAG -/
 
@@ -127,12 +124,5 @@ where
       else go d fuel (emitted ++ avail)
 
 end Dag
-
-/-! ## BoundedFix — see CodegenCore.Kit
-
-`iterateBounded` + `iterateBounded_sound` moved to the kit; the aliases
-above keep `Machines.iterateBounded` working. The design note stands: the
-one combinator behind every "iterate until converged, with a cap" story
-(the cascade exec loop, Convergent, Dag fuel, pregel pass budgets). -/
 
 end Machines

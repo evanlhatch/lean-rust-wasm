@@ -33,10 +33,14 @@ Driving decisions (deliberate exclusions):
   row is a `some` step of the proved table).
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
-import SchemaLang.OrderMachine
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.OrderMachine
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Typestate
 

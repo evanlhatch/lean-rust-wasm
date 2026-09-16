@@ -74,7 +74,7 @@ def name (n : String) : String :=
 abbrev sep (d : String) (xs : List String) : String := String.intercalate d xs
 
 /-- `$n`. -/
-def fieldRef (ord : Nat) : String := "$" ++ toString ord
+def fieldRef (ord : Nat) : String := dollarTok ++ toString ord
 
 /-! ## Types (mirrors textify/types.rs) -/
 
@@ -87,7 +87,7 @@ def nullSuffix : Proto.Nullability → Except String String
 /-- A parameter list `<a, b>` (empty → nothing). -/
 def params (ps : List (Except String String)) : Except String String := do
   let vs ← ps.mapM id
-  if vs.isEmpty then pure "" else pure ("<" ++ sep ", " vs ++ ">")
+  if vs.isEmpty then pure "" else pure ("<" ++ sep sepTok vs ++ gtTok)
 
 /-! Render loop of the type text: `typeTextBase` is the outer shape without the
 outer nullability suffix (nested elements keep their own nullability, so
@@ -109,14 +109,14 @@ mutual
     | .fp64 _         => pure (ScalarCtor.prefix .fp64)
     | .string _       => pure (ScalarCtor.prefix .string)
     | .binary _       => pure (ScalarCtor.prefix .binary)
-    | .decimal p s _  => pure (TCtor.prefix .decimal ++ toString p ++ "," ++ toString s ++ ">")
-    | .list e _       => do let es ← typeText e; pure (TCtor.prefix .list ++ es ++ ">")
+    | .decimal p s _  => pure (TCtor.prefix .decimal ++ toString p ++ commaTok ++ toString s ++ gtTok)
+    | .list e _       => do let es ← typeText e; pure (TCtor.prefix .list ++ es ++ gtTok)
     | .map k v _      => do
         let ks ← typeText k; let vs ← typeText v
-        pure (TCtor.prefix .map ++ ks ++ ", " ++ vs ++ ">")
+        pure (TCtor.prefix .map ++ ks ++ sepTok ++ vs ++ gtTok)
     | .struct fs _    => do
         let f' ← fs.mapM (fun t => typeText t)
-        pure (TCtor.prefix .struct ++ sep ", " f' ++ ">")
+        pure (TCtor.prefix .struct ++ sep sepTok f' ++ gtTok)
     | .userDefined anchor _ _ =>
         throw s!"cannot emit user-defined type with anchor {anchor} (no extension registry in Emit.Text)"
 
@@ -142,15 +142,6 @@ theorem typeTextBase_scalar (c : ScalarCtor) (n : Proto.Nullability) :
     ScalarCtor.prefix]
   all_goals rfl
 
-/-- A single `Proto.PParam`. -/
-def param : Proto.PParam → Except String String
-  | .boolean b   => pure (if b then "true" else "false")
-  | .integer i   => pure (toString i)
-  | .string s    => pure s
-  | .enum e      => pure e
-  | .dataType t  => typeText t
-  | .null t      => do let ts ← typeText t; pure ("null" ++ ts)
-
 /-! ## The plan extension context -/
 
 /-- Extension lookup for a plan (mirrors `SimpleExtensions`). -/
@@ -174,25 +165,27 @@ def nameOf (c : Ctx) (kind : Nat) (a : Nat) : Option String :=
 def namesOf (c : Ctx) (kind : Nat) : List String :=
   (c.extensions.filter (fun (_, k, _, _) => k == kind)).map fun x => x.2.2.2
 
-/-- Build the context from a plan. -/
+/-- Build the context from a plan. The kind numbers come from the shared
+    `Grammar.extKindGrammar` table (`ExtKind.num` — the SAME rows the
+    decoder's `parseDeclBlocks` reconstructs). -/
 def ofPlan (p : Proto.Plan) : Ctx :=
   { urns := p.extensionUrns.map fun u => (u.extensionUrnAnchor, u.urn)
     extensions := p.extensions.map fun d =>
       match d with
-      | .function u a n => (u, 0, a, n)
-      | .extType u a n  => (u, 1, a, n)
-      | .typeVariation u a n => (u, 2, a, n) }
+      | .function u a n => (u, ExtKind.num .function, a, n)
+      | .extType u a n  => (u, ExtKind.num .extType, a, n)
+      | .typeVariation u a n => (u, ExtKind.num .typeVariation, a, n) }
 
 /--
 A function's rendered name (± `:sig`, ± `#anchor`): mirrors `NamedAnchor`
 (unique names and unique base names are suppressed).
 -/
 def functionName (c : Ctx) (a : Nat) : Except String String :=
-  match c.nameOf 0 a with
+  match c.nameOf (ExtKind.num .function) a with
   | none => throw s!"function anchor {a} is not declared in this plan's extensions"
   | some fullName =>
       let base := (fullName.splitOn ":").headD fullName
-      let all := c.namesOf 0
+      let all := c.namesOf (ExtKind.num .function)
       let uniqueMatches := all.filter (fun n => n == fullName)
       let baseMatches := all.filter (fun n => (n.splitOn ":").headD n == base)
       let unique := uniqueMatches.length == 1
@@ -222,25 +215,31 @@ def literalValue : Proto.LiteralType → String
   | .i8 v | .i16 v | .i32 v | .i64 v => toString v
   | .fp32 v | .fp64 v => toString v
   | .string s     => "'" ++ escape s ++ "'"
-  | .binary _     => "{{binary}}"          -- show_literal_binaries=false default
-  | .null _       => "null"
+  | .binary _     => binarySentinel         -- show_literal_binaries=false default
+                                       -- the token is single-sourced in
+                                       -- `Substrait.Grammar.binarySentinel` (a VALUE
+                                       -- sentinel, not a name-table row);
+                                       -- `Decode.Expr.parseLiteral` scans the same
+                                       -- constant.
+  | .null _       => "null"   -- value word; `parseLiteral` pattern-matches it
+                              -- (char patterns cannot consume a constant — noted)
 
 /-- Render a literal with its type suffix (mirrors `Literal::textify`). -/
 def literal : Proto.Literal → Except String String
   | { literalType := .null t, nullable := _ } => do
       let ts ← typeText t
-      pure ("null" ++ ":" ++ ts)
+      pure ("null" ++ colonTok ++ ts)
   | { literalType := lt, nullable := n } =>
       let suffix : String :=
         if n || !isDefaultForSyntax lt then
-          ":" ++ literalTypeName lt ++ (if n then "?" else "")
+          colonTok ++ literalTypeName lt ++ (if n then "?" else "")
         else ""
       pure (literalValue lt ++ suffix)
 
 /-- The `:type` suffix of a function call's output type (mandatory in the grammar). -/
 def typeSuffix (t : Proto.PType) : Except String String := do
   let ts ← typeText t
-  pure (":" ++ ts)
+  pure (colonTok ++ ts)
 
 /-- A scalar-function call renders as `name(args...)suffix` — shared by
     `expr`'s `.scalarFunction` arm and `measure`. `rec` = the caller's
@@ -252,7 +251,7 @@ def callText (ctx : Ctx) (rec : Proto.Expression → Except String String)
   let na ← Ctx.functionName ctx anchor
   let as' ← args.mapM rec
   let fs ← typeSuffix out
-  pure (na ++ "(" ++ sep ", " as' ++ ")" ++ fs)
+  pure (na ++ lparenTok ++ sep sepTok as' ++ rparenTok ++ fs)
 
 /-- Render any expression. -/
 -- v0: emitter; totality not required
@@ -263,14 +262,16 @@ partial def expr (ctx : Ctx) : Proto.Expression → Except String String
   | .ifThen ifs elseE => do
       let cs ← ifs.mapM (fun (ifc, thenc) => do
         let i ← expr ctx ifc; let t ← expr ctx thenc
-        pure (i ++ " -> " ++ t))
+        pure (i ++ ifArrowTok ++ t))
       let e ← expr ctx elseE
-      pure ("if_then(" ++ sep ", " cs ++ ", _ -> " ++ e ++ ")")
+      pure (kwIfThen ++ sep sepTok cs ++ sepTok ++ ifElseTok ++ e ++ rparenTok)
   | .cast input targetType fb => do
       let i ← expr ctx input
       let t ← typeText targetType
-      let fbTxt := match fb with | .returnNull => "?" | .throwException => "!" | _ => ""
-      pure ("(" ++ i ++ ")::" ++ fbTxt ++ t)
+      let fbTxt := match CastFbCtor.ofBehavior fb with
+        | some c => c.token
+        | none => ""
+      pure (lparenTok ++ i ++ rparenTok ++ castTok ++ fbTxt ++ t)
   | .subquery _ _  => throw "cannot emit subqueries in the text format"
 
 /-- An aggregate measure renders like a scalar function. -/
@@ -304,14 +305,18 @@ def colAt (cols : List Col) (i : Nat) : Except String Col :=
 /-- Render a column. -/
 def colText : Col → String
   | .ref ord        => fieldRef ord
-  | .namedField n t => name n ++ ":" ++ t
+  | .namedField n t => name n ++ colonTok ++ t
   | .e txt          => txt
 
 /-- Direct (pre-emit) output columns as text. -/
-def directCols (cols : List Col) : String := sep ", " (cols.map colText)
+def directCols (cols : List Col) : String := sep sepTok (cols.map colText)
 
 /--
-The emit/output clause of a rel (mirrors `Emitted::write_output_clause`).
+The emit/output clause of a rel (mirrors `Emitted::write_output_clause`),
+LEADING SPACE INCLUDED — the clause IS `Grammar.arrowTok`/`plusArrowTok`
+(± the `pipeTok` mapping tail) plus the columns, so the caller concatenates
+header ++ clause directly and the decoder's `expect arrowTok` consumes
+exactly this (`Grammar.emptyGroupTok_arrowTok` pins the empty-group fusion).
 `implicit` selects `=>` vs `+>` (Direct/Implicit relations use `=>`; Read's
 explicit output uses `+>`).
 -/
@@ -319,17 +324,14 @@ def outputClause (implicit : Bool) (cols : List Col) (emit : Option Proto.EmitKi
   let direct := directCols cols
   if implicit then
     match emit with
-    | none            => pure ("=> " ++ direct)
-    | some .direct    => pure ("=> " ++ direct)
-    | some (.emit m)  => pure ("=> " ++ sep ", " (m.map fieldRef))
+    | none            => pure (arrowTok ++ direct)
+    | some .direct    => pure (arrowTok ++ direct)
+    | some (.emit m)  => pure (arrowTok ++ sep sepTok (m.map fieldRef))
   else
     match emit with
-    | none            => pure ("+> " ++ direct)
-    | some .direct    => pure ("+> " ++ direct)
-    | some (.emit m)  => pure ("+> " ++ direct ++ " |> " ++ sep ", " (m.map fieldRef))
-
-/-- The empty group argument display: `_`. -/
-def emptyGroup : String := "_"
+    | none            => pure (plusArrowTok ++ direct)
+    | some .direct    => pure (plusArrowTok ++ direct)
+    | some (.emit m)  => pure (plusArrowTok ++ direct ++ pipeTok ++ sep sepTok (m.map fieldRef))
 
 /-- The emitted width of a rel (how many output columns its parent sees). -/
 -- v0: emitter; totality not required
@@ -396,7 +398,7 @@ def refOutput (w : Nat) (common : Option Proto.RelCommon) : Except String String
 def wrapChild (rec : Ctx → String → Proto.Rel → Except String (List String))
     (ctx : Ctx) (indent : String) (input : Proto.Rel) (header : String) :
     Except String (List String) := do
-  let child ← rec ctx (indent ++ "  ") input
+  let child ← rec ctx (indent ++ indentUnit) input
   pure ([header] ++ child)
 
 /-- Render a relation (headers + children) as indented lines. -/
@@ -405,7 +407,7 @@ partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String
   | .read r => do
       match r.readType with
       | .namedTable names =>
-          let tableName := sep "." (names.map name)
+          let tableName := sep dotTok (names.map name)
           let fields : List Col ← match r.baseSchema with
             | some s => do
                 let ft ← (s.fields.zip s.names).mapM (fun (ty, nm) => do
@@ -416,13 +418,13 @@ partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String
           let out ← match emitOf r.common with
             | none => outputClause true fields none
             | some e => outputClause false fields (some e)
-          pure [indent ++ "Read[" ++ tableName ++ " " ++ out ++ "]"]
+          pure [indent ++ kwRead ++ tableName ++ out ++ "]"]
       | .virtualTable _ _ => throw "Read:Virtual is not yet supported by the typed emitter"
   | .filter r => do
       let c ← expr ctx r.condition
       let w ← relWidth r.input
       let out ← refOutput w r.common
-      wrapChild relLines ctx indent r.input (indent ++ "Filter[" ++ c ++ " " ++ out ++ "]")
+      wrapChild relLines ctx indent r.input (indent ++ kwFilter ++ c ++ out ++ "]")
   | .project r => do
       let w ← relWidth r.input
       let ex ← r.expressions.mapM (expr ctx)
@@ -434,18 +436,18 @@ partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String
       let shown ← match emitOf r.common with
         | some (.emit m) => m.mapM (fun i => colAt cols i)
         | _ => pure cols
-      let child ← relLines ctx (indent ++ "  ") r.input
-      pure ([indent ++ "Project[" ++ directCols shown ++ "]"] ++ child)
+      let child ← relLines ctx (indent ++ indentUnit) r.input
+      pure ([indent ++ kwProject ++ directCols shown ++ "]"] ++ child)
   | .aggregate r => do
       let groupArgs : List String ←
-        if r.groupingExpressions.isEmpty then pure [emptyGroup]
+        if r.groupingExpressions.isEmpty then pure [emptyGroupTok]
         else r.groupingExpressions.mapM (expr ctx)
       let ms ← r.measures.mapM (fun m => measure ctx m.measure)
       let gexprs : List String ← r.groupingExpressions.mapM (expr ctx)
       let cols : List Col := gexprs.map .e ++ ms.map .e
       let out ← outputClause true cols (emitOf r.common)
-      let child ← relLines ctx (indent ++ "  ") r.input
-      pure ([indent ++ "Aggregate[" ++ sep ", " groupArgs ++ " " ++ out ++ "]"] ++ child)
+      let child ← relLines ctx (indent ++ indentUnit) r.input
+      pure ([indent ++ kwAggregate ++ sep sepTok groupArgs ++ out ++ "]"] ++ child)
   | .sort r => do
       let sortArgs ← r.sorts.mapM (fun sf => do
         let rn ← match sf.expr with
@@ -453,39 +455,39 @@ partial def relLines (ctx : Ctx) (indent : String) : Proto.Rel → Except String
           | _ => throw "SortField must be a field reference in the text grammar"
         match sf.direction with
         | .unspecified => throw "cannot emit Unspecified sort direction in the text format"
-        | d => pure ("(" ++ rn ++ ", &" ++ sortDirName d ++ ")"))
+        | d => pure (lparenTok ++ rn ++ sortAmpTok ++ sortDirName d ++ rparenTok))
       let w ← relWidth r.input
       let out ← refOutput w r.common
-      wrapChild relLines ctx indent r.input (indent ++ "Sort[" ++ sep ", " sortArgs ++ " " ++ out ++ "]")
+      wrapChild relLines ctx indent r.input (indent ++ kwSort ++ sep sepTok sortArgs ++ out ++ "]")
   | .fetch r => do
       let named : List String :=
-        (r.limit.map (fun n => "limit=" ++ toString n)).toList ++
-        (r.offset.map (fun n => "offset=" ++ toString n)).toList
-      let argsText := if named.isEmpty then emptyGroup else sep ", " named
+        (r.limit.map (fun n => fetchLimitName ++ eqTok ++ toString n)).toList ++
+        (r.offset.map (fun n => fetchOffsetName ++ eqTok ++ toString n)).toList
+      let argsText := if named.isEmpty then emptyGroupTok else sep sepTok named
       let w ← relWidth r.input
       let out ← refOutput w r.common
-      wrapChild relLines ctx indent r.input (indent ++ "Fetch[" ++ argsText ++ " " ++ out ++ "]")
+      wrapChild relLines ctx indent r.input (indent ++ kwFetch ++ argsText ++ out ++ "]")
   | .join r => do
       let jt ← joinTypeName r.joinType
       let c ← expr ctx r.condition
       let l ← relWidth r.left; let rw ← relWidth r.right
       let total := r.joinType.width l rw
       let out ← outputClause true ((List.range total).map .ref) (emitOf r.common)
-      let childL ← relLines ctx (indent ++ "  ") r.left
-      let childR ← relLines ctx (indent ++ "  ") r.right
-      pure ([indent ++ "Join[&" ++ jt ++ ", " ++ c ++ " " ++ out ++ "]"] ++ childL ++ childR)
+      let childL ← relLines ctx (indent ++ indentUnit) r.left
+      let childR ← relLines ctx (indent ++ indentUnit) r.right
+      pure ([indent ++ kwJoin ++ ampTok ++ jt ++ sepTok ++ c ++ out ++ "]"] ++ childL ++ childR)
   | .set r => do
       let w ← relWidth (.set r)
       let out ← outputClause true ((List.range w).map .ref) (emitOf r.common)
       let op ← setOpName r.op
-      let children ← r.inputs.mapM (fun rl => relLines ctx (indent ++ "  ") rl)
-      pure ([indent ++ "Set[&" ++ op ++ " " ++ out ++ "]"] ++ children.flatten)
+      let children ← r.inputs.mapM (fun rl => relLines ctx (indent ++ indentUnit) rl)
+      pure ([indent ++ kwSet ++ ampTok ++ op ++ out ++ "]"] ++ children.flatten)
   | .cross r => do
       let l ← relWidth r.left; let rw ← relWidth r.right
-      let childL ← relLines ctx (indent ++ "  ") r.left
-      let childR ← relLines ctx (indent ++ "  ") r.right
+      let childL ← relLines ctx (indent ++ indentUnit) r.left
+      let childR ← relLines ctx (indent ++ indentUnit) r.right
       let cols := (List.range (l + rw)).map .ref
-      pure ([indent ++ "Cross[" ++ directCols cols ++ "]"] ++ childL ++ childR)
+      pure ([indent ++ kwCross ++ directCols cols ++ "]"] ++ childL ++ childR)
   | .write _          => throw "WriteRel is not part of the substrait-explain grammar — refusing to emit"
   | .extensionLeaf _  => throw "ExtensionLeafRel is not part of the substrait-explain grammar — refusing to emit"
   | .extensionSingle _=> throw "ExtensionSingleRel is not part of the substrait-explain grammar — refusing to emit"
@@ -505,10 +507,6 @@ def declUrnRef : Proto.ExtensionDeclaration → Nat
 def declName : Proto.ExtensionDeclaration → String
   | .function _ _ n => n | .extType _ _ n => n | .typeVariation _ _ n => n
 
-/-- The kind number (0 function, 1 type, 2 type variation). -/
-def declKindNum : Proto.ExtensionDeclaration → Nat
-  | .function _ _ _ => 0 | .extType _ _ _ => 1 | .typeVariation _ _ _ => 2
-
 /-- Stable insertion into a sorted list. -/
 def insertDecl (lt : Proto.ExtensionDeclaration → Proto.ExtensionDeclaration → Bool)
     (x : Proto.ExtensionDeclaration) : List Proto.ExtensionDeclaration → List Proto.ExtensionDeclaration
@@ -518,16 +516,30 @@ def insertDecl (lt : Proto.ExtensionDeclaration → Proto.ExtensionDeclaration �
 /-- Extensions sorted by (anchor, kind), matching textify's BTreeMap order. -/
 def sortedDeclarations (p : Proto.Plan) : List Proto.ExtensionDeclaration :=
   let lt (a b : Proto.ExtensionDeclaration) : Bool :=
-    let sa := (declAnchor a, declKindNum a)
-    let sb := (declAnchor b, declKindNum b)
+    let sa := (declAnchor a, (ExtKind.ofDecl a).num)
+    let sb := (declAnchor b, (ExtKind.ofDecl b).num)
     sa.1 < sb.1 || (sa.1 == sb.1 && sa.2 < sb.2)
   p.extensions.foldl (fun acc x => insertDecl lt x acc) []
 
-/-- Render a kind's section (header + entries), or nothing when empty. -/
-def kindSection (header : String) (list : List Proto.ExtensionDeclaration) : List String :=
+/-- One URN entry line (`  @{anchor:3}: {urn}`) — the emitter half of the
+    row shape `Decode.parseUrnEntry` inverts
+    (`Decode.parseUrnEntry_urnLine`). -/
+def urnLine (a : Nat) (urn : String) : String :=
+  urnEntryPfx ++ rightJustify 3 a ++ colonSpTok ++ urn
+
+/-- One declaration entry line (`  #{anchor:3} @{urnRef:3}: {name}`) — the
+    emitter half of the row shape `Decode.parseDeclEntry` inverts
+    (`Decode.parseDeclEntry_declLine`). The `" @"` separator's decoder half
+    is a char-level space-skip + `'@'` pattern (a resistant site — noted). -/
+def declLine (urnRef anchor : Nat) (nm : String) : String :=
+  declEntryPfx ++ rightJustify 3 anchor ++ " @" ++ rightJustify 3 urnRef ++ colonSpTok ++ nm
+
+/-- Render a kind's section (header + entries), or nothing when empty. The
+    header comes from the shared `Grammar.extKindGrammar` table — the SAME
+    rows the decoder's block loop looks up. -/
+def kindSection (k : ExtKind) (list : List Proto.ExtensionDeclaration) : List String :=
   if list.isEmpty then []
-  else header :: (list.map fun d =>
-    "  #" ++ rightJustify 3 (declAnchor d) ++ " @" ++ rightJustify 3 (declUrnRef d) ++ ": " ++ declName d)
+  else k.header :: (list.map fun d => declLine (declUrnRef d) (declAnchor d) (declName d))
 
 /-- The `=== Extensions` lines of a plan (nothing when the plan declares nothing). -/
 def extensionsLines (p : Proto.Plan) : List String :=
@@ -535,20 +547,22 @@ def extensionsLines (p : Proto.Plan) : List String :=
   else
     let urnBlock : List String :=
       if p.extensionUrns.isEmpty then []
-      else "URNs:" :: (p.extensionUrns.map fun u => "  @" ++ rightJustify 3 u.extensionUrnAnchor ++ ": " ++ u.urn)
+      else urnsHeader :: (p.extensionUrns.map fun u => urnLine u.extensionUrnAnchor u.urn)
     let decls := sortedDeclarations p
-    let fnS := kindSection "Functions:" (decls.filter (fun d => declKindNum d == 0))
-    let tyS := kindSection "Types:" (decls.filter (fun d => declKindNum d == 1))
-    let tvS := kindSection "Type Variations:" (decls.filter (fun d => declKindNum d == 2))
-    ["=== Extensions"] ++ urnBlock ++ fnS ++ tyS ++ tvS
+    let fnS := kindSection .function (decls.filter (fun d => ExtKind.ofDecl d == .function))
+    let tyS := kindSection .extType (decls.filter (fun d => ExtKind.ofDecl d == .extType))
+    let tvS := kindSection .typeVariation (decls.filter (fun d => ExtKind.ofDecl d == .typeVariation))
+    [sectionExtensions] ++ urnBlock ++ fnS ++ tyS ++ tvS
 
 /-! ## Version + relations + driver -/
 
-/-- The `=== Version` lines (only when the version is present and non-empty). -/
+/-- The `=== Version` lines (only when the version is present and non-empty).
+    The line shapes are the `Grammar.versionPfx`/`dotTok`/`producerPfx`/
+    `gitHashPfx` tokens — `Decode.parseVersion_versionLines` inverts them. -/
 def versionLines (v : Proto.Version) : List String :=
-  let header := "=== Version " ++ toString v.majorNumber ++ "." ++ toString v.minorNumber ++ "." ++ toString v.patchNumber
-  let producer := if v.producer.isEmpty then [] else ["  producer: " ++ v.producer]
-  let git := if v.gitHash.isEmpty then [] else ["  git_hash: " ++ v.gitHash]
+  let header := versionPfx ++ toString v.majorNumber ++ dotTok ++ toString v.minorNumber ++ dotTok ++ toString v.patchNumber
+  let producer := if v.producer.isEmpty then [] else [producerPfx ++ v.producer]
+  let git := if v.gitHash.isEmpty then [] else [gitHashPfx ++ v.gitHash]
   header :: (producer ++ git)
 
 /-- Render all plan rels; one blank line separates consecutive rels. -/
@@ -558,9 +572,9 @@ def relationsLines (ctx : Ctx) : List Proto.PlanRel → Except String (List Stri
       let cur ← match r with
         | .rel rel => relLines ctx "" rel
         | .root names input => do
-            let namesTxt := sep ", " (names.map name)
-            let inp ← relLines ctx "  " input
-            pure (["Root[" ++ namesTxt ++ "]"] ++ inp)
+            let namesTxt := sep sepTok (names.map name)
+            let inp ← relLines ctx indentUnit input
+            pure ([kwRoot ++ namesTxt ++ "]"] ++ inp)
       let tail ← relationsLines ctx rest
       pure (cur ++ (if rest.isEmpty then [] else [""]) ++ tail)
 
@@ -577,7 +591,7 @@ def emit (plan : Proto.Plan) : Except String String := do
   if !ext.isEmpty then
     lines := lines ++ ext
     lines := lines ++ [""]
-  lines := lines ++ ["=== Plan"]
+  lines := lines ++ [sectionPlan]
   let rels ← relationsLines ctx plan.relations
   lines := lines ++ rels
   pure (sep "\n" lines ++ "\n")

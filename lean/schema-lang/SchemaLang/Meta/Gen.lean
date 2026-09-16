@@ -26,10 +26,14 @@ Ownership: schema-lang's generator lane (the elab half; the runtime
 half — `FieldsClosed`/`genRowVals` — is `SchemaLang.Gen`).
 -/
 
-import Lean
-import SchemaLang.Meta.Derive
-import SchemaLang.Meta.Reflect
-import SchemaLang.Gen
+module
+
+public import Lean
+public import SchemaLang.Meta.Derive
+public import SchemaLang.Meta.Reflect
+public import SchemaLang.Gen
+
+public meta section
 
 namespace SchemaLang.Meta
 

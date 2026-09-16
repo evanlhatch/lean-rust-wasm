@@ -31,9 +31,13 @@ no output channel — see Machines/Core.lean); the machine is the
 DISCIPLINE model, the data effects ride the schema funcs.
 -/
 
-import Machines.Dsl
-import Machines.Testing
-import SchemaLang.Item
+module
+
+public import Machines.Dsl
+public import Machines.Testing
+public import SchemaLang.Item
+
+@[expose] public section
 
 open Machines.Dsl
 

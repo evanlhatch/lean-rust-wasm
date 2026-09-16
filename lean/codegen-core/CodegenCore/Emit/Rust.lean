@@ -26,6 +26,9 @@ Design decisions:
 - Determinism: no HashMap iteration anywhere in emitters; folds are over
   registry `List`s in registration order.
 -/
+module
+
+@[expose] public section
 
 namespace CodegenCore.Emit.Rust
 

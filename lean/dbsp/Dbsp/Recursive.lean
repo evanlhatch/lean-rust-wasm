@@ -22,9 +22,15 @@ The classical choice inside `streamElim` stays inert: every use comes with
 a `ZeroAfter` certificate (here: iterate stabilization).
 -/
 
-import Dbsp.Certs
-import Dbsp.StreamElim
-import Mathlib.Logic.Function.Iterate
+module
+
+public import Dbsp.Certs
+public import Dbsp.StreamElim
+public import Mathlib.Logic.Function.Iterate
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -142,3 +148,5 @@ theorem naive_ok (R : B → A → A) (i : B) (n : Nat)
   exact naive_ok R i n heqn
 
 end Dbsp
+
+end -- @[expose] public section

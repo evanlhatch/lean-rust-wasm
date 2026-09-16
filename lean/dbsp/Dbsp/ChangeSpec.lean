@@ -35,7 +35,13 @@ their `Operator`/`ΔRun.correct` monadic runner (our end-to-end shape is
 `Flatland.Cascade` + the oracle conformance relation).
 -/
 
-import Dbsp.Relational
+module
+
+public import Dbsp.Relational
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -149,3 +155,5 @@ def Bilinear.toPartialDerivSpec {a b c : Type} [AddCommGroup a] [AddCommGroup b]
     exact (hb.2 x y dy).symm
 
 end Dbsp
+
+end -- @[expose] public section

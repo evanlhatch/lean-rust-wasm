@@ -2094,6 +2094,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "oracle-runner"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "steel-host",
+ "tokio",
+ "wasmtime",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3254,6 +3265,10 @@ checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "wasm-delta"
+version = "0.1.0"
 
 [[package]]
 name = "wasm-encoder"

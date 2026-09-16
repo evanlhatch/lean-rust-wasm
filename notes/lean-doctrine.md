@@ -48,7 +48,7 @@ TestKit, codegen-core            (core-only — importable by everything)
 | Emitters are pure `List Item → List GeneratedFile`; drivers write | convention → lint | Emitter.run-vs-outputs audit test per registry (guide 3.2). |
 | One writer per artifact path; every emitter's outputs are covered by the driver's job manifest | test-audit (`pathsUnique`, `jobsCoverEmitters`) | Exists in schema-lang AND faults registries. The gap: `run` re-states paths and nothing checks them against `outputs` (guide 3.2). |
 | Every artifact carries a provenance header citing its spec source | structural (`Emitter.specSource` → `CodegenCore.Emit.header`) | Currently defeated in the golden path: Tests/Main.lean:198 hardcodes the header instead of `e.specSource`, so 6 of 11 emitters byte-tie a header production never emits (guide 1.4). |
-| Closed universes stay closed (no escape-hatch ctors); new ctors break every emitter until handled | structural (exhaustiveness) | `Ty` (18 ctors), `MetadataShape` (no `Raw`). This is deliberate — do not "fix" the parallel folds over `Ty`. |
+| Closed universes stay closed (no escape-hatch ctors); new ctors break every emitter until handled | structural (exhaustiveness) | `Ty` (20 ctors), `MetadataShape` (no `Raw`). This is deliberate — do not "fix" the parallel folds over `Ty`. |
 | Unsupported constructs in a backend THROW; never emit comments | structural | `WasmBackend.unsupported`; pure-only ctors discharged by `absurd`. |
 | Boundary policies are pure predicates + elab-time attribute gates with `#guard` positive AND negative controls | structural + test | `WasmBackend.Check` (`@[guest]`, `Ban.strict/.std`). The shape: policy as pure data, attribute only renders. |
 

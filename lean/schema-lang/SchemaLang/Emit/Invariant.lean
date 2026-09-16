@@ -31,12 +31,16 @@ do not exist in the demo registry yet (the ctor is closed for when
 they do).
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Invariant
-import SchemaLang.ExprLang
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Meta.Reflect
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Invariant
+public import SchemaLang.ExprLang
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Meta.Reflect
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Invariant
 

@@ -34,12 +34,16 @@ environment's own map) and groups by it — see `rootPartitionOf`.
 Emitters consume `ctx.rootItems`.
 -/
 
-import Lean
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Invariant
-import SchemaLang.Update
-import SchemaLang.Wf
+module
+
+public import Lean
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Invariant
+public import SchemaLang.Update
+public import SchemaLang.Wf
+
+@[expose] public section
 
 namespace SchemaLang.Emit
 

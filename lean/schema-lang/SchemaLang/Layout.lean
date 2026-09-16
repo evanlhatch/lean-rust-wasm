@@ -23,7 +23,11 @@ Ownership: schema-lang (the tensor lane). Imports Ty (the universe +
 TVal/TSlices) and CodecValue (the flatten + the length lemmas).
 -/
 
-import SchemaLang.CodecValue
+module
+
+public import SchemaLang.CodecValue
+
+@[expose] public section
 
 namespace SchemaLang
 

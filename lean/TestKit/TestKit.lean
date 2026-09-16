@@ -1,11 +1,15 @@
 /- TestKit — the shared test harness (harness, golden, PropSpec, DetSpec,
    DiffSpec, GateKit) + the shared deterministic LCG. -/
-import TestKit.Harness
-import TestKit.Golden
-import TestKit.PropSpec
-import TestKit.DetSpec
-import TestKit.DiffSpec
-import TestKit.GateKit
+module
+
+public import TestKit.Harness
+public import TestKit.Golden
+public import TestKit.PropSpec
+public import TestKit.DetSpec
+public import TestKit.DiffSpec
+public import TestKit.GateKit
+
+@[expose] public section
 
 namespace TestKit
 

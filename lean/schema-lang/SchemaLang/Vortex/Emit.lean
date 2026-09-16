@@ -25,12 +25,16 @@ each record also gets `impl IntoVortex for <Struct>`, building the
 struct array column-wise via `IntoArray`.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Wf
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Vortex.DType
-import SchemaLang.Vortex.Lower
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Wf
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Vortex.DType
+public import SchemaLang.Vortex.Lower
+
+@[expose] public section
 
 namespace SchemaLang.Vortex.Emit
 
@@ -52,7 +56,7 @@ def nullabilityRust : Nullability → String
   | .nullable => "Nullability::Nullable"
 
 /-- Metadata bytes as a `vec![...]` literal. -/
-private def bytesVecRust : List UInt8 → String
+def bytesVecRust : List UInt8 → String
   | [] => "vec![]"
   | bs => "vec![" ++ String.intercalate ", " (bs.map fun b => s!"{b}u8") ++ "]"
 
@@ -65,7 +69,7 @@ mutual
     THROUGH this member's structural recursion over the field list, so
     the fold must stay a list-recursion (a `map`+`intercalate` one-liner
     would rob the block's termination witness). -/
-private def fieldsItemsRust : List (FieldName × DType) → String
+def fieldsItemsRust : List (FieldName × DType) → String
   | [] => ""
   | (n, dt) :: rest =>
       s!"(\"{n}\".into(), {dtypeRust dt})"
@@ -118,7 +122,7 @@ def intoVortexImpl (structName : String) (fields : List (String × DType)) :
 /-- Variant cases → union variants: payload cases lower their type;
     payload-free cases lower to `DType::Null` (v1: every case gets a
     slot in the union). -/
-private def lowerVariantCases (sem : VortexSem) (cases : List SchemaLang.VariantCase) :
+def lowerVariantCases (sem : VortexSem) (cases : List SchemaLang.VariantCase) :
     List (FieldName × DType) :=
   cases.filterMap fun (c, payload) =>
     match payload with
@@ -150,7 +154,7 @@ def refSem (items : List SchemaLang.Item) : Nat → VortexSem
 /-- The sem-parameterized record-table spine — the checked and
     unchecked views share it (`recordDTypes` instantiates `sem` with
     the fuel-bounded self-semantics). -/
-private def recordDTypesWith (sem : VortexSem) (items : List SchemaLang.Item) :
+def recordDTypesWith (sem : VortexSem) (items : List SchemaLang.Item) :
     List (String × StructFields) :=
   items.filterMap fun it =>
     match it with
@@ -183,7 +187,7 @@ impossibility stated against the emitter's input. -/
     at `recordDTypesChecked` and threaded through the recursion (the
     membership wall: a `filterMap` lambda carries no membership proof,
     so the fold is structural here). -/
-private def recordDTypesCheckedGo (sem : VortexSem) :
+def recordDTypesCheckedGo (sem : VortexSem) :
     (items : List SchemaLang.Item) →
     (∀ n fields, SchemaLang.Item.record n fields ∈ items →
       ∀ f, f ∈ fields → f.ty.banAsync = true) →

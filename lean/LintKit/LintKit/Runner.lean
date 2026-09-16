@@ -16,12 +16,16 @@ The linters are also registered via `@[builtin_env_linter]`, so packages
 that DO import LintKit get stock `lake lint --builtin-lint` integration for
 free (snapshots recorded, per-decl opt-outs honored by core).
 -/
-import LintKit.AxiomAllowlist
-import LintKit.GuestBan
-import LintKit.RecursiveSimpEqns
-import LintKit.DupDefBodies
-import LintKit.PackageNamespace
-import LintKit.TextLints
+module
+
+public import LintKit.AxiomAllowlist
+public import LintKit.GuestBan
+public import LintKit.RecursiveSimpEqns
+public import LintKit.DupDefBodies
+public import LintKit.PackageNamespace
+public import LintKit.TextLints
+
+public meta section
 
 open Lean Meta Linter EnvLinter
 

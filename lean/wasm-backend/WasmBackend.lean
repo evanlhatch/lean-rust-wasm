@@ -533,15 +533,11 @@ wrong shape = a differential failure (the host misreads).
   -- poll; the callback = the constant Exit=0). The fused-adapter
   -- `type mismatch` seen earlier = the missing task-return import+call.
 def asyncFns : List String := ["watch-orders", "watch-counts", "watch-users"]
-  -- GATED OFF: the [async-lift] protocol's shapes are emitted correctly
-  -- (the callback + the interface-qualified exports — verified against
-  -- the wit-bindgen 0.61 reference + the minimal-module probes), but
-  -- sync-computable watch-orders = the landed form; the async = the
-  -- plan doc's Track 1b. RESOLUTION (this session): the async = LANDED
-  -- — the recipe (the WIT's async func + the task-return/waitable
-  -- imports + the task-return delivery) = in the asyncFns' note; the
-  -- earlier `fused-adapter mismatch` = the MISSING task-return
-  -- import+call, not a wit-component bug.
+  -- [async-lift] emission is LIVE: the callback + interface-qualified
+  -- exports are emitted (verified against the wit-bindgen 0.61
+  -- reference), and the callee delivers results by calling
+  -- task-return(flat-results) then returning 0 — the task-return
+  -- import+call is the piece the fused-adapter type mismatch was missing.
 
 /-- The adapter result shape per export (kebab name). -/
 def adapterShape? : String → Option String
@@ -1207,7 +1203,7 @@ def emitModule (decls : List (Decl .impure))
   -- `{interface-key}#{fn}` (the resolve's own-package key = the BARE
   -- "demo-exports" — the foreign-package references carry the full
   -- pkg:iface path); the world-level scalars = the bare kebab; the async
-  -- ones = the [async-lift] prefix (gated off — see asyncFns).
+  -- ones = the [async-lift] prefix (see asyncFns).
   -- ALL exports = the world-level (the async = the [async-lift]-prefixed
   -- bare name; the interface-split = the wit-component 47's fused
   -- adapter mismatch — see the asyncFns' note + the plan doc's 1b).

@@ -43,8 +43,12 @@ shape) needs these laws PLUS the row-shape certification — the growth
 path is noted in notes/flatland-alignment.md §2.
 -/
 
-import SchemaLang.Update
-import Dbsp.Effects
+module
+
+public import SchemaLang.Update
+public import Dbsp.Effects
+
+@[expose] public section
 
 namespace SchemaLang
 

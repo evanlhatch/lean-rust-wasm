@@ -3,6 +3,12 @@
 
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
+W5.3 phase 2b: the cast failure-behavior suffix scans the shared
+`Grammar.castFbGrammar` table (`castFbScan`, with `castFbScan_token` the
+round trip); parens/arrows/`if_then(`/the binary sentinel are the shared
+line-shape tokens. The `null`/`true`/`false` value words stay
+char-pattern-matched (patterns cannot consume a constant — the
+resistant-site note in `Substrait.Grammar`'s header).
 -/
 import Substrait.Decode.Types
 
@@ -50,7 +56,53 @@ def intLitTail (v : Int) (r1 : List Char) : Option (Proto.Literal × List Char) 
       ({ literalType := lt, nullable := suffixNullable sfx }, r))
   | none => none
 
-/-- Parse a literal (the emitter's `literal` forms). -/
+/-- Parse a decimal float value: optional `-`, integer digits, `.`,
+    fractional digits (at least one digit after `.`).  Uses `scanNat`
+    for the integer part, then iterates the fractional digits dividing
+    by successive powers of 10 — avoids `Float` exponent (not available
+    in core-only) and handles leading zeros in the fractional part. -/
+def scanFloat : List Char → Option (Float × List Char)
+  | '-' :: cs =>
+    match scanFloat cs with
+    | some (v, rest) => some (-v, rest)
+    | none => none
+  | cs =>
+    match scanNat cs with
+    | some (intPart, '.' :: rest) =>
+      -- `started` distinguishes "no digits after the dot" (not a float)
+      -- from "input ended INSIDE the fraction" (the float is complete)
+      let rec go (started : Bool) (frac : Float) (div : Float) : List Char → Option (Float × List Char)
+        | [] => if started then some ((Nat.toFloat intPart) + frac, []) else none
+        | c :: rest' =>
+          if h : c.isDigit then
+            let digit := (c.val.toNat - '0'.val.toNat)
+            go true (frac + (Nat.toFloat digit) / div) (div * (10 : Float)) rest'
+          else if started then
+            some ((Nat.toFloat intPart) + frac, c :: rest')
+          else none
+      go false 0.0 (10 : Float) rest
+    | _ => none
+
+/-- Float literal from the suffix's type (default fp64 when no suffix;
+    a non-float suffix type is a parse error). -/
+def floatLitOf (v : Float) : Option Proto.PType → Option Proto.LiteralType
+  | none => some (.fp64 v)  -- default: fp64 (isDefaultForSyntax)
+  | some (.fp32 _) => some (.fp32 v)
+  | some (.fp64 _) => some (.fp64 v)
+  | _ => none
+
+/-- The float arm's tail: the suffix scan after a scanned float value
+    (mirrors `intLitTail`). -/
+def floatLitTail (v : Float) (r1 : List Char) : Option (Proto.Literal × List Char) :=
+  match scanLitSuffix r1 with
+  | some (sfx, r) => (floatLitOf v sfx).map (fun lt =>
+      ({ literalType := lt, nullable := suffixNullable sfx }, r))
+  | none => none
+
+/-- Parse a literal (the emitter's `literal` forms). The value words
+    `null`/`true`/`false` stay char-pattern-matched (patterns cannot consume
+    a constant — the resistant-site note in `Substrait.Grammar`'s header);
+    the binary sentinel IS the shared `Grammar.binarySentinel`. -/
 def parseLiteral : List Char → Option (Proto.Literal × List Char)
   | 'n' :: 'u' :: 'l' :: 'l' :: ':' :: rest =>
     (parseType (rest.length + 1) rest).map (fun (t, r) =>
@@ -61,10 +113,26 @@ def parseLiteral : List Char → Option (Proto.Literal × List Char)
     (scanQuotedRaw '\'' [] rest).bind fun (raw, r1) =>
       (unescape (String.ofList raw)).bind fun s => litWithSuffix (.string s) r1
   | cs =>
-    if startsWith cs "{{binary}}" then litWithSuffix (.binary []) (cs.drop 10)
-    else match scanInt cs with
-      | some (v, r1) => intLitTail v r1
-      | none => none
+    if startsWith cs Grammar.binarySentinel then
+      litWithSuffix (.binary []) (cs.drop Grammar.binarySentinel.length)
+    else match scanFloat cs with
+      | some (v, r1) => floatLitTail v r1
+      | none => match scanInt cs with
+        | some (v, r1) => intLitTail v r1
+        | none => none
+
+/-- The cast failure-behavior suffix scan over the shared
+    `Grammar.castFbGrammar` table (the emitter's `?`/`!` tokens; the bare
+    `::t` form scans nothing and the caller rejects `unspecified`). -/
+def castFbScan (cs : List Char) : Option (Grammar.CastFbCtor × List Char) :=
+  (Grammar.castFbGrammar.find? (fun c => startsWith cs c.token)).map
+    (fun c => (c, cs.drop c.token.length))
+
+/-- **Cast-failure round trip** (`parse (emit x) = some x`): the emitter's
+    token for a behavior scans back to the ctor. -/
+theorem castFbScan_token (c : Grammar.CastFbCtor) (rest : List Char) :
+    castFbScan (c.token.toList ++ rest) = some (c, rest) := by
+  cases c <;> rfl
 
 mutual
 
@@ -75,7 +143,7 @@ def parseExprList : Nat → Nat → FnCtx → List Char → Option (List Proto.E
     match parseExpr efuel ctx cs with
     | none => none
     | some (e, r1) =>
-      match expect ", " r1 with
+      match expect Grammar.sepTok r1 with
       | some r2 => match parseExprList lfuel efuel ctx r2 with
         | some (es, r3) => some (e :: es, r3)
         | none => none
@@ -86,18 +154,18 @@ def parseIfPairs : Nat → Nat → FnCtx → List Char →
     Option (List (Proto.Expression × Proto.Expression) × Proto.Expression × List Char)
   | 0, _, _, _ => none
   | lfuel + 1, efuel, ctx, cs =>
-    if startsWith cs "_ -> " then
-      match parseExpr efuel ctx (cs.drop 5) with
-      | some (e, r1) => match expect ")" r1 with
+    if startsWith cs Grammar.ifElseTok then
+      match parseExpr efuel ctx (cs.drop Grammar.ifElseTok.length) with
+      | some (e, r1) => match expect Grammar.rparenTok r1 with
         | some r2 => some ([], e, r2)
         | none => none
       | none => none
     else match parseExpr efuel ctx cs with
       | some (c, r1) =>
-        match expect " -> " r1 with
+        match expect Grammar.ifArrowTok r1 with
         | some r2 => match parseExpr efuel ctx r2 with
           | some (v, r3) =>
-            match expect ", " r3 with
+            match expect Grammar.sepTok r3 with
             | some r4 => match parseIfPairs lfuel efuel ctx r4 with
               | some (rest', els, r5) => some ((c, v) :: rest', els, r5)
               | none => none
@@ -112,17 +180,16 @@ def parseExpr : Nat → FnCtx → List Char → Option (Proto.Expression × List
   | 0, _, _ => none
   | fuel + 1, ctx, cs =>
     -- cast: `(expr)::?type` / `(expr)::!type` / `(expr)::type`
-    if startsWith cs "(" then
-      match parseExpr fuel ctx (cs.drop 1) with
+    if startsWith cs Grammar.lparenTok then
+      match parseExpr fuel ctx (cs.drop Grammar.lparenTok.length) with
       | some (e, r1) =>
-        match expect ")" r1 with
+        match expect Grammar.rparenTok r1 with
         | some r2 =>
-          match expect "::" r2 with
+          match expect Grammar.castTok r2 with
           | some r3 =>
-            let (fb, r4) := match r3 with
-              | '?' :: rr => (Proto.CastFailureBehavior.returnNull, rr)
-              | '!' :: rr => (Proto.CastFailureBehavior.throwException, rr)
-              | rr => (Proto.CastFailureBehavior.unspecified, rr)
+            let (fb, r4) := match castFbScan r3 with
+              | some (c, rr) => (c.toBehavior, rr)
+              | none => (Proto.CastFailureBehavior.unspecified, r3)
             match parseType (r4.length + 1) r4 with
             | some (t, r5) =>
               -- Unspecified behavior cannot be emitted; parse it back as
@@ -137,23 +204,23 @@ def parseExpr : Nat → FnCtx → List Char → Option (Proto.Expression × List
         | none => none
       | none => none
     -- if_then(...)
-    else if startsWith cs "if_then(" then
-      match parseIfPairs (cs.length + 1) fuel ctx (cs.drop 8) with
+    else if startsWith cs Grammar.kwIfThen then
+      match parseIfPairs (cs.length + 1) fuel ctx (cs.drop Grammar.kwIfThen.length) with
       | some (ifs, els, r) => some (.ifThen ifs els, r)
       | none => none
-    else if startsWith cs "$" then
+    else if startsWith cs Grammar.dollarTok then
       match scanNat (cs.drop 1) with
       | some (n, r) => some (.field { ordinal := n, segment := none }, r)
       | none => none
     else match scanIdent cs with
     | some (fn, r1) =>
-      match expect "(" r1 with
+      match expect Grammar.lparenTok r1 with
       | some r2 =>
         match parseExprList (r2.length + 1) fuel ctx r2 with
         | some (args, r3) =>
-          match expect ")" r3 with
+          match expect Grammar.rparenTok r3 with
           | some r4 =>
-            match expect ":" r4 with
+            match expect Grammar.colonTok r4 with
             | some r5 =>
               match parseType (r5.length + 1) r5 with
               | some (outTy, r6) =>
@@ -471,7 +538,8 @@ private theorem parseExpr_int_prefix (n : Nat) (rest : List Char) :
 
 /-- The `i64` literal (the syntax-default integer): `42` scans back. -/
 private theorem parseLiteral_i64 (n : Nat) (rest : List Char)
-    (hstop : notDigitHead rest) (hnotcolon : rest.head? ≠ some ':') :
+    (hstop : notDigitHead rest) (hnotcolon : rest.head? ≠ some ':')
+    (hnotdot : rest.head? ≠ some '.') :
     parseLiteral ((toString n).toList ++ rest) =
       some ({ literalType := .i64 (n : Int), nullable := false }, rest) := by
   cases hn : (toString n).toList with
@@ -486,6 +554,21 @@ private theorem parseLiteral_i64 (n : Nat) (rest : List Char)
     have hsc := scanNat_of_toString n rest hstop
     rw [hn] at hsc
     rw [List.cons_append] at hsc
+    have hsf : scanFloat (c :: (cs ++ rest)) = none := by
+      have hneg' : c ≠ '-' := char_ne_digit hdim (by decide : '-'.isDigit = false)
+      rw [scanFloat.eq_2 (c :: (cs ++ rest)) (by
+        intro rest' h'
+        injection h' with hcc _
+        exact hneg' hcc)]
+      rw [hsc]
+      cases hrest : rest
+      · rfl
+      · rename_i c' rest'
+        have hc' : c' ≠ '.' := by
+          intro hdot
+          apply hnotdot
+          simp [hrest, hdot]
+        simp [hrest, hc']
     have hsc' : scanInt (c :: (cs ++ rest)) = some ((n : Int), rest) := by
       rw [scanInt.eq_2 (c :: (cs ++ rest)) (by intro rest' h'; injection h' with hcc _; exact hneg hcc)]
       rw [Parser.bind_apply, Parser.bind]
@@ -496,7 +579,7 @@ private theorem parseLiteral_i64 (n : Nat) (rest : List Char)
       char_ne_digit hdim (by decide : 't'.isDigit = false),
       char_ne_digit hdim (by decide : 'f'.isDigit = false),
       char_ne_digit hdim (by decide : ('\'' : Char).isDigit = false),
-      hbin, hsc', intLitTail, scanLitSuffix_none rest hnotcolon, intLitOf, suffixNullable]
+      hbin, hsf, hsc', intLitTail, scanLitSuffix_none rest hnotcolon, intLitOf, suffixNullable]
 
 
 
@@ -831,12 +914,20 @@ private theorem parseLiteral_i64_nullable (n : Nat) (rest : List Char)
         rfl
       rw [← hs]
       exact hlt
+    have hsf : scanFloat (c :: (cs ++ ':' :: 'i' :: '6' :: '4' :: '?' :: rest)) = none := by
+      have hneg' : c ≠ '-' := char_ne_digit hdim (by decide : '-'.isDigit = false)
+      rw [scanFloat.eq_2 (c :: (cs ++ ':' :: 'i' :: '6' :: '4' :: '?' :: rest)) (by
+        intro rest' h'
+        injection h' with hcc _
+        exact hneg' hcc)]
+      rw [hscn']
+      simp
     simp [parseLiteral,
       char_ne_digit hdim (by decide : 'n'.isDigit = false),
       char_ne_digit hdim (by decide : 't'.isDigit = false),
       char_ne_digit hdim (by decide : 'f'.isDigit = false),
       char_ne_digit hdim (by decide : ('\'' : Char).isDigit = false),
-      hbin, hsc', hlt', intLitTail, intLitOf, suffixNullable, nullabilityOf]
+      hbin, hsf, hsc', hlt', intLitTail, intLitOf, suffixNullable, nullabilityOf]
     rfl
 
 /-- A non-alpha head makes `scanIdent` fail. -/
@@ -890,7 +981,8 @@ private theorem parseLiteral_string (s : String) (rest : List Char)
 
 /-- The nullable `i64` literal at the `parseExpr` level: `42:i64?`. -/
 theorem parseExpr_lit_i64 (fuel n : Nat) (ctx : FnCtx) (rest : List Char)
-    (hstop : notDigitHead rest) (hnotcolon : rest.head? ≠ some ':') :
+    (hstop : notDigitHead rest) (hnotcolon : rest.head? ≠ some ':')
+    (hnotdot : rest.head? ≠ some '.') :
     parseExpr (fuel + 1) ctx ((toString n).toList ++ rest) =
       some (.literal { literalType := .i64 (n : Int), nullable := false }, rest) := by
   rcases parseExpr_int_prefix n rest with ⟨hnot1, hnot2, hnot3, hsn⟩
@@ -900,7 +992,7 @@ theorem parseExpr_lit_i64 (fuel n : Nat) (ctx : FnCtx) (rest : List Char)
     rw [hsn] at h'
     cases h'
   rw [parseExpr_literal_fallback fuel ctx ((toString n).toList ++ rest) hnot1 hnot2 hnot3 hnocall]
-  rw [parseLiteral_i64 n rest hstop hnotcolon]
+  rw [parseLiteral_i64 n rest hstop hnotcolon hnotdot]
 
 
 end Substrait.Decode

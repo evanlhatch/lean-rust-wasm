@@ -41,8 +41,12 @@ Deliberately NOT here: trace correctness (that's the oracle, engine-side)
 and safety (that's the EventSpec PO, discharged at construction).
 -/
 
-import Machines.Core
-import TestKit
+module
+
+public import Machines.Core
+public import TestKit
+
+public section
 
 namespace Machines.Testing
 

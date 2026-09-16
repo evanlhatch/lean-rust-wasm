@@ -16,9 +16,15 @@ Core-only mechanism (environment extension + a command elaborator); no
 mathlib needed beyond what Dbsp already has.
 -/
 
-import Lean
+module
+
+public import Lean
 
 open Lean Elab Command Term Meta
+
+-- Elaboration-time only: env extension, attribute, and command
+-- elaborators live in a `public meta section` (W5.4 module discipline).
+public meta section
 
 namespace Dbsp.Certs
 
@@ -38,10 +44,13 @@ initialize registerBuiltinAttribute {
   applicationTime := .afterCompilation
   add := fun decl _stx _kind => do
     let env ← getEnv
-    let some ci := env.find? decl
-      | throwError "@[cert]: unknown declaration `{decl}`"
-    unless ci.isTheorem do
-      throwError "@[cert]: `{decl}` is not a theorem — certs cite proofs"
+    unless (env.find? decl).isSome do
+      throwError "@[cert]: unknown declaration `{decl}`"
+    -- NOTE (module system, W5.4): the theorem-kind check CANNOT live here.
+    -- In a module, theorem bodies elaborate deferred, so at attribute
+    -- application time a `theorem` is visible as an `axiomInfo`
+    -- (observed: `.afterCompilation` and `.afterTypeChecking` both).
+    -- Theorem-ness is enforced at `#check_cert` instead — the CI gate.
     modifyEnv (fun env => certExt.addEntry env decl)
 }
 
@@ -60,8 +69,12 @@ elab "#check_cert " n:ident " : " ty:term : command => do
     unless (certExt.getState env).contains name do
       throwError "`{name}` is not a registered certificate (missing @[cert])"
     let some ci := env.find? name | throwError "unknown constant `{name}`"
+    unless ci.isTheorem do
+      throwError "`{name}` is not a theorem — certs cite proofs"
     let expected ← elabType ty
     unless ← isDefEq ci.type expected do
       throwError m!"cert `{name}` has type{indentD m!"{ci.type}"}\nnot defeq to the required{indentD m!"{expected}"}"
 
 end Dbsp.Certs
+
+end -- public meta section

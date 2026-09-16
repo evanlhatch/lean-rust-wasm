@@ -19,7 +19,11 @@ The handler defines the `all` def THEN the instance (so the instance
 references the def, keeping the binder chain simple).
 -/
 
-import Lean
+module
+
+public import Lean
+
+@[expose] public section
 
 open Lean Elab Command
 open Lean.Elab.Deriving

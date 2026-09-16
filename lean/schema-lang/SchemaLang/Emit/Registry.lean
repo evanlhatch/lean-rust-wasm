@@ -21,24 +21,28 @@ manifest forge byte-ties from — the driver consumes the Lean spec
 instead of a hand-copied stale table.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Pipeline
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Emit.Wit
-import SchemaLang.Emit.Rust
-import SchemaLang.Emit.GenRust
-import SchemaLang.Delta
-import SchemaLang.Emit.WitFixture
-import SchemaLang.Emit.Invariant
-import SchemaLang.Emit.Update
-import SchemaLang.Emit.Machine
-import SchemaLang.Emit.Circuit
-import SchemaLang.Emit.Typestate
-import SchemaLang.Vortex.Emit
-import SchemaLang.Vortex.ExtDType
-import SchemaLang.Docs
-import SchemaLang.ModuleDocs
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Pipeline
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Emit.Wit
+public import SchemaLang.Emit.Rust
+public import SchemaLang.Emit.GenRust
+public import SchemaLang.Delta
+public import SchemaLang.Emit.WitFixture
+public import SchemaLang.Emit.Invariant
+public import SchemaLang.Emit.Update
+public import SchemaLang.Emit.Machine
+public import SchemaLang.Emit.Circuit
+public import SchemaLang.Emit.Typestate
+public import SchemaLang.Vortex.Emit
+public import SchemaLang.Vortex.ExtDType
+public import SchemaLang.Docs
+public import SchemaLang.ModuleDocs
+
+@[expose] public section
 
 namespace SchemaLang.Emit
 

@@ -49,9 +49,13 @@ TODO/FIXME/dbg! — the emitter self-audit rules
 other's.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+
+@[expose] public section
 
 namespace SchemaLang.Emit.GenRust
 

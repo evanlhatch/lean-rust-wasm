@@ -22,7 +22,13 @@ Also here: `δ0` (the unit impulse), `zeroAfter`, and the I/D interplay
 lemmas (`integral_zero`, `integral_delta`, `nested_zpp`).
 -/
 
-import Dbsp.Incremental
+module
+
+public import Dbsp.Incremental
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 open Classical
 
@@ -243,3 +249,5 @@ theorem nested_zpp (Q : Operator a b) (hti : TimeInvariant Q) :
   rw [δ0_0, time_invariant_zpp Q hti, stream_elim_0]
 
 end Dbsp
+
+end -- @[expose] public section

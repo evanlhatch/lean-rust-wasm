@@ -25,11 +25,17 @@ Deleted as dead (2026-12 quality pass, zero consumers): `linear_add`
 recoverable from the op log if a future proof needs them.
 -/
 
-import Dbsp.Certs
-import Dbsp.Operators
-import Dbsp.Tactics
-import Mathlib.Algebra.Group.Prod
-import Mathlib.Tactic.Abel
+module
+
+public import Dbsp.Certs
+public import Dbsp.Operators
+public import Dbsp.Tactics
+public import Mathlib.Algebra.Group.Prod
+public import Mathlib.Tactic.Abel
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -436,3 +442,5 @@ theorem integral_snd_comm (s : Stream (a × b)) :
   exact integral_lift_comm Prod.snd s (fun x y => by simp)
 
 end Dbsp
+
+end -- @[expose] public section

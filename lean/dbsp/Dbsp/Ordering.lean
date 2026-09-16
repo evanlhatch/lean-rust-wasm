@@ -16,10 +16,16 @@ The content is one theorem and one counterexample:
   generated. The lint cites this theorem.
 -/
 
-import Dbsp.Linear
-import Mathlib.Algebra.Order.Monoid.Defs
-import Mathlib.Algebra.Order.Group.Unbundled.Basic
-import Mathlib.Algebra.Order.Pi
+module
+
+public import Dbsp.Linear
+public import Mathlib.Algebra.Order.Monoid.Defs
+public import Mathlib.Algebra.Order.Group.Unbundled.Basic
+public import Mathlib.Algebra.Order.Pi
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -90,3 +96,5 @@ theorem derivative_pos_counter_example (h : ∃ x : a, x < 0) :
   exact not_le_of_gt hx h2
 
 end Dbsp
+
+end -- @[expose] public section

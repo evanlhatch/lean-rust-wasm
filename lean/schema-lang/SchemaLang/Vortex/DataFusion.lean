@@ -30,3 +30,5 @@ stub, and the zero-sorry discipline applies to designs too. The
 encodings (the Vortex-central capability) live in `Encoding.lean`; the
 batch reads live in `Batch.lean`.
 -/
+module
+

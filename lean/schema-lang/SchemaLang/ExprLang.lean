@@ -33,7 +33,11 @@ family (`VCase`) joins when a consumer needs it; emission algebras
 live in Emit.Invariant (the consumer), not here.
 -/
 
-import SchemaLang.Validate
+module
+
+public import SchemaLang.Validate
+
+@[expose] public section
 
 namespace SchemaLang
 

@@ -14,10 +14,14 @@ Everything here is byte-tied like any emitter output (drift fails CI);
 the fixtures are emitted, never hand-edited.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Emit.Wit
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Emit.Wit
+
+@[expose] public section
 
 namespace SchemaLang.Emit.WitFixture
 

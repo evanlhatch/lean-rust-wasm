@@ -23,10 +23,16 @@ qualified. `denoteF` is an explicit parameter of `equiv` (Lean 4 drops
 section variables used only in definition bodies).
 -/
 
-import Dbsp.Certs
-import Dbsp.Incremental
-import Mathlib.Algebra.Group.Prod
-import Mathlib.Data.Bool.Basic
+module
+
+public import Dbsp.Certs
+public import Dbsp.Incremental
+public import Mathlib.Algebra.Group.Prod
+public import Mathlib.Data.Bool.Basic
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/abbrevs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Dbsp
 
@@ -425,3 +431,5 @@ theorem incrementalize_feedback (isLinear : IsLinearOracle Func)
       rfl
 
 end Dbsp
+
+end -- @[expose] public section

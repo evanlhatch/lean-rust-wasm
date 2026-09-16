@@ -20,12 +20,16 @@ they are REGISTERED (so the lookup/`Ty.lower` story knows they exist)
 but NOT emitted — the fork provides their impls.
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
-import SchemaLang.Vortex.DType
-import SchemaLang.Vortex.Lower
-import SchemaLang.Vortex.Emit
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Vortex.DType
+public import SchemaLang.Vortex.Lower
+public import SchemaLang.Vortex.Emit
+
+@[expose] public section
 
 namespace SchemaLang.Vortex
 
@@ -84,7 +88,7 @@ def metadataRust : MetadataShape → String
 /-! ## Body dispatch (the audited leaves) -/
 
 /-- `fn serialize_metadata` body per shape. -/
-private def serializeBody : MetadataShape → String
+def serializeBody : MetadataShape → String
   | .unit => "vec![]"
   | .u8Enum _ _ => "vec![self.0]"
   | .utf8NonEmpty _ => "self.0.clone().into_bytes()"
@@ -93,7 +97,7 @@ private def serializeBody : MetadataShape → String
 
 /-- `fn deserialize_metadata` body per shape. Literal Rust braces come
     from plain-string segments (s! treats `{{` as `{...}` notation). -/
-private def deserializeBody : MetadataShape → String
+def deserializeBody : MetadataShape → String
   | .unit => "if bytes.is_empty() { Some(vortex::EmptyMetadata) } else { None }"
   | .u8Enum allowed suffix =>
       let allowedStr := String.intercalate ", " (allowed.map fun b => s!"{b}u8")
@@ -106,7 +110,7 @@ private def deserializeBody : MetadataShape → String
   | .geoArrow => "GeoMetadata::deserialize(bytes).ok()"
 
 /-- `fn validate_dtype` body per storage constraint. -/
-private def validateDTypeBody : StorageConstraint → String
+def validateDTypeBody : StorageConstraint → String
   | .fixed p =>
       "match storage { vortex::dtype::DType::Primitive(" ++ ptyRust p
         ++ ", _) => Ok(()), other => Err(vortex::error::VortexError::InvalidDType(other.clone())) }"
@@ -143,7 +147,7 @@ def extVTableImpl (item : ExtDTypeItem) : CodegenCore.Emit.Rust.Item :=
 
 /-- One non-external item → comment + (u8Enum: newtype + Display) +
     vtable unit struct + the ExtVTable impl. -/
-private def itemItems (it : ExtDTypeItem) : List CodegenCore.Emit.Rust.Item :=
+def itemItems (it : ExtDTypeItem) : List CodegenCore.Emit.Rust.Item :=
   let mty := it.metadata
   let metaItems : List CodegenCore.Emit.Rust.Item :=
     match mty with

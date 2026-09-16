@@ -28,11 +28,17 @@ incrementality calculus (three-term stream joins, D/I over `Stream`).
 The point is the INTERFACE: `Machine` + `AddCommGroup` + the linearity law.
 -/
 
-import Machines.Core
-import Mathlib.Algebra.Group.Defs
-import Mathlib.Algebra.Group.Int.Defs
-import Mathlib.Tactic.Abel
-import Dbsp.ChangeSpec
+module
+
+public import Machines.Core
+public import Mathlib.Algebra.Group.Defs
+public import Mathlib.Algebra.Group.Int.Defs
+public import Mathlib.Tactic.Abel
+public import Dbsp.ChangeSpec
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines
 
@@ -216,3 +222,5 @@ theorem runState_zero_chain (m : Machine) [AddCommGroup m.State] [LinearMachine 
   rw [patch_zero]
 
 end Machines
+
+end -- @[expose] public section

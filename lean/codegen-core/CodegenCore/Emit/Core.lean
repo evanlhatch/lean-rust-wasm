@@ -13,6 +13,9 @@ rules:
 - Every generated file carries the header citing its spec source — so an
   agent knows: regenerate, don't edit.
 -/
+module
+
+@[expose] public section
 
 namespace CodegenCore.Emit
 

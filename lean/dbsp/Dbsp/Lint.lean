@@ -10,5 +10,9 @@ Flatland.Value) so every downstream file elaborates with these registered.
 The options themselves are set per-package in the lakefiles
 (`weakLeanArgs`) so test files can override.
 -/
-import Mathlib.Tactic.Linter.FlexibleLinter
-import Mathlib.Tactic.Linter.Style
+module
+
+-- This module's whole job is re-export: the two lint bundles must be
+-- visible to every importer, hence `public import` (W5.4).
+public import Mathlib.Tactic.Linter.FlexibleLinter
+public import Mathlib.Tactic.Linter.Style

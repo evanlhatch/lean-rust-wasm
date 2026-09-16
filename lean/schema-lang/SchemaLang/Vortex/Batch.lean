@@ -30,9 +30,13 @@ batch ordering — flatland's `applySeq_perm` territory) needs the
 mutable-state engine model; the schema-language side is the total-read
 spec those kernels are held to.
 -/
-import SchemaLang.Validate
-import SchemaLang.Subschema
-import SchemaLang.Vortex.Encoding
+module
+
+public import SchemaLang.Validate
+public import SchemaLang.Subschema
+public import SchemaLang.Vortex.Encoding
+
+@[expose] public section
 
 namespace SchemaLang.Vortex
 

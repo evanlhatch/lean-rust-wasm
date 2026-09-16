@@ -17,7 +17,11 @@ Deliberate exclusion: consumers are NOT re-quantified here — W7.9 owns
 the `{ items // WellFormed items }` bundling at the drivers.
 -/
 
-import SchemaLang.Item
+module
+
+public import SchemaLang.Item
+
+@[expose] public section
 
 namespace SchemaLang
 

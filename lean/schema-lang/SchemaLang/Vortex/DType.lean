@@ -18,6 +18,9 @@ the serde handshake — Lean → bytes → Rust parse, and back — proved on
 the Lean side, differential-fuzzed across. That codec lands with the
 wire work; the model stands alone until then.
 -/
+module
+
+@[expose] public section
 
 namespace SchemaLang.Vortex
 

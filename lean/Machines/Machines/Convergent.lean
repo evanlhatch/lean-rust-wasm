@@ -22,9 +22,15 @@ Consumers: the compiler's runtime-pass budgeting (TOOLKIT §2.4 204–208:
 cap-minus-fill idiom constructors this file ships.
 -/
 
-import Machines.Core
-import Mathlib.Order.WellFounded
-import Dbsp.Stream
+module
+
+public import Machines.Core
+public import Mathlib.Order.WellFounded
+public import Dbsp.Stream
+
+-- W5.4 module discipline: all declarations public; bodies exposed
+-- (defs/instances must reduce across module boundaries).
+@[expose] public section
 
 namespace Machines
 
@@ -146,3 +152,5 @@ theorem terminates (c : Convergent m) (steps : Dbsp.Stream m.State)
 end Convergent
 
 end Machines
+
+end -- @[expose] public section

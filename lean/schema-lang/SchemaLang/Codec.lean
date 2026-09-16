@@ -33,7 +33,11 @@ decode to `none`. `decVarNat` itself is total (empty input decodes to
 top (tag mismatch, length-prefix overrun, trailing-garbage check).
 -/
 
-import SchemaLang.Ty
+module
+
+public import SchemaLang.Ty
+
+@[expose] public section
 
 namespace SchemaLang.Codec
 

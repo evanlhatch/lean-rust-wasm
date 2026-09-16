@@ -8,7 +8,11 @@ proof-carrying migration evidence (`.yes h` reuse for upcast functions)
 lands with schema-indexed.
 -/
 
-import SchemaLang.Item
+module
+
+public import SchemaLang.Item
+
+@[expose] public section
 
 namespace SchemaLang
 

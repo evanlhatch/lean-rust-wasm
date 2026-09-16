@@ -12,7 +12,13 @@ The working shape for "split, then let the caller continue per-branch" is
 bullets, goals exposed.
 -/
 
-import Lean
+module
+
+public import Lean
+
+-- Elaboration-time only: syntax/macros/attr registration live in a
+-- `public meta section` (W5.4 module discipline).
+public meta section
 
 /-- The pointwise zset reading lemmas. -/
 register_simp_attr zset
@@ -31,3 +37,5 @@ cases t <;> simp [lemma1, lemma2]
 -/
 macro "stream_cases" : tactic =>
   `(tactic| funext t <;> cases t)
+
+end -- public meta section

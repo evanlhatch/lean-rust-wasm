@@ -17,7 +17,11 @@ This is the seed the `@[schema]` macro will generate per record
 resolved field type, validators, etc.).
 -/
 
-import SchemaLang.Item
+module
+
+public import SchemaLang.Item
+
+@[expose] public section
 
 namespace SchemaLang
 

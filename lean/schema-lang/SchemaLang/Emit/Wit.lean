@@ -29,9 +29,13 @@ world; one world per universe today), interface splitting (small
 interfaces are the wasmtron rule — split when a real consumer needs it).
 -/
 
-import CodegenCore
-import SchemaLang.Item
-import SchemaLang.Emit.GenCtx
+module
+
+public import CodegenCore
+public import SchemaLang.Item
+public import SchemaLang.Emit.GenCtx
+
+@[expose] public section
 
 namespace SchemaLang.Emit.Wit
 

@@ -413,6 +413,29 @@ def validationChecks : CheckResult := do
     (Validation.ok (ε := String) 42)
   .ok ()
 
+/-! ## Obligation (W7.1) — the checkable-fact-as-data substrate
+
+Pins: the tier's renderings, the evidence→tier mapping (a mis-wired
+discharge is detectable as data), and one toy obligation's shape. The
+lane-level discharge + its negative control live in schema-lang's
+tests (the invariant lane rides this substrate). -/
+def obligationChecks : CheckResult := do
+  _ ← assertEq "tier render" (Obligation.Tier.render .generatedCheck) "generated-check"
+  _ ← assertEq "tier render proved" (Obligation.Tier.render .provedAtElab) "proved-at-elab"
+  _ ← assertEq "evidence tier: cited proof"
+    (Obligation.Evidence.tier (.citedProof `foo)) Obligation.Tier.provedAtElab
+  _ ← assertEq "evidence tier: decided"
+    (Obligation.Evidence.tier (.decided true)) .decidableNow
+  _ ← assertEq "evidence tier: generated"
+    (Obligation.Evidence.tier (.generatedCheck "a.rs" "f")) .generatedCheck
+  _ ← assertEq "evidence tier: oracle"
+    (Obligation.Evidence.tier (.oracleRow "r")) .oracleSwept
+  let toy : Obligation Bool :=
+    { label := "one-eq-one", tier := .decidableNow, payload := true, provenance := `toy }
+  _ ← assertEq "toy label" toy.label "one-eq-one"
+  _ ← assertEq "toy tier" toy.tier .decidableNow
+  .ok ()
+
 /-! ## RoundTripSpec (W7.17) — toy Bool wire codec
 
 The combinator assembles sweep + sabotage control + golden; the tests pin
@@ -463,6 +486,7 @@ def main : IO UInt32 := do
   , ("data-registry", dataRegistryChecks)
   , ("coded-registry", codedRegistryChecks)
   , ("validation", validationChecks)
+  , ("obligation", obligationChecks)
     ]
   if code != 0 then return code
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND
