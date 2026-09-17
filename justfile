@@ -341,7 +341,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms kernel-check manifest-check coverage check-schema breaking splice-smoke rt-conformance lean-lint budget-check
+gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms native-policy kernel-check manifest-check coverage check-schema breaking wasm-diff-check splice-smoke rt-conformance lean-lint budget-check
 	@echo "gates: clean"
 
 # Axiom gate (delegated to the gates exe — Gates.Axioms): one process,
@@ -378,6 +378,13 @@ coverage:
 # notes/divergences.md (investigated before the gate is bypassed).
 kernel-check:
 	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates kernel-check
+
+# The native_decide policy (delegated to the gates exe —
+# Gates.NativePolicy): no decl in the checked set depends on the
+# `_native.native_decide.` trust base outside the grandfathered exiles
+# (doctrine §3 — the lean4lean-checked set must stay kernel-replayable).
+native-policy:
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates native-policy
 
 # ── The compiler line: LCNF → WAT → binary WASM ──────────────────────
 # The backend re-runs Lean's LCNF pipeline (the leanir pattern) and emits
@@ -922,3 +929,27 @@ budget-check:
 	fi
 	[ "$fail" = 0 ] || { echo "budget-check: RED"; exit 1; }
 	echo "budget-check: green - size + perf within budgets"
+
+# The WASM-COMPILE byte-tie (was the byte-tie's hole — review
+# 2026-09-16): the pipeline's committed outputs must match a fresh regen.
+# Volatile: the 2-line GENERATED headers (timestamp + spec sha);
+# target/diff.json is deterministic (proved by 2× regen 2026-09-17).
+wasm-diff-check:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	D=lean/wasm-backend/target/wasm-diff-check
+	mkdir -p "$D"
+	cp lean/wasm-backend/demo-world.wit "$D/demo-world.wit.committed"
+	cp src/observability_generated.rs "$D/observability_generated.rs.committed"
+	cp lean/wasm-backend/target/diff.json "$D/diff.json.committed"
+	just wasm-compile
+	cmp -s lean/wasm-backend/target/diff.json "$D/diff.json.committed" \
+	  || { echo "FAIL: target/diff.json drifted — regenerate (just wasm-compile) + commit"; exit 1; }
+	for f in "lean/wasm-backend/demo-world.wit" "src/observability_generated.rs"; do
+	  b=$(basename "$f")
+	  if ! cmp -s <(tail -n +3 "$f") <(tail -n +3 "$D/$b.committed"); then
+	    echo "FAIL: $f drifted from the committed surface — regenerate (just wasm-compile) + commit"
+	    exit 1
+	  fi
+	done
+	echo "wasm-diff-check: clean — all wasm-compile committed outputs match"

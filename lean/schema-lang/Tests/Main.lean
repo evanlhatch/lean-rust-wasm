@@ -18,6 +18,8 @@ import SchemaLang.Meta.WireCodec
 import SchemaLang.TableInvariant
 import SchemaLang.Meta.TableInvariant
 import SchemaLang.Update2
+import SchemaLang.EntityMachine
+import SchemaLang.Meta.EntityMachine
 import Demo
 import SchemaLang.Trace
 import Machines
@@ -5622,6 +5624,549 @@ def update2Checks : CheckResult := do
 
 end Update2Sweep
 
+/-! ## W8.5 scheduling — time as input, streams from day one
+
+Canon row: a schedule / rate / deadline = stream operations (sampling,
+delay, comparison) — never a separate time system; NO new `Ty` ctor
+(timestamps/durations are plain u64 scalars; the boundary universe
+stays closed). Every operator here is a pure function of tick indices
+and streams — no wall clock, no effect (the vision's scope lock).
+Negative controls: the WRONG laws must fail (a delayed stream is not
+the identity at the origin; a quiet rate is not the always-fire rate;
+a non-multiple tick is not due). -/
+
+namespace SchedSweep
+
+/-- A list-backed stream (the fixture: value i at tick i, then a
+default — enough ticks for every window checked below). -/
+def sOf (l : List Nat) (d : Nat) : Dbsp.Stream Nat := fun t => l.getD t d
+
+def rate1 : Scheduling.Rate := { period := 1, hpos := by decide }
+def rate3 : Scheduling.Rate := { period := 3, hpos := by decide }
+def rateQuiet : Scheduling.Rate := { period := 1000, hpos := by decide }
+
+def schedChecks : CheckResult := do
+  -- the time input: ticks IS the identity stream
+  _ ← assert (Scheduling.ticks 0 = 0 ∧ Scheduling.ticks 9 = 9)
+    "ticks: the identity stream of tick indices"
+  -- rates: the due pattern (executable witnesses — origin fires,
+  -- in-period ticks silent, multiples fire)
+  _ ← assert (rate3.due? 0) "rate3: the origin fires"
+  _ ← assert (!rate3.due? 1 && !rate3.due? 2)
+    "rate3: inside the first period is silent"
+  _ ← assert (rate3.due? 3 && rate3.due? 9) "rate3: multiples fire"
+  -- NEGATIVE: a non-multiple tick is not due; the quiet rate is NOT
+  -- the always-fire rate (rates are distinguishable)
+  _ ← assert (!rate3.due? 5) "rate3: 5 is not a 3-multiple"
+  _ ← assert (rate1.due? 5 && !rateQuiet.due? 5)
+    "rate: always-fire ≠ quiet-rate"
+  -- sampling: due → source value; between firings → hold
+  let s := sOf [10, 11, 12, 13, 14, 15, 16] 0
+  _ ← assert (rate3.sample 99 s 0 = 10) "sample: the origin passes through"
+  _ ← assert (rate3.sample 99 s 3 = 13) "sample: a due tick passes through"
+  _ ← assert (rate3.sample 99 s 1 = 99 && rate3.sample 99 s 2 = 99)
+    "sample: holds between firings"
+  -- delays: the "visible next tick" law, executable
+  _ ← assert (Scheduling.delayBy 1 0 s 0 = 0) "delay: the origin shows the default"
+  _ ← assert (Scheduling.delayBy 1 0 s (0 + 1) = 10)
+    "delay: visible next tick (t=0)"
+  _ ← assert (Scheduling.delayBy 1 0 s (3 + 1) = 13)
+    "delay: visible next tick (t=3)"
+  -- delay composition: k + m = m then k, pointwise over a window
+  _ ← assert ((List.range 12).all fun t =>
+    Scheduling.delayBy 2 0 (Scheduling.delayBy 3 0 s) t
+      = Scheduling.delayBy 5 0 s t)
+    "delay: (2+3) == 3-then-2 over the window"
+  -- the dbsp tie: the unit delay with 0 pre-history IS Dbsp.delay
+  _ ← assert ((List.range 10).all fun t =>
+    Scheduling.delayBy 1 0 s t = Dbsp.delay s t)
+    "delay: the unit case IS Dbsp.delay"
+  -- NEGATIVE: a delay is not the identity at the origin; two ticks
+  -- are not zero ticks
+  _ ← assert (Scheduling.delayBy 1 0 s 0 != s 0)
+    "delay: not the identity at the origin"
+  _ ← assert (Scheduling.delayBy 2 0 s 3 != s 3)
+    "delay: two ticks ≠ zero ticks"
+  -- deadlines: missed = at/past d ∧ still not done
+  let onTime : Dbsp.Stream Bool := fun t => decide (5 ≤ t)
+  let late : Dbsp.Stream Bool := fun t => decide (6 ≤ t)
+  let never : Dbsp.Stream Bool := fun _ => false
+  _ ← assert (Scheduling.missed 5 onTime 3 = false)
+    "deadline: quiet before d"
+  _ ← assert (Scheduling.missed 5 onTime 5 = false)
+    "deadline: on-time AT d is not missed"
+  _ ← assert (Scheduling.missed 5 late 5 = true)
+    "deadline: unfinished AT d IS missed"
+  _ ← assert (Scheduling.missed 5 never 9 = true)
+    "deadline: never-done stays missed past d"
+  _ ← assert (Scheduling.missed 5 late 9 = false)
+    "deadline: a late finish un-misses once done"
+  _ ← assert (Scheduling.missed 5 onTime 9 = false)
+    "deadline: done never misses"
+  .ok ()
+
+end SchedSweep
+
+/-! ## Metamorphic sweep — the breaking classifier vs its own documented rules
+
+OWNERSHIP: the breaking-gate metamorphic sweep (review 2026-09-16: gates
+need negative controls too — nobody tested that the CLASSIFIER agrees
+with ground truth on mutations it wasn't hand-fed). This section only;
+every other section above is owned by its own work order.
+
+The classifier of record: `SchemaLang.Diff.diff` + `SchemaLang.Migration.
+breakingOf` (the gate's single breaking name, consumed by BreakingMain).
+Ground truth = the classifier's OWN documented semantics, read from the
+docstrings before writing the grammar:
+
+- `.added` (a NEW item under a fresh name) is the ONLY safe change
+  (`Migration.breakingOf`: "Breaking = anything but `.added`";
+  `Diff.backwardCompatible`: "Additions are safe").
+- ANY same-name reshape is breaking — INCLUDING adding an optional
+  field (`.changed` + `.fieldAdded` evidence; the classifier has no
+  rule treating added fields as safe — stated in `breakingOf`'s
+  docstring, not guessed).
+- `fieldDiffsOf` evidence: removals, then type changes (EqAns-routed),
+  then additions, then `semChanged`.
+
+Every mutation kind below has an explicit classifier rule for it; no
+ambiguous kind is in the grammar (func `body` is excluded — registry
+metadata, invisible to the gate per `Item.specEq`).
+
+The mandatory negative control: the SAME sweep with every ground-truth
+flag SABOTAGED (flipped) must FAIL — a control that passes proves the
+sweep vacuous. -/
+
+namespace BreakingMetaSweep
+
+/-- The fixture universe: one record (two fields), one variant (one
+    payloadless + one payload-carrying case), one func. Small on
+    purpose — every mutation kind has a candidate in it. -/
+def fixture : List Item :=
+  [ .record "acct" [⟨"id", .u64⟩, ⟨"nick", .string⟩, ⟨"age", .u32⟩]
+  , .variant "status" [("open", none), ("closed", some .u32)]
+  , .func { name := "get-acct", params := [("id", .u64)]
+          , ret := .option (.ty "acct") } ]
+
+def freshItems : List String := ["fresh-r0", "fresh-r1", "fresh-r2"]
+def freshFields : List String := ["fresh-f0", "fresh-f1"]
+
+/-- One widening step on the numeric fragment (the migration exemplar's
+    direction — `widenU32U64` generalizes). -/
+def widenTy : Ty → Option Ty
+  | .u8 => some .u16 | .u16 => some .u32 | .u32 => some .u64
+  | .i8 => some .i16 | .i16 => some .i32 | .i32 => some .i64
+  | _ => none
+
+/-- One narrowing step (the inverse — the lossy direction). -/
+def narrowTy : Ty → Option Ty
+  | .u16 => some .u8 | .u32 => some .u16 | .u64 => some .u32
+  | .i16 => some .i8 | .i32 => some .i16 | .i64 => some .i32
+  | _ => none
+
+/-- One mutation kind: its label, the GROUND-TRUTH verdict per the
+    classifier's documented rules above, and ALL one-step mutated
+    fixture universes it can produce (empty = kind inapplicable). -/
+structure Mutation where
+  label : String
+  breaking : Bool
+  apply : List Item → List (List Item)
+  deriving Inhabited
+
+/-- Retype every field whose type `f` maps, one retyping per candidate. -/
+def recordRetypes (u : List Item) (f : Ty → Option Ty) : List (List Item) :=
+  u.zipIdx.flatMap fun (it, i) =>
+    match it with
+    | .record n fs =>
+        (fs.zipIdx.filterMap fun (fl, j) =>
+          match f fl.ty with
+          | some t => some (fs.set j { fl with ty := t })
+          | none => none).map fun fs' => u.set i (.record n fs')
+    | _ => []
+
+/-- The grammar: every mutation the classifier HAS a documented rule for. -/
+def mutations : List Mutation :=
+  [ /- safe per the docs: a NEW item is `.added` -/
+    { label := "add-item", breaking := false
+      apply := fun u => freshItems.map fun n =>
+        u ++ [.record n [⟨"x", .u8⟩]] }
+  , { label := "remove-item", breaking := true
+      apply := fun u => u.map fun it => u.filter (·.name != it.name) }
+  /- reshape per the docs: adding even an OPTIONAL field is `.changed`
+     + `.fieldAdded` → breaking -/
+  , { label := "add-optional-field", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .record n fs =>
+            freshFields.map fun fn =>
+              u.set i (.record n (fs ++ [⟨fn, .option .u8⟩]))
+        | _ => [] }
+  , { label := "remove-field", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .record n fs =>
+            (fs.zipIdx.filterMap fun (_, j) => some (fs.eraseIdx j)).map
+              fun fs' => u.set i (.record n fs')
+        | _ => [] }
+  , { label := "widen-field", breaking := true
+      apply := fun u => recordRetypes u widenTy }
+  , { label := "narrow-field", breaking := true
+      apply := fun u => recordRetypes u narrowTy }
+  , { label := "rename-field", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .record n fs =>
+            (fs.zipIdx.filterMap fun (fl, j) =>
+              some (fs.set j { fl with name := s!"renamed-{j}" })).map
+              fun fs' => u.set i (.record n fs')
+        | _ => [] }
+  , { label := "reorder-fields", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .record n (a :: b :: rest) =>
+            [u.set i (.record n (b :: a :: rest))]
+        | _ => [] }
+  /- variant drift: arity drift trips `.changed` even when the new case
+     carries no payload (Diff.fieldsOf documents exactly this) -/
+  , { label := "add-payloadless-case", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .variant n cs =>
+            [u.set i (.variant n (cs ++ [("fresh-c", none)]))]
+        | _ => [] }
+  , { label := "add-case-payload", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .variant n cs =>
+            (cs.zipIdx.filterMap fun ((c, p), j) =>
+              match p with
+              | none => some (cs.set j (c, some .u8))
+              | some _ => none).map fun cs' => u.set i (.variant n cs')
+        | _ => [] }
+  /- func drift: the ret type is field `(ret)` in `fieldsOf` -/
+  , { label := "func-ret-change", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .func s => [u.set i (.func { s with ret := .string })]
+        | _ => [] }
+  /- func drift: the semantic contract fields ARE spec surface
+     (`Item.specEq` compares `sem`) → `.changed` + `semChanged` -/
+  , { label := "func-sem-drift", breaking := true
+      apply := fun u => u.zipIdx.flatMap fun (it, i) =>
+        match it with
+        | .func s =>
+            [u.set i (.func { s with sem := ⟨.strict, .volatile, .stream⟩ })]
+        | _ => [] }
+  ]
+
+/-- One deterministic sample: LCG-pick kind + candidate, apply to the
+    fixture, assert the classifier's verdict equals the ground truth.
+    Returns `true` (a sample ran) or throws (inapplicable kind, no-op,
+    or — the valuable output — a MISCLASSIFICATION counterexample). -/
+def sweepOnce (ms : List Mutation) (seed : UInt64) : Except String Bool := do
+  let s1 := TestKit.lcg seed
+  let s2 := TestKit.lcg s1
+  let m := ms[(s1 % ms.length.toUInt64).toNat]?.getD (ms.head!)
+  let cands := m.apply fixture
+  if cands.isEmpty then
+    throw s!"sweep: '{m.label}' produced no candidates on the fixture"
+  let newU := cands[(s2 % cands.length.toUInt64).toNat]?.getD (cands.head!)
+  if newU == fixture then
+    throw s!"sweep: '{m.label}' was a no-op (vacuous sample)"
+  let changes := diff fixture newU
+  let isBreaking := !(breakingOf changes).isEmpty
+  if isBreaking != m.breaking then
+    throw s!"MISCLASSIFICATION: '{m.label}' — ground truth breaking={m.breaking}, classifier says breaking={isBreaking}; changes: {changes}"
+  pure true
+
+/-- The sweep: 64 pinned-seed samples, chained LCG. A pinned seed makes
+    any failure replay byte-identically. -/
+def sweepChecksOf (ms : List Mutation) : CheckResult :=
+  let rec loop : Nat → UInt64 → CheckResult
+    | 0, _ => .ok ()
+    | n + 1, s =>
+        match sweepOnce ms s with
+        | .error e => .error e
+        | .ok _ => loop n (TestKit.lcg (TestKit.lcg s))
+  loop 64 20260917
+
+/-- The positive sweep: ground truth = the documented rules. -/
+def breakingSweepChecks : CheckResult := sweepChecksOf mutations
+
+/-- MANDATORY NEGATIVE CONTROL: the same sweep with every ground-truth
+    flag flipped MUST fail — else the sweep agrees with anything and
+    proves nothing. -/
+def controlChecks : CheckResult :=
+  match sweepChecksOf (mutations.map fun m => { m with breaking := !m.breaking }) with
+  | .error _ => .ok ()
+  | .ok () => .error "sabotaged ground truth NOT caught — breaking sweep is vacuous"
+
+end BreakingMetaSweep
+
+/-! ## W8.6 — effects/commands: the guest↔host loop as a session
+
+The canon row: the guest↔host effect loop = a session protocol (commands
+out, events in). This section: DECLARE the cart world's two sum types
+over a SYNTHETIC universe (Demo untouched — byte-tie), DERIVE the session
+(`EffectDecl.protocol`), pin the SESSION ROW's laws as EXECUTED
+witnesses (each one cites the generic Machines.Session theorem — nothing
+here re-proves the mechanism), and pin the WIT output (`toWire`, the ONE
+renderer). Negative controls: the checker refuses an unresolved name and
+a record in a sum-type slot; the relational refusal `cart_not_self_dual`
+and the elaboration-time `IsDualOf` refusal (the type error the runtime
+cannot skip). -/
+
+namespace EffectSweep
+
+/-- The SYNTHETIC universe: the cart world's command + event sum types,
+    and a RECORD (`order-id`) — the not-a-variant negative control's
+    target. -/
+def effectItems : List Item :=
+  [ .variant "cart-command"
+      [ ("add-item", some .u64)
+      , ("remove-item", some .u64)
+      , ("checkout", none) ]
+  , .variant "cart-event"
+      [ ("item-added", some .u64)
+      , ("item-removed", some .u64)
+      , ("order-placed", some (.ty "order-id"))
+      , ("cart-error", some .string) ]
+  , .record "order-id" [⟨"n", .u64⟩] ]
+
+/-- The cart world: guest returns `cart-command`s, host answers with
+    `cart-event`s. -/
+def cartWorld : EffectDecl :=
+  { world := "cart", commands := "cart-command", events := "cart-event" }
+
+/-- The derived session: commands out, events in. -/
+def cartProtocol : SchemaLang.Session.TProtocol := cartWorld.protocol
+
+/-- NEGATIVE 1: the events name does not resolve (a typo) — refused. -/
+def brokenMissing : EffectDecl :=
+  { world := "cart", commands := "cart-command", events := "cart-evnt" }
+
+/-- The typo'd declaration is NOT well-formed (via the proved-complete
+    bridge — a clean check is unprovable, decide over the diagnostics). -/
+theorem brokenMissing_not_wf :
+    ¬ EffectWellFormed effectItems brokenMissing := by
+  intro h
+  exact absurd (EffectDecl.check_complete h) (by decide)
+
+/-- NEGATIVE 2: the events slot names a RECORD — not a sum type; refused. -/
+def brokenNotVariant : EffectDecl :=
+  { world := "cart", commands := "cart-command", events := "order-id" }
+
+theorem brokenNotVariant_not_wf :
+    ¬ EffectWellFormed effectItems brokenNotVariant := by
+  intro h
+  exact absurd (EffectDecl.check_complete h) (by decide)
+
+/-- NEGATIVE 3 (relational): the guest's script is NOT its own dual —
+    the loop's two sides are distinct (snd/rcv oppose at both positions). -/
+theorem cart_not_self_dual :
+    ¬ (cartProtocol : SchemaLang.Session.TProtocol)
+        = SchemaLang.Session.tdual cartProtocol := by
+  intro h
+  exact absurd h (by decide)
+
+-- NEGATIVE 4 (type-level): a hand-written peer that does not FLIP the
+-- guest's directions fails definitional equality in `IsDualOf` at
+-- ELABORATION time — the refusal is a type error, not a runtime check.
+-- (`drop error`: the pin is the ERROR itself — its text embeds
+-- elaboration-state-sensitive metavariable numbering.)
+#guard_msgs (drop error) in
+example : Machines.Session.IsDualOf cartProtocol cartProtocol := ⟨rfl⟩
+
+def effectChecks : CheckResult := do
+  -- DECLARE → CHECK: the well-formed fixture's check is clean, and the
+  -- bridge transports it into the relation
+  _ ← assertEq "cart: clean check" (cartWorld.check effectItems) []
+  _ ← assert ((cartWorld.check effectItems).isEmpty)
+    "cart: well-formed (the Bool gate; the bridge ties it to the relation)"
+  -- DERIVE: the protocol IS commands-out/events-in
+  _ ← assert (cartProtocol ==
+      [ (.snd, .ty "cart-command"), (.rcv, .ty "cart-event") ])
+    "cart: the derived protocol is commands-out/events-in"
+  -- LAW 1 (duality, cites Machines.Session.tdual_dual): the dual is an
+  -- involution; the HOST's script is the flipped guest
+  _ ← assert ((SchemaLang.Session.tdual
+      (SchemaLang.Session.tdual cartProtocol)) == cartProtocol)
+    "cart: dual is an involution"
+  _ ← assert ((SchemaLang.Session.tdual cartProtocol) ==
+      [ (.rcv, .ty "cart-command"), (.snd, .ty "cart-event") ])
+    "cart: the host's script flips both directions"
+  -- LAW 2 (mid-protocol deadlock-freedom, cites
+  -- Machines.Session.session_mid_deadlockFree): at the interior
+  -- position 0 a step IS enabled — executed on the session machine
+  _ ← assert (((Machines.Session.session cartProtocol).event
+      ⟨0, by decide⟩).guard (0 : Nat))
+    "cart: the guest's own first step is enabled (no wedge)"
+  -- LAW 3 (termination, cites
+  -- Machines.Session.session_variant_decreases): the variant strictly
+  -- decreases — exactly 2 firings complete the loop
+  _ ← assert ((List.range cartProtocol.length).all fun i =>
+      decide (cartProtocol.length - (i + 1) < cartProtocol.length - i))
+    "cart: the variant strictly decreases at every position"
+  -- WIT SHAPE (the ONE renderer): send cart-command, receive cart-event
+  _ ← assertEq "cart: WIT send" (SchemaLang.Session.toWire cartProtocol)[0]
+    (.snd, "cart-command")
+  _ ← assertEq "cart: WIT receive" (SchemaLang.Session.toWire cartProtocol)[1]
+    (.rcv, "cart-event")
+  -- the WIT bridge (cites SchemaLang.Session.tdual_toWire): the wire
+  -- view of the typed dual IS the wire dual of the wire view
+  _ ← assert (SchemaLang.Session.toWire (SchemaLang.Session.tdual cartProtocol)
+      == Machines.Session.tdual (SchemaLang.Session.toWire cartProtocol))
+    "cart: the wire bridge holds of the derived protocol"
+  -- the wire PAYLOAD SEQUENCE survives dualing (cites
+  -- typed_wire_payloads_agree): same named types, position for position
+  _ ← assertEq "cart: wire payloads agree"
+    ((SchemaLang.Session.toWire (SchemaLang.Session.tdual cartProtocol)).map (·.2))
+    ((SchemaLang.Session.toWire cartProtocol).map (·.2))
+  -- NEGATIVE 1 executed: the typo is a MISSING diagnostic (did-you-mean
+  -- names cart-event)
+  _ ← assert (match brokenMissing.check effectItems with
+    | [.missing _ "events" _ hints] => hints.contains "cart-event"
+    | _ => false)
+    "negative: a typo'd events name refuses with a did-you-mean"
+  -- NEGATIVE 2 executed: a record in the sum-type slot refuses
+  _ ← assert (match brokenNotVariant.check effectItems with
+    | [.notVariant _ "events" "order-id"] => true | _ => false)
+    "negative: a record in the sum-type slot refuses"
+  .ok ()
+
+end EffectSweep
+/-! ## W8.4 — the entity-machine preset (`schema_entity_machine`)
+
+The canon row: an entity lifecycle = a machine ON a record (enum state
+column + transitions); the preset derives the five artifacts. The
+fixture record + the machine declaration live at TOP LEVEL, AFTER the
+final `#schema` pin (the replayed-registry count is unaffected), and
+the declaration is registration-free (the byte-tie holds by
+construction — no emitter reads the preset).
+-/
+
+-- the lifecycle states: the closed enum the machine rides (codes =
+-- declaration order: new 0, triaged 1, closed 2)
+inductive TicketState where
+  | new | triaged | closed
+deriving Repr, BEq, DecidableEq, Inhabited
+
+@[schema]
+structure Ticket where
+  id : UInt64
+  status : UInt64
+
+schema_entity_machine ticketMachine for Ticket := status : TicketState
+  initial: new
+  rewind: reopen
+  transition: assign (new → triaged)
+  transition: start (triaged → closed)
+  transition: reopen (closed → new)
+
+namespace EntityMachineSweep
+
+open SchemaLang.EntityMachine (legalJournal)
+
+/-- The fixture's full derived surface: the machine entourage, the
+    keyed updates' obligations, the legality relation + the journal
+    checks, and the typestate hook. -/
+def entityMachineChecks : CheckResult := do
+  -- 1. the machine + entourage
+  unless ticketMachineStates == [.new, .triaged, .closed] do
+    throw "entityMachine: wrong state enumeration"
+  unless ticketMachineTrans ==
+      [(.assign, .new, .triaged), (.start, .triaged, .closed),
+        (.reopen, .closed, .new)] do
+    throw "entityMachine: wrong transition table"
+  -- 2. the keyed updates: all six obligations FIRE (the kernel's
+  -- decide over the pinned from-row — the derived guard/postcondition
+  -- hold)
+  unless ticketMachineObligations.length == 6 do
+    throw "entityMachine: expected 6 obligations (2 per transition)"
+  for o in ticketMachineObligations do
+    match o.discharge with
+    | some (CodegenCore.Obligation.Evidence.decided true) => pure ()
+    | other =>
+        throw s!"entityMachine: obligation `{o.label}` did not \
+          discharge"
+  -- 3. the legality relation: the happy path RUNS
+  match ticketMachine.run .new [.assign, .start] with
+  | some (_, .closed) => pure ()
+  | other => throw s!"entityMachine: happy path rejected"
+  unless ticketMachineLegalFrom .new [.assign, .start] == true do
+    throw "entityMachine: legalFrom refused the happy path"
+  -- an illegal transition is refused at the RELATION level
+  unless ticketMachine.step? .closed .assign == none do
+    throw "entityMachine: illegal transition NOT refused (relation level)"
+  unless ticketMachineLegalFrom .new [.assign, .reopen] == false do
+    throw "entityMachine: legalFrom accepted an illegal trace"
+  -- and at the GENERATED CHECK level (the journal antijoin)
+  unless legalJournal ticketMachineTrans [(.assign, .closed, .new)] == false do
+    throw "entityMachine: illegal journal NOT refused (antijoin level)"
+  unless legalJournal ticketMachineTrans
+      [(.assign, .new, .triaged), (.start, .triaged, .closed)] == true do
+    throw "entityMachine: legal journal refused"
+  -- replay: the legal journal replays to the last state
+  match ticketMachineReplay .new
+      [(.assign, .new, .triaged), (.start, .triaged, .closed)] with
+  | some .closed => pure ()
+  | other => throw s!"entityMachine: replay failed"
+  -- 4. the typestate hook: the rewind edge filtered, the rest folded
+  unless ticketMachineHook.edges ==
+      [(.assign, .new, .triaged), (.start, .triaged, .closed)] do
+    throw "entityMachine: hook edges wrong (rewind not filtered)"
+  unless ticketMachineHook.stateStruct .new == "New" do
+    throw "entityMachine: state struct naming wrong"
+  unless ticketMachineHook.eventMethod .assign == "assign" do
+    throw "entityMachine: event method naming wrong"
+  unless !ticketMachineTypestateRust.isEmpty do
+    throw "entityMachine: empty typestate Rust"
+  -- the provenance row agrees with the declaration
+  unless ticketMachineEntityDecl.stateCode "triaged" == some 1 do
+    throw "entityMachine: state code wrong"
+
+end EntityMachineSweep
+
+-- the gates (the tightest tier) — the negative controls. All
+-- registration-free, so the failed elaborations leave nothing behind.
+
+/-- error: schema_entity_machine: `ZzzNope` is not a registered record -/
+#guard_msgs in
+schema_entity_machine badRec for ZzzNope := status : TicketState
+  initial: new
+  transition: assign (new → triaged)
+
+/-- error: schema_entity_machine `badCol`: `nope` is not a column of `Ticket` -/
+#guard_msgs in
+schema_entity_machine badCol for Ticket := nope : TicketState
+  initial: new
+  transition: assign (new → triaged)
+
+/-- error: schema_entity_machine `badTy`: the state column `name` must be `u64` (the state CODE — transitions are u64 deltas on it; the wire record carries the code, the enum is the host-side discipline) -/
+#guard_msgs in
+schema_entity_machine badTy for User := name : TicketState
+  initial: new
+  transition: assign (new → triaged)
+
+/-- error: schema_entity_machine `badEdge`: transition `assign`: `ghost` is not a constructor of ``TicketState` -/
+#guard_msgs in
+schema_entity_machine badEdge for Ticket := status : TicketState
+  initial: new
+  transition: assign (new → ghost)
+
+/-- error: schema_entity_machine `badRewind`: rewind `ghost` is not a declared transition -/
+#guard_msgs in
+schema_entity_machine badRewind for Ticket := status : TicketState
+  initial: new
+  rewind: ghost
+  transition: assign (new → triaged)
+
+/-- error: schema_entity_machine `dupTr`: duplicate transition name `assign` -/
+#guard_msgs in
+schema_entity_machine dupTr for Ticket := status : TicketState
+  initial: new
+  transition: assign (new → triaged)
+  transition: assign (triaged → closed)
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let ctx ← loadDemoCtx
@@ -5697,6 +6242,11 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("keys", KeySweep.keyChecks)
      , ("tableInv", TableInvSweep.tableInvChecks)
      , ("update2", Update2Sweep.update2Checks)
+     , ("scheduling", SchedSweep.schedChecks)
+     , ("effects", EffectSweep.effectChecks)
+     , ("breakingSweep", BreakingMetaSweep.breakingSweepChecks)
+     , ("breakingSweepControl", BreakingMetaSweep.controlChecks)
+     , ("entityMachine", EntityMachineSweep.entityMachineChecks)
      ])
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control
@@ -5729,7 +6279,7 @@ GRACEFULNESS: if `#world gatway` ever threw, the build fails here.
 No registry side effects: the pins are deterministic replays.
 -/
 
-/-- info: registered schema items (14):
+/-- info: registered schema items (15):
   User : record user (4 fields)
   OrderItem : record order-item (3 fields)
   Order : record order (3 fields)
@@ -5743,7 +6293,8 @@ No registry side effects: the pins are deterministic replays.
   probeDefaultFn : func probe-default-fn(x: u32, y: u32) -> u32 delivery=once — Probe: no args — the defaults. (Two params: bodies of the one-param
   updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once — The volatile probe: a clock-reading fn (the volatilities probe
   updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once — The pure probe: same shape, default determinism — registers clean
-  Upd2Entry : record upd2-entry (3 fields) — The fixture record: registered, with a DECLARED key (the v2 gates' -/
+  Upd2Entry : record upd2-entry (3 fields) — The fixture record: registered, with a DECLARED key (the v2 gates'
+  Ticket : record ticket (2 fields) -/
 #guard_msgs in
 #schema
 
@@ -5781,6 +6332,10 @@ record upd2-entry {
   id: u64,
   email: string,
   age: u64,
+}
+record ticket {
+  id: u64,
+  status: u64,
 }
 }
 
@@ -5835,6 +6390,10 @@ record upd2-entry {
   id: u64,
   email: string,
   age: u64,
+}
+record ticket {
+  id: u64,
+  status: u64,
 }
 }
 

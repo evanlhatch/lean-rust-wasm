@@ -48,7 +48,11 @@ substrait `parseType_mono` / wasm-backend fuel-insensitive precedent).
 ## The guest discipline
 
 `lookupU64?`/`lookupString?`/`evalWU64?`/`evalWBool?`/`checkSteps`/
-`checkWitness`/`checkWitnessArtifact` are `@[guest_std]` — the GATE
+`checkWitness`/`checkWitnessArtifact` were `@[guest_std]`-marked at
+landing; the marks are REMOVED pending the backend wave
+(notes/w9-6-guest-checker-audit.md's gap list: Nat-literal lowering,
+fap, string intrinsics) — the marks put the checker in wasm-gen's
+compile set, and the backend cannot lower it yet. The gate
 mount (CodegenCore.GuestGate), not the census lint: elaboration fails
 if the closure leaves the guestlang-std surface. The constants used:
 match-only Nat (zero/succ fuel patterns, `Nat.beq` on lengths — Nat
@@ -119,7 +123,6 @@ and a wrong-typed name-hit is `none`, not a skip — loud; the tie
 theorems carry the uniqueness hypothesis (the header). -/
 
 /-- The first `u64` field named `n`, unboxed. -/
-@[guest_std]
 def lookupU64? (n : String) : (fs : List Field) → RowVals fs → Option UInt64
   | [], _ => none
   | f :: fs, .cons v vs =>
@@ -130,7 +133,6 @@ def lookupU64? (n : String) : (fs : List Field) → RowVals fs → Option UInt64
       else lookupU64? n fs vs
 
 /-- The first `string` field named `n` (the `strlenCol` operand). -/
-@[guest_std]
 def lookupString? (n : String) : (fs : List Field) → RowVals fs → Option String
   | [], _ => none
   | f :: fs, .cons v vs =>
@@ -143,7 +145,6 @@ def lookupString? (n : String) : (fs : List Field) → RowVals fs → Option Str
 /-- The mirror's u64 reading — one-for-one with the `.u64`-valued
     fragment of `evalRaw`: literal, u64 column, string column's raw
     length via `string_len` (THE one definition — W6.10's dedup). -/
-@[guest_std]
 def evalWU64? : WU64 → (fs : List Field) → RowVals fs → Option UInt64
   | .lit v, _, _ => some v
   | .col n, fs, row => lookupU64? n fs row
@@ -154,7 +155,6 @@ def evalWU64? : WU64 → (fs : List Field) → RowVals fs → Option UInt64
     multiplication, `not` = `1 - x`). Any unresolved operand is `none`
     — refusal, not the 0-analog: the CHECKER is not the validator's
     totalized reading, it is a gate. -/
-@[guest_std]
 def evalWBool? : WBoolExpr → (fs : List Field) → RowVals fs → Option UInt64
   | .gt a b, fs, row =>
       match evalWU64? a fs row, evalWU64? b fs row with
@@ -179,7 +179,6 @@ def evalWBool? : WBoolExpr → (fs : List Field) → RowVals fs → Option UInt6
     proof destructs a FLAT def, not a nested match): v1's per-step claim
     is always `.valid inv`, whose only proof ctor is `byValidEval`
     (deviation 3) — anything else refuses. -/
-@[guest_std]
 def checkStepProof (p : WProof) (inv : WBoolExpr) (fs : List Field)
     (row : RowVals fs) : Bool :=
   match p with
@@ -190,7 +189,6 @@ def checkStepProof (p : WProof) (inv : WBoolExpr) (fs : List Field)
     deviation 2), each step's offset dereferenced against the guest-held
     log. Length mismatch, out-of-range offset, wrong proof shape, out of
     fuel — all `false`: refusal is total. -/
-@[guest_std]
 def checkSteps : (fuel : Nat) → List WStep → List WProof → WBoolExpr →
     (fs : List Field) → List (RowVals fs) → Bool
   | _, [], [], _, _, _ => true
@@ -214,7 +212,6 @@ def checkSteps : (fuel : Nat) → List WStep → List WProof → WBoolExpr →
       checks against the log (deviation 4's semantics).
 
     Fuel 0 is refusal (the cap IS the semantics, §7.3 — never a trap). -/
-@[guest_std]
 def checkWitness : (fuel : Nat) → WProp → WProof →
     (fs : List Field) → RowVals fs → List (RowVals fs) → Bool
   | 0, _, _, _, _, _ => false
@@ -239,7 +236,6 @@ structure RowValsP where
 /-- The artifact-level entry (the §4 consumer flow's check): fuel,
     claim and proof from the certificate itself — fuel is PART of the
     artifact (§7.3), so host and guest agree by construction. -/
-@[guest_std]
 def checkWitnessArtifact (w : Witness) (ctx : RowValsP) : Bool :=
   checkWitness w.fuel w.claim w.proof ctx.fs ctx.row ctx.log
 
@@ -642,7 +638,6 @@ theorem WHolds.chain_validates {fs : List Field} {steps : List WStep} {inv : WBo
     touches one definition and the oracle duel pins guest verdict ≡
     interpreted verdict. `@[guest_std]`-gated like the checker it
     wraps: the seam's closure is exactly the checker's. -/
-@[guest_std]
 def verifyWitness (w : Witness) (ctx : RowValsP) : Bool :=
   checkWitnessArtifact w ctx
 

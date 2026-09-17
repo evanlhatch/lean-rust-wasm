@@ -1,4 +1,9 @@
 name = "GuestlangStd"
+
+# The wasm backend cannot lower Perceus reset/reuse/isShared joins
+# (WasmBackend.lean:448) — disable reuse instrumentation package-wide
+# (a runtime optimization only; semantics unchanged).
+weakLeanArgs = ["-Dcompiler.reuse=false"]
 defaultTargets = ["GuestlangStd", "GuestlangStdTests"]
 
 # LSpec's @[test_driver]-registered runner for `lake test`.

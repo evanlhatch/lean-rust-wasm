@@ -54,7 +54,9 @@ public import SchemaLang.Meta.TableInvariant
 public import SchemaLang.Meta.EventSourced
 public import SchemaLang.Bridge
 public import SchemaLang.Session
+public import SchemaLang.Commands
 public import SchemaLang.Debug
 public import SchemaLang.Witness
 public import SchemaLang.WitnessCheck
 public import SchemaLang.WitnessSpec
+public import SchemaLang.Scheduling

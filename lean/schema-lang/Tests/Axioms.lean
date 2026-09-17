@@ -6,6 +6,7 @@
 import SchemaLang
 import SchemaLang.Bridge
 import SchemaLang.TableInvariant
+import SchemaLang.EntityMachine
 import Demo
 
 #print axioms SchemaLang.Vortex.PType.ofDiscriminant_toDiscriminant
@@ -186,3 +187,48 @@ import Demo
 #print axioms SchemaLang.EventSourced.replayMigrated?_ok
 #print axioms SchemaLang.EventSourced.replayMigrated?_fuelExhausted
 #print axioms SchemaLang.EventSourced.replayMigrated?_diverged
+
+-- W8.5: scheduling — rates (the decide tie, periodicity, multiples,
+-- the in-period negative), delays (the next-tick law, composition,
+-- the Dbsp.delay tie), deadlines (the missed iff overdue-and-undone
+-- family). Bar: the core triple.
+#print axioms SchemaLang.Scheduling.Rate.due?_iff
+#print axioms SchemaLang.Scheduling.Rate.due_zero
+#print axioms SchemaLang.Scheduling.Rate.due_periodic
+#print axioms SchemaLang.Scheduling.Rate.due_mul
+#print axioms SchemaLang.Scheduling.Rate.due?_false_of_lt
+#print axioms SchemaLang.Scheduling.Rate.sample_due
+#print axioms SchemaLang.Scheduling.Rate.sample_hold
+#print axioms SchemaLang.Scheduling.delayBy_zero
+#print axioms SchemaLang.Scheduling.delayBy_one_zero
+#print axioms SchemaLang.Scheduling.delayBy_one_succ
+#print axioms SchemaLang.Scheduling.delayBy_add
+#print axioms SchemaLang.Scheduling.delayBy_eq_delay
+#print axioms SchemaLang.Scheduling.missed_false_of_done
+#print axioms SchemaLang.Scheduling.missed_false_of_lt
+#print axioms SchemaLang.Scheduling.missed_at
+#print axioms SchemaLang.Scheduling.missed_true_of_overdue
+
+-- W8.6 effects/commands: the well-formedness bridge (the lane's own
+-- footprint) + the derived session's laws — each law CITES the generic
+-- Machines.Session theorem (the mechanism is proved once, there).
+#print axioms SchemaLang.EffectDecl.check_eq_nil_iff
+#print axioms SchemaLang.EffectDecl.check_sound
+#print axioms SchemaLang.EffectDecl.check_complete
+#print axioms SchemaLang.EffectDecl.protocol_dual
+#print axioms SchemaLang.EffectDecl.protocol_deadlockFree
+#print axioms SchemaLang.EffectDecl.protocol_terminates
+#print axioms SchemaLang.EffectDecl.toWire_eq
+#print axioms SchemaLang.EffectDecl.protocol_wire_bridge
+#print axioms SchemaLang.EffectDecl.protocol_wire_payloads
+
+-- W8.4 entity-machine preset: the generic laws (one proof per law, every
+-- generated machine instantiates them) + the agreement chain.
+#print axioms SchemaLang.EntityMachine.legalFrom
+#print axioms SchemaLang.EntityMachine.legalJournal_iff
+#print axioms SchemaLang.EntityMachine.replay_of_legalJournal
+#print axioms SchemaLang.EntityMachine.trans_honest
+#print axioms SchemaLang.EntityMachine.hookEdges_legal
+#print axioms SchemaLang.EntityMachine.hookStates_reachable
+#print axioms SchemaLang.EntityMachine.EntityObligation.discharge_sound
+#print axioms SchemaLang.EntityMachine.EntityObligation.discharge_of_claim

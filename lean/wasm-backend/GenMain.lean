@@ -93,6 +93,82 @@ def targetDeclsOf (env : Environment) : Array Name :=
   (CodegenCore.GuestGate.guestMarkedDecls env).eraseDups.toArray.filter
     fun n => (GuestlangStd.Intrinsic.ofName? n).isNone
 
+/-- The LCNF x-ray (the W9.6 guest-compat audit's tool): render one
+    `LetValue` as its construct name — the diagnostic names the EXACT
+    construct the backend cannot lower, per decl, with the code path
+    to it. -/
+private def ctorNameOf : Lean.Compiler.LCNF.LetValue .impure → String := fun v =>
+  match v with
+  | .lit (.nat _) => "nat-lit" | .lit _ => "lit"
+  | .erased => "erased"
+  | .proj _ _ _ _ => "proj"
+  | .const n _ _ _ => s!"const {n}"
+  | .fvar _ _ => "fvar"
+  | .ctor i _ => s!"ctor {i.name}"
+  | .oproj _ _ _ => "oproj"
+  | .sproj _ _ _ _ => "sproj"
+  | .box t _ _ => s!"box {t}"
+  | .unbox _ _ => "unbox"
+  | .uproj .. => "uproj"
+  | .fap .. => "fap"
+  | .pap .. => "pap"
+  | .reset .. => "reset"
+  | .reuse .. => "reuse"
+  | .isShared .. => "isShared"
+
+/-- The W9.6 audit diagnostic: report every target decl whose final
+    LCNF carries a construct the backend does not lower — Perceus
+    reset/reuse/isShared (no guest lowering) or Nat literals (GMP —
+    banned in the guest). The walk is IO-recursive over the jp/cases
+    structure; the printed path (`@/case/let/let/jpK`) locates the
+    construct. Kept on every wasm-gen run: a marked decl the backend
+    cannot compile fails LOUD here, before any artifact is written. -/
+private partial def reportUnsupportedLCNF (decls2Names : NameSet) (d : Lean.Compiler.LCNF.Decl .impure) : IO Unit := do
+  let debugTrace := false
+  let rec walk (path : String) (c : Lean.Compiler.LCNF.Code .impure) : IO Bool := do
+    match c with
+    | .let decl k =>
+        let here : Bool :=
+          match decl.value with
+          | .reset .. => true
+          | .reuse .. => true
+          | .isShared .. => true
+          | .lit (.nat _) => true
+          | .fap fn _ =>
+              -- unknown callees: not a binop, not an intrinsic, and not
+              -- a decl the backend emits (an undefined wasm call)
+              (WasmBackend.binop? fn).isNone
+                && (GuestlangStd.Intrinsic.ofName? fn).isNone
+                && !decls2Names.contains fn
+          | _ => false
+        let _ : Unit ←
+          if here then
+            IO.eprintln s!"wasm-gen: UNSUPPORTED-LCNF {d.name} @{path}: {ctorNameOf decl.value}"
+          else
+            pure ()
+        let rest ← walk (path ++ "/let") k
+        pure (here || rest)
+    | .jp fd k =>
+        let a ← walk (path ++ "/jp") fd.value
+        let b ← walk (path ++ "/jpK") k
+        pure (a || b)
+    | .cases cs =>
+        let mut any := false
+        if debugTrace then
+          IO.eprintln s!"WALK {d.name} @{path}: cases {cs.typeName} ({cs.alts.size} alts)"
+        else pure ()
+        for a in cs.alts do
+          let bad ← match a with
+            | .ctorAlt _ c => walk (path ++ "/case") c
+            | .default c => walk (path ++ "/caseD") c
+            | .alt _ _ _ _ => pure false
+          any := any || bad
+        pure any
+    | _ => pure false
+  if let .code c := d.value then
+    let _ ← walk "" c
+    pure ()
+
 /-- Run the LCNF pipeline + emit the module, in CoreM. Returns the
     runtime-spliced WAT body WITHOUT the GENERATED header — the header
     is the driver's prepend (`watEmitter` + `runEmitters`, W7.12); this
@@ -114,6 +190,9 @@ def emitModuleWasm (targetDecls : Array Name) : CoreM String := do
       decls2 := d :: decls2
   decls2 := decls2.reverse
   -- Debug dump: the final LCNF per decl (the compiler line's x-ray).
+  let decls2Names : Lean.NameSet := decls2.foldl (fun s d => s.insert d.name) {}
+  for d in decls2 do
+    reportUnsupportedLCNF decls2Names d
   for d in decls2 do
     let fmt ← Lean.Compiler.LCNF.ppDecl' d .impure
     IO.eprintln s!"--- {d.name}\n{fmt}"
@@ -334,6 +413,7 @@ def wasmEmitters : List (CodegenCore.Emit.Emitter WasmGenSpec) :=
   [watEmitter, worldWitEmitter, observabilityEmitter]
 
 
+
 unsafe def main : IO Unit := do
   Lean.initSearchPath (← Lean.findSysroot)
   Lean.enableInitializersExecution
@@ -344,8 +424,16 @@ unsafe def main : IO Unit := do
   -- the manifest = the modules: load the deduped union, extensions
   -- replayed (the schema + guest-mark registries come back populated).
   let mods := (manifest.specModules ++ manifest.implModules).toList.eraseDups
-  let env ← Lean.importModules (mods.toArray.map ({ module := · })) (opts := {}) (loadExts := true)
-  let ctx : Core.Context := { fileName := "<wasm-gen>", fileMap := default }
+  -- The LCNF re-run happens IN THIS PROCESS (the impure phase is not
+  -- persisted in oleans) — disable Perceus reuse instrumentation: the
+  -- emitter cannot lower reset/reuse/isShared joins (the
+  -- UNSUPPORTED-LCNF diagnostic). Runtime optimization only; the
+  -- emitted wasm is semantics-identical (RC correctness never relies
+  -- on reuse).
+  let env ← Lean.importModules (mods.toArray.map ({ module := · }))
+    (opts := (default : Lean.Options).setBool `compiler.reuse false) (loadExts := true)
+  let ctx : Core.Context := { fileName := "<wasm-gen>", fileMap := default
+                              options := (default : Lean.Options).setBool `compiler.reuse false }
   let state : Core.State := { env := env }
   -- the manifest's fold: the marks = the decls (no hand-list)
   let targetDecls := targetDeclsOf env
