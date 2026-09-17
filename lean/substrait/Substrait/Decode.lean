@@ -73,10 +73,13 @@ the same constant. Resistant sites (char-level `match` patterns, the
 `null`/`true`/`false` value words, `relWidth` vs `relWidthD`) are noted at
 their definitions and in the `Substrait.Grammar` header.
 -/
-import Substrait.Decode.Basic
-import Substrait.Decode.Types
-import Substrait.Decode.Expr
-import Substrait.Decode.Rel
-import Substrait.Decode.Plan
-import Substrait.Decode.Typed
-import Substrait.Decode.TypedRel
+
+module
+
+public import Substrait.Decode.Basic
+public import Substrait.Decode.Types
+public import Substrait.Decode.Expr
+public import Substrait.Decode.Rel
+public import Substrait.Decode.Plan
+public import Substrait.Decode.Typed
+public import Substrait.Decode.TypedRel

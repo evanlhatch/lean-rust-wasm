@@ -72,6 +72,8 @@ def tyUniverse : List (String × Ty) :=
   , ("option", .option .bool)
   , ("result", .result .bool .bool)
   , ("list",   .list .string)
+  , ("map",    .map .string .u64)  -- W8.1: scalar key (the KeyTy gate)
+  , ("set",    .set .string)
   , ("future", .future .u64)
   , ("stream", .stream .u64)
   , ("tensor", .tensor [2] .u64)
@@ -89,6 +91,10 @@ def tagsOf : Ty → List String
   | .option a => "option" :: tagsOf a
   | .result ok err => "result" :: tagsOf ok ++ tagsOf err
   | .list a => "list" :: tagsOf a
+  -- the key is a `KeyTy` scalar: its tag rides the row name (the
+  -- sample's own tag); only the VALUE's tags are transitive
+  | .map _ v => "map" :: tagsOf v
+  | .set _ => ["set"]
   | .future a => "future" :: tagsOf a
   | .stream a => "stream" :: tagsOf a
   | .tensor _ a => "tensor" :: tagsOf a

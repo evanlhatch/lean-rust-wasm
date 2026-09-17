@@ -36,8 +36,13 @@ type-erased package) instead of a bare dependent sigma: Lean forbids
 indexed `Args` spine is only meaningful when the accepted shape is a *signature*
 argument list.
 -/
-import Substrait.Typed.Expr
-import Substrait.Proto.Rel
+
+module
+
+public import Substrait.Typed.Expr
+public import Substrait.Proto.Rel
+
+@[expose] public section
 
 namespace Substrait.Typed
 
@@ -108,3 +113,5 @@ inductive Rel : Schema → Schema → Type where
   | extensionSingle (detail : String) (input : Rel s s') : Rel s s'
 
 end Substrait.Typed
+
+end -- @[expose] public section

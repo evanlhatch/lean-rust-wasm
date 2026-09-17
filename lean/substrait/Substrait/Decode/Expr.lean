@@ -10,7 +10,12 @@ line-shape tokens. The `null`/`true`/`false` value words stay
 char-pattern-matched (patterns cannot consume a constant — the
 resistant-site note in `Substrait.Grammar`'s header).
 -/
-import Substrait.Decode.Types
+
+module
+
+public import Substrait.Decode.Types
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -282,7 +287,7 @@ private theorem scanInt_of_nat (n : Nat) (rest : List Char) (hstop : notDigitHea
       rw [hcc] at hdigc
       have hnd : Char.isDigit '-' = false := by decide
       rw [hnd] at hdigc
-      simp at hdigc
+      simp [Bind.bind, Except.bind] at hdigc
   rw [scanInt.eq_2 ((toString n).toList ++ rest) hdash]
   rw [Parser.bind_apply, Parser.bind]
   rw [scanNat_of_toString n rest hstop]
@@ -637,7 +642,7 @@ private theorem typeDepth_sum_le_len_sum (fs : List Proto.PType) (ts : List Stri
     | nil => simp
     | cons t rest =>
       have hl := mapM_length ([] : List Proto.PType) Emit.Text.typeText (t :: rest) hmap
-      simp at hl
+      simp [Bind.bind, Except.bind] at hl
   | cons f fs' ih =>
     rcases mapM_cons_ok f fs' Emit.Text.typeText ts hmap with ⟨tf, ts', hf, hr, hts⟩
     subst ts
@@ -674,7 +679,7 @@ private theorem typeText_base_ok (t : Proto.PType) (b : String)
   match he : Emit.Text.typeTextBase t with
   | .error em =>
     rw [he] at h
-    simp at h
+    simp [Bind.bind, Except.bind] at h
   | .ok b0 => exact ⟨b0, rfl⟩
 
 /-- **The depth/length bound**: a type's text is always at least as long as
@@ -734,9 +739,9 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | required =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
       cases he : Emit.Text.typeText e with
-      | error em => simp [he] at hemit
+      | error em => simp [he, Bind.bind, Except.bind] at hemit
       | ok es =>
-        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
         have hb : b' = "list<" ++ es ++ ">" := hemit.symm
         rw [hb]
         simp [typeDepth]
@@ -745,9 +750,9 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | nullable =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
       cases he : Emit.Text.typeText e with
-      | error em => simp [he] at hemit
+      | error em => simp [he, Bind.bind, Except.bind] at hemit
       | ok es =>
-        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
         have hb : b' = "list<" ++ es ++ ">" ++ "?" := hemit.symm
         rw [hb]
         simp [typeDepth]
@@ -756,19 +761,19 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | unspecified =>
       rcases typeText_base_ok (.list e .unspecified) b' hemit with ⟨b0, hb0⟩
       rw [Emit.Text.typeText.eq_def, hb0] at hemit
-      simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
   have hmap : ∀ k v n, motive k → motive v → motive (.map k v n) := by
     intro k v n ihk ihv b' hemit
     cases n with
     | required =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
       cases he : Emit.Text.typeText k with
-      | error em => simp [he] at hemit
+      | error em => simp [he, Bind.bind, Except.bind] at hemit
       | ok ks =>
         cases he2 : Emit.Text.typeText v with
-        | error em => simp [he, he2] at hemit
+        | error em => simp [he, he2, Bind.bind, Except.bind] at hemit
         | ok vs =>
-          simp [he, he2, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+          simp [he, he2, Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
           have hb : b' = "map<" ++ ks ++ ", " ++ vs ++ ">" := hemit.symm
           rw [hb]
           simp [typeDepth]
@@ -778,12 +783,12 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | nullable =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
       cases he : Emit.Text.typeText k with
-      | error em => simp [he] at hemit
+      | error em => simp [he, Bind.bind, Except.bind] at hemit
       | ok ks =>
         cases he2 : Emit.Text.typeText v with
-        | error em => simp [he, he2] at hemit
+        | error em => simp [he, he2, Bind.bind, Except.bind] at hemit
         | ok vs =>
-          simp [he, he2, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+          simp [he, he2, Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
           have hb : b' = "map<" ++ ks ++ ", " ++ vs ++ ">" ++ "?" := hemit.symm
           rw [hb]
           simp [typeDepth]
@@ -793,16 +798,16 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | unspecified =>
       rcases typeText_base_ok (.map k v .unspecified) b' hemit with ⟨b0, hb0⟩
       rw [Emit.Text.typeText.eq_def, hb0] at hemit
-      simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
   have hstruct : ∀ fs n, (∀ f, f ∈ fs → motive f) → motive (.struct fs n) := by
     intro fs n hmem b' hemit
     cases n with
     | required =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
       cases he : fs.mapM Emit.Text.typeText with
-      | error em => simp [he] at hemit
+      | error em => simp [he, Bind.bind, Except.bind] at hemit
       | ok ts =>
-        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
         have hb : b' = "struct<" ++ Emit.Text.sep ", " ts ++ ">" := hemit.symm
         rw [hb]
         simp [typeDepth]
@@ -814,9 +819,9 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | nullable =>
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
       cases he : fs.mapM Emit.Text.typeText with
-      | error em => simp [he] at hemit
+      | error em => simp [he, Bind.bind, Except.bind] at hemit
       | ok ts =>
-        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+        simp [he, Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
         have hb : b' = "struct<" ++ Emit.Text.sep ", " ts ++ ">" ++ "?" := hemit.symm
         rw [hb]
         simp [typeDepth]
@@ -828,10 +833,10 @@ private theorem typeDepth_le_len (t : Proto.PType) (b : String)
     | unspecified =>
       rcases typeText_base_ok (.struct fs .unspecified) b' hemit with ⟨b0, hb0⟩
       rw [Emit.Text.typeText.eq_def, hb0] at hemit
-      simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
+      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
   have huser : ∀ a ps n, True → motive (.userDefined a ps n) := by
     intro a ps n _ b' hemit
-    simp [Emit.Text.typeText, Emit.Text.typeTextBase] at hemit
+    simp [Emit.Text.typeText, Emit.Text.typeTextBase, Bind.bind, Except.bind, Pure.pure, Except.pure] at hemit
   exact ptypeRec motive hbool hi8 hi16 hi32 hi64 hfp32 hfp64 hstring hbinary
     hdecimal hlist hmap hstruct huser t b hemit
 
@@ -905,7 +910,7 @@ private theorem parseLiteral_i64_nullable (n : Nat) (rest : List Char)
       simp
     have hlt := scanLitType (Proto.PType.i64 Proto.Nullability.nullable) "i64?" rest hcont (by
       rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def]
-      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Substrait.Grammar.ScalarCtor.prefix])
+      simp [Emit.Text.nullSuffix, Proto.PType.nullability, Substrait.Grammar.ScalarCtor.prefix, Bind.bind, Except.bind, Pure.pure, Except.pure])
     have hlt' : scanLitSuffix (':' :: 'i' :: '6' :: '4' :: '?' :: rest) =
         some (some (Proto.PType.i64 Proto.Nullability.nullable), rest) := by
       have hs : ((":i64?" : String).toList ++ rest) = ':' :: 'i' :: '6' :: '4' :: '?' :: rest := by
@@ -996,3 +1001,5 @@ theorem parseExpr_lit_i64 (fuel n : Nat) (ctx : FnCtx) (rest : List Char)
 
 
 end Substrait.Decode
+
+end -- @[expose] public section

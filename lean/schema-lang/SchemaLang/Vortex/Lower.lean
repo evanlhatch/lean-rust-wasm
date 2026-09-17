@@ -42,6 +42,18 @@ open SchemaLang
     their lowered Vortex dtypes. Provided by the caller (the driver). -/
 abbrev VortexSem : Type := String → Option DType
 
+/-- The map/set KEY's dtype, DIRECT (the `KeyTy.toTy` indirection
+    breaks `Ty.lower`'s structural recursion; the arms are exactly the
+    scalar arms). Keys/elements sit INSIDE the entry struct/element
+    position: always non-nullable (the `list` element precedent). -/
+def keyLower : KeyTy → DType
+  | .bool => .bool .nonNullable
+  | .u8 => .primitive .u8 .nonNullable | .u16 => .primitive .u16 .nonNullable
+  | .u32 => .primitive .u32 .nonNullable | .u64 => .primitive .u64 .nonNullable
+  | .i8 => .primitive .i8 .nonNullable | .i16 => .primitive .i16 .nonNullable
+  | .i32 => .primitive .i32 .nonNullable | .i64 => .primitive .i64 .nonNullable
+  | .string => .utf8 .nonNullable
+
 /-- Lower a target-neutral `Ty` to a Vortex `DType`, given a semantics
     for named references. Returns `none` for unresolvable refs or
     non-tabular types (future/stream in field position). -/
@@ -78,6 +90,17 @@ def Ty.lower (sem : VortexSem) (null : Nullability) : Ty → Option DType
       do
         let inner ← Ty.lower sem .nonNullable a
         some (DType.list inner null)
+  | .map k v => do
+      -- the parquet convention: a map column is a LIST of key/value
+      -- entry structs; key uniqueness is the payload invariant, not
+      -- dtype data. The entry struct and its key are non-nullable
+      -- (the `list` element precedent); `null` stamps the LIST only.
+      let vd ← Ty.lower sem .nonNullable v
+      some (DType.list (.struct [("key", keyLower k), ("value", vd)] .nonNullable) null)
+  | .set k =>
+      -- a set column is a LIST of its (non-nullable) elements;
+      -- uniqueness is the payload invariant, not dtype data
+      some (DType.list (keyLower k) null)
   | .future _ => none  -- not tabular
   | .stream _ => none  -- not tabular
   | .ty n => (sem n).map (·.withNullability null)
@@ -126,6 +149,10 @@ def Ty.lowerChecked (sem : VortexSem) (null : Nullability) :
   | .tensor _dims a, h => do
       let inner ← Ty.lowerChecked sem .nonNullable a h
       some (DType.list inner null)
+  | .map k v, h => do
+      let vd ← Ty.lowerChecked sem .nonNullable v h
+      some (DType.list (.struct [("key", keyLower k), ("value", vd)] .nonNullable) null)
+  | .set k, _ => some (DType.list (keyLower k) null)
   | .future _, h => Bool.noConfusion h
   | .stream _, h => Bool.noConfusion h
   | .ty n, _ => (sem n).map (·.withNullability null)
@@ -157,6 +184,10 @@ theorem Ty.lowerChecked_eq_lower (sem : VortexSem) (t : Ty)
   | tensor _ _ ih =>
       simp only [Ty.lowerChecked, Ty.lower]
       rw [ih h .nonNullable]
+  | map _ _ ih =>
+      simp only [Ty.lowerChecked, Ty.lower]
+      rw [ih h .nonNullable]
+  | set _ => rfl
   | future _ => exact Bool.noConfusion h
   | stream _ => exact Bool.noConfusion h
   | ty _ => rfl

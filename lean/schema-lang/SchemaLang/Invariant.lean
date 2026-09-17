@@ -29,7 +29,14 @@ file's lock discipline), and the emission in `SchemaLang.Emit.Invariant`.
 Ownership: the invariant lane (this module + Meta.Reflect's command +
 Emit.Invariant). Deliberate exclusions: no negation/implication on
 VExpr (Validate's closed fragment governs — extend THERE, not here);
-no emission logic (Emit.Invariant owns it).
+no emission logic (Emit.Invariant owns it). The TABLE-level sibling
+(predicates over the whole row-set via aggregation — a different
+checking tier entirely: the row lane's `Tier` ladder is per-row, an
+aggregate check is O(table) over the materialized table) lives in
+`SchemaLang.TableInvariant` (W8.8); this module's `Tier`/`tierOf` are
+deliberately NOT extended (the aggregate shape needs no row-lane
+rung — the table lane's module header carries the rung-by-rung
+reading).
 -/
 
 module

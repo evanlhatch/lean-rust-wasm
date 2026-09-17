@@ -4,7 +4,12 @@
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
 -/
-import Substrait.Decode.Typed
+
+module
+
+public import Substrait.Decode.Typed
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -891,3 +896,5 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
               simp [relLower, Rel.toProtoWith, hlow]
 
 end Substrait.Decode
+
+end -- @[expose] public section

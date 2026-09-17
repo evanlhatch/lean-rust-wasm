@@ -46,7 +46,9 @@ namespace WasmBackend.Layout
 def width : Ty → Nat
   | .u64 | .i64 | .f64 => 8
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
-      | .stream _ | .tensor _ _ | .ty _ => 8
+      -- map/set: the (ptr, len) pair of their wire list form (W8.1 —
+      -- deliberate arm, the `list` precedent)
+      | .stream _ | .tensor _ _ | .map _ _ | .set _ | .ty _ => 8
   | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 | .f32 => 4
 
 theorem width_pos (t : Ty) : 0 < width t := by cases t <;> simp [width] <;> omega

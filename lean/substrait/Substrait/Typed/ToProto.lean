@@ -22,8 +22,13 @@ emission* from the declaration list a plan uses:
 The public signatures match the design exactly: `Rel.toProto : Rel inS outS →
 Proto.Rel` and `Rel.toPlan : Rel inS outS → Proto.Plan`.
 -/
-import Substrait.Typed.Rel
-import Substrait.Proto.Plan
+
+module
+
+public import Substrait.Typed.Rel
+public import Substrait.Proto.Plan
+
+@[expose] public section
 
 namespace Substrait.Typed
 
@@ -324,3 +329,5 @@ def Rel.toPlan {inS outS : Schema} (rel : Rel inS outS) : Proto.Plan :=
     relations := [Proto.PlanRel.rel (rel.toProtoWith ctx)] }
 
 end Substrait.Typed
+
+end -- @[expose] public section

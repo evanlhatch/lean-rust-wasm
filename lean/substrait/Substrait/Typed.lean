@@ -19,8 +19,11 @@ Rules of the road for users: schemas must be declared as **`abbrev`** (not
 their type and nullability explicitly (`col "health" .i32 true`); nullability
 is `false` = required, `true` = nullable.
 -/
-import Substrait.Typed.Schema
-import Substrait.Typed.Expr
-import Substrait.Typed.Rel
-import Substrait.Typed.ToProto
-import Substrait.Typed.Builder
+
+module
+
+public import Substrait.Typed.Schema
+public import Substrait.Typed.Expr
+public import Substrait.Typed.Rel
+public import Substrait.Typed.ToProto
+public import Substrait.Typed.Builder

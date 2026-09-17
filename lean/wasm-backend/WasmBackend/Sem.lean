@@ -773,9 +773,7 @@ theorem exec_typed (locals : Nat → Ty) :
                             ⟨loc, .i32 (a + b) :: vs2, mem, msz⟩
                             hcheck' (by simp [stackTys, hts]) hloc'
         | i32eq =>
-          -- the branch comparison (added by the cases lane): the same
-          -- stack shape as i32add (pop two i32, push one) — the VALUE is
-          -- irrelevant for typing, so the case is the i32add mirror.
+          -- same stack shape as i32add (pop two i32, push one); VALUE irrelevant for typing.
           cases base with
           | nil => simp [checkStack] at hcheck
           | cons t1 ts1 =>
@@ -810,9 +808,7 @@ theorem exec_typed (locals : Nat → Ty) :
                             ⟨loc, .i32 (if a == b then 1 else 0) :: vs2, mem, msz⟩
                             hcheck' (by simp [stackTys, hts]) hloc'
         | i64add =>
-          -- the i32add case mirrored over i64 (added by the
-          -- translation-correctness lane: the backend's `binop?` emits
-          -- i64.add for UInt64.add — see the header ledger)
+          -- mirror of i32add for i64; see header ledger.
           cases base with
           | nil => simp [checkStack] at hcheck
           | cons t1 ts1 =>
@@ -1123,10 +1119,7 @@ theorem exec_typed (locals : Nat → Ty) :
                           . simp only [execList, step, if_neg hlt]
                             err_tail
         | i32load8u off =>
-          -- the tag-read lane: the i32store8 mirror with ONE popped
-          -- operand (the base address); the checker case is net-zero
-          -- (pop i32, push i32) so the tail check keeps the `.i32 ::`
-          -- — the loaded byte's VALUE is irrelevant for typing.
+          -- mirror of i32store8 with ONE popped operand; net-zero (pop i32, push i32); VALUE irrelevant for typing.
           cases base with
           | nil => simp [checkStack] at hcheck
           | cons t1 ts1 =>
@@ -1659,7 +1652,6 @@ theorem call_split (fuel : Nat) (f : Fn) (args : List Val) (s : State)
     (by simp [List.append_nil])
   simp only [List.length_reverse] at h2
   rw [h2]
-  -- both sides: the bound state, the callee's body
   have hfin : fuel - args.length - args.length = fuel - 2 * args.length := by omega
   rw [hfin]
   have hstack : ((s.stack.reverse.drop args.length).reverse) = [] := by
@@ -2107,7 +2099,6 @@ theorem callProtocol_agrees (fuel : Nat) (f : Fn) (args : List Val) (s : State)
      | .error _ => none) := by
   rw [callProtocol, pushFrame, if_pos harity]
   dsimp only
-  -- the machine's bound state IS the big-step's bindArgs state
   have hbound : ({ locals := fun n => args.getD n (s.locals n)
                  , stack := ([] : List Val), mem := s.mem
                  , memSize := s.memSize } : State)

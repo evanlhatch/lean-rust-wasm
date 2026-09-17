@@ -55,15 +55,6 @@ def Item.changeTypeName : Item → String
   | .record n _ => pascal n ++ "Change"
   | _ => ""
 
-/-- The key field of a record: the FIRST field (the same key
-    convention the oracle and codecs use). `none` for non-records and
-    field-less records. The one "does this record have a key?" test —
-    the four delta lowerings used to each re-derive it from the
-    record's field list. -/
-def Item.keyOf : Item → Option Field
-  | .record _ fields => fields.head?
-  | _ => none
-
 /-- The change variant's PAYLOAD type for a record: the record itself
     (`.ty n` — the caller wraps it in its target's variant/enum). `none`
     for non-records AND for field-less records (no key field). -/
@@ -145,6 +136,10 @@ def litTy? : Ty → Option String
   -- no self-contained tensor literal (the nested-record rule: the
   -- shape needs per-element literals + a shape-checked constructor)
   | .tensor _ _ => none
+  -- map/set: `BTreeMap::new()`/`BTreeSet::new()` need the
+  -- `std::collections` import in the emitted test module — not pinned
+  -- (no consumer), so `none` (the tensor rule)
+  | .map _ _ | .set _ => none
   | .future a | .stream a => litTy? a
   | .ty _ => none
 

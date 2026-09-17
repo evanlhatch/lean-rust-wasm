@@ -46,9 +46,13 @@ char-level `match` patterns (quoted escapes, `'_'`, `'@'`, `'.'`, `'('`,
 structural — the agreement is sweep-witnessed, not proved).
 -/
 
-import Substrait.Proto.Type
-import Substrait.Proto.Rel
-import Substrait.Proto.Plan
+module
+
+public import Substrait.Proto.Type
+public import Substrait.Proto.Rel
+public import Substrait.Proto.Plan
+
+@[expose] public section
 
 namespace Substrait.Grammar
 
@@ -756,3 +760,5 @@ theorem castFbGrammar_token_nodup : (castFbGrammar.map CastFbCtor.token).Nodup :
   decide
 
 end Substrait.Grammar
+
+end -- @[expose] public section

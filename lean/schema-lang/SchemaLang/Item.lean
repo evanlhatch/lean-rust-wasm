@@ -143,6 +143,19 @@ def Item.name : Item → String
   | .func s => s.name
   | .resource n => n
 
+/-- The key field of a record: the FIRST field (the same key
+    convention the oracle, the codecs, and the delta lowerings use).
+    `none` for non-records and field-less records. The one "does this
+    record have a key?" test — the delta lowerings used to each
+    re-derive it from the record's field list. W8.2: a DECLARED key
+    (SchemaLang.Keys' registry), when present, WINS — read through
+    `Item.keyOfWith`; this stays the default for undeclared records.
+    (Moved here from Delta.lean at W8.2: the convention is item-level,
+    not delta-level.) -/
+def Item.keyOf : Item → Option Field
+  | .record _ fields => fields.head?
+  | _ => none
+
 /-- The SPEC-SURFACE equality: `FuncSig.body` (6.5.1) is registry
     metadata — the declaring constant, re-attached at `@[schema_fn]`
     time and reconstructed anonymous by the snapshot round-trip — so
@@ -168,6 +181,8 @@ def Ty.tyRefs : Ty → List String
   | .option a => a.tyRefs
   | .result ok err => ok.tyRefs ++ err.tyRefs
   | .list a => a.tyRefs
+  | .map _ v => v.tyRefs  -- the key is a `KeyTy` scalar: no refs
+  | .set _ => []          -- a `KeyTy` scalar: no refs
   | .future a => a.tyRefs
   | .stream a => a.tyRefs
   | .tensor _ a => a.tyRefs
@@ -197,6 +212,19 @@ inductive SchemaDiag where
   | multiPayload (name : String)
   | reservedWord (name context : String)
   | volatileInPureContext (fn context : String)
+  -- the W8.2 key lane (checkers in `SchemaLang.Keys`): declared
+  -- primary/foreign keys against the item universe
+  | keyRecordMissing (record : String) (candidates : List String)
+  | keyRecordNotRecord (record : String)
+  | keyFieldsMismatch (record : String)
+  | keyFieldMissing (record field : String) (candidates : List String)
+  | keyNotScalar (record field tyText : String)
+  | foreignFieldMissing (record field : String) (candidates : List String)
+  | foreignTargetMissing (record field target : String) (candidates : List String)
+  | foreignTargetNotRecord (record field target : String)
+  | foreignTargetKeyless (record field target : String)
+  | foreignTypeMismatch (record field target got want : String)
+  | dupKeyDecl (record : String)
 deriving Repr, BEq, Inhabited
 
 /-! ## Reserved words — the identifier gate (elab-time, via the
@@ -267,6 +295,53 @@ def render : SchemaDiag → String
   | .volatileInPureContext fn ctx =>
       s!"func `{fn}` is volatile but `{ctx}` requires purity — valid "
         ++ "determinisms in a pure context: pure, stable"
+  | .keyRecordMissing record cands =>
+      let hint := match cands with
+        | [] => ""
+        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
+      s!"key declaration for `{record}`: no such record in the universe" ++ hint
+  | .keyRecordNotRecord record =>
+      s!"key declaration for `{record}`: `{record}` is not a record — "
+        ++ "keys declare on `@[schema]` records only"
+  | .keyFieldsMismatch record =>
+      s!"key declaration for `{record}`: the stored field list is not the "
+        ++ "record's field list — re-declare against the current record"
+  | .keyFieldMissing record field cands =>
+      let hint := match cands with
+        | [] => ""
+        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
+      s!"key declaration for `{record}`: no field `{field}` on the record" ++ hint
+  | .keyNotScalar record field tyText =>
+      s!"key declaration for `{record}`: key field `{field}` has type "
+        ++ s!"`{tyText}` — a key must inject from the KeyTy scalar "
+        ++ "sub-universe (W8.1): bool, u8, u16, u32, u64, i8, i16, i32, "
+        ++ "i64, string"
+  | .foreignFieldMissing record field cands =>
+      let hint := match cands with
+        | [] => ""
+        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
+      s!"key declaration for `{record}`: foreign-key field `{field}` is "
+        ++ "not on the record" ++ hint
+  | .foreignTargetMissing record field target cands =>
+      let hint := match cands with
+        | [] => ""
+        | cs => " — did you mean: " ++ String.intercalate ", " cs ++ "?"
+      s!"key declaration for `{record}`: foreign key `{field}` targets "
+        ++ s!"`{target}`, which is not in the universe" ++ hint
+  | .foreignTargetNotRecord record field target =>
+      s!"key declaration for `{record}`: foreign key `{field}` targets "
+        ++ s!"`{target}`, which is not a record — foreign keys reference "
+        ++ "records only"
+  | .foreignTargetKeyless record field target =>
+      s!"key declaration for `{record}`: foreign key `{field}` targets "
+        ++ s!"`{target}`, which has no declared key — declare the target's "
+        ++ "keys first (the forward-reference rule)"
+  | .foreignTypeMismatch record field target got want =>
+      s!"key declaration for `{record}`: foreign-key field `{field}` has "
+        ++ s!"type `{got}` but `{target}`'s declared key has type `{want}` — "
+        ++ "the foreign key field's type must BE the target's key type"
+  | .dupKeyDecl record =>
+      s!"duplicate key declaration for `{record}` — one declaration per record"
 
 end SchemaDiag
 
@@ -277,6 +352,8 @@ def Ty.check (known : List String) : Ty → List SchemaDiag
   | .option a => a.check known
   | .result ok err => ok.check known ++ err.check known
   | .list a => a.check known
+  | .map _ v => v.check known  -- the key is a `KeyTy` scalar: always clean
+  | .set _ => []               -- a `KeyTy` scalar: always clean
   | .future a => a.check known
   | .stream a => a.check known
   | .tensor _ a => a.check known
@@ -292,6 +369,8 @@ def Ty.banAsync : Ty → Bool
   | .option a => a.banAsync
   | .result ok err => ok.banAsync && err.banAsync
   | .list a => a.banAsync
+  | .map _ v => v.banAsync  -- the key is a `KeyTy` scalar: async-free
+  | .set _ => true          -- a `KeyTy` scalar: async-free
   | .future _ | .stream _ => false
   | .tensor _ a => a.banAsync
   | _ => true

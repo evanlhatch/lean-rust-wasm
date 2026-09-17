@@ -5,6 +5,7 @@
    the pipeline-machine acyclicity/happy-path proofs. -/
 import SchemaLang
 import SchemaLang.Bridge
+import SchemaLang.TableInvariant
 import Demo
 
 #print axioms SchemaLang.Vortex.PType.ofDiscriminant_toDiscriminant
@@ -103,3 +104,85 @@ import Demo
 #print axioms SchemaLang.CasePath.payloadOf_isSome_of_isName
 #print axioms SchemaLang.universeWellFormed_iff
 #print axioms SchemaLang.SchemaObligation.discharge_isSome_of_computed
+
+-- W7.1 phase 2: the decidableNow backend — soundness (a `.decided
+-- true` discharge IS the default-row claim) and completeness (a true
+-- claim fires the backend). decide-backed, no new trust base.
+#print axioms SchemaLang.SchemaObligation.discharge_decidableNow_sound
+#print axioms SchemaLang.SchemaObligation.discharge_decidableNow_of_claim
+
+-- W9.2: the guest witness checker — the soundness deliverable (artifact
+-- level + judgment level), the per-step lemma, the fuel discipline
+-- (zero refuses; acceptance monotone), the evalV/validates grounding
+-- ties, the CheckedProp pack. Bar: the core triple only.
+#print axioms SchemaLang.WitnessCheck.checkWitness_sound
+#print axioms SchemaLang.WitnessCheck.checkWitnessArtifact_sound
+#print axioms SchemaLang.WitnessCheck.checkSteps_sound
+#print axioms SchemaLang.WitnessCheck.checkWitness_zero
+#print axioms SchemaLang.WitnessCheck.checkWitness_mono
+#print axioms SchemaLang.WitnessCheck.checkSteps_mono
+#print axioms SchemaLang.WitnessCheck.evalWU64?_eq_evalU
+#print axioms SchemaLang.WitnessCheck.evalWBool?_eq_evalB
+#print axioms SchemaLang.WitnessCheck.WHolds.valid_iff_validates
+#print axioms SchemaLang.WitnessCheck.WHolds.eqU_iff_evalU
+#print axioms SchemaLang.WitnessCheck.WHolds.chain_validates
+#print axioms SchemaLang.WitnessCheck.witnessChecked
+
+-- W8.2: the keys lane — the checker↔relation bridge (both directions
+-- + the CheckedProp pack), the obligation backend's soundness and
+-- completeness, the keyOf-migration equivalence. Bar: the core triple.
+#print axioms SchemaLang.keyDeclsCheck_sound
+#print axioms SchemaLang.keyDeclsCheck_complete
+#print axioms SchemaLang.keysChecked
+#print axioms SchemaLang.keyDeclsWellFormed_iff
+#print axioms SchemaLang.KeyObligation.discharge_decidableNow_sound
+#print axioms SchemaLang.KeyObligation.discharge_decidableNow_of_claim
+#print axioms SchemaLang.Item.keyOfWith_eq_keyOf
+#print axioms SchemaLang.Item.keyOfWith_eq_keyOf_of_decl_head
+#print axioms SchemaLang.FieldVal.beq_refl
+
+-- W9.3: the fifth tier's discharge backend — the arm's equation,
+-- soundness (a fired guestVerified discharge IS the WHolds denotation,
+-- via checkWitnessArtifact_sound), the fires-direction. Bar: the core
+-- triple only. (`discharge_isSome_of_computed` above is re-pinned by
+-- its existing row — the re-stated disjunct proof rides the same name.)
+#print axioms SchemaLang.SchemaObligation.discharge_guestVerified_eq
+#print axioms SchemaLang.SchemaObligation.discharge_guestVerified_sound
+#print axioms SchemaLang.SchemaObligation.discharge_guestVerified_of_accept
+
+-- W8.8: table-level invariants — the existential executor's interface
+-- (guarded-cast collapse), the decidableNow backend's soundness and
+-- completeness over a PROVIDED materialized table, the mis-wire check.
+-- Bar: the core triple.
+#print axioms SchemaLang.TableInvItem.checkOn_self
+#print axioms SchemaLang.TableInvItem.checkOn_of_ne
+#print axioms SchemaLang.TableObligation.discharge_decidableNow_sound
+#print axioms SchemaLang.TableObligation.discharge_decidableNow_of_holds
+#print axioms SchemaLang.TableObligation.discharge_tier_agrees
+
+-- W9.4: host-side witness generation — the acceptance lemmas (the
+-- checker's exact cost), generation completeness (a TRUE claim
+-- self-checks: WHolds → the generated certificate passes at its
+-- pinned fuel), the demo registry's semantic premise, the emitter
+-- law's discharge. Bar: the core triple only.
+#print axioms SchemaLang.Emit.Witness.checkWitness_accept_valid
+#print axioms SchemaLang.Emit.Witness.checkWitness_accept_eqU
+#print axioms SchemaLang.Emit.Witness.checkSteps_accept
+#print axioms SchemaLang.Emit.Witness.checkWitness_accept_chain
+#print axioms SchemaLang.Emit.Witness.selfChecked?_of_WHolds
+#print axioms SchemaLang.Emit.Witness.demoWitnessSpec_holds
+#print axioms SchemaLang.Emit.Witness.witnessLaw_discharged
+
+-- W9.5: the witness-gated migration checkpoint — the seam's soundness
+-- wrapper, the fuel classifier's exactness lemmas (below the need =
+-- always refuse; at/above it = fuel-free verdict), the gate's refusal
+-- classes + the acceptance theorem (accept → the replay AND the
+-- claim's denotation). Bar: the core triple only.
+#print axioms SchemaLang.WitnessCheck.verifyWitness_sound
+#print axioms SchemaLang.WitnessCheck.checkSteps_fuel_sufficient
+#print axioms SchemaLang.WitnessCheck.checkWitness_fuel_sufficient
+#print axioms SchemaLang.WitnessCheck.checkSteps_eq_false_of_fuel_lt
+#print axioms SchemaLang.WitnessCheck.checkWitness_eq_false_of_fuel_lt
+#print axioms SchemaLang.EventSourced.replayMigrated?_ok
+#print axioms SchemaLang.EventSourced.replayMigrated?_fuelExhausted
+#print axioms SchemaLang.EventSourced.replayMigrated?_diverged

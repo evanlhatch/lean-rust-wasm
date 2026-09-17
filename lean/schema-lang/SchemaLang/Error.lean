@@ -135,6 +135,8 @@ def Ty.noResult : Ty → Bool
   | .option a => a.noResult
   | .result _ _ => false
   | .list a => a.noResult
+  | .map _ v => v.noResult  -- the key is a `KeyTy` scalar: result-free
+  | .set _ => true          -- a `KeyTy` scalar: result-free
   | .future a => a.noResult
   | .stream a => a.noResult
   | .tensor _ a => a.noResult
@@ -194,6 +196,22 @@ theorem Ty.lower_isSome_iff (sem : VortexSem) (null : Nullability) (t : Ty) :
       | some inner =>
           exact ⟨fun _ => (ih .nonNullable).mp (by rw [hl]; rfl),
             fun _ => by simp [Ty.lower, hl]⟩
+  | map k v ih =>
+      -- the entry struct's key always lowers (`KeyTy.lower` is total);
+      -- the iff reduces to the VALUE's, whose guards are the map's
+      -- (each guard's map arm IS the value's verdict, definitionally)
+      cases hl : Ty.lower sem .nonNullable v with
+      | none =>
+          exact ⟨fun h => by simp [Ty.lower, hl] at h, fun h => by
+            have hg := (ih .nonNullable).mpr h
+            rw [hl] at hg
+            exact Bool.noConfusion hg⟩
+      | some inner =>
+          exact ⟨fun _ => (ih .nonNullable).mp (by rw [hl]; rfl),
+            fun _ => by simp [Ty.lower, hl]⟩
+  | set k =>
+      exact ⟨fun _ => ⟨rfl, rfl, fun _ hn => absurd hn List.not_mem_nil⟩,
+        fun _ => rfl⟩
   | future a =>
       exact ⟨fun h => by simp [Ty.lower] at h, fun h => Bool.noConfusion h.1⟩
   | stream a =>

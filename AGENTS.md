@@ -41,6 +41,13 @@ All green before declaring done. Never trust your own report — run the gate.
 
 ## Known traps (do not re-pay)
 
+- wf-recursive (`termination_by`) defs are KERNEL-OPAQUE — `decide`/rfl
+  over anything touching them can never reduce (module system or not).
+  The pattern: prove a specialized reduction lemma for the concrete
+  shape (e.g. `FieldVal.beq_u64_ne`) and route the check through it.
+  (Found by the W8.3 landing repair, 2026-09-17.)
+- `Option.noConfusion` across universe-mismatched Eq: use `nomatch h`.
+
 - `SimplePersistentEnvExtension.addImportedFn` takes `Array (Array α)`.
 - `prefix` is a reserved token. `{{` is not the f! brace escape — `\{` is.
 - GADTs forbid nested `List (Value t)` — mutual sibling inductive.

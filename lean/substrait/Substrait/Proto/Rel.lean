@@ -16,7 +16,12 @@ Every message here references `Rel` (directly or transitively), so the whole
 relation surface lives in one `mutual` block and the instance derivations are
 batched after it.
 -/
-import Substrait.Proto.Expression
+
+module
+
+public import Substrait.Proto.Expression
+
+@[expose] public section
 
 namespace Substrait.Proto
 
@@ -219,3 +224,5 @@ def JoinType.width (jt : JoinType) (l r : Nat) : Nat :=
   | _ => l + r
 
 end Substrait.Proto
+
+end -- @[expose] public section

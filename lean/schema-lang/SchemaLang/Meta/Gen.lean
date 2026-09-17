@@ -65,6 +65,10 @@ def ccTerm : Ty → CommandElabM Term
   | .result o e => do
       `(CodecClosed.result $(← ccTerm o) $(← ccTerm e))
   | .list a => do `(CodecClosed.list $(← ccTerm a))
+  -- the key half needs NO witness (the key codec is complete by
+  -- `decode_encodeKey_append` — `CodecClosed.map`/`set` take none)
+  | .map _ v => do `(CodecClosed.map $(← ccTerm v))
+  | .set _ => `(CodecClosed.set)
   | .tensor _ a => do `(CodecClosed.tensor $(← ccTerm a))
   | .future a => do `(CodecClosed.future $(← ccTerm a))
   | .stream a => do `(CodecClosed.stream $(← ccTerm a))

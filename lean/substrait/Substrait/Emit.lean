@@ -14,4 +14,7 @@ the v0 wire path, so it carried nonzero maintenance for zero wire value.)
 function; it hard-fails on plans the text grammar cannot express (Write,
 Extension* rels).
 -/
-import Substrait.Emit.Text
+
+module
+
+public import Substrait.Emit.Text

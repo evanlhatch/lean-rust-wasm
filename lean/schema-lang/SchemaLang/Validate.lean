@@ -118,6 +118,49 @@ inductive RowVals : List Field → Type where
   | cons : {f : Field} → {fs : List Field} → Value f.ty → RowVals fs →
       RowVals (f :: fs)
 
+-- The default row (the lane-canonical concrete table). MOVED HERE from
+-- `Emit.Invariant` at W8.2: the keys lane's obligation claims
+-- (`SchemaLang.Keys`) needed the all-default row and `Emit.Invariant`
+-- imports `Meta.Reflect` — the default row had to live BELOW the
+-- emit/meta split. `RowVals`' home owns it. (Plain comments, not a
+-- doc section: `ModuleDocs`' manifest extracts this module's docs into
+-- the byte-tied lean-internals.md.)
+
+
+
+/-- The default value per Ty (`none` = no literal: `.ty` refs have no
+    `Value` ctor — a record with such a field gets no emitted test). -/
+def defaultValue? : (t : Ty) → Option (Value t)
+  | .bool => some (.bool false)
+  | .u8 => some (.u8 0) | .u16 => some (.u16 0)
+  | .u32 => some (.u32 0) | .u64 => some (.u64 0)
+  | .i8 => some (.i8 0) | .i16 => some (.i16 0)
+  | .i32 => some (.i32 0) | .i64 => some (.i64 0)
+  | .f32 => some (.f32 0) | .f64 => some (.f64 0)
+  | .string => some (.string "")
+  | .bytes => some (.bytes [])
+  | .option _ => some .none
+  | .list _ => some (.list .nil)
+  | .map _ _ => some (.map .nil)   -- the empty association list
+  | .set _ => some (.set .nil)     -- the empty element list
+  -- the zero-dims default only: `TVal.scalar` IS the 0-dim shape; a
+  -- nonzero-dims tensor needs per-element literals (none available)
+  | .tensor [] a => do let v ← defaultValue? a; some (Value.tensor (TVal.scalar v))
+  | .tensor (_ :: _) _ => none
+  | .result ok _ => do let v ← defaultValue? ok; some (.ok v)
+  | .future a => do let v ← defaultValue? a; some (.future v)
+  | .stream _ => some (.stream .nil)
+  | .ty _ => none
+
+/-- The all-default row for a field list (`none` = a field without a
+    literal default). -/
+def defaultRow? : (fs : List Field) → Option (RowVals fs)
+  | [] => some .nil
+  | f :: rest => do
+      let v ← defaultValue? f.ty
+      let rest' ← defaultRow? rest
+      some (.cons v rest')
+
 /-! ## The field path — the resolution's RUNTIME half -/
 
 /-- `ColPath n t fs` — the CONSTRUCTOR path from a schema's head to the
@@ -670,6 +713,12 @@ open Lean in
 /-- The invariant language's syntax category (the book's `arith`/
 `boolean` shape, one cat). -/
 declare_syntax_cat vexpr
+
+-- Syntax-category bodies are identical by construction (a category
+-- carries no payload) — the dupDefBodies pair with `updateClause` is
+-- structural.
+attribute [nolint linter.guestlang.dupDefBodies "syntax-category bodies are identical by construction (a category carries no payload)"]
+  Lean.Parser.Category.vexpr
 
 -- the atoms (atom-like rules default to `maxPrec` — parseable at any
 -- operand position)

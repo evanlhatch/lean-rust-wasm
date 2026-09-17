@@ -4,7 +4,12 @@
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
 -/
-import Substrait.Emit.Text
+
+module
+
+public import Substrait.Emit.Text
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -418,3 +423,5 @@ theorem expect_self (p : String) (rest : List Char) : expect p (p.toList ++ rest
 
 
 end Substrait.Decode
+
+end -- @[expose] public section

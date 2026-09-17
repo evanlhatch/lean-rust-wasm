@@ -37,9 +37,12 @@ def plan : Rel units units :=
 #eval Substrait.Emit.Text.emit plan.toPlan
 ```
 -/
-import Substrait.Proto
-import Substrait.Typed
-import Substrait.Eval
-import Substrait.Emit
-import Substrait.Decode
-import Substrait.Grammar
+
+module
+
+public import Substrait.Proto
+public import Substrait.Typed
+public import Substrait.Eval
+public import Substrait.Emit
+public import Substrait.Decode
+public import Substrait.Grammar

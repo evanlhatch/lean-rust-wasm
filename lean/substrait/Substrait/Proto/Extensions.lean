@@ -5,6 +5,11 @@ Wire-faithful model of Substrait's `extensions/extensions.proto` surface:
 URN declarations and simple extension declarations (functions, types, type
 variations).  Anchors are plain `Nat`s, local to a plan, as in the wire format.
 -/
+
+module
+
+@[expose] public section
+
 namespace Substrait.Proto
 
 /-- Proto `SimpleExtensionUrn` — `{ extension_urn_anchor, urn }`. -/
@@ -30,3 +35,5 @@ def ExtensionDeclaration.kind : ExtensionDeclaration → String
   | .typeVariation _ _ _ => "type_variation"
 
 end Substrait.Proto
+
+end -- @[expose] public section

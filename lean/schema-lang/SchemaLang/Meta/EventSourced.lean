@@ -17,7 +17,11 @@ an enum of events. The delta variant is determined by the record (the
 Delta.lean shape — insert/update carry the full row, remove carries the
 key, `Item.keyOf`'s first-field convention, REUSED not re-read); an
 event enum would need a user-supplied step function and no law could be
-derived. The generated `R.Event` is `EventSourced.Delta R K` — the SAME
+derived. W8.2: the key read goes through `Item.keyOfWith
+(registeredKeys env)` — a DECLARED key (`schema_keys`), when present,
+WINS over the first-field convention; undeclared records are unchanged
+(`keyOfWith_eq_keyOf`, and `keyOfWith_eq_keyOf_of_decl_head` when the
+declaration names the first field). The generated `R.Event` is `EventSourced.Delta R K` — the SAME
 shape the emitters lower to `delta.wit`/`delta_generated.rs`.
 
 Generated (for a record `R` with key field `k` of native type `K`):
@@ -26,7 +30,7 @@ Generated (for a record `R` with key field `k` of native type `K`):
 |---|---|
 | `R.esFields` | the field-list snapshot (the registry read, `abbrev`) |
 | `R.esFieldsClosed` | the `FieldsClosed` witness (the codec's hypothesis) |
-| `R.esKey` | the key projection (first field — `Item.keyOf`) |
+| `R.esKey` | the key projection (declared key wins, else first field — `Item.keyOfWith`) |
 | `R.esToRow` / `R.esOfRow` | native ↔ `RowVals` bridges |
 | `R.esOfRow_esToRow` | the bridge round trip (proved) |
 | `R.Event` | THE DELTA VARIANT — `EventSourced.Delta R K` |
@@ -74,7 +78,9 @@ public import SchemaLang.Meta.Derive
 public import CodegenCore.AttrKit
 public import SchemaLang.EventSourced
 public import SchemaLang.Trace
+public import SchemaLang.Meta.Keys
 public meta import SchemaLang.Delta
+public meta import SchemaLang.Keys
 
 public meta section
 
@@ -226,10 +232,17 @@ meta def eventSourcedAdd (decl : Name) : CoreM Unit := do
   let fields ← match registeredRecord? env decl with
     | .ok fs => pure fs
     | .error msg => throwError s!"@[event_sourced] `{decl}`: {msg}"
-  let keyF ← match (registeredItem? env decl) >>= Item.keyOf with
+  -- W8.2: a DECLARED key (`schema_keys`) wins; the first-field
+  -- convention is the default (`Item.keyOfWith` — the one "which key?"
+  -- answer; the Delta.lean emitters keep the pure convention — the
+  -- byte-tie — while the emitted universe declares no differing keys)
+  let keyF ← match (registeredItem? env decl) >>=
+      Item.keyOfWith (registeredKeys env) with
     | some f => pure f
     | none => throwError s!"@[event_sourced] `{decl}`: a field-less record has \
-        no key and no event semantics (the Delta.lean `Item.keyOf` convention)"
+        no key and no event semantics (the `Item.keyOf` convention; a \
+        `schema_keys` declaration names the key field)"
+
   for f in fields do
     unless (esFragment.any (fun fr => fr.ty == f.ty)) do
       throwError s!"@[event_sourced] `{decl}`: field `{f.name}` has type \
@@ -258,7 +271,7 @@ meta def eventSourcedAdd (decl : Name) : CoreM Unit := do
     (← `(SchemaLang.FieldsClosed $(id `esFields)))
     (← esFieldsClosedTerm fields) .dfn
   -- the key projection
-  gen `esKey "The key projection (the first field — `Item.keyOf`)."
+  gen `esKey "The key projection (the declared key when present, else the first field — `Item.keyOfWith` at the registry)."
     (← `($R → $keyTy)) (← `(fun r => $(mkIdent (decl ++ Name.mkSimple keyF.name)):ident r)) .abbr
   -- the native ↔ row bridges + their round trip
   let rId : Ident := ⟨← `(r)⟩

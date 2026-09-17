@@ -115,13 +115,18 @@ are prelude types — nothing schema-shaped crosses this line. -/
 /-- The discharge tier: WHICH backend discharges the obligation.
     Generalizes schema-lang's `Invariant.Tier` ladder
     (`boundaryCheck`/`proved`/`oracleCovered` → `generatedCheck`/
-    `provedAtElab`/`oracleSwept`) and adds the `decidableNow` rung the
-    doctrine row names (a decide/grind discharge at elaboration or CI). -/
+    `provedAtElab`/`oracleSwept`), adds the `decidableNow` rung the
+    doctrine row names (a decide/grind discharge at elaboration or CI),
+    and adds the `guestVerified` rung (W9.3,
+    notes/design-guest-verified.md §3): a guest-checked witness — the
+    host ships a serialized certificate, the guest re-checks it at the
+    point of use. -/
 inductive Obligation.Tier where
   | provedAtElab
   | decidableNow
   | generatedCheck
   | oracleSwept
+  | guestVerified
 deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- The tier's rendering (emitted doc comments + test pins). -/
@@ -130,6 +135,7 @@ def Obligation.Tier.render : Obligation.Tier → String
   | .decidableNow => "decidable-now"
   | .generatedCheck => "generated-check"
   | .oracleSwept => "oracle-swept"
+  | .guestVerified => "guest-verified"
 
 instance : ToString Obligation.Tier := ⟨Obligation.Tier.render⟩
 
@@ -141,6 +147,10 @@ inductive Obligation.Evidence where
   | decided (result : Bool)
   | generatedCheck (artifact fn : String)
   | oracleRow (ref : String)
+  /-- W9.3: `artifact` = the byte-tied witness file; `ref` = the
+      obligation's label inside it (the certificate certifies THAT
+      obligation). -/
+  | guestWitness (artifact ref : String)
 deriving Repr, BEq, DecidableEq, Inhabited
 
 instance : ToString Obligation.Evidence := ⟨reprStr⟩
@@ -153,6 +163,7 @@ def Obligation.Evidence.tier : Obligation.Evidence → Obligation.Tier
   | .decided _ => .decidableNow
   | .generatedCheck _ _ => .generatedCheck
   | .oracleRow _ => .oracleSwept
+  | .guestWitness _ _ => .guestVerified
 
 /-- A checkable fact as data: the label, the computed discharge tier,
     the lane's own payload row, and the declaring declaration.

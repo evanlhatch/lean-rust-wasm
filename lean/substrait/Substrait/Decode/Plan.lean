@@ -12,7 +12,12 @@ row inversions `parseUrnEntry_urnLine` / `parseDeclEntry_declLine` /
 `parseVersion_versionLines` / `parseRootNames_emitted` reduce by equation
 lemma.
 -/
-import Substrait.Decode.Rel
+
+module
+
+public import Substrait.Decode.Rel
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -723,7 +728,7 @@ theorem parseVersion_versionLines (v : Proto.Version) (rest : List String)
     subst hg'
     simp only [List.nil_append]
     cases rest with
-    | nil => rfl
+    | nil => simp [List.isEmpty, List.headD, List.drop]
     | cons p ps =>
       obtain ⟨hpp, hpg⟩ := hboth rfl rfl p rfl
       simp [hpp, hpg]
@@ -1017,3 +1022,5 @@ triples — `fnInvOf` inverts `ExtCtx`'s 1-based `indexOf1` anchoring.
 
 
 end Substrait.Decode
+
+end -- @[expose] public section

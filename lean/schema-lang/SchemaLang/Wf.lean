@@ -48,6 +48,8 @@ inductive TyRefsOk (known : List String) : Ty → Prop where
   | result {ok err : Ty} : TyRefsOk known ok → TyRefsOk known err →
       TyRefsOk known (.result ok err)
   | list {a : Ty} : TyRefsOk known a → TyRefsOk known (.list a)
+  | map {k : KeyTy} {v : Ty} : TyRefsOk known v → TyRefsOk known (.map k v)
+  | set {k : KeyTy} : TyRefsOk known (.set k)
   | future {a : Ty} : TyRefsOk known a → TyRefsOk known (.future a)
   | stream {a : Ty} : TyRefsOk known a → TyRefsOk known (.stream a)
   | tensor {dims : List Nat} {a : Ty} : TyRefsOk known a →
@@ -73,6 +75,8 @@ inductive NoAsyncTy : Ty → Prop where
   | option {a : Ty} : NoAsyncTy a → NoAsyncTy (.option a)
   | result {ok err : Ty} : NoAsyncTy ok → NoAsyncTy err → NoAsyncTy (.result ok err)
   | list {a : Ty} : NoAsyncTy a → NoAsyncTy (.list a)
+  | map {k : KeyTy} {v : Ty} : NoAsyncTy v → NoAsyncTy (.map k v)
+  | set {k : KeyTy} : NoAsyncTy (.set k)
   | tensor {dims : List Nat} {a : Ty} : NoAsyncTy a → NoAsyncTy (.tensor dims a)
   | ty {n : String} : NoAsyncTy (.ty n)
 
@@ -148,6 +152,12 @@ theorem tyCheck_eq_nil_iff {known : List String} {t : Ty} :
       constructor
       · intro h; exact .list (ih.mp h)
       · intro h; cases h with | list ha => exact ih.mpr ha
+  | map k v ih =>
+      constructor
+      · intro h; exact .map (ih.mp h)
+      · intro h; cases h with | map ha => exact ih.mpr ha
+  | set k =>
+      exact ⟨fun _ => .set, fun _ => rfl⟩
   | future a ih =>
       constructor
       · intro h; exact .future (ih.mp h)
@@ -215,6 +225,12 @@ theorem banAsync_iff_noAsyncTy {t : Ty} :
       constructor
       · intro h; exact .list (ih.mp h)
       · intro h; cases h with | list ha => exact ih.mpr ha
+  | map k v ih =>
+      constructor
+      · intro h; exact .map (ih.mp h)
+      · intro h; cases h with | map ha => exact ih.mpr ha
+  | set k =>
+      exact ⟨fun _ => .set, fun _ => rfl⟩
   | future a _ =>
       exact ⟨fun h => Bool.noConfusion h, fun h => by cases h⟩
   | stream a _ =>

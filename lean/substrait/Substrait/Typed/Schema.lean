@@ -23,7 +23,12 @@ nullability is carried separately (the `n : Bool` index on `Expr`, and the
 third component of a schema column).  `toProtoType` in `Substrait.Typed`
 maps both into the wire `Proto.Type`.
 -/
-import Substrait.Proto.Type
+
+module
+
+public import Substrait.Proto.Type
+
+@[expose] public section
 
 namespace Substrait.Typed
 
@@ -359,3 +364,5 @@ instance : DecidableEq SParam := fun a b => decidable_of_iff _ (SParam.beq_iff_e
 
 
 end Substrait.Typed
+
+end -- @[expose] public section

@@ -168,6 +168,111 @@ theorem listToVList_vListToList :
       simp only [vListToList, listToVList]
       rw [listToVList_vListToList vl]
 
+/-! ## The key codec (direct — the `toTy` indirection breaks
+    `encodeValue`'s structural recursion)
+
+`encodeKey`/`decKey?` are the scalar arms of `encodeValue`/`decVal?`
+factored over `KeyTy`; `decode_encodeKey_append` is their round trip,
+case-split per key (the same discharges as the master theorem's scalar
+arms). Coherent with the generic codec by construction — the arms are
+the same terms. -/
+
+/-- Encode a key payload (the scalar encode arms, direct). -/
+def encodeKey : (k : KeyTy) → Value k.toTy → List UInt8
+  | .bool, .bool b => Codec.encodeBool b
+  | .u8, .u8 x => Codec.encodeU8 x
+  | .u16, .u16 x => Codec.encVarNat x.toNat
+  | .u32, .u32 x => Codec.encVarNat x.toNat
+  | .u64, .u64 x => Codec.encVarNat x.toNat
+  | .i8, .i8 x => Codec.encVarNat (zigzag x.toInt)
+  | .i16, .i16 x => Codec.encVarNat (zigzag x.toInt)
+  | .i32, .i32 x => Codec.encVarNat (zigzag x.toInt)
+  | .i64, .i64 x => Codec.encVarNat (zigzag x.toInt)
+  | .string, .string s => Codec.encList Codec.encVarNat (s.toList.map Char.toNat)
+
+/-- Decode a key payload (the scalar decode arms, direct). -/
+def decKey? : (k : KeyTy) → List UInt8 → Option (Value k.toTy × List UInt8)
+  | .bool, bs => (Codec.decBool? bs).map fun (b, r) => (.bool b, r)
+  | .u8, bs => (Codec.decU8? bs).map fun (x, r) => (.u8 x, r)
+  | .u16, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) =>
+          if _ : n < 2 ^ 16 then some (.u16 (UInt16.ofNat n), r) else none
+      | none => none
+  | .u32, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) =>
+          if _ : n < 2 ^ 32 then some (.u32 (UInt32.ofNat n), r) else none
+      | none => none
+  | .u64, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) =>
+          if _ : n < 2 ^ 64 then some (.u64 (UInt64.ofNat n), r) else none
+      | none => none
+  | .i8, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) => some (.i8 (Int8.ofInt (unzigzag n)), r)
+      | none => none
+  | .i16, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) => some (.i16 (Int16.ofInt (unzigzag n)), r)
+      | none => none
+  | .i32, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) => some (.i32 (Int32.ofInt (unzigzag n)), r)
+      | none => none
+  | .i64, bs =>
+      match Codec.decNat? bs with
+      | some (n, r) => some (.i64 (Int64.ofInt (unzigzag n)), r)
+      | none => none
+  | .string, bs =>
+      match Codec.decList? Codec.decNat? bs with
+      | some (ns, r) => some (.string (String.ofList (ns.map Char.ofNat)), r)
+      | none => none
+
+/-- The key round trip, append form (the scalar arms of
+    `decode_encodeValue_append`, factored). -/
+theorem decode_encodeKey_append : ∀ (k : KeyTy) (v : Value k.toTy)
+    (rest : List UInt8),
+    decKey? k (encodeKey k v ++ rest) = some (v, rest)
+  | .bool, .bool _, rest => by simp [encodeKey, decKey?]
+  | .u8, .u8 _, rest => by simp [encodeKey, decKey?]
+  | .u16, .u16 _, rest => by simp [encodeKey, decKey?, UInt16.toNat_lt _]
+  | .u32, .u32 _, rest => by simp [encodeKey, decKey?, UInt32.toNat_lt _]
+  | .u64, .u64 _, rest => by simp [encodeKey, decKey?, UInt64.toNat_lt _]
+  | .i8, .i8 _, rest => by simp [encodeKey, decKey?, unzigzag_zigzag]
+  | .i16, .i16 _, rest => by simp [encodeKey, decKey?, unzigzag_zigzag]
+  | .i32, .i32 _, rest => by simp [encodeKey, decKey?, unzigzag_zigzag]
+  | .i64, .i64 _, rest => by simp [encodeKey, decKey?, unzigzag_zigzag]
+  | .string, .string s, rest => by
+      simp only [encodeKey, decKey?]
+      rw [Codec.decList_encList_append Codec.encVarNat Codec.decNat?
+        Codec.decNat_encVarNat_append (s.toList.map Char.toNat) rest]
+      simp [map_ofNat_toNat_id, String.ofList_toList]
+
+/-! ## VMap ↔ List (the association-list payloads) -/
+
+/-- Erase a `VMap` to a plain association list (the `vListToList`
+    pattern over the entry family). -/
+def vMapToList : {k : KeyTy} → {v : Ty} → VMap k v → List (Value k.toTy × Value v)
+  | _, _, .nil => []
+  | _, _, .cons kv vv m => (kv, vv) :: vMapToList m
+
+/-- Rebuild a `VMap` from a plain association list. -/
+def listToVMap : {k : KeyTy} → {v : Ty} → List (Value k.toTy × Value v) → VMap k v
+  | _, _, [] => .nil
+  | _, _, (kv, vv) :: kvs => .cons kv vv (listToVMap kvs)
+
+/-- The erase/rebuild round trip on `VMap` (the `listToVList_vListToList`
+    pattern — proof-carrying def, `induction` barred on the mutual
+    family). -/
+theorem listToVMap_vMapToList :
+    ∀ {k : KeyTy} {v : Ty} (m : VMap k v), listToVMap (vMapToList m) = m
+  | _, _, .nil => by simp [vMapToList, listToVMap]
+  | _, _, .cons _ _ m => by
+      simp only [vMapToList, listToVMap]
+      rw [listToVMap_vMapToList m]
+
 /-! ## The tensor payload: shape-indexed values, flat wire form
 
 The wire form is SELF-DESCRIBING and SHAPE-GATED: the dims list
@@ -411,6 +516,14 @@ def encodeValue : (t : Ty) → Value t → List UInt8
   | .option a, v => Codec.encOpt (encodeValue a) (valOpt v)
   | .result ok err, v => encSum (encodeValue ok) (encodeValue err) (valSum v)
   | .list a, .list vl => Codec.encList (encodeValue a) (vListToList vl)
+  -- the map wire: the length-prefixed ENTRY list (each entry the
+  -- concatenated key/value encodings, `Codec.encProd` over the DIRECT key
+  -- codec — the `toTy` indirection would break structural recursion);
+  -- insertion order is payload data and rides the wire (the `list`
+  -- discipline)
+  | .map k v, .map m =>
+      Codec.encList (Codec.encProd (encodeKey k) (encodeValue v)) (vMapToList m)
+  | .set k, .set vl => Codec.encList (encodeKey k) (vListToList vl)
   | .future a, .future x => encodeValue a x
   | .stream a, .stream vl => Codec.encList (encodeValue a) (vListToList vl)
   -- the tensor wire: the dims list, then the flat row-major elements
@@ -485,6 +598,14 @@ def decVal? (t : Ty) (bs : List UInt8) : Option (Value t × List UInt8) :=
       match Codec.decList? (decVal? a) bs with
       | some (xs, r) => some (.list (listToVList xs), r)
       | none => none
+  | .map k v =>
+      match Codec.decList? (Codec.decProd? (decKey? k) (decVal? v)) bs with
+      | some (kvs, r) => some (.map (listToVMap kvs), r)
+      | none => none
+  | .set k =>
+      match Codec.decList? (decKey? k) bs with
+      | some (xs, r) => some (.set (listToVList xs), r)
+      | none => none
   | .future a => (decVal? a bs).map fun (x, r) => (.future x, r)
   | .stream a =>
       match Codec.decList? (decVal? a) bs with
@@ -534,6 +655,8 @@ inductive CodecClosed : Ty → Type where
   | result {ok err : Ty} : CodecClosed ok → CodecClosed err →
       CodecClosed (.result ok err)
   | list {t : Ty} : CodecClosed t → CodecClosed (.list t)
+  | map {k : KeyTy} {v : Ty} : CodecClosed v → CodecClosed (.map k v)
+  | set {k : KeyTy} : CodecClosed (.set k)
   | /-- the tensor's element codec (the dims are static data — the
       shape gate needs no closure hypothesis) -/
   tensor {t : Ty} {dims : List Nat} : CodecClosed t → CodecClosed (.tensor dims t)
@@ -565,6 +688,36 @@ theorem decode_encStreamVList_append (t : Ty)
   simp only [decVal?]
   rw [Codec.decList_encList_append (encodeValue t) (decVal? t) ih
     (vListToList vl) rest]
+  simp [listToVList_vListToList]
+
+/-- The association-list round trip over the key codec + a value codec,
+    append form (map arm): the entry codec is `Codec.encProd`/`Codec.decProd?`, so
+    the list combinator's law instantiates at the pair law (the key half
+    by `decode_encodeKey_append` — keys need no closure hypothesis). -/
+theorem decode_encListVMap_append (k : KeyTy) (v : Ty)
+    (ihV : ∀ (vv : Value v) (rest : List UInt8),
+      decVal? v (encodeValue v vv ++ rest) = some (vv, rest))
+    (m : VMap k v) (rest : List UInt8) :
+    decVal? (.map k v)
+        (Codec.encList (Codec.encProd (encodeKey k) (encodeValue v))
+            (vMapToList m) ++ rest)
+      = some (.map m, rest) := by
+  simp only [decVal?]
+  rw [Codec.decList_encList_append _ _
+    (fun p r => Codec.decProd_encProd_append _ _ _ _ (decode_encodeKey_append k) ihV p r)
+    (vMapToList m) rest]
+  simp [listToVMap_vMapToList]
+
+/-- The VList round trip over the key codec, append form (set arm —
+    same wire shape as `list`, different `Value` constructor). -/
+theorem decode_encSetVList_append (k : KeyTy)
+    (vl : VList k.toTy) (rest : List UInt8) :
+    decVal? (.set k)
+        (Codec.encList (encodeKey k) (vListToList vl) ++ rest)
+      = some (.set vl, rest) := by
+  simp only [decVal?]
+  rw [Codec.decList_encList_append (encodeKey k) (decKey? k)
+    (decode_encodeKey_append k) (vListToList vl) rest]
   simp [listToVList_vListToList]
 
 /-- THE theorem: over the codec-closed universe, `decode ∘ encode = id`,
@@ -645,6 +798,18 @@ theorem decode_encodeValue_append (t : Ty) (h : CodecClosed t) :
       | list vl =>
           simp only [encodeValue]
           rw [decode_encListVList_append _ ih vl rest]
+  | map _ ihV =>
+      intro v rest
+      cases v with
+      | map m =>
+          simp only [encodeValue]
+          rw [decode_encListVMap_append _ _ ihV m rest]
+  | set =>
+      intro v rest
+      cases v with
+      | set vl =>
+          simp only [encodeValue]
+          rw [decode_encSetVList_append _ vl rest]
   | future _ ih =>
       intro v rest
       cases v with
@@ -711,6 +876,7 @@ def tensorClosed {t : Ty} {dims : List Nat} (h : CodecClosed (.tensor dims t)) :
     CodecClosed t :=
   match h with | .tensor h' => h'
 
+
 -- (plain comment: doc comments cannot precede `mutual`. The doc:
 -- a default value for any codec-closed type — the generator/shrinker
 -- base case (structural recursion on the CodecClosed proof). The
@@ -762,6 +928,8 @@ def defaultValue : (t : Ty) → CodecClosed t → Value t
   | .option _, _ => .none
   | .result ok _, h => .ok (defaultValue ok (resultOkClosed h))
   | .list _, _ => .list .nil
+  | .map _ _, _ => .map .nil
+  | .set _, _ => .set .nil
   | .future t, h => .future (defaultValue t (futureClosed h))
   | .stream _, _ => .stream .nil
 

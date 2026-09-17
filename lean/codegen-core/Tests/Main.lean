@@ -430,6 +430,12 @@ def obligationChecks : CheckResult := do
     (Obligation.Evidence.tier (.generatedCheck "a.rs" "f")) .generatedCheck
   _ ← assertEq "evidence tier: oracle"
     (Obligation.Evidence.tier (.oracleRow "r")) .oracleSwept
+  -- W9.3: the fifth tier (design-guest-verified §3) — render + the
+  -- witness evidence's tier mapping
+  _ ← assertEq "tier render guest-verified"
+    (Obligation.Tier.render .guestVerified) "guest-verified"
+  _ ← assertEq "evidence tier: guest witness"
+    (Obligation.Evidence.tier (.guestWitness "w.wtn" "lbl")) .guestVerified
   let toy : Obligation Bool :=
     { label := "one-eq-one", tier := .decidableNow, payload := true, provenance := `toy }
   _ ← assertEq "toy label" toy.label "one-eq-one"

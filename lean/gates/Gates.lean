@@ -12,6 +12,8 @@ TYPED access to what the justfile recipes used to grep/subprocess:
 - `Gates.Coverage`    — the Ty × emitter × oracle coverage matrix
                         (probe-differential; notes/coverage-matrix.md)
 - `Gates.KernelCheck` — the lean4lean double-check (pure-Lean kernel replay)
+- `Gates.NativePolicy`— the native_decide grandfathering gate (W9.7 /
+                        design-guest-verified.md §6.3)
 
 Legacy (non-module) files by design — the drivers touch meta
 env-extension state (constraint 12, notes/w5-4-module-migration.md).
@@ -23,3 +25,4 @@ import Gates.Axioms
 import Gates.Manifest
 import Gates.Coverage
 import Gates.KernelCheck
+import Gates.NativePolicy

@@ -14,7 +14,12 @@ directly): the recursive-before-declaration problem that separate
 sub-structures would create is avoided, and the shapes still mirror the proto
 one-to-one (`IfThen` = list of (if, then) pairs + else, etc.).
 -/
-import Substrait.Proto.Type
+
+module
+
+public import Substrait.Proto.Type
+
+@[expose] public section
 
 namespace Substrait.Proto
 
@@ -81,3 +86,5 @@ inductive Expression where
 deriving Repr, BEq, Inhabited
 
 end Substrait.Proto
+
+end -- @[expose] public section

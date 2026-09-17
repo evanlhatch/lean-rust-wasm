@@ -19,6 +19,9 @@ line) interpolate — never join.
 
 Lowering decisions (target-neutral universe → WIT):
 - `option t` → `option<t>`, `result ok err` → `result<ok, err>` (1:1)
+- `map k v` → `list<tuple<K, V>>`, `set k` → `list<K>` (WIT has no
+  map/set — the association-list form; key/element uniqueness is a
+  documented payload invariant, not WIT data)
 - `future t` / `stream t` → `future<t>` / `stream<t>` (WASI 0.3-native)
 - records → `record`, variants → `variant` (payload cases → `case(ty)`)
 - funcs → `func` in the world's export interface
@@ -42,6 +45,15 @@ namespace SchemaLang.Emit.Wit
 open CodegenCore.Emit (kebab)
 open Std.Format
 
+/-- The map/set KEY rendering, DIRECT (the `KeyTy.toTy` indirection
+    breaks `tyFmt`'s structural recursion; the arms are exactly the
+    scalar atoms `tyFmt` gives the injected types). -/
+def keyFmt : KeyTy → Std.Format
+  | .bool => "bool"
+  | .u8 => "u8" | .u16 => "u16" | .u32 => "u32" | .u64 => "u64"
+  | .i8 => "s8" | .i16 => "s16" | .i32 => "s32" | .i64 => "s64"
+  | .string => "string"
+
 /-- Lower a `Ty` to WIT type text as a format ATOM (no `line`s —
     `.pretty` is the identity on it, so `tyWit`'s bytes are the old
     `s!` interpolation's, exactly). -/
@@ -57,6 +69,12 @@ def tyFmt : Ty → Std.Format
   -- boundary cannot carry — the canonical-ABI pair-form keeps the
   -- count, not the shape)
   | .tensor _ a => f!"list<{tyFmt a}>"
+  -- WIT has no map/set: the ASSOCIATION-LIST form (the canonical
+  -- ABI's own shape for it). Key/element uniqueness is a documented
+  -- payload invariant, not WIT data; the keys render via `keyFmt`
+  -- (the direct spelling — they are ordinary WIT scalars)
+  | .map k v => f!"list<tuple<{keyFmt k}, {tyFmt v}>>"
+  | .set k => f!"list<{keyFmt k}>"
   | .option a => f!"option<{tyFmt a}>"
   | .result ok err => f!"result<{tyFmt ok}, {tyFmt err}>"
   | .list a => f!"list<{tyFmt a}>"

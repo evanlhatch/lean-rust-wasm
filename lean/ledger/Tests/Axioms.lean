@@ -20,3 +20,19 @@ import LedgerES
 #print axioms LedgerES.transfer_rewind_suffix
 #print axioms LedgerES.conservation_discharges
 #print axioms LedgerES.discharge_tier_agrees
+
+-- W9.5: the witness-gated migration dogfood — the remedy row's soundness,
+-- the semantic premise, generation completeness cited, the gate run
+-- (decide'd), the certification chain (gate soundness → WHolds → the
+-- compiled `validates` verdicts), the post-state invariant, the fifth-tier
+-- discharge. Bar: the core triple only.
+#print axioms LedgerES.ledgerMigration_remedies
+#print axioms LedgerES.migrateAccountV1_id
+#print axioms LedgerES.accountV1V2_holds
+#print axioms LedgerES.accountV1V2_selfChecked
+#print axioms LedgerES.accountV1V2Replay_ok
+#print axioms LedgerES.accountV1V2_certified
+#print axioms LedgerES.accountIdPositiveMirror
+#print axioms LedgerES.accountV1V2_validates
+#print axioms LedgerES.accountV1V2_post_valid
+#print axioms LedgerES.accountMigration_discharges

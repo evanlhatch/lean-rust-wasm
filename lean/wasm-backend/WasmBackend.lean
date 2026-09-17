@@ -677,7 +677,10 @@ def flatTyOf : SchemaLang.Ty → List String
   | .f32 => ["f32"]
   | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 => ["i32"]
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
-  | .stream _ | .tensor _ _ | .ty _ => ["i32", "i32"]
+  -- map/set flatten to the (ptr, len) pair of their wire list form
+  -- (the association/element list — the `list` precedent); no
+  -- map-specific ABI handling yet (W8.1: deliberate, not missing)
+  | .stream _ | .tensor _ _ | .map _ _ | .set _ | .ty _ => ["i32", "i32"]
 
 def userFlatTys (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List String :=
   (userFieldTys cert).flatMap flatTyOf

@@ -293,3 +293,15 @@ etc.) — the file's import closure is substrait-internal only, and the
 working copy carries uncommitted substrait edits (Decode/*, Emit/Text,
 Grammar, Tests/Main) from other in-flight work. Verified independent: no
 import path from any migrated package into substrait's library.
+
+## Constraint 14 (wave 21, found by the W8.8/W8.3 collision)
+
+`public` (or `public meta`) importing a MATHLIB-CARRYING module leaks
+mathlib's names into every LEGACY consumer of the importer — observed:
+`Meta/Reflect` publicly importing `Update2` (→ TickCascade → Dbsp.Effects
+→ mathlib) put mathlib's `Flag` in scope for feature-flags' own
+`structure Flag` ("already declared", 10+ errors, gen-check dead).
+Rule: mathlib-carrying modules stay behind NON-public imports at any
+module consumed by legacy/downstream packages; registration surfaces
+(Reflect) must not publicly depend on them. The probe:
+`#check Flag` after a bare `import` of the suspect module.

@@ -4,8 +4,13 @@
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
 -/
-import Substrait.Decode.Plan
-import Substrait.Typed
+
+module
+
+public import Substrait.Decode.Plan
+public import Substrait.Typed
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -637,3 +642,5 @@ def decodeSortKeys (s : Schema) : List Proto.SortField → Option (List (SortKey
 
 
 end Substrait.Decode
+
+end -- @[expose] public section

@@ -45,6 +45,15 @@ public import SchemaLang.Diff
 
 namespace SchemaLang
 
+/-- The key's snapshot spelling, DIRECT (the `toTy` indirection breaks
+    `Ty.toSnapshot`'s structural recursion). Agrees with the injected
+    spelling by `toSnapshot_toTy`. -/
+def KeyTy.toSnapshot : KeyTy → String
+  | .bool => "bool"
+  | .u8 => "u8" | .u16 => "u16" | .u32 => "u32" | .u64 => "u64"
+  | .i8 => "i8" | .i16 => "i16" | .i32 => "i32" | .i64 => "i64"
+  | .string => "string"
+
 /-- Paren encoding of a type: scalars as atoms, constructors as
     `head(arg,…)`, named refs as `ty(<name>)`. No spaces. -/
 def Ty.toSnapshot : Ty → String
@@ -56,6 +65,11 @@ def Ty.toSnapshot : Ty → String
   | .option a => s!"option({a.toSnapshot})"
   | .result ok err => s!"result({ok.toSnapshot},{err.toSnapshot})"
   | .list a => s!"list({a.toSnapshot})"
+  -- the key rides in its scalar spelling (`KeyTy.toSnapshot`); the
+  -- parse side GATES it through `Ty.toKeyTy?` (`map(f32,u64)` is a
+  -- parse error — the type-level negative control)
+  | .map k v => s!"map({k.toSnapshot},{v.toSnapshot})"
+  | .set k => s!"set({k.toSnapshot})"
   | .future a => s!"future({a.toSnapshot})"
   | .stream a => s!"stream({a.toSnapshot})"
   | .tensor dims a =>
@@ -63,6 +77,13 @@ def Ty.toSnapshot : Ty → String
       -- `tensor(2;3;u64)` (a 2×3 u64 tensor); zero dims = `tensor(;elem)`
       s!"tensor({String.intercalate "" (dims.map (fun d => s!"{d};"))}{a.toSnapshot})"
   | .ty n => s!"ty({n})"
+
+/-- The two key spellings agree (the direct one is the structural
+    recursion's; the injected one is what the parser's key gate
+    consumes). -/
+theorem KeyTy.toSnapshot_toTy (k : KeyTy) :
+    Ty.toSnapshot k.toTy = k.toSnapshot := by
+  cases k <;> rfl
 
 -- the `<nullsem>`/`<determinism>` tokens are `NullSem.toToken` /
 -- `Determinism.toToken` (Item.lean — the one spelling, shared with the
@@ -109,6 +130,35 @@ def parseTy : Nat → List Char → Except String (Ty × List Char)
       | "string" => .ok (.string, rest) | "bytes" => .ok (.bytes, rest)
       | "option" => arg1 .option
       | "list" => arg1 .list
+      | "set" =>
+          -- the key GATE: the element type must parse, then BE a
+          -- scalar key (`Ty.toKeyTy?` — the type-level discipline,
+          -- enforced at the format boundary)
+          match rest with
+          | '(' :: r => do
+              let (t, r) ← parseTy fuel r
+              match Ty.toKeyTy? t with
+              | none => .error s!"snapshot: set element `{t.toSnapshot}` is not a scalar key type"
+              | some k =>
+                  match r with
+                  | ')' :: r => .ok (.set k, r)
+                  | _ => .error "snapshot: expected ')' after `set(…`"
+          | _ => .error "snapshot: expected '(' after `set`"
+      | "map" =>
+          match rest with
+          | '(' :: r => do
+              let (kt, r) ← parseTy fuel r
+              match Ty.toKeyTy? kt with
+              | none => .error s!"snapshot: map key `{kt.toSnapshot}` is not a scalar key type"
+              | some k =>
+                  match r with
+                  | ',' :: r => do
+                      let (v, r) ← parseTy fuel r
+                      match r with
+                      | ')' :: r => .ok (.map k v, r)
+                      | _ => .error "snapshot: expected ')' after map's value type"
+                  | _ => .error "snapshot: expected ',' between map's key and value types"
+          | _ => .error "snapshot: expected '(' after `map`"
       | "future" => arg1 .future
       | "stream" => arg1 .stream
       | "result" =>

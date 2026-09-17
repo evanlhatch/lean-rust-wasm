@@ -73,6 +73,13 @@ def registeredRecord? (env : Environment) (declName : Name) :
 
 /-! ## The term builders (the emitted literals, kebab-cased) -/
 
+/-- The key literal (a `KeyTy` term — the arms are the scalar
+    constructors; direct, mirroring `tyTerm`'s scalar row). -/
+def keyTerm : KeyTy → CommandElabM Term
+  | .bool => `(.bool) | .u8 => `(.u8) | .u16 => `(.u16) | .u32 => `(.u32)
+  | .u64 => `(.u64) | .i8 => `(.i8) | .i16 => `(.i16) | .i32 => `(.i32)
+  | .i64 => `(.i64) | .string => `(.string)
+
 def tyTerm : Ty → CommandElabM Term
   | .bool => `(.bool) | .u8 => `(.u8) | .u16 => `(.u16) | .u32 => `(.u32)
   | .u64 => `(.u64) | .i8 => `(.i8) | .i16 => `(.i16) | .i32 => `(.i32)
@@ -81,6 +88,8 @@ def tyTerm : Ty → CommandElabM Term
   | .option a => do `(.option $(← tyTerm a))
   | .result o e => do `(.result $(← tyTerm o) $(← tyTerm e))
   | .list a => do `(.list $(← tyTerm a))
+  | .map k v => do `(.map $(← keyTerm k) $(← tyTerm v))
+  | .set k => do `(.set $(← keyTerm k))
   | .tensor dims a => do
       let ds : Array Term := (dims.map (fun d => (⟨Syntax.mkNatLit d⟩ : Term))).toArray
       `(.tensor ([$ds,*] : List Nat) $(← tyTerm a))

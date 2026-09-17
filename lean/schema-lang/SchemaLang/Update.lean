@@ -274,6 +274,165 @@ theorem ColPath.set_commute_disjoint {n₁ n₂ : String} {t₁ t₂ : Ty} :
                   simp only [set]
                   rw [ih p₁' p₂' hne vs v₁ v₂]
  
+
+/-! ## The reads-congruence family (moved from TickCascade at W8.3) -/
+
+-- the row-level write-locality + reads-congruence lemmas live at the
+-- ROW layer (they mention no cascade); TickCascade's composition laws
+-- and Update2's v2 laws both consume them through this module. The move
+-- keeps Update2 mathlib-free (TickCascade drags Dbsp.Effects; the
+-- feature-flags `Flag` collision lesson). Names unchanged.
+
+/-! ## The reads-membership simp family -/
+
+@[simp] theorem VExpr.not_mem_reads_col {n m : String} {s : List Field} {t : Ty}
+    {p : ColPath m t s} : n ∉ (VExpr.col m p).reads ↔ n ≠ m := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_lit {n : String} {s : List Field} (v : UInt64) :
+    n ∉ (VExpr.lit v : VExpr s .u64).reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_gt {n : String} {s : List Field} (a b : VExpr s .u64) :
+    n ∉ (VExpr.gt a b).reads ↔ n ∉ a.reads ∧ n ∉ b.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_eq {n : String} {s : List Field} (a b : VExpr s .u64) :
+    n ∉ (VExpr.eq a b).reads ↔ n ∉ a.reads ∧ n ∉ b.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_and {n : String} {s : List Field} (a b : VExpr s .bool) :
+    n ∉ (VExpr.and a b).reads ↔ n ∉ a.reads ∧ n ∉ b.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_strlen {n : String} {s : List Field} (e : VExpr s .string) :
+    n ∉ (VExpr.strlen e).reads ↔ n ∉ e.reads := by
+  simp [VExpr.reads]
+
+@[simp] theorem VExpr.not_mem_reads_not {n : String} {s : List Field} (e : VExpr s .bool) :
+    n ∉ (VExpr.not e).reads ↔ n ∉ e.reads := by
+  simp [VExpr.reads]
+
+/-! ## Write locality -/
+
+/-- A write to column `n₁` does not change ANY OTHER column's read. -/
+theorem ColPath.get_set_neutral {n₁ n : String} {t₁ t : Ty} :
+    ∀ {fs : List Field} (p : ColPath n t fs) (p₁ : ColPath n₁ t₁ fs),
+      n ≠ n₁ → ∀ (row : RowVals fs) (v : Value t₁),
+        p.get (p₁.set row v) = p.get row := by
+  intro fs
+  induction fs with
+  | nil => intro p _ _; cases p
+  | cons f fs ih =>
+      intro p p₁ hne row v
+      cases p with
+      | here =>
+          cases p₁ with
+          | here => exact absurd rfl hne
+          | there p₁' => cases row; simp [ColPath.set, ColPath.get]
+      | there p' =>
+          cases p₁ with
+          | here => cases row; simp [ColPath.set, ColPath.get]
+          | there p₁' =>
+              cases row with
+              | cons a vs => simp only [ColPath.set]; exact ih p' p₁' hne vs v
+
+/-- An expression whose reads avoid column `n₁` evaluates the same
+    before and after a write to `n₁` (the reads-congruence). -/
+theorem VExpr.evalV_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
+    ∀ {t : Ty} (e : VExpr fs t) (p₁ : ColPath n₁ t₁ fs) (_hne : n₁ ∉ e.reads)
+      (row : RowVals fs) (v : Value t₁),
+      evalV e (p₁.set row v) = evalV e row := by
+  intro t e
+  induction e with
+  | col n p =>
+      intro p₁ hne row v
+      have hnn : n₁ ≠ n := by
+        simpa using hne
+      exact ColPath.get_set_neutral p p₁ hnn.symm row v
+  | lit _ => intro _ _ _ _; rfl
+  | gt a b iha ihb =>
+      intro p₁ hne row v
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
+      simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
+  | eq a b iha ihb =>
+      intro p₁ hne row v
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
+      simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
+  | and a b iha ihb =>
+      intro p₁ hne row v
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
+      simp [evalV, iha p₁ ha row v, ihb p₁ hb row v]
+  | «strlen» e ih =>
+      intro p₁ hne row v
+      have he : n₁ ∉ e.reads := by
+        simpa using hne
+      simp [evalV, ih p₁ he row v]
+  | not e ih =>
+      intro p₁ hne row v
+      have he : n₁ ∉ e.reads := by
+        simpa using hne
+      simp [evalV, ih p₁ he row v]
+
+/-- The RAW evaluator's congruence, at the GENERAL index (W3.4): an
+    expression whose reads avoid column `n₁` evaluates the same before
+    and after a write to `n₁`. The general `t` index is what unblocks
+    `induction` — the fixed-index `.bool` slice barred it, forcing the
+    old proof-carrying-def workaround (`evalBNeutral`; retired, with
+    `evalU_set_neutral`, into this ONE theorem). The `strlen` case's
+    operand is a field ref (the only `.string`-typed shape), so it
+    closes by `cases` + `get_set_neutral`, no induction hypothesis. -/
+theorem VExpr.evalRaw_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} :
+    ∀ {t : Ty} (e : VExpr fs t) (p₁ : ColPath n₁ t₁ fs) (_hne : n₁ ∉ e.reads)
+      (row : RowVals fs) (v : Value t₁),
+      evalRaw e (p₁.set row v) = evalRaw e row := by
+  intro t e
+  induction e with
+  | col n p =>
+      intro p₁ hne row v
+      have hnn : n₁ ≠ n := by
+        simpa using hne
+      have := ColPath.get_set_neutral p p₁ hnn.symm row v
+      simp only [evalRaw, this]
+  | lit _ => intro _ _ _ _; rfl
+  | gt a b iha ihb =>
+      intro p₁ hne row v
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
+      simp only [evalRaw]
+      rw [iha p₁ ha row v, ihb p₁ hb row v]
+  | eq a b iha ihb =>
+      intro p₁ hne row v
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
+      simp only [evalRaw]
+      rw [iha p₁ ha row v, ihb p₁ hb row v]
+  | and a b iha ihb =>
+      intro p₁ hne row v
+      have ⟨ha, hb⟩ : n₁ ∉ a.reads ∧ n₁ ∉ b.reads := by
+        simpa using hne
+      simp only [evalRaw]
+      rw [iha p₁ ha row v, ihb p₁ hb row v]
+  | «strlen» e _ih =>
+      intro p₁ hne row v
+      -- the operand is a field ref (the only `.string` shape)
+      cases e with
+      | col n p =>
+          have hnn : n₁ ≠ n := by
+            simpa using hne
+          have := ColPath.get_set_neutral p p₁ hnn.symm row v
+          simp only [evalRaw, this]
+  | not e ih =>
+      intro p₁ hne row v
+      have he : n₁ ∉ e.reads := by
+        simpa using hne
+      simp only [evalRaw]
+      rw [ih p₁ he row v]
+
+
 /-! ## The registered-update wrapper -/
 
 /-- The registered-update wrapper: the table's fields + the written

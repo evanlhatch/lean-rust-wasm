@@ -17,7 +17,12 @@ the group exprs + measure calls through `parseExpr`) stays sweep-witnessed
 in Tests — the call-argument inversion ladder does not exist yet; the lane's
 tokens are shared, its pairing is `emptyGroupTok_arrowTok`.
 -/
-import Substrait.Decode.Expr
+
+module
+
+public import Substrait.Decode.Expr
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -554,3 +559,5 @@ theorem sortDirOfName_sortDirName (d : Proto.SortDirection) (hd : d ≠ .unspeci
 
 
 end Substrait.Decode
+
+end -- @[expose] public section

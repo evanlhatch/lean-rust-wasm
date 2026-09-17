@@ -21,7 +21,12 @@ schema-preserving wire node): on a `Builder inS outS` where `inS ≠ outS`
 refuses to invent, so those steps are typed `Builder inS inS`.  This is the
 only shape the golden plan (and any filter-before-project pipeline) needs.
 -/
-import Substrait.Typed.Rel
+
+module
+
+public import Substrait.Typed.Rel
+
+@[expose] public section
 
 namespace Substrait.Typed
 
@@ -77,3 +82,5 @@ def toRel (b : Builder inS outS) : Rel inS outS := b.rel
 end Builder
 
 end Substrait.Typed
+
+end -- @[expose] public section

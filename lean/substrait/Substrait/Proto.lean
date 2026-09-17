@@ -16,8 +16,11 @@ Modules:
 
 The namespace is `Substrait.Proto`.
 -/
-import Substrait.Proto.Type
-import Substrait.Proto.Expression
-import Substrait.Proto.Rel
-import Substrait.Proto.Extensions
-import Substrait.Proto.Plan
+
+module
+
+public import Substrait.Proto.Type
+public import Substrait.Proto.Expression
+public import Substrait.Proto.Rel
+public import Substrait.Proto.Extensions
+public import Substrait.Proto.Plan

@@ -15,7 +15,9 @@ The Item-AST discipline (Emit/Rust.lean): item shape goes through the
 `CodegenCore.Emit.Rust.Item` nodes; string interpolation appears only
 in leaf payloads (fn bodies — the audited concession). Names are
 pre-mangled via `Emit.snake`/`rustIdent`/`pascal` — the AST never
-case-converts.
+case-converts. The expression lowering (u64/bool → Rust text) lives in
+`Emit.Expr` — the shared consumer module written against the
+`ExprLang` interface (W7.2 phase 2; phase 1 housed it here).
 
 The emitter contract (v2): `run` takes the FULL registry state
 (`Emit.GenCtx`) — the invariant lane reads `ctx.invariants`, the
@@ -37,6 +39,7 @@ public import CodegenCore
 public import SchemaLang.Item
 public import SchemaLang.Invariant
 public import SchemaLang.ExprLang
+public import SchemaLang.Emit.Expr
 public import SchemaLang.Emit.GenCtx
 public import SchemaLang.Meta.Reflect
 
@@ -46,84 +49,22 @@ namespace SchemaLang.Emit.Invariant
 
 open CodegenCore.Emit (pascal snake rustIdent)
 
-/-! ## The VExpr → Rust lowering (the evalB discipline), written ONCE
-    against the ExprLang interface (W7.2) -/
+/-! ## The default row — the Lean-computed test verdict
 
-/-- The u64 operand's Rust text — the EMISSION reading of the
-    `U64Node` view: the name is the rendering key, the boxed
-    projection the node carries is the evaluation readings' half
-    (ignored here). `ref` renders a field ref (the record's struct
-    field — `rustIdent`-mangled). -/
-def u64RustI (L : ExprLang) [HasU64 L] (ref : L.Ident → String)
-    (e : L.Expr .u64) : String :=
-  match HasU64.view e with
-  | .lit v => s!"{v}u64"
-  | .col n _ => ref n
-  | .strlenCol n _ => s!"({ref n}).len() as u64"
-
-/-- The boolean's Rust text ALGEBRA (children arrive pre-folded to
-    text — the fold owns the recursion). -/
-def boolRustAlg {I R : Type} (ref : I → String) :
-    BoolNode I R String String → String
-  | .col n _ => s!"({ref n}) as u64 == 1"
-  | .gt a b => s!"({a} > {b})"
-  | .eq a b => s!"({a} == {b})"
-  | .and a b => s!"({a} && {b})"
-  | .not a => s!"(!({a}))"
-
-/-- The boolean's Rust text: the fold at the emission algebras. -/
-def boolRustI (L : ExprLang) [HasU64 L] [HasBool L] (ref : L.Ident → String)
-    (e : L.Expr .bool) : String :=
-  HasBool.fold (u64RustI L ref) (boolRustAlg ref) e
-
-/-- COMPAT (W7.2 phase 1): the VExpr-specialized spellings Emit.Update
-    still rides; its port is the next consumer step. Same signatures
-    as the pre-interface defs. -/
-def u64Rust (ref : String → String) {fs : List Field} (e : VExpr fs .u64) : String :=
-  u64RustI (vexprLang fs) ref e
-
-def boolRust (ref : String → String) {fs : List Field} (e : VExpr fs .bool) : String :=
-  boolRustI (vexprLang fs) ref e
-
-/-! ## The default row — the Lean-computed test verdict -/
-
-/-- The default value per Ty (`none` = no literal: `.ty` refs have no
-    `Value` ctor — a record with such a field gets no emitted test). -/
-def defaultValue? : (t : Ty) → Option (Value t)
-  | .bool => some (.bool false)
-  | .u8 => some (.u8 0) | .u16 => some (.u16 0)
-  | .u32 => some (.u32 0) | .u64 => some (.u64 0)
-  | .i8 => some (.i8 0) | .i16 => some (.i16 0)
-  | .i32 => some (.i32 0) | .i64 => some (.i64 0)
-  | .f32 => some (.f32 0) | .f64 => some (.f64 0)
-  | .string => some (.string "")
-  | .bytes => some (.bytes [])
-  | .option _ => some .none
-  | .list _ => some (.list .nil)
-  -- the zero-dims default only: `TVal.scalar` IS the 0-dim shape; a
-  -- nonzero-dims tensor needs per-element literals (none available)
-  | .tensor [] a => do let v ← defaultValue? a; some (Value.tensor (TVal.scalar v))
-  | .tensor (_ :: _) _ => none
-  | .result ok _ => do let v ← defaultValue? ok; some (.ok v)
-  | .future a => do let v ← defaultValue? a; some (.future v)
-  | .stream _ => some (.stream .nil)
-  | .ty _ => none
-
-/-- The all-default row for a field list (`none` = a field without a
-    literal default). -/
-def defaultRow? : (fs : List Field) → Option (RowVals fs)
-  | [] => some .nil
-  | f :: rest => do
-      let v ← defaultValue? f.ty
-      let rest' ← defaultRow? rest
-      some (.cons v rest')
+`defaultValue?`/`defaultRow?` MOVED to `SchemaLang.Validate` (W8.2 —
+the keys lane's obligation claims needed them and this module imports
+`Meta.Reflect`, so they had to live below the emit/meta split; the
+`RowVals` home owns them). This section keeps the consumers. -/
 
 /-- The invariant's verdict on the all-default row — the verdict the
     emitted `#[test]` pins (a false verdict = the failing row that must
     fail). -/
 def defaultVerdict (it : InvariantItem) : Option Bool := do
   let row ← defaultRow? it.inv.fields
-  pure (validates it.inv.expr row)
+  -- the interface's validator projection (W7.2 phase 2) —
+  -- `validatesI_vexpr` ties it to `validates`, so the pinned verdict's
+  -- bytes are unchanged
+  pure (validatesI (vexprLang it.inv.fields) it.inv.expr row)
 
 /-! ## The Rust literal defaults (the test row's construction) -/
 
@@ -144,6 +85,11 @@ def rustDefault? : Ty → Option String
   -- HONEST default: `none` — an empty Vec's shape is 0, not dims —
   -- a tensor field gets no emitted test literal (the .ty rule)).
   | .tensor _ _ => none
+  -- map/set: `BTreeMap::new()`/`BTreeSet::new()` are self-contained
+  -- but need the `std::collections` import in the emitted test module
+  -- — not pinned today (no consumer), so the HONEST default: `none`
+  -- (the tensor rule). v2 with the imports work.
+  | .map _ _ | .set _ => none
   | .result _ _ | .future _ | .stream _ | .ty _ => none
 
 /-! ## The module assembly -/
@@ -162,14 +108,16 @@ def checkFn (it : InvariantItem) : List CodegenCore.Emit.Rust.Item :=
     | none => ""
   [ .comment s!"invariant `{it.name}` on {it.schemaRef} — tier: {it.tier.render}{proofLine}"
   , .fn s!"fn {checkFnName it}(v: &{pascal it.schemaRef}) -> bool"
-      (boolRustI (vexprLang it.inv.fields) (fun n => s!"v.{rustIdent n}") it.inv.expr) ]
+      (Emit.Expr.boolRustI (vexprLang it.inv.fields)
+        (fun n => s!"v.{rustIdent n}") it.inv.expr) ]
 
 /-- One record → the folding validator (AND over its invariants). -/
 def validateFn (invs : List InvariantItem) (rec : String) :
     CodegenCore.Emit.Rust.Item :=
   let ref : String → String := fun n => s!"v.{rustIdent n}"
   let body := String.intercalate " && "
-    (invs.map fun it => s!"({boolRustI (vexprLang it.inv.fields) ref it.inv.expr})")
+    (invs.map fun it =>
+      s!"({Emit.Expr.boolRustI (vexprLang it.inv.fields) ref it.inv.expr})")
   .fn s!"fn {validateFnName rec}(v: &{pascal rec}) -> bool"
     (if invs.isEmpty then "true" else body)
 

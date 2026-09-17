@@ -23,9 +23,14 @@ not consulted.
 `mutual` block with value-first signatures so dot notation (`e.evalCell row`,
 `args.eval row`) resolves.
 -/
-import Substrait.Typed.Rel
+
+module
+
+public import Substrait.Typed.Rel
 
 namespace Substrait.Typed
+
+@[expose] public section
 
 /-! ## Runtime values -/
 
@@ -298,6 +303,10 @@ def Row.splitRight {b : Schema} : (a : Schema) → Row (a ++ b) → Row b
 /-- The source-resolver: table name → rows. -/
 abbrev Reader (s : Schema) := String → Except String (Table s)
 
+end -- @[expose] public section
+
+public meta section
+
 /--
 `![cells]` — a row literal: cells are `some (Sigma.mk SType.i32 (Cell.i32 5))`
 / `none` terms; the schema is inferred from the expected `Row s` type.
@@ -306,6 +315,10 @@ scoped syntax "![ " sepBy(term, ", ") " ]" : term
 
 macro_rules
   | `(![ $cells,* ]) => `(Row.ofCells _ [ $cells,* ])
+
+end -- public meta section
+
+@[expose] public section
 
 /--
 Evaluate a typed projection over a table of the input schema (the `p ++ …`
@@ -594,5 +607,7 @@ def eval {s s' : Schema} (reader : Reader s) : Rel s s' → Table s → Except S
       throw "eval: write not implemented in the skeleton evaluator"
   | .extensionSingle _ _, _ =>
       throw "eval: extensionSingle not implemented in the skeleton evaluator"
+
+end -- @[expose] public section
 
 end Substrait.Typed

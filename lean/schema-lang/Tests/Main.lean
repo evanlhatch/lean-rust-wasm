@@ -8,9 +8,16 @@ import Lean
 import SchemaLang
 import SchemaLang.Emit.GenCtx
 import SchemaLang.Emit.GenRust
+import SchemaLang.Emit.Expr
 import SchemaLang.Emit.Invariant
 import SchemaLang.Emit.Update
 import SchemaLang.Bridge
+import SchemaLang.Witness
+import SchemaLang.WitnessCheck
+import SchemaLang.Meta.WireCodec
+import SchemaLang.TableInvariant
+import SchemaLang.Meta.TableInvariant
+import SchemaLang.Update2
 import Demo
 import SchemaLang.Trace
 import Machines
@@ -1251,12 +1258,18 @@ def sizeV : (t : Ty) → Value t → Nat
   | .result _ err, .err x => sizeV err x + 1
   | .future a, .future x => sizeV a x + 1
   | .list a, .list vl => sizeL a vl + 1
+  | .map k _, .map m => sizeM k m + 1
+  | .set k, .set vl => sizeL k.toTy vl + 1
   | .stream a, .stream vl => sizeL a vl + 1
   | .tensor _ a, .tensor tv => sizeT a tv + 1
 
 def sizeL : (t : Ty) → VList t → Nat
   | _, .nil => 0
   | t, .cons v vl => sizeV t v + sizeL t vl + 1
+
+def sizeM : (k : KeyTy) → {v : Ty} → VMap k v → Nat
+  | _, _, .nil => 0
+  | k, _, .cons kv vv m => sizeV k.toTy kv + sizeV _ vv + sizeM k m + 1
 
 -- every wrapper +1: the repr chain (valueReprStr ⇄ valueTReprStr ⇄
 -- slicesReprStr) needs each cross-function call to STRICTLY decrease
@@ -1297,6 +1310,8 @@ def valueReprStr : (t : Ty) → Value t → String
   | .result _ err, .err x => s!"err ({valueReprStr err x})"
   | .future t, .future x => s!"future ({valueReprStr t x})"
   | .list t, .list vl => s!"list [{vListReprStr t vl}]"
+  | .map k _, .map m => s!"map [{vMapReprStr k m}]"
+  | .set k, .set vl => s!"set [{vListReprStr k.toTy vl}]"
   | .stream t, .stream vl => s!"stream [{vListReprStr t vl}]"
   | .tensor _ a, .tensor tv => s!"tensor [{valueTReprStr a tv}]"
   termination_by t v => sizeV t v
@@ -1324,6 +1339,15 @@ def vListReprStr : (t : Ty) → VList t → String
       if rest == "" then valueReprStr t v else s!"{valueReprStr t v}, {rest}"
   termination_by t vl => sizeL t vl
 decreasing_by all_goals (simp [sizeL]; omega)
+
+def vMapReprStr : (k : KeyTy) → {v : Ty} → VMap k v → String
+  | _, _, .nil => ""
+  | k, _, .cons kv vv m =>
+      let rest := vMapReprStr k m
+      let head := s!"{valueReprStr k.toTy kv} => {valueReprStr _ vv}"
+      if rest == "" then head else s!"{head}, {rest}"
+  termination_by k _ m => sizeM k m
+decreasing_by all_goals (simp [sizeM]; omega)
 
 end
 
@@ -1418,11 +1442,18 @@ def genLeafPack : Gen Pack :=
     , do pure ⟨.string, .string, .string (String.ofList (← genShortList genChar 3))⟩
     , do pure ⟨.bytes, .bytes, .bytes (← genShortList genU8 3)⟩ ]
 
+/-- A key-type choice (the `KeyTy` sub-universe, uniformly). -/
+def genKeyTy : Gen KeyTy := do
+  let n ← Gen.chooseNat
+  pure (match n % 10 with
+    | 0 => .bool | 1 => .u8 | 2 => .u16 | 3 => .u32 | 4 => .u64
+    | 5 => .i8 | 6 => .i16 | 7 => .i32 | 8 => .i64 | _ => .string)
+
 def genPack : Nat → Gen Pack
   | 0 => genLeafPack
   | fuel + 1 => do
     let branch ← Gen.chooseNat
-    match branch % 6 with
+    match branch % 8 with
     | 0 => genLeafPack
     | 1 => do
       let p ← genPack fuel
@@ -1442,10 +1473,22 @@ def genPack : Nat → Gen Pack
     | 4 => do
       let p ← genPack fuel
       pure ⟨.future p.t, .future p.h, .future p.val⟩
-    | _ => do
+    | 5 => do
       let p ← genPack fuel
       let vs ← genShortList (genVal p.t p.h fuel) 3
       pure ⟨.stream p.t, .stream p.h, .stream (listToVList vs)⟩
+    -- W8.1: map/set packs (the new `CodecClosed` arms ride the SAME
+    -- sweep — the master theorem's executable image covers them)
+    | 6 => do
+      let p ← genPack fuel
+      let k ← genKeyTy
+      let ks ← genShortList (genKey k) 3
+      let vs ← genShortList (genVal p.t p.h fuel) 3
+      pure ⟨.map k p.t, .map p.h, .map (listToVMap (ks.zip vs))⟩
+    | _ => do
+      let k ← genKeyTy
+      let es ← genShortList (genKey k) 3
+      pure ⟨.set k, .set, .set (listToVList es)⟩
   termination_by fuel => fuel
 
 instance : ArbitraryFueled Pack where
@@ -1980,6 +2023,64 @@ def exprLangChecks : CheckResult := do
     "raw reading distinguishes rows (non-vacuous)"
   .ok ()
 
+/-! ## W7.2 phase 2 — the emission consumers ride the interface
+
+Phase 2 ported Emit.Update's guard/value lowering onto
+`Emit.Expr.u64RustI`/`boolRustI` at the `vexprLang` instance (phase 1
+was the invariant lane; the COMPAT spellings are gone) and ported
+Emit.Invariant's `defaultVerdict` to `validatesI`. The golden
+byte-ties (`invariantGoldenChecks`/`updateGoldenChecks`) pin the whole
+artifacts; these pins are the PER-EXPRESSION half: the exact Rust
+text the fold produces for a guard exercising every bool ctor over
+every u64 leaf shape, and the ported `valueRust` arms (the interface
+u64 arm, the justified GADT-direct string arm, the honest skip). -/
+
+/-- The probe guard's emission text at the update lane's `r.<field>`
+    ref — the exact bytes `applyFn` splices into the `if`. -/
+def probeGuardText : String :=
+  SchemaLang.Emit.Expr.boolRustI (vexprLang valUserFields)
+    SchemaLang.Emit.Update.refOf probeExpr
+
+/-- The probe's u64 leaves' emission texts (lit / col / strlenCol —
+    the `HasU64` view's three shapes). -/
+def probeU64Texts : List String :=
+  [ SchemaLang.Emit.Expr.u64RustI (vexprLang valUserFields)
+      SchemaLang.Emit.Update.refOf (.lit 0)
+  , SchemaLang.Emit.Expr.u64RustI (vexprLang valUserFields)
+      SchemaLang.Emit.Update.refOf (.colOf "id")
+  , SchemaLang.Emit.Expr.u64RustI (vexprLang valUserFields)
+      SchemaLang.Emit.Update.refOf valStrlen ]
+
+def exprEmitChecks : CheckResult := do
+  -- the fold at the emission algebra, BYTE-PINNED: eq/and/not over
+  -- gt/lit/col/strlenCol (the probe's full ctor coverage)
+  _ ← assertEq "guard text through the interface fold (byte-pin)"
+    probeGuardText
+    "((r.id == 7u64) && (!(((r.id > 0u64) && ((r.name).len() as u64 > 3u64)))))"
+  -- the u64 leaf texts (the ported value lane's building blocks)
+  _ ← assertEq "u64 leaf texts through the view (byte-pin)"
+    probeU64Texts ["0u64", "r.id", "(r.name).len() as u64"]
+  -- the ported `valueRust`: the u64 arm rides the interface
+  _ ← assertEq "valueRust: u64 arm via HasU64.view"
+    (SchemaLang.Emit.Update.valueRust (fs := valUserFields) (.lit 0))
+    (some "0u64")
+  -- the string-write arm stays GADT-direct (justified: no HasString
+  -- capability — syntax-directed at the `.string` index)
+  _ ← assertEq "valueRust: string .col arm (GADT-direct, justified)"
+    (SchemaLang.Emit.Update.valueRust (fs := valUserFields) (.colOf "name"))
+    (some "(r.name).clone()")
+  -- the honest skip: a bool-typed value has no lowering
+  _ ← assertEq "valueRust: non-lowerable shape skips honestly"
+    (SchemaLang.Emit.Update.valueRust (fs := valUserFields) valPositive)
+    (none : Option String)
+  -- non-vacuity: the byte-pins are LIVE text — a sabotaged algebra
+  -- (here: the guard under a different ref) yields different bytes
+  _ ← assert
+    (SchemaLang.Emit.Expr.boolRustI (vexprLang valUserFields)
+        (fun n => s!"v.{n}") probeExpr != probeGuardText)
+    "emission reading depends on the ref (non-vacuous byte-pin)"
+  .ok ()
+
 /-! ## The variant family (SchemaLang.Validate's Phase 3) -/
 
 /-- order-error's cases, as the variant-validator tests see them
@@ -2364,6 +2465,90 @@ run_cmd do
   match ← citationDiag? env axiomCtl with
   | some _ => pure ()
   | none => throwError "citation check: axiom citation NOT caught — the resolver is vacuous"
+
+/-! ## W7.1 phase 2 — the decidableNow obligation backend
+
+The backend (`SchemaLang.SchemaObligation.discharge`'s `decidableNow`
+arm) runs `decide` over the obligation's `decidableClaim` — the
+registered predicate's verdict on the ALL-DEFAULT row (the same row
+the emitted `#[test]` pins, so the decide discharge and the Rust CI
+replay decide the SAME fact). A true claim discharges to
+`.decided true`; a false claim or a default-less record REFUSES
+(`none`, loudly — no fabricated evidence). The soundness theorem
+(`discharge_decidableNow_sound`, axiom-pinned in Tests/Axioms.lean)
+is CITED by `decNowTrue_holds` below: the demo obligation's
+discharge yields the `validates` verdict AS a theorem. -/
+
+/-- The demo item: the empty-schema invariant `lit 1 > lit 0` — TRUE
+    on the (only) default row. -/
+def decNowTrueItem : SchemaLang.InvariantItem :=
+  { name := "dec-now-true", schemaRef := "User", tier := .boundaryCheck
+  , proofName := none, inv := ⟨[], .gt (.lit 1) (.lit 0)⟩ }
+
+/-- The demo obligation, hand-tiered decidableNow (no invariant-lane
+    rung computes it — the tier is a backend ASSIGNMENT, registration
+    computes only the three invariant rungs). -/
+def decNowTrueObligation : SchemaLang.SchemaObligation :=
+  { decNowTrueItem.obligation with tier := .decidableNow }
+
+/-- The soundness theorem, CITED: the `.decided true` discharge IS the
+    claim — here the denotation `validates (lit 1 > lit 0) nil = true`
+    (the claim reduces to it: the empty schema's default row IS
+    `RowVals.nil`). -/
+theorem decNowTrue_holds :
+    validates (.gt (.lit 1) (.lit 0) : VExpr [] .bool) .nil = true :=
+  decNowTrueObligation.discharge_decidableNow_sound rfl rfl
+
+/-- Negative control 1: `lit 0 > lit 0` — FALSE on the default row. -/
+def decNowFalseItem : SchemaLang.InvariantItem :=
+  { name := "dec-now-false", schemaRef := "User", tier := .boundaryCheck
+  , proofName := none, inv := ⟨[], .gt (.lit 0) (.lit 0)⟩ }
+
+def decNowFalseObligation : SchemaLang.SchemaObligation :=
+  { decNowFalseItem.obligation with tier := .decidableNow }
+
+/-- The false claim's `decide` IS false — pinned. -/
+theorem decNowFalse_decide : decide decNowFalseObligation.decidableClaim = false := rfl
+
+/-- ... and the discharge REFUSES: `none`, loudly. A `decide = false`
+    verdict is a refusal, not evidence. -/
+theorem decNowFalse_refused : decNowFalseObligation.discharge = none := rfl
+
+/-- Negative control 2: a record with a non-literal default (a
+    nonzero-dims tensor field) has NO default row — no claim to
+    decide, the backend refuses. -/
+def decNowNoRowItem : SchemaLang.InvariantItem :=
+  { name := "dec-now-no-row", schemaRef := "User", tier := .boundaryCheck
+  , proofName := none
+  , inv := ⟨[⟨"t", .tensor [2] .u8⟩], .gt (.lit 1) (.lit 0)⟩ }
+
+def decNowNoRowObligation : SchemaLang.SchemaObligation :=
+  { decNowNoRowItem.obligation with tier := .decidableNow }
+
+theorem decNowNoRow_refused : decNowNoRowObligation.discharge = none := rfl
+
+def decidableNowChecks : CheckResult := do
+  -- the demo obligation's data: label + tier + evidence shape
+  _ ← assertEq "decNow: label" decNowTrueObligation.label "dec-now-true"
+  _ ← assertEq "decNow: tier" decNowTrueObligation.tier .decidableNow
+  _ ← assertEq "decNow: true claim discharges to .decided true"
+    decNowTrueObligation.discharge (some (.decided true))
+  -- the evidence's tier IS the obligation's (no mis-wiring)
+  _ ← assertEq "decNow: evidence tier matches"
+    (decNowTrueObligation.discharge.map (·.tier)) (some .decidableNow)
+  -- negative control 1: a FALSE claim refuses, loudly
+  _ ← assertEq "decNow: FALSE claim discharges to NONE (loud)"
+    decNowFalseObligation.discharge none
+  _ ← assertEq "decNow: false claim's decide = false"
+    (decide decNowFalseObligation.decidableClaim) false
+  -- negative control 2: a default-less record has no claim — refusal
+  _ ← assertEq "decNow: default-less record refuses (loud)"
+    decNowNoRowObligation.discharge none
+  -- non-vacuity: decide DISTINGUISHES the two demo claims
+  _ ← assert (decide decNowTrueObligation.decidableClaim !=
+      decide decNowFalseObligation.decidableClaim)
+    "decide distinguishes true from false claims"
+  .ok ()
 
 /-! ## Docs emitter (DOCS-SITE lane): the markdown API page -/
 
@@ -3200,6 +3385,82 @@ def enumWireChecks : CheckResult := do
 
 end
 
+/-! ## W7.14 — `deriving WireCodec` (SchemaLang.Meta.WireCodec)
+
+Per-structure wire codec, generated: the `WireCodec` instance (encoder/
+decoder over the Codec.lean combinators + the append-form law PROVED —
+the class-law simp rule covers every field shape carrying an instance),
+the EnumWire-parity wrappers, and the `RoundTripSpec` assembly (the
+review-2026-09-16 F2/F3 graduation — the kit `PartialIso` gets its codec
+consumer via `WireCodec.toPartialIso`, and the sweep + mandatory
+byte-sabotage control ride the spec's PropSpec bridge in `runSpecs`
+below). The fixture spans the codec-supported shapes (UInt64/Bool/Nat
+atoms, Option, List) plus a NESTED struct (composition through the inner
+instance). The refusal surface is pinned by `#guard_msgs`: an
+unsupported field type is an elaboration error naming the field — never
+a sorry, never a silent skip. -/
+
+/-- Fixture across the codec-supported field shapes. -/
+structure WireCodecFixture where
+  id : UInt64
+  active : Bool
+  nick : Option String
+  tags : List String
+  score : Nat
+deriving WireCodec
+
+/-- Composition fixture: a field of another `deriving WireCodec`
+    structure (the inner instance carries the wire). -/
+structure WireCodecOuter where
+  inner : WireCodecFixture
+  n : Nat
+deriving WireCodec
+
+/-- The generated instance's append-form law, cited. -/
+example (v : WireCodecFixture) (rest : List UInt8) :
+    WireCodec.dec? (WireCodec.enc v ++ rest) = some (v, rest) :=
+  WireCodec.decode_encode_append v rest
+
+/-- The plain round trip through the kit PartialIso law shape, cited
+    (F2: `WireCodec.toPartialIso` is PartialIso's codec consumer). -/
+example (v : WireCodecOuter) :
+    WireCodec.decode WireCodecOuter (WireCodec.enc v) = some v :=
+  WireCodec.decode_encode _ v
+
+/- The refusal: a field with no `WireCodec` instance is an elaboration
+error NAMING the offending field (the pinned behavior — the wire family
+widens in Codec.lean, not per call site). -/
+/--
+error: deriving WireCodec: field `price : Float` of `BadWireFixture` has no `SchemaLang.WireCodec` instance — codec-supported field types: Bool / UInt8 / Nat / UInt64 / String, Option and List over them, and other `deriving WireCodec` structures (the wire family widens in Codec.lean, not per call site)
+-/
+#guard_msgs in
+structure BadWireFixture where
+  price : Float
+deriving WireCodec
+
+def wireCodecChecks : CheckResult := do
+  let v : WireCodecFixture := ⟨42, true, some "ada", ["x", "y"], 7⟩
+  -- the round trip, executed (plain + append form)
+  _ ← assert (WireCodecFixture.decode? (WireCodecFixture.encode v) == some (v, []))
+    "decode_encode (unit)"
+  _ ← assert (WireCodecFixture.decode? (WireCodecFixture.encode v ++ [9]) == some (v, [9]))
+    "decode_encode_append (unit)"
+  -- the none/nil corners
+  let corners : WireCodecFixture := ⟨0, false, none, [], 0⟩
+  _ ← assert (WireCodecFixture.decode (WireCodecFixture.encode corners) == some corners)
+    "none/nil corners round trip"
+  -- nested composition, executed (the outer codec rides the inner instance)
+  let o : WireCodecOuter := ⟨⟨1, false, none, [], 0⟩, 3⟩
+  _ ← assert (WireCodecOuter.decode (WireCodecOuter.encode o) == some o)
+    "nested struct round trip"
+  -- the spec assembly IS a RoundTripSpec over the kit PartialIso (F3):
+  -- the iso's law executes through the spec's own fields
+  _ ← assertEq "spec name" WireCodecFixture.roundTripSpec.name "WireCodecFixture"
+  _ ← assert (WireCodecFixture.roundTripSpec.iso.decode
+      (WireCodecFixture.roundTripSpec.iso.encode v) == some v)
+    "PartialIso law, executed through the spec"
+  .ok ()
+
 /-! ## The `[inv| …]` DSL — the VExpr surface syntax (the ch. 8 embedding)
 
 The Metaprogramming-in-Lean book's chapter-8 pattern, landed in
@@ -3452,6 +3713,1915 @@ example :
 example : universeWellFormed demoItems = true :=
   universeWellFormed_iff.mpr demoItems_wellFormed
 
+/-! ## W9.1 — the witness codec: RoundTripSpec's FIRST PRODUCTION consumer
+
+`SchemaLang.Witness`'s codec assembled ONCE as a `RoundTripSpec` (the
+review-2026-09-16 F3 graduation — the spec's `iso` field gets its first
+real inhabitant: `SchemaLang.Witness.witnessIso`). The sweep rides the
+spec's PropSpec bridge (`decode ∘ encode` over generated witnesses) with
+the MANDATORY byte-sabotage control: the default first-byte increment
+corrupts the envelope VERSION byte (version 1 → 2), which
+`decEnvelope?` rejects — a decoder that accepted it would fail its own
+gate, and a vacuous control fails the run. The golden byte-tie over
+fixed samples pins the WIRE FORMAT itself: a reordered `WProp`/`WProof`
+ctor changes the bytes and fails the tie (the EnumWire wire-breaking
+rule, enforced here for a hand-written wire).
+
+Field resolution (design §2.1) is pinned both ways: a known field
+resolves, a misspelled or wrongly-typed field rejects with `none`. -/
+
+namespace WitnessSweep
+
+open Plausible SchemaLang.Witness
+
+/-- The suite's fixed envelope pair (W9.4 derives per-record pairs from
+    the schema fingerprints; the suite pins ONE — the golden ties the
+    format). Version 1 keeps byte 0 a single byte the default sabotage
+    corrupts into a version mismatch. -/
+def version : Nat := 1
+def fingerprint : Nat := 9001
+
+/-- Column-name supply for the generators. -/
+def nameSupply : List String := ["id", "amount", "note"]
+
+/-- Pick a name from the supply. -/
+def pickWName : Gen String := do
+  let n ← Gen.chooseNat
+  pure (nameSupply[n % nameSupply.length]?.getD "id")
+
+/-- `WU64` leaves: literals, column refs, strlen refs. -/
+def genWU64 : Gen WU64 :=
+  Gen.oneOfWithDefault (pure (.lit 0))
+    [ do pure (.lit ((← Gen.chooseNat) % 1000).toUInt64)
+    , do pure (.col (← pickWName))
+    , do pure (.strlenCol (← pickWName)) ]
+
+/-- The boolean fragment, depth-bounded by fuel. -/
+def genWBoolExpr : Nat → Gen WBoolExpr
+  | 0 => do pure (.gt (← genWU64) (← genWU64))
+  | fuel + 1 => do
+      let branch ← Gen.chooseNat
+      match branch % 4 with
+      | 0 => pure (.gt (← genWU64) (← genWU64))
+      | 1 => pure (.eq (← genWU64) (← genWU64))
+      | 2 => pure (.and (← genWBoolExpr fuel) (← genWBoolExpr fuel))
+      | _ => pure (.not (← genWBoolExpr fuel))
+
+/-- Claims across all three ctors (v1 scope: valid / eqU / chain). -/
+def genWProp (fuel : Nat) : Gen WProp := do
+  let branch ← Gen.chooseNat
+  match branch % 3 with
+  | 0 => pure (.valid (← genWBoolExpr fuel))
+  | 1 => pure (.eqU (← genWU64) (← genWU64))
+  | _ => pure (.chain
+      (← genShortList (do pure ⟨(← Gen.chooseNat) % 16⟩) 3)
+      (← genWBoolExpr fuel))
+
+/-- Proof terms, depth-bounded by fuel. -/
+def genWProof : Nat → Gen WProof
+  | 0 => pure .byValidEval
+  | fuel + 1 => do
+      let branch ← Gen.chooseNat
+      match branch % 3 with
+      | 0 => pure (.byEval ((← Gen.chooseNat) % 1000).toUInt64)
+      | 1 => pure .byValidEval
+      | _ => pure (.steps (← genShortList (genWProof fuel) 2))
+
+/-- Whole witnesses. -/
+def genWitness : Gen Witness := do
+  let n ← Gen.chooseNat
+  let label := (["inv-a", "mig-v1-v2", "step-ok"][n % 3]?.getD "inv-a")
+  pure ⟨label, ← genWProp 2, ← genWProof 2, (← Gen.chooseNat) % 512⟩
+
+instance : Shrinkable WU64 := {}
+instance : Shrinkable WBoolExpr := {}
+instance : Shrinkable WStep := {}
+instance : Shrinkable WProp := {}
+instance : Shrinkable WProof := {}
+instance : Shrinkable Witness := {}
+
+instance : Arbitrary WU64 where arbitrary := genWU64
+instance : Arbitrary WProp where arbitrary := Gen.sized genWProp
+instance : Arbitrary Witness where arbitrary := genWitness
+
+/-- THE SUITE (the F3 graduation): the witness codec's law stated once
+    as a RoundTripSpec — sweep + default byte-sabotage control +
+    golden byte-tie at `goldens/witness.golden`. -/
+def witnessSpec : CodegenCore.RoundTripSpec Witness where
+  name := "witness"
+  iso := SchemaLang.Witness.witnessIso version fingerprint
+  samples :=
+    [ ⟨"inv-a", .valid (.gt (.col "amount") (.lit 0)), .byValidEval, 64⟩
+    , ⟨"mig-v1-v2", .chain [⟨0⟩, ⟨1⟩] (.not (.eq (.strlenCol "note") (.lit 5))),
+        .steps [.byValidEval, .byValidEval], 128⟩
+    , ⟨"eq-pin", .eqU (.lit 7) (.lit 7), .byEval 7, 8⟩ ]
+  goldenDir := some "goldens"
+
+/-- Deterministic pins: the theorems' objects EXECUTED, the envelope's
+    wrong-version rejection, truncation/trailing-garbage rejection, and
+    the field-resolution verdicts (design §2.1) both ways. -/
+def witnessChecks : CheckResult := do
+  let w : Witness := ⟨"inv-a", .valid (.gt (.col "amount") (.lit 0)), .byValidEval, 64⟩
+  -- the round-trip theorem, executed
+  _ ← assert (decWitness? version (encWitness version fingerprint w) == some w)
+    "decWitness? ∘ encWitness = some (theorem, executed)"
+  -- the envelope rejects a version mismatch before touching the payload
+  _ ← assert (decWitness? 2 (encWitness version fingerprint w)).isNone
+    "wrong version rejected (decEnvelope?_wrong_version, executed)"
+  -- truncation MID-PAYLOAD rejects (the length prefix overruns; a
+  -- 3-byte truncation is NOT a rejection case — it is a valid shorter
+  -- envelope for a degenerate witness: decVarNat is total on empty
+  -- input, Codec.lean's documented discipline)
+  let bs := encWitness version fingerprint w
+  _ ← assert (decWitness? version (bs.take (bs.length - 1))).isNone
+    "truncated witness rejected (payload length-prefix overrun)"
+  -- trailing garbage rejects (the payload's no-trailing rule)
+  _ ← assert (decWitness? version (encWitness version fingerprint w ++ [0])).isNone
+    "trailing garbage rejected"
+  -- field resolution: the known field resolves
+  let fields : List Field := [⟨"amount", .u64⟩, ⟨"note", .string⟩]
+  _ ← assert (decWitnessFor? fields version (encWitness version fingerprint w)).isSome
+    "known field resolves"
+  -- a misspelled field is `none`, loud
+  let bad : Witness := ⟨"inv-b", .valid (.gt (.col "amoutn") (.lit 0)), .byValidEval, 64⟩
+  _ ← assert (decWitnessFor? fields version (encWitness version fingerprint bad)).isNone
+    "misspelled field rejected (design §2.1)"
+  -- a wrongly-typed field (a string column at a u64 position) rejects
+  let badTy : Witness := ⟨"inv-c", .valid (.gt (.col "note") (.lit 0)), .byValidEval, 64⟩
+  _ ← assert (decWitnessFor? fields version (encWitness version fingerprint badTy)).isNone
+    "wrongly-typed field rejected"
+  .ok ()
+
+end WitnessSweep
+
+/-! ## W9.2 — the guest witness checker: sound, fuel-bounded, refusal-total
+
+`SchemaLang.WitnessCheck`'s pins: positive witnesses (hand-built AND via
+W9.1's codec round trip — encode, decode+resolve, then check), the
+negative controls (tampered proof term / wrong claim-proof pairing /
+false claim / misspelled field / insufficient fuel / out-of-range
+offset / length mismatch / wrong per-step proof shape — each REFUSED,
+pinned), the soundness theorem APPLIED (an accepting check transports
+to `WHolds`), and the design §2.4 grounding executed end to end:
+checker → `WHolds` → the compiled `validates` verdict. -/
+
+namespace WitnessCheckSweep
+
+open SchemaLang.Witness SchemaLang.WitnessCheck
+
+/-- The fixture record: `amount : u64`, `note : string`. -/
+def wcFields : List Field := [⟨"amount", .u64⟩, ⟨"note", .string⟩]
+
+/-- The certified row: `amount = 7`, `note = "hello"`. -/
+def wcRow : RowVals wcFields := .cons (.u64 7) (.cons (.string "hello") .nil)
+
+/-- The chain lane's guest-held log segment (offsets 0 and 1). -/
+def wcLog : List (RowVals wcFields) :=
+  [.cons (.u64 1) (.cons (.string "hi") .nil),
+   .cons (.u64 2) (.cons (.string "yo") .nil)]
+
+/-- The chain fixture's invariant: `strlen note ≠ 4` (holds of the row
+    and both log rows). -/
+def wcChainInv : WBoolExpr := .not (.eq (.strlenCol "note") (.lit 4))
+
+-- positive: `valid` + `byValidEval` accepts (amount 7 > 0)
+example : checkWitness 4 (.valid (.gt (.col "amount") (.lit 0))) .byValidEval
+    wcFields wcRow [] = true := by decide
+
+-- positive: `eqU` + `byEval` (strlen "hello" = 5, both sides)
+example : checkWitness 4 (.eqU (.strlenCol "note") (.lit 5)) (.byEval 5)
+    wcFields wcRow [] = true := by decide
+
+-- positive: the migration chain — init holds, both steps certify
+example : checkWitness 3 (.chain [⟨0⟩, ⟨1⟩] wcChainInv)
+    (.steps [.byValidEval, .byValidEval]) wcFields wcRow wcLog = true := by decide
+
+-- fuel monotone, executed: the same chain accepts at a larger cap
+example : checkWitness 64 (.chain [⟨0⟩, ⟨1⟩] wcChainInv)
+    (.steps [.byValidEval, .byValidEval]) wcFields wcRow wcLog = true := by decide
+
+-- NEGATIVE CONTROL: insufficient fuel REFUSES (2 steps need fuel ≥ 3)
+example : checkWitness 2 (.chain [⟨0⟩, ⟨1⟩] wcChainInv)
+    (.steps [.byValidEval, .byValidEval]) wcFields wcRow wcLog = false := by decide
+
+-- NEGATIVE CONTROL: fuel 0 refuses even a true claim (exhaustion = refusal)
+example : checkWitness 0 (.valid (.gt (.col "amount") (.lit 0))) .byValidEval
+    wcFields wcRow [] = false := by decide
+
+-- NEGATIVE CONTROL: tampered proof term (wrong expected literal)
+example : checkWitness 4 (.eqU (.strlenCol "note") (.lit 5)) (.byEval 6)
+    wcFields wcRow [] = false := by decide
+
+-- NEGATIVE CONTROL: wrong claim/proof pairing, both directions
+example : checkWitness 4 (.valid (.gt (.col "amount") (.lit 0))) (.byEval 1)
+    wcFields wcRow [] = false := by decide
+example : checkWitness 4 (.eqU (.lit 1) (.lit 1)) .byValidEval
+    wcFields wcRow [] = false := by decide
+
+-- NEGATIVE CONTROL: a FALSE claim's proof does not check (amount 7 ≯ 9)
+example : checkWitness 4 (.valid (.gt (.col "amount") (.lit 9))) .byValidEval
+    wcFields wcRow [] = false := by decide
+
+-- NEGATIVE CONTROL: a misspelled field evaluates to none → refused
+example : checkWitness 4 (.valid (.gt (.col "amoutn") (.lit 0))) .byValidEval
+    wcFields wcRow [] = false := by decide
+
+-- NEGATIVE CONTROL: chain step offset out of range (the log has 2 rows)
+example : checkWitness 4 (.chain [⟨5⟩] wcChainInv)
+    (.steps [.byValidEval]) wcFields wcRow wcLog = false := by decide
+
+-- NEGATIVE CONTROL: proof/step length mismatch
+example : checkWitness 4 (.chain [⟨0⟩, ⟨1⟩] wcChainInv)
+    (.steps [.byValidEval]) wcFields wcRow wcLog = false := by decide
+
+-- NEGATIVE CONTROL: tampered per-step proof shape (v1 steps are
+-- `byValidEval` exactly — the header's deviation 3)
+example : checkWitness 4 (.chain [⟨0⟩] wcChainInv)
+    (.steps [.steps []]) wcFields wcRow wcLog = false := by decide
+
+-- SOUNDNESS, APPLIED: accepting checks transport to the denotation
+example : WHolds (.valid (.gt (.col "amount") (.lit 5))) wcRow [] :=
+  checkWitness_sound 4 (.valid (.gt (.col "amount") (.lit 5))) .byValidEval wcRow []
+    (by decide)
+
+example : WHolds (.chain [⟨0⟩, ⟨1⟩] wcChainInv) wcRow wcLog :=
+  checkWitness_sound 3 (.chain [⟨0⟩, ⟨1⟩] wcChainInv)
+    (.steps [.byValidEval, .byValidEval]) wcRow wcLog (by decide)
+
+/-- The resolution evidence: `amount` is the head field, `note` one
+    deeper (the `ColPath` data the mirror relation cites). -/
+def wcAmountPath : ColPath "amount" .u64 wcFields := .here
+
+def wcNotePath : ColPath "note" .string wcFields := .there .here
+
+/-- The mirror for the fixture invariant `amount > 5`. -/
+theorem wcMirror : WBMirror (.gt (.col "amount") (.lit 5))
+    (VExpr.gt (VExpr.col "amount" wcAmountPath) (VExpr.lit 5)) :=
+  WBMirror.gt (WUMirror.col "amount" wcAmountPath) (WUMirror.lit 5)
+
+/-- The mirror for the chain invariant `strlen note ≠ 4`. -/
+theorem wcChainMirror : WBMirror wcChainInv
+    (VExpr.not (VExpr.eq (VExpr.strlen (VExpr.col "note" wcNotePath)) (VExpr.lit 4))) :=
+  WBMirror.not (WBMirror.eq (WUMirror.strlenCol "note" wcNotePath) (WUMirror.lit 4))
+
+-- THE GROUNDING (design §2.4), executed end to end: checker → WHolds →
+-- the compiled `validates` verdict on the VExpr the claim mirrors
+example : validates (VExpr.gt (VExpr.col "amount" wcAmountPath) (VExpr.lit 5)) wcRow = true :=
+  (WHolds.valid_iff_validates wcMirror (by decide) wcRow []).mp
+    (checkWitness_sound 4 (.valid (.gt (.col "amount") (.lit 5))) .byValidEval wcRow []
+      (by decide))
+
+-- the chain grounding: the compiled invariant certified at the initial
+-- row AND at every referenced log row
+example : validates
+      (VExpr.not (VExpr.eq (VExpr.strlen (VExpr.col "note" wcNotePath)) (VExpr.lit 4)))
+      wcRow = true ∧
+    ∀ s ∈ ([⟨0⟩, ⟨1⟩] : List WStep), ∃ r, wcLog[s.offset]? = some r ∧ validates
+      (VExpr.not (VExpr.eq (VExpr.strlen (VExpr.col "note" wcNotePath)) (VExpr.lit 4)))
+      r = true :=
+  WHolds.chain_validates wcChainMirror (by decide)
+    (checkWitness_sound 3 (.chain [⟨0⟩, ⟨1⟩] wcChainInv)
+      (.steps [.byValidEval, .byValidEval]) wcRow wcLog (by decide))
+
+-- the CheckedProp pack: sound, completeness LOUD-missing (pinned)
+example : witnessChecked.isComplete = false := witnessChecked_incomplete
+
+example : WHolds (.valid (.gt (.col "amount") (.lit 5))) wcRow [] :=
+  witnessChecked.sound ⟨⟨wcFields, wcRow, []⟩, .valid (.gt (.col "amount") (.lit 5)),
+    .byValidEval, 64⟩ (by decide)
+
+/-- The positive witness THROUGH W9.1's codec: encode → decode+resolve
+    → check (the §4 consumer flow's guest half, minus the transport). -/
+def wcWitness : Witness :=
+  ⟨"w92-inv", .valid (.gt (.col "amount") (.lit 0)), .byValidEval, 64⟩
+
+-- the codec round trip, theorem-level (no kernel evaluation — the
+-- kernel does not reduce the u64 codec's `Fin.Internal` path; the
+-- EXECUTED pin is the runtime assert below, W9.1's own pattern)
+example : decWitness? 7 (encWitness 7 99 wcWitness) = some wcWitness :=
+  decWitness?_encWitness 7 99 wcWitness
+
+example : checkWitnessArtifact wcWitness ⟨wcFields, wcRow, []⟩ = true := by decide
+
+/-- The executed pin: the full §4 guest flow over the wire bytes —
+    encode, decode+resolve, check — run by the test exe (the WitnessSweep
+    discipline: codec behavior is pinned by runtime asserts). -/
+def witnessCheckChecks : CheckResult := do
+  let w := wcWitness
+  let ok := match decWitnessFor? wcFields 7 (encWitness 7 99 w) with
+    | some w' => w' == w && checkWitnessArtifact w' ⟨wcFields, wcRow, []⟩
+    | none => false
+  _ ← assert ok "witness: encode → decWitnessFor? → checkWitnessArtifact accepts"
+  .ok ()
+
+-- artifact-level soundness, applied to the codec round trip's witness
+example : WHolds (.valid (.gt (.col "amount") (.lit 0))) wcRow [] :=
+  checkWitnessArtifact_sound wcWitness ⟨wcFields, wcRow, []⟩ (by decide)
+
+end WitnessCheckSweep
+
+/-! ## W9.3 — the fifth obligation tier: guestVerified discharges
+
+`SchemaObligation.discharge`'s guestVerified arm (design-guest-verified
+§3): the host PROVIDES a `WitnessRef` (certificate + decoded context +
+the artifact name W9.4 will emit it under); the arm fires
+`.guestWitness` evidence ONLY when the certificate's label IS the
+obligation's AND W9.2's checker accepts the certificate at its own
+shipped fuel. The end-to-end miniature: a hand-tiered guestVerified
+obligation + a hand-built valid witness → discharge FIRES, and
+`discharge_guestVerified_sound` transports the verdict to `WHolds`
+(then through the §2.4 grounding to the compiled `validates` verdict).
+Negative controls: a tampered claim, exhaustion fuel (owner decision 2
+— refusal, NO retry: the same obligation fires at the shipped fuel and
+refuses at fuel 0), a label mismatch, and no witness provided (the
+armed-but-unfired gap) — all `none`, LOUD. -/
+
+namespace GuestVerifiedSweep
+
+open SchemaLang.Witness SchemaLang.WitnessCheck
+
+/-- The fixture item: `amount > 0` over the W9.2 sweep's record — the
+    invariant the witness certifies (the payload the tier is assigned
+    to). -/
+def gvItem : SchemaLang.InvariantItem :=
+  { name := "gv-amount-positive", schemaRef := "User", tier := .boundaryCheck
+  , proofName := none
+  , inv := ⟨WitnessCheckSweep.wcFields,
+      VExpr.gt (VExpr.col "amount" WitnessCheckSweep.wcAmountPath) (VExpr.lit 0)⟩ }
+
+/-- The hand-tiered guestVerified obligation (no invariant-lane rung
+    computes the fifth tier — registration is W9.4; the tier is a
+    backend ASSIGNMENT). -/
+def gvObligation : SchemaLang.SchemaObligation :=
+  { gvItem.obligation with tier := .guestVerified }
+
+/-- A VALID witness for the obligation: the claim mirrors the
+    invariant (`amount > 0`), the certified row (amount = 7) satisfies
+    it, the shipped fuel (64) dwarfs the 1 the checker consumes. -/
+def gvRef : SchemaLang.SchemaObligation.WitnessRef :=
+  { artifact := "witnesses/user-gv-amount-positive.wtn"
+  , witness := ⟨"gv-amount-positive", .valid (.gt (.col "amount") (.lit 0)), .byValidEval, 64⟩
+  , ctx := ⟨WitnessCheckSweep.wcFields, WitnessCheckSweep.wcRow, []⟩ }
+
+-- END TO END: obligation at tier guestVerified + a hand-built valid
+-- witness → discharge FIRES, the evidence naming the artifact + the
+-- certified label
+example : gvObligation.discharge (some gvRef) =
+    some (.guestWitness "witnesses/user-gv-amount-positive.wtn" "gv-amount-positive") := by decide
+
+-- the evidence's tier IS the obligation's (the kit's mis-wire check,
+-- discharged for this lane)
+example : (gvObligation.discharge (some gvRef)).map (·.tier) =
+    some .guestVerified := by decide
+
+-- SOUNDNESS CITED: the fired discharge IS the claim's denotation
+example : WHolds (.valid (.gt (.col "amount") (.lit 0))) WitnessCheckSweep.wcRow [] :=
+  gvObligation.discharge_guestVerified_sound gvRef rfl (by decide)
+
+/-- The mirror for the fixture claim `amount > 0`. -/
+theorem gvMirror : WBMirror (.gt (.col "amount") (.lit 0))
+    (VExpr.gt (VExpr.col "amount" WitnessCheckSweep.wcAmountPath) (VExpr.lit 0)) :=
+  WBMirror.gt (WUMirror.col "amount" WitnessCheckSweep.wcAmountPath) (WUMirror.lit 0)
+
+-- ... and through the §2.4 grounding: the discharged witness certifies
+-- the COMPILED `validates` verdict on the VExpr the claim mirrors
+example : validates (VExpr.gt (VExpr.col "amount" WitnessCheckSweep.wcAmountPath) (VExpr.lit 0))
+    WitnessCheckSweep.wcRow = true :=
+  (WHolds.valid_iff_validates gvMirror (by decide) WitnessCheckSweep.wcRow []).mp
+    (gvObligation.discharge_guestVerified_sound gvRef rfl (by decide))
+
+-- the completeness disjunct, EXERCISED: the witness-backed row is a
+-- computed-tier discharge
+example : (gvObligation.discharge (some gvRef)).isSome = true :=
+  SchemaLang.SchemaObligation.discharge_isSome_of_computed gvObligation (some gvRef)
+    (.inr ⟨rfl, gvRef, rfl, rfl, by decide⟩)
+
+/-- NEGATIVE CONTROL fixture: the tampered certificate — the claim
+    strengthened to `amount > 9`, FALSE on the row (amount = 7). -/
+def gvTamperedRef : SchemaLang.SchemaObligation.WitnessRef :=
+  { gvRef with witness :=
+      ⟨"gv-amount-positive", .valid (.gt (.col "amount") (.lit 9)), .byValidEval, 64⟩ }
+
+/-- NEGATIVE CONTROL fixture: exhaustion — the same certificate with
+    fuel 0 (owner decision 2: exhaustion = refusal, NO retry). -/
+def gvFuelZeroRef : SchemaLang.SchemaObligation.WitnessRef :=
+  { gvRef with witness :=
+      ⟨"gv-amount-positive", .valid (.gt (.col "amount") (.lit 0)), .byValidEval, 0⟩ }
+
+/-- NEGATIVE CONTROL fixture: a certificate for ANOTHER obligation
+    (label mismatch — the mis-wire check as data). -/
+def gvWrongLabelRef : SchemaLang.SchemaObligation.WitnessRef :=
+  { gvRef with witness :=
+      ⟨"gv-other", .valid (.gt (.col "amount") (.lit 0)), .byValidEval, 64⟩ }
+
+-- the tampered claim REFUSES (the checker's verdict, not fabricated evidence)
+example : gvObligation.discharge (some gvTamperedRef) = none := by decide
+
+-- DECISION 2 PINNED: fuel exhaustion refuses — the SAME obligation +
+-- claim that fires at fuel 64 refuses at fuel 0, and nothing retries
+example : gvObligation.discharge (some gvFuelZeroRef) = none := by decide
+
+-- the label mismatch REFUSES (a certificate for another obligation
+-- cannot discharge this one)
+example : gvObligation.discharge (some gvWrongLabelRef) = none := by decide
+
+-- NO witness provided: the armed-but-unfired gap, `none`, LOUD
+example : gvObligation.discharge = none := by decide
+
+-- non-vacuity: acceptance DISTINGUISHES the valid certificate from
+-- the exhausted one
+def guestVerifiedChecks : CheckResult := do
+  _ ← assertEq "gv: valid witness FIRES" (gvObligation.discharge (some gvRef))
+    (some (.guestWitness "witnesses/user-gv-amount-positive.wtn" "gv-amount-positive"))
+  _ ← assertEq "gv: evidence tier is guestVerified"
+    ((gvObligation.discharge (some gvRef)).map (·.tier)) (some .guestVerified)
+  _ ← assertEq "gv: tampered claim REFUSED (loud)"
+    (gvObligation.discharge (some gvTamperedRef)) none
+  _ ← assertEq "gv: fuel 0 REFUSED — exhaustion = refusal, no retry"
+    (gvObligation.discharge (some gvFuelZeroRef)) none
+  _ ← assertEq "gv: label mismatch REFUSED (loud)"
+    (gvObligation.discharge (some gvWrongLabelRef)) none
+  _ ← assertEq "gv: no witness provided = the loud gap"
+    gvObligation.discharge none
+  _ ← assert ((gvObligation.discharge (some gvRef)).isSome !=
+      (gvObligation.discharge (some gvFuelZeroRef)).isSome)
+    "non-vacuity: the discharge distinguishes acceptance from refusal"
+  .ok ()
+
+end GuestVerifiedSweep
+
+/-! ## W9.4 — host-side witness generation + self-check + the artifact
+
+`SchemaLang.Emit.Witness`'s pins: the generated certificate (the
+claim-matched proof term, the `consumed × 4` pinned fuel), the
+ARTIFACT-BYTES round trip (the encoded payload the artifact carries,
+decoded + resolved + re-checked — the in-memory value is not the
+evidence), the tamper controls (a semantically tampered row REFUSED;
+a truncated payload REFUSED), the doctored-generator negative control
+(generation WITHOUT the self-check ships a certificate the checker
+refuses — the self-check is the gate), the discharge end-to-end
+(generated certificate → `.guestWitness` evidence), and the emitter's
+`law` field (populated, discharged). The FILE half of the round trip
+(`artifactFileChecks`, IO over the committed artifact) runs from
+`main`. -/
+
+namespace WitnessEmitSweep
+
+open SchemaLang.Witness SchemaLang.WitnessCheck SchemaLang.Emit.Witness
+
+/-- The generated certificate, via the emitter's CHECKED path — the
+    `.get` proof IS the self-check pin (an uncheckable demo spec fails
+    THIS elaboration). -/
+def generatedCert : Witness :=
+  (selfChecked? demoWitnessSpecUserV1V2).get (by decide)
+
+-- the certificate is the spec's claim with the claim-matched proof
+example : generatedCert.label = "user-v1-v2-id-positive" := by decide
+example : generatedCert.claim = .chain [⟨0⟩, ⟨1⟩] (.gt (.col "id") (.lit 0)) := by decide
+
+/-- The proof-shape predicate (a kernel-reducible match — the derived
+    `BEq WProof` is NOT reducible, the nested-`List` trap W9.1's header
+    documents; the whole-certificate BEq pin lives in the RUNTIME
+    checks below, where compiled evaluation handles it). -/
+def isStepsOfTwoValidEvals : WProof → Bool
+  | .steps [.byValidEval, .byValidEval] => true
+  | _ => false
+
+-- the generated proof is the claim-matched shape: one `byValidEval`
+-- per chain step (W9.2's deviation 3)
+example : isStepsOfTwoValidEvals generatedCert.proof = true := by decide
+
+-- the pinned fuel is consumed × 4 (owner decision 2): the 2-step chain
+-- consumes 3 (1 node + 2 steps — W9.2's deviation 2), ships 12
+example : fuelConsumed demoWitnessSpecUserV1V2.claim = 3 := by decide
+example : generatedCert.fuel = 12 := by decide
+
+-- soundness, applied: the generated certificate's acceptance IS the
+-- claim's denotation (W9.2's `checkWitnessArtifact_sound`, cited)
+example : WHolds generatedCert.claim demoWitnessSpecUserV1V2.ctx.row
+    demoWitnessSpecUserV1V2.ctx.log :=
+  checkWitnessArtifact_sound generatedCert demoWitnessSpecUserV1V2.ctx (by decide)
+
+-- completeness, applied: the semantic premise regenerates an accepting
+-- certificate (the module's `selfChecked?_of_WHolds` at the demo spec)
+example : (selfChecked? demoWitnessSpecUserV1V2).isSome = true :=
+  selfChecked?_of_WHolds _ demoWitnessSpec_holds
+
+/-- The bytes the artifact carries for the demo row (the emitter's own
+    encoding path: version + surface-hash fingerprint + payload). -/
+def artifactBytes : List UInt8 :=
+  encWitness witnessVersion (surfaceHash demoWitnessSpecUserV1V2.ctx.fs).toNat generatedCert
+
+-- THE ROUND TRIP, theorem half: the artifact's bytes decode back to the
+-- generated certificate (W9.1's assembled law CITED — the kernel does
+-- not evaluate the u64 codec, the law does the work)
+example : decWitness? witnessVersion artifactBytes = some generatedCert :=
+  decWitness?_encWitness _ _ _
+
+-- the claim's field names resolve against the demo record's surface
+-- (design §2.1: a misspelled field is a decode failure — pinned in W9.1's
+-- sweep; here the POSITIVE pin for the demo surface)
+example : (demoWitnessSpecUserV1V2.claim.resolve?
+    demoWitnessSpecUserV1V2.ctx.fs).isSome = true := by decide
+
+/-- The obligation the demo spec certifies (hand-tiered at the kit
+    level — the W9.3 deviation: no invariant-lane rung computes the
+    fifth tier). The payload's invariant is the `id-positive` mirror
+    over User's DERIVED fields. -/
+def demoIdPath : ColPath "id" .u64 userNameLenFields := .here
+
+def demoIdPositiveItem : SchemaLang.InvariantItem :=
+  { name := "user-v1-v2-id-positive", schemaRef := "User", tier := .boundaryCheck
+  , proofName := none
+  , inv := ⟨userNameLenFields, VExpr.gt (VExpr.col "id" demoIdPath) (VExpr.lit 0)⟩ }
+
+def demoObligation : SchemaLang.SchemaObligation :=
+  { demoIdPositiveItem.obligation with tier := .guestVerified }
+
+/-- The discharge's provided witness: the GENERATED certificate + the
+    spec's decoded context + the artifact name. -/
+def demoRef : SchemaLang.SchemaObligation.WitnessRef :=
+  { artifact := demoWitnessSpecUserV1V2.artifact
+  , witness := generatedCert
+  , ctx := demoWitnessSpecUserV1V2.ctx }
+
+-- END TO END: the registered obligation + the GENERATED certificate →
+-- the discharge FIRES, the evidence naming the artifact + the label
+example : demoObligation.discharge (some demoRef) =
+    some (.guestWitness "witnesses/user-v1-v2-id-positive.wtn" "user-v1-v2-id-positive") := by decide
+
+-- and the fired evidence IS the claim's denotation (W9.3's
+-- `discharge_guestVerified_sound`, cited — the §4 flow's host half
+-- closed: generate → self-check → discharge → WHolds)
+example : WHolds generatedCert.claim demoWitnessSpecUserV1V2.ctx.row
+    demoWitnessSpecUserV1V2.ctx.log :=
+  demoObligation.discharge_guestVerified_sound demoRef rfl (by decide)
+
+/-- NEGATIVE CONTROL fixture: the doctored-claim spec — `id > 99` is
+    FALSE on the spec's own initial row (id 1). -/
+def falseSpec : SchemaLang.WitnessSpec :=
+  { demoWitnessSpecUserV1V2 with claim := .valid (.gt (.col "id") (.lit 99)) }
+
+-- the RAW generator still builds a certificate — THIS is what a
+-- doctored generator (skipping the self-check) would ship
+example : (generateWitness falseSpec).isSome = true := by decide
+
+-- …and the self-check REFUSES it: emission fails, the artifact cannot
+-- carry the false certificate (the gate the doctored generator skips)
+example : (selfChecked? falseSpec).isNone = true := by decide
+
+-- non-vacuity: the self-check DISTINGUISHES the true spec from the
+-- false one
+example : ((selfChecked? demoWitnessSpecUserV1V2).isSome !=
+    (selfChecked? falseSpec).isSome) = true := by decide
+
+-- SHIPPED-FUEL tamper: the SAME certificate at fuel 0 refuses
+-- (exhaustion = refusal, owner decision 2 — no retry)
+example : checkWitnessArtifact { generatedCert with fuel := 0 }
+    demoWitnessSpecUserV1V2.ctx = false := by decide
+
+-- a certificate re-labeled for ANOTHER obligation refuses the discharge
+-- (the mis-wire check, on the generated artifact row)
+example : demoObligation.discharge
+    (some { demoRef with witness := { generatedCert with label := "user-v9-other" } }) =
+    none := by decide
+
+-- the emitter's `law` field is POPULATED (W7.3p2) and discharged for
+-- every ctx (the registry is module data — the `circuitLaw` precedent)
+example : witnessEmitter.law.isSome = true := rfl
+example (ctx : SchemaLang.Emit.GenCtx) : witnessEmitter.Cert ctx := witnessLaw_discharged ctx
+example : witnessEmitter.outputs = ["../../src/witnesses_generated.rs"] := rfl
+
+/-- The executed pins: the artifact's byte payload decoded + resolved +
+    re-checked at RUNTIME (the codec's kernel path is un-evaluable —
+    W9.1's note — so the round trip's executable half lives here), the
+    tamper controls, and the emitted content's shape. -/
+def witnessEmitChecks : CheckResult := do
+  let spec := demoWitnessSpecUserV1V2
+  let fs := spec.ctx.fs
+  match decWitnessFor? fs witnessVersion artifactBytes with
+  | none => .error "artifact bytes did not decode+resolve (the round trip FAILED)"
+  | some w' => do
+    _ ← assert (w' == generatedCert) "artifact bytes decode to the generated certificate"
+    _ ← assert (checkWitnessArtifact w' spec.ctx)
+      "the decoded certificate passes the checker (from the BYTES, not the in-memory value)"
+    -- TAMPER CONTROL (semantic): the claim strengthened to `id > 99` —
+    -- the tampered row decodes fine and the checker REFUSES it
+    let tampered : Witness := { w' with claim := .valid (.gt (.col "id") (.lit 99)) }
+    let tamperedBytes := encWitness witnessVersion (surfaceHash fs).toNat tampered
+    let refused := match decWitnessFor? fs witnessVersion tamperedBytes with
+      | none => true
+      | some w'' => !checkWitnessArtifact w'' spec.ctx
+    _ ← assert refused "tampered artifact row REFUSED (a doctored row cannot pass)"
+    -- TAMPER CONTROL (raw): a truncated payload never decodes (the
+    -- envelope's length-prefix overrun — W9.1's pinned discipline)
+    _ ← assert (decWitnessFor? fs witnessVersion
+        (artifactBytes.take (artifactBytes.length - 1))).isNone
+      "truncated artifact payload refused at decode"
+    -- the emitted artifact's content: the registry, the row, THE BYTES
+    match witnessFiles demoWitnesses with
+    | [f] => do
+      _ ← assertEq "artifact path" f.path "../../src/witnesses_generated.rs"
+      _ ← assertContains "artifact declares the registry" f.contents "pub static WITNESS_REGISTRY"
+      _ ← assertContains "artifact row: the obligation label" f.contents "user-v1-v2-id-positive"
+      _ ← assertContains "artifact row: the pinned fuel" f.contents "fuel: 12u64"
+      _ ← assertContains "artifact row carries the exact wire bytes" f.contents
+          (s!"bytes: &[{renderBytes artifactBytes}]")
+      .ok ()
+    | _ => .error "witnessFiles must emit exactly one artifact"
+
+/-- Parse the `bytes: &[…]` payload out of the artifact's first row
+    (the file's own rendering — the round trip through the FILE is the
+    point). -/
+def parseRowBytes? (text : String) : Option (List UInt8) := do
+  let after ← (text.splitOn "bytes: &[")[1]?
+  let payload ← (after.splitOn "]")[0]?
+  (payload.splitOn ", ").mapM fun s => do
+    let n ← s.toNat?
+    if n < 256 then some n.toUInt8 else none
+
+/-- The FILE half of the round trip: read the COMMITTED byte-tied
+    artifact (what the host ships), parse the row's bytes back out,
+    decode + resolve, re-check. IO; run from `main`. -/
+def artifactFileChecks : IO UInt32 := do
+  let path : System.FilePath := "../../src/witnesses_generated.rs"
+  unless ← path.pathExists do
+    IO.println "W9.4 artifact-file check FAILED: witnesses_generated.rs absent — run `lake exe schema gen`"
+    return 1
+  let text ← IO.FS.readFile path
+  let spec := demoWitnessSpecUserV1V2
+  match parseRowBytes? text with
+  | none =>
+    IO.println "W9.4 artifact-file check FAILED: no parseable `bytes: &[…]` row"
+    return 1
+  | some bytes =>
+    match decWitnessFor? spec.ctx.fs witnessVersion bytes with
+    | none =>
+      IO.println "W9.4 artifact-file check FAILED: the file's row bytes did not decode+resolve"
+      return 1
+    | some w =>
+      if w == generatedCert && checkWitnessArtifact w spec.ctx then
+        IO.println "W9.4 artifact-file check: the committed artifact's row decodes + passes the checker"
+        return 0
+      else
+        IO.println "W9.4 artifact-file check FAILED: the file's row disagrees with generation or fails the checker"
+        return 1
+
+end WitnessEmitSweep
+
+/-! ## W9.5 — the witness-gated migration checkpoint (the apply-gate)
+
+`SchemaLang.EventSourced.replayMigrated?` (design-guest-verified §4
+steps 3–5) + the `WitnessCheck.verifyWitness` seam: the seam IS
+`checkWitnessArtifact` (W9.6's swap point — one definition), the fuel
+classifier is EXACT (`fuelNeed`: below it the check always refuses,
+at/above it the verdict is fuel-free — both theorems, both executed
+here), and the gate applies the migrated segment ONLY on acceptance —
+refusal names the obligation's label + the class (`diverged` /
+`fuelExhausted`). The END-TO-END dogfood (a real v1→v2 field migration
+over a registered record) is the ledger package's (LedgerES); this
+sweep pins the gate's semantics over a synthetic fixture. -/
+
+namespace MigrationGateSweep
+
+open SchemaLang.Witness SchemaLang.WitnessCheck SchemaLang.EventSourced
+
+/-- The fixture record: one u64 column (the migrated segment's rows). -/
+def mgFields : List Field := [⟨"amount", .u64⟩]
+
+/-- The row builder. -/
+def mgRowOf (n : UInt64) : RowVals mgFields := .cons (.u64 n) .nil
+
+/-- The identity upcast, explicitly typed (the implicit key type
+    cannot be synthesized from a bare lambda). -/
+def mgUpcast : Delta UInt64 UInt64 → Delta UInt64 UInt64 := fun e => e
+
+/-- The derived decoded context the gate checks against (init row 7,
+    the segment's one insert payload 1). -/
+def mgCtx : RowValsP := migrationCtx mgRowOf mgUpcast 7 [.insert 1]
+
+/-- A VALID witness for the gate fixture: `amount > 0` holds of the
+    init row (7) and the segment row (1); fuel 8 dwarfs the need (2). -/
+def mgWitness : Witness :=
+  ⟨"mg-amount-positive", .chain [⟨0⟩] (.gt (.col "amount") (.lit 0)),
+    .steps [.byValidEval], 8⟩
+
+/-- The gate call under test (fixture-shaped: identity upcast, state =
+    the base row's table). -/
+def mgGate (w : Witness) : Except MigrationRefusal (List UInt64) :=
+  replayMigrated? (fun (n : UInt64) => n) mgRowOf mgUpcast w 7 [.insert 1] [7]
+
+/-- NEGATIVE CONTROL fixture: the tampered certificate — the claim
+    strengthened to `amount > 5`, FALSE on the segment row (1). -/
+def mgTampered : Witness :=
+  { mgWitness with claim := .chain [⟨0⟩] (.gt (.col "amount") (.lit 5)) }
+
+/-- NEGATIVE CONTROL fixture: the corrupted certificate — one chain
+    step, zero step proofs (the length mismatch). -/
+def mgCorrupt : Witness := { mgWitness with proof := .steps [] }
+
+/-- NEGATIVE CONTROL fixture: exhaustion — the SAME certificate with
+    fuel 1, below the need (2) (§7.3: refusal, NO retry). -/
+def mgFuelLow : Witness := { mgWitness with fuel := 1 }
+
+-- the seam IS the checker's artifact entry (the W9.6 swap point)
+example : verifyWitness mgWitness mgCtx = checkWitnessArtifact mgWitness mgCtx := rfl
+
+-- the seam, executed both ways
+example : verifyWitness mgWitness mgCtx = true := by decide
+example : verifyWitness mgTampered mgCtx = false := by decide
+example : verifyWitness mgFuelLow mgCtx = false := by decide
+
+-- the seam's soundness wrapper, APPLIED
+example : WHolds mgWitness.claim mgCtx.row mgCtx.log :=
+  verifyWitness_sound mgWitness mgCtx (by decide)
+
+-- the fuel need, pinned
+example : fuelNeed mgWitness.claim = 2 := rfl
+example : fuelNeed (.valid (.gt (.col "amount") (.lit 0))) = 1 := rfl
+
+-- the classifier, exact, EXECUTED: below the need the check refuses …
+example : checkWitness 1 mgWitness.claim mgWitness.proof mgFields mgCtx.row mgCtx.log
+    = false := by decide
+-- … and at/above the need the verdict is fuel-free (no retry could help)
+example : checkWitness 2 mgWitness.claim mgWitness.proof mgFields mgCtx.row mgCtx.log =
+    checkWitness 64 mgWitness.claim mgWitness.proof mgFields mgCtx.row mgCtx.log := by decide
+
+-- `Delta.row?`: insert/update carry the row, remove carries none
+example : Delta.row? (.insert 7 : Delta UInt64 UInt64) = some 7 := rfl
+example : Delta.row? (.remove 3 : Delta UInt64 UInt64) = none := rfl
+
+-- POSITIVE: the valid witness ACCEPTS and the migrated segment replays
+example : mgGate mgWitness = .ok [7, 1] := by decide
+
+-- NEGATIVE CONTROL: the tampered claim REFUSES — `diverged`, label named
+example : mgGate mgTampered = .error (.diverged "mg-amount-positive") := by decide
+
+-- NEGATIVE CONTROL: the corrupted proof REFUSES — `diverged`
+example : mgGate mgCorrupt = .error (.diverged "mg-amount-positive") := by decide
+
+-- NEGATIVE CONTROL (§7.3): the exhausted certificate REFUSES —
+-- `fuelExhausted`, label named, BEFORE any checking
+example : mgGate mgFuelLow = .error (.fuelExhausted "mg-amount-positive") := by decide
+example : mgGate { mgWitness with fuel := 0 } =
+    .error (.fuelExhausted "mg-amount-positive") := by decide
+
+-- the refusal-class theorems, APPLIED (not just the decide'd verdicts)
+example : mgGate mgFuelLow = .error (.fuelExhausted "mg-amount-positive") :=
+  replayMigrated?_fuelExhausted (fun (n : UInt64) => n) mgRowOf mgUpcast
+    mgFuelLow 7 [.insert 1] [7] (by decide)
+
+example : mgGate mgTampered = .error (.diverged "mg-amount-positive") :=
+  replayMigrated?_diverged (fun (n : UInt64) => n) mgRowOf mgUpcast
+    mgTampered 7 [.insert 1] [7] (by decide) (by decide)
+
+-- THE ACCEPTANCE THEOREM, APPLIED: acceptance returns the replay AND
+-- the claim's denotation over the derived context
+example : WHolds mgWitness.claim (mgRowOf 7)
+    (migrationCtx mgRowOf mgUpcast 7 [.insert 1]).log :=
+  (replayMigrated?_ok (fun (n : UInt64) => n) mgRowOf mgUpcast
+    mgWitness 7 [.insert 1] [7] [7, 1] (by decide)).2
+
+/-- The executed pins + non-vacuity (the gate DISTINGUISHES acceptance
+    from refusal — a suite whose sabotage passes fails here). -/
+def migrationGateChecks : CheckResult := do
+  _ ← assert (mgGate mgWitness == .ok [7, 1])
+    "gate: valid witness ACCEPTS + replays the migrated segment"
+  _ ← assert (mgGate mgTampered == .error (.diverged "mg-amount-positive"))
+    "gate: tampered claim REFUSED (diverged, label named)"
+  _ ← assert (mgGate mgCorrupt == .error (.diverged "mg-amount-positive"))
+    "gate: corrupted proof REFUSED (diverged)"
+  _ ← assert (mgGate mgFuelLow == .error (.fuelExhausted "mg-amount-positive"))
+    "gate: exhausted fuel REFUSED (fuelExhausted — §7.3, no retry)"
+  _ ← assert (mgGate mgWitness != mgGate mgTampered)
+    "non-vacuity: the gate distinguishes acceptance from refusal"
+  -- the refusal render names the obligation's label (LOUD, not silent) —
+  -- String.splitOn does not kernel-reduce, so this pin runs compiled
+  _ ← assert (((MigrationRefusal.diverged "mg-x").render.splitOn "mg-x").length == 2)
+    "refusal render: `diverged` names the obligation's label"
+  _ ← assert (((MigrationRefusal.fuelExhausted "mg-x").render.splitOn "mg-x").length == 2)
+    "refusal render: `fuelExhausted` names the obligation's label"
+  .ok ()
+
+end MigrationGateSweep
+
+/-! ## W8.1 — `map`/`set` in `Ty` (the closed-universe rule, exercised)
+
+The new ctors' pins over SYNTHETIC universes (the demo is UNCHANGED —
+the byte-tie): the `KeyTy` scalar sub-universe (a non-scalar key is
+unrepresentable — the gate pins live at the snapshot format boundary),
+the wire round trips (the `decode_encodeValue` theorem's executable
+image, concrete + swept via `genPack`'s new arms), the RowVals row
+round trip, and every emitter's rendering. -/
+
+namespace MapSetSweep
+
+/-- The fixture types: a string-keyed map, a string set, a composite
+    VALUE (maps nest values freely — only KEYS are gated). -/
+def scoresTy : Ty := .map .string .u64
+def tagsTy : Ty := .set .string
+def nestedTy : Ty := .map .u32 (.list (.option .string))
+
+/-- The fixture payloads (insertion-ordered association/element lists
+    — the `list` discipline). -/
+def scoresVal : Value scoresTy :=
+  .map (.cons (.string "a") (.u64 1) (.cons (.string "b") (.u64 2) .nil))
+def tagsVal : Value tagsTy :=
+  .set (.cons (.string "x") (.cons (.string "y") .nil))
+
+/-- A synthetic universe exercising both ctors in field position. -/
+def mapSetUniverse : List Item :=
+  [.record "mapset-rec" [⟨"scores", scoresTy⟩, ⟨"tags", tagsTy⟩]]
+
+/-- The Wf bridge lane, discharged through the checker (the reasoning
+    authority ADMITS map/set fields — a stub would not elaborate). -/
+example : WellFormed mapSetUniverse := universeCheck_sound rfl
+
+def mapSetChecks : CheckResult := do
+  -- the wire round trips (decode_encodeValue's executable image)
+  _ ← assert (match decodeValue scoresTy (encodeValue scoresTy scoresVal) with
+    | some v => valueEq scoresTy v scoresVal | none => false)
+    "map wire round trip"
+  _ ← assert (match decodeValue tagsTy (encodeValue tagsTy tagsVal) with
+    | some v => valueEq tagsTy v tagsVal | none => false)
+    "set wire round trip"
+  -- the RowVals row round trip (re-encode stable — the row codec's pin)
+  let fields : List Field := [⟨"scores", scoresTy⟩, ⟨"tags", tagsTy⟩]
+  let row : RowVals fields := .cons scoresVal (.cons tagsVal .nil)
+  let wire := encRowVals fields row
+  _ ← assert (match decRowVals? fields wire with
+    | some (row', []) => encRowVals fields row' == wire | _ => false)
+    "map+set row wire round trip"
+  -- NEGATIVE CONTROLS, wire level (malformed payloads reject). The
+  -- varint leaves are TOTAL on empty input (decVarNat [] = (0, [])),
+  -- so count-only/truncated wires decode — the REJECTING shape in
+  -- this codec family is the bounded-int gate, firing here THROUGH
+  -- the entry/element decoder:
+  let mapU16 : Ty := .map .u16 .u16
+  _ ← assert (decVal? mapU16 ([1] ++ Codec.encVarNat (2^16)
+      ++ Codec.encVarNat 0)).isNone
+    "map wire: an out-of-range KEY rejects (the u16 gate fires through the entry pair)"
+  _ ← assert (decVal? mapU16 ([1] ++ Codec.encVarNat 7
+      ++ Codec.encVarNat (2^16))).isNone
+    "map wire: an out-of-range VALUE rejects"
+  _ ← assert (decVal? mapU16 ([1] ++ Codec.encVarNat 7
+      ++ Codec.encVarNat 9)).isSome
+    "map wire: an in-range entry decodes"
+  let setU16 : Ty := .set .u16
+  _ ← assert (decVal? setU16 ([1] ++ Codec.encVarNat (2^16))).isNone
+    "set wire: an out-of-range element rejects"
+  _ ← assert (decVal? tagsTy [0]).isSome
+    "set wire: the empty set decodes (the count-0 pin)"
+  -- NEGATIVE CONTROLS, type level (the key gate at the snapshot
+  -- boundary — in the TYPE the bad keys are unrepresentable):
+  _ ← assert (Snapshot.parseTyText "map(f32,u64)").toOption.isNone
+    "snapshot key gate: a float key rejects (NaN breaks the order)"
+  _ ← assert (Snapshot.parseTyText "set(list(u8))").toOption.isNone
+    "snapshot key gate: a composite element rejects"
+  _ ← assert (Snapshot.parseTyText "map(ty(User),u64)").toOption.isNone
+    "snapshot key gate: a named-ref key rejects"
+  _ ← assert (Ty.toKeyTy? .f32 == none) "toKeyTy? float"
+  _ ← assert (Ty.toKeyTy? (.list .u8) == none) "toKeyTy? composite"
+  _ ← assert (Ty.toKeyTy? .string == some .string) "toKeyTy? string"
+  -- the snapshot round trips (ty-level and universe-level)
+  _ ← assert ((Snapshot.parseTyText scoresTy.toSnapshot).toOption == some scoresTy)
+    "map snapshot round trip"
+  _ ← assert ((Snapshot.parseTyText tagsTy.toSnapshot).toOption == some tagsTy)
+    "set snapshot round trip"
+  _ ← assert ((Snapshot.parseTyText nestedTy.toSnapshot).toOption == some nestedTy)
+    "nested-value snapshot round trip"
+  _ ← assert
+    ((Snapshot.parse (Snapshot.render mapSetUniverse)).toOption == some mapSetUniverse)
+    "universe snapshot round trip"
+  -- the emitters (the rendering table, pinned):
+  _ ← assertEq "WIT map" (Emit.Wit.tyWit scoresTy) "list<tuple<string, u64>>"
+  _ ← assertEq "WIT set" (Emit.Wit.tyWit tagsTy) "list<string>"
+  _ ← assertContains "WIT record member"
+    (Emit.Wit.typeDecl (.record "mapset-rec"
+      [⟨"scores", scoresTy⟩, ⟨"tags", tagsTy⟩])).pretty
+    "scores: list<tuple<string, u64>>,"
+  _ ← assertEq "Rust map (BTree — deterministic)"
+    (Emit.Rust.tyRust scoresTy) "BTreeMap<String, u64>"
+  _ ← assertEq "Rust set (BTree — deterministic)"
+    (Emit.Rust.tyRust tagsTy) "BTreeSet<String>"
+  _ ← assertEq "a float VALUE blocks Eq through the map"
+    (Emit.Rust.hasFloat [] (.map .string .f32)) true
+  _ ← assertEq "scalar map is Eq-clean" (Emit.Rust.hasFloat [] scoresTy) false
+  _ ← assertEq "set is Eq-clean (KeyTy is float-free)"
+    (Emit.Rust.hasFloat [] tagsTy) false
+  _ ← assert
+    (Vortex.Ty.lower (fun _ => none) .nonNullable scoresTy ==
+      some (.list (.struct [("key", .utf8 .nonNullable),
+          ("value", .primitive .u64 .nonNullable)] .nonNullable) .nonNullable))
+    "vortex map lowers (the parquet list-of-entries convention)"
+  _ ← assert
+    (Vortex.Ty.lower (fun _ => none) .nonNullable tagsTy ==
+      some (.list (.utf8 .nonNullable) .nonNullable))
+    "vortex set lowers (list of elements)"
+  _ ← assert
+    (Vortex.Ty.lowerChecked (fun _ => none) .nonNullable scoresTy rfl ==
+      Vortex.Ty.lower (fun _ => none) .nonNullable scoresTy)
+    "the checked lowering agrees (map)"
+  _ ← assert (Ty.toSType? scoresTy).isNone
+    "substrait bridge: maps not queryable (the refusal precedent)"
+  _ ← assert (Ty.toSType? tagsTy).isNone
+    "substrait bridge: sets not queryable"
+  -- the guard lanes reach THROUGH the new ctors:
+  _ ← assertEq "async in a map VALUE is banned in field position"
+    (Ty.banAsync (.map .string (.future .u8))) false
+  _ ← assertEq "set is async-free (KeyTy)" (Ty.banAsync tagsTy) true
+  _ ← assertEq "refs resolve through the map value"
+    (Ty.tyRefs (.map .string (.ty "user"))) ["user"]
+  _ ← assertEq "set carries no refs" (Ty.tyRefs tagsTy) []
+  _ ← assertEq "result in a map value trips the vortex guard"
+    (Ty.noResult (.map .string (.result .u8 .u8))) false
+  _ ← assert (universeCheck mapSetUniverse == [])
+    "universeCheck is clean over map/set fields"
+  -- the secondary emitters' deliberate arms:
+  _ ← assert (Emit.GenRust.unsupported? [] 8 scoresTy).isSome
+    "genRust: maps gated out of the v1 fragment (loud, named)"
+  _ ← assert (Emit.GenRust.unsupported? [] 8 tagsTy).isSome
+    "genRust: sets gated out of the v1 fragment (loud, named)"
+  _ ← assert (litTy? scoresTy).isNone
+    "delta: no self-contained map literal (the tensor rule)"
+  _ ← assert (SchemaLang.defaultValue? scoresTy).isSome
+    "invariant: the empty map is a Lean-side default"
+  _ ← assert (Emit.Invariant.rustDefault? scoresTy).isNone
+    "invariant: no Rust map literal (the import is not pinned)"
+  .ok ()
+
+end MapSetSweep
+
+/-! ## W8.2 — declared keys + foreign keys (SchemaLang.Keys)
+
+The pure lane: the fixture universe + declaration set below exercise
+the checker (positive + EVERY rejection mode as a negative control),
+the relation via the bridge (the W3.5 discharge shape), the obligation
+view's enumeration + discharge (the decidableNow backend), and the
+`Item.keyOfWith` migration (declared = conventional on first-field
+declarations; declared WINS otherwise). The command/attribute surface
+and the `@[event_sourced]` key migration pin live at the end of the
+file (the meta lane). -/
+
+namespace KeySweep
+
+/-- The fixture universe: two records (user keyed by `id`; order keyed
+    by `id`, FK `userId → user`), a keyless record (`plain` — the
+    target-keyless control), and a variant (`role` — the
+    not-a-record control). -/
+def keyItems : List Item :=
+  [ .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩]
+  , .record "order"
+      [⟨"id", .u64⟩, ⟨"userId", .u64⟩, ⟨"userName", .string⟩, ⟨"total", .f64⟩]
+  , .record "plain" [⟨"x", .u64⟩]
+  , .variant "role" [("admin", none), ("viewer", none)] ]
+
+def userFields : List Field := [⟨"id", .u64⟩, ⟨"name", .string⟩]
+def orderFields : List Field :=
+  [⟨"id", .u64⟩, ⟨"userId", .u64⟩, ⟨"userName", .string⟩, ⟨"total", .f64⟩]
+
+/-- The well-formed fixture declarations. -/
+def userKeys : KeyDecl :=
+  { record := "user", fields := userFields, key := "id" }
+def orderKeys : KeyDecl :=
+  { record := "order", fields := orderFields, key := "id"
+  , foreign := [{ field := "userId", target := "user" }] }
+def keyDecls : List KeyDecl := [userKeys, orderKeys]
+
+/-- The fixture declaration set is well-formed, VIA the sound bridge
+    (the checker discharges — `rfl`; the relation receives). -/
+theorem keyDecls_wellFormed : KeysWellFormed keyItems keyDecls :=
+  keyDeclsCheck_sound rfl
+
+/-- NEGATIVE CONTROL (non-vacuity), the missing-key-field mode: the
+    relation REJECTS what the checker rejects (a vacuous
+    `KeysWellFormed` breaks this proof — the W3.5 pin's shape). -/
+theorem keyDeclsMissingField_not_wf :
+    ¬ KeysWellFormed keyItems [userKeys, { orderKeys with key := "uid" }] := by
+  intro hwf
+  have hnil := keyDeclsCheck_complete hwf
+  have hlen : (keyDeclsCheck keyItems
+      [userKeys, { orderKeys with key := "uid" }]).length = 1 := by decide
+  rw [hnil] at hlen
+  exact absurd hlen (by decide)
+
+/-- NEGATIVE CONTROL, the foreign-key type-mismatch mode (a `string`
+    field referencing a `u64` key — both are scalars; the TYPES must
+    agree). -/
+theorem keyDeclsFkMismatch_not_wf :
+    ¬ KeysWellFormed keyItems
+      [userKeys, { orderKeys with foreign := [⟨"userName", "user"⟩] }] := by
+  intro hwf
+  have hnil := keyDeclsCheck_complete hwf
+  have hlen : (keyDeclsCheck keyItems
+      [userKeys, { orderKeys with foreign := [⟨"userName", "user"⟩] }]).length
+        = 1 := by decide
+  rw [hnil] at hlen
+  exact absurd hlen (by decide)
+
+/-- A user row (id controllable, name default). -/
+def userRow (i : UInt64) : RowVals userFields :=
+  .cons (.u64 i) (.cons (.string "") .nil)
+
+/-- An order row (id + userId controllable, the rest default). -/
+def orderRow (i uid : UInt64) : RowVals orderFields :=
+  .cons (.u64 i) (.cons (.u64 uid) (.cons (.string "") (.cons (.f64 0) .nil)))
+
+/-- The demo obligations, hand-assembled (the enumeration pin below
+    checks the VIEW against these). -/
+def userUniqueObligation : KeyObligation :=
+  { label := "user.key-unique(id)"
+  , tier := KeyClaim.tierOf (.unique userKeys)
+  , payload := .unique userKeys
+  , provenance := "user".toName }
+
+/-- The FK row for the fixtures. -/
+def orderFk : ForeignKey := { field := "userId", target := "user" }
+
+def orderReferencesObligation : KeyObligation :=
+  { label := "order.userId-references-user(id)"
+  , tier := KeyClaim.tierOf (.references orderKeys orderFk userKeys)
+  , payload := .references orderKeys orderFk userKeys
+  , provenance := "order".toName }
+
+/-- The soundness theorem, CITED at the key lane (the
+    `decNowTrue_holds` pattern): the `.decided true` discharge IS the
+    claim — here the `user` declaration's uniqueness on the pinned
+    all-default singleton table. -/
+theorem userKeyUnique_holds :
+    userKeys.uniqueOn [.cons (.u64 0) (.cons (.string "") .nil)] = true :=
+  userUniqueObligation.discharge_decidableNow_sound rfl rfl
+
+/-- The completeness theorem, CITED: the true claim FIRES the backend
+    (discharge = the decided evidence). -/
+theorem userKeyUnique_discharges :
+    userUniqueObligation.discharge = some (.decided true) :=
+  userUniqueObligation.discharge_decidableNow_of_claim rfl userKeyUnique_holds
+
+/-- A broken declaration (key field not on the record): the projection
+    fails, the claim decides FALSE, the backend REFUSES. -/
+def orderKeysBroken : KeyDecl := { orderKeys with key := "uid" }
+def brokenUniqueObligation : KeyObligation :=
+  { label := "order.key-unique(uid)", tier := .decidableNow
+  , payload := .unique orderKeysBroken, provenance := "order".toName }
+
+/-- The refusal, pinned (no fabricated evidence). -/
+theorem brokenUnique_refused : brokenUniqueObligation.discharge = none := rfl
+
+/-- A type-mismatched FK (`userName : string` → user's `id : u64`
+    key): referential integrity can never hold across types — the
+    claim decides FALSE, the backend REFUSES. -/
+def orderKeysMismatch : KeyDecl :=
+  { orderKeys with foreign := [{ field := "userName", target := "user" }] }
+def mismatchReferencesObligation : KeyObligation :=
+  { label := "order.userName-references-user(id)", tier := .decidableNow
+  , payload := .references orderKeysMismatch ⟨"userName", "user"⟩ userKeys
+  , provenance := "order".toName }
+
+/-- The refusal, pinned. -/
+theorem mismatchReferences_refused :
+    mismatchReferencesObligation.discharge = none := rfl
+
+/-- The `keyOfWith` fixtures: a record whose DECLARED key is NOT the
+    first field. -/
+def rekeyedItem : Item :=
+  .record "rekeyed" [⟨"label", .string⟩, ⟨"code", .u64⟩]
+def rekeyedDecl : KeyDecl :=
+  { record := "rekeyed", fields := [⟨"label", .string⟩, ⟨"code", .u64⟩]
+  , key := "code" }
+
+/-- The migration equivalence, APPLIED to the fixture: the `user`
+    declaration names the FIRST field, so declared = conventional (the
+    ledger/Demo shape — `keyOfWith_eq_keyOf_of_decl_head`). -/
+theorem keyOfWith_user_eq_keyOf :
+    Item.keyOfWith keyDecls (.record "user" userFields) =
+      Item.keyOf (.record "user" userFields) :=
+  Item.keyOfWith_eq_keyOf_of_decl_head (kd := userKeys) rfl rfl
+
+def keyChecks : CheckResult := do
+  -- positive: the fixture declaration set, both readings
+  _ ← assertEq "keys: the fixture declaration set checks clean"
+    (keyDeclsCheck keyItems keyDecls) []
+  _ ← assert (keyDeclsWellFormed keyItems keyDecls)
+    "keys: the Bool gate agrees"
+  _ ← assert (keysChecked.check (keyItems, keyDecls))
+    "keys: the CheckedProp pack fires"
+  _ ← assert keysChecked.isComplete
+    "keys: completeness is PROVED (not .missing — the loud flag)"
+  -- NEGATIVE CONTROLS — one per rejection mode (the diag ctor is the pin)
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with key := "uid" }] with
+    | [.keyFieldMissing "order" "uid" _] => true | _ => false)
+    "keys: missing key field rejected (keyFieldMissing)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with key := "total" }] with
+    | [.keyNotScalar "order" "total" _] => true | _ => false)
+    "keys: non-scalar key rejected (keyNotScalar — f64 is not KeyTy)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [{ userKeys with record := "usr" }] with
+    | [.keyRecordMissing "usr" _] => true | _ => false)
+    "keys: unknown record rejected (keyRecordMissing)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [{ record := "role", fields := [], key := "id" }] with
+    | [.keyRecordNotRecord "role"] => true | _ => false)
+    "keys: a variant cannot take keys (keyRecordNotRecord)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [{ userKeys with fields := [⟨"id", .u64⟩] }] with
+    | [.keyFieldsMismatch "user"] => true | _ => false)
+    "keys: stale field snapshot rejected (keyFieldsMismatch)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with foreign := [⟨"uid", "user"⟩] }] with
+    | [.foreignFieldMissing "order" "uid" _] => true | _ => false)
+    "keys: missing FK field rejected (foreignFieldMissing)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with foreign := [⟨"userId", "usr"⟩] }] with
+    | [.foreignTargetMissing "order" "userId" "usr" _] => true | _ => false)
+    "keys: unknown FK target rejected (foreignTargetMissing)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with foreign := [⟨"userId", "role"⟩] }] with
+    | [.foreignTargetNotRecord "order" "userId" "role"] => true | _ => false)
+    "keys: variant FK target rejected (foreignTargetNotRecord)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with foreign := [⟨"userId", "plain"⟩] }] with
+    | [.foreignTargetKeyless "order" "userId" "plain"] => true | _ => false)
+    "keys: keyless FK target rejected (foreignTargetKeyless)"
+  _ ← assert (match keyDeclsCheck keyItems
+      [userKeys, { orderKeys with foreign := [⟨"userName", "user"⟩] }] with
+    | [.foreignTypeMismatch "order" "userName" "user" _ _] => true | _ => false)
+    "keys: FK type mismatch rejected (foreignTypeMismatch)"
+  _ ← assert (match keyDeclsCheck keyItems [userKeys, userKeys, orderKeys] with
+    | [.dupKeyDecl "user"] => true | _ => false)
+    "keys: duplicate declaration rejected (dupKeyDecl)"
+  -- the obligation VIEW: enumeration, labels, computed tiers, provenance
+  _ ← assertEq "keyObligations: one unique per decl + one per FK"
+    ((keyObligations keyDecls).map (·.label))
+    ["user.key-unique(id)", "order.key-unique(id)",
+      "order.userId-references-user(id)"]
+  _ ← assertEq "keyObligations: the computed tier is decidableNow"
+    ((keyObligations keyDecls).map (·.tier))
+    [.decidableNow, .decidableNow, .decidableNow]
+  _ ← assertEq "keyObligations: provenance is the record"
+    ((keyObligations keyDecls).map (·.provenance))
+    [("user".toName), ("order".toName), ("order".toName)]
+  -- the discharge: computed-tier obligations FIRE on the pinned table
+  _ ← assertEq "keyObl: unique discharges (.decided true)"
+    userUniqueObligation.discharge (some (.decided true))
+  _ ← assertEq "keyObl: references discharges (.decided true)"
+    orderReferencesObligation.discharge (some (.decided true))
+  _ ← assertEq "keyObl: the evidence's tier IS the obligation's"
+    (userUniqueObligation.discharge.map (·.tier)) (some .decidableNow)
+  -- NEGATIVE CONTROLS (the loud refusal — no fabricated evidence)
+  _ ← assertEq "keyObl: a broken projection REFUSES (none, loud)"
+    brokenUniqueObligation.discharge none
+  _ ← assertEq "keyObl: a type-mismatched FK REFUSES (none, loud)"
+    mismatchReferencesObligation.discharge none
+  _ ← assert (userUniqueObligation.discharge != brokenUniqueObligation.discharge)
+    "keyObl: discharge DISTINGUISHES sound from broken (non-vacuity)"
+  -- the table checks themselves, beyond the pinned singleton
+  _ ← assert (userKeys.uniqueOn [userRow 1, userRow 2])
+    "uniqueOn: distinct keys pass"
+  _ ← assert (!userKeys.uniqueOn [userRow 1, userRow 1])
+    "uniqueOn: duplicate keys FAIL — the row-set is a FUNCTION from key to row"
+  _ ← assert (orderKeys.referencesOn orderFk userKeys [orderRow 1 7] [userRow 7])
+    "referencesOn: a resolving FK passes"
+  _ ← assert (!orderKeys.referencesOn orderFk userKeys [orderRow 1 7] [userRow 9])
+    "referencesOn: a dangling FK FAILS"
+  -- the one "which key?" answer
+  _ ← assert (Item.keyOfWith [] rekeyedItem == Item.keyOf rekeyedItem)
+    "keyOfWith: no declarations = the convention"
+  _ ← assert (Item.keyOfWith [rekeyedDecl] rekeyedItem == some ⟨"code", .u64⟩)
+    "keyOfWith: the declared key WINS"
+  _ ← assert (Item.keyOf rekeyedItem == some ⟨"label", .string⟩)
+    "keyOf: the convention alone would pick the first field"
+  _ ← assert (Item.keyOfWith keyDecls (.record "user" userFields) ==
+      Item.keyOf (.record "user" userFields))
+    "keyOfWith: declared = conventional on first-field decls"
+  .ok ()
+
+end KeySweep
+
+/-! ## W8.8 — table-level invariants (the pure lane)
+
+Uniqueness / conservation / cardinality as aggregation predicates over
+the whole row-set (`TableAgg.check`); the obligation view discharges at
+the computed `decidableNow` rung over a PROVIDED materialized table —
+the aggregate check RUNS where the table is materialized (the module
+header's tier answer). The ledger-shaped fixture is the conservation
+dogfood: ledger's `total_post_conserves` is the PRESERVATION half (the
+update lane's obligation); here the invariant itself, checked pre/post
+transfer, with the one-legged posting as the sabotage. -/
+
+namespace TableInvSweep
+
+/-- The fixture universe: `acct` (the ledger's Account shape — `id`
+    key, a string column, the u64 `balance` stock), a keyless record,
+    and a variant (the not-a-record control). -/
+def tiItems : List Item :=
+  [ .record "acct" [⟨"id", .u64⟩, ⟨"nick", .string⟩, ⟨"balance", .u64⟩]
+  , .record "plain" [⟨"x", .string⟩]
+  , .variant "role" [("admin", none), ("viewer", none)] ]
+
+def acctFields : List Field := [⟨"id", .u64⟩, ⟨"nick", .string⟩, ⟨"balance", .u64⟩]
+
+/-- An account row (id + balance controllable, nick default). -/
+def acctRow (i b : UInt64) : RowVals acctFields :=
+  .cons (.u64 i) (.cons (.string "") (.cons (.u64 b) .nil))
+
+/-- The pre-transfer table: alice 100, bob 50 — the stock total is 150. -/
+def acctPre : List (RowVals acctFields) := [acctRow 1 100, acctRow 2 50]
+
+/-- The post-transfer table (alice → bob, 30): the total SURVIVES the
+    update — conservation's whole point. -/
+def acctPost : List (RowVals acctFields) := [acctRow 1 70, acctRow 2 80]
+
+/-- The sabotaged table: a ONE-LEGGED posting (the debit leg without
+    the credit) — the total moved; conservation must REFUSE. -/
+def acctSabotaged : List (RowVals acctFields) := [acctRow 1 70, acctRow 2 50]
+
+/-- The declared invariants: uniqueness of `id`, conservation of
+    `balance` at 150, the cardinality bound, the exact cardinality. -/
+def acctUnique : TableInvItem :=
+  { name := "acct-ids-unique", schemaRef := "acct", fields := acctFields
+  , agg := .unique "id" }
+def acctConservation : TableInvItem :=
+  { name := "acct-conserves", schemaRef := "acct", fields := acctFields
+  , agg := .sum "balance" 150 }
+def acctBounded : TableInvItem :=
+  { name := "acct-bounded", schemaRef := "acct", fields := acctFields
+  , agg := .countLe 2 }
+def acctExact : TableInvItem :=
+  { name := "acct-exact", schemaRef := "acct", fields := acctFields
+  , agg := .countEq 2 }
+
+def tiDecls : List TableInvItem := [acctUnique, acctConservation, acctBounded, acctExact]
+
+/-- CONSERVATION, the dogfood's positive leg: the pre-transfer table
+    conserves 150, kernel-checked. -/
+theorem conservation_pre : acctConservation.agg.check acctPre = true := rfl
+
+/-- The transfer PRESERVES the invariant (posting moves stock, the
+    total stays). -/
+theorem conservation_post : acctConservation.agg.check acctPost = true := rfl
+
+/-- NEGATIVE CONTROL: the one-legged posting VIOLATES conservation (a
+    vacuous check would pass it). -/
+theorem conservation_sabotaged :
+    acctConservation.agg.check acctSabotaged = false := rfl
+
+/-- The obligation row + the CITED soundness (the `userKeyUnique_holds`
+    pattern): the `.decided true` discharge IS the claim over the
+    provided table. -/
+def acctConsObligation : TableObligation := acctConservation.obligation
+
+theorem acctCons_holds : acctConsObligation.holdsOn acctPre :=
+  acctConsObligation.discharge_decidableNow_sound acctPre rfl rfl
+
+/-- The completeness theorem, CITED: the true claim FIRES the backend. -/
+theorem acctCons_discharges :
+    acctConsObligation.discharge (some acctPre) = some (.decided true) :=
+  acctConsObligation.discharge_decidableNow_of_holds acctPre rfl acctCons_holds
+
+/-- The sabotaged table REFUSES (no fabricated evidence). -/
+theorem acctCons_sabotage_refused :
+    acctConsObligation.discharge (some acctSabotaged) = none := rfl
+
+/-- No provided table = the loud gap. -/
+theorem acctCons_no_table_refused : acctConsObligation.discharge = none := rfl
+
+/-- A hand-set tier the lane cannot serve REFUSES — the unwired
+    oracleSwept, and the design-doc's guestVerified refusal (§7.1:
+    table-level aggregations get no v1 witness). -/
+def acctConsOracle : TableObligation :=
+  { acctConsObligation with tier := .oracleSwept }
+def acctConsGuest : TableObligation :=
+  { acctConsObligation with tier := .guestVerified }
+
+theorem acctCons_oracle_refused :
+    acctConsOracle.discharge (some acctPre) = none := rfl
+theorem acctCons_guest_refused :
+    acctConsGuest.discharge (some acctPre) = none := rfl
+
+/-- The existential executor at the item's own fields IS the check
+    (the `checkOn_self` interface — no unfolding the irreducible). -/
+theorem acctCons_checkOn : acctConservation.checkOn acctPre = true :=
+  (TableInvItem.checkOn_self acctConservation acctPre).trans conservation_pre
+
+def plainFields : List Field := [⟨"x", .string⟩]
+
+/-- The cross-schema refusal, APPLIED: a `plain`-shaped table against
+    the acct item refuses (type mismatch = refusal, never a misread). -/
+theorem acctCons_checkOn_refuses (r : RowVals plainFields) :
+    acctConservation.checkOn [r] = false :=
+  TableInvItem.checkOn_of_ne (fs := plainFields) (ti := acctConservation) (by decide) [r]
+
+def tableInvChecks : CheckResult := do
+  -- the checker, positive
+  _ ← assertEq "tableInv: the fixture declaration set checks clean"
+    (tableInvCheck tiItems tiDecls) []
+  _ ← assert (tableInvWellFormed tiItems tiDecls) "tableInv: the Bool gate agrees"
+  -- NEGATIVE CONTROLS — one per rejection mode
+  _ ← assert (tableInvCheck tiItems [{ acctUnique with schemaRef := "zz" }] != [])
+    "tableInv: unknown record rejected"
+  _ ← assert (tableInvCheck tiItems [{ acctUnique with schemaRef := "role" }] != [])
+    "tableInv: a variant cannot take a table invariant"
+  _ ← assert (tableInvCheck tiItems
+      [{ acctUnique with fields := [⟨"id", .u64⟩] }] != [])
+    "tableInv: stale field snapshot rejected"
+  _ ← assertEq "tableInv: missing aggregation field rejected (exact diag)"
+    (tableInvCheck tiItems [{ acctUnique with agg := .unique "zz" }])
+    ["field `zz` is not on record `acct` — did you mean: id?"]
+  _ ← assertEq "tableInv: non-u64 sum column rejected (exact diag)"
+    (tableInvCheck tiItems [{ acctConservation with agg := .sum "nick" 150 }])
+    ["field `nick` has type `SchemaLang.Ty.string` — the conservation sum reads a u64 column (v1)"]
+  _ ← assertEq "tableInv: duplicate name rejected (exact diag)"
+    (tableInvCheck tiItems [acctUnique, acctUnique])
+    ["duplicate table-invariant name `acct-ids-unique`"]
+  -- the obligation VIEW: enumeration, labels, computed tiers, provenance
+  _ ← assertEq "tableObligations: one obligation per declaration"
+    ((tableObligations tiDecls).map (·.label))
+    ["acct-ids-unique", "acct-conserves", "acct-bounded", "acct-exact"]
+  _ ← assertEq "tableObligations: the computed tier is decidableNow"
+    ((tableObligations tiDecls).map (·.tier))
+    [.decidableNow, .decidableNow, .decidableNow, .decidableNow]
+  _ ← assertEq "tableObligations: provenance is the name"
+    ((tableObligations tiDecls).map (·.provenance))
+    [("acct-ids-unique".toName), ("acct-conserves".toName),
+      ("acct-bounded".toName), ("acct-exact".toName)]
+  -- the discharge: the computed tier FIRES on a provided table
+  _ ← assertEq "tableObl: conservation discharges on the pre-transfer table"
+    (acctConsObligation.discharge (some acctPre)) (some (.decided true))
+  _ ← assertEq "tableObl: the evidence's tier IS the obligation's"
+    ((acctConsObligation.discharge (some acctPre)).map (·.tier))
+    (some .decidableNow)
+  -- NEGATIVE CONTROLS (the loud refusal — no fabricated evidence)
+  _ ← assertEq "tableObl: the sabotaged table REFUSES (loud)"
+    (acctConsObligation.discharge (some acctSabotaged)) none
+  _ ← assertEq "tableObl: no provided table REFUSES (loud)"
+    (acctConsObligation.discharge none) none
+  _ ← assertEq "tableObl: oracleSwept REFUSES (unwired, loud)"
+    (acctConsOracle.discharge (some acctPre)) none
+  _ ← assertEq "tableObl: guestVerified REFUSES (no v1 witness — design §7.1)"
+    (acctConsGuest.discharge (some acctPre)) none
+  _ ← assert (acctConsObligation.discharge (some acctPre)
+      != acctConsObligation.discharge (some acctSabotaged))
+    "tableObl: discharge DISTINGUISHES sound from sabotaged (non-vacuity)"
+  -- the checks themselves, beyond the pinned fixture
+  _ ← assert (acctUnique.agg.check acctPre) "unique: distinct ids pass"
+  _ ← assert (!acctUnique.agg.check [acctRow 1 100, acctRow 1 999])
+    "unique: duplicate ids FAIL — the row-set is a FUNCTION from key to row"
+  _ ← assert (acctBounded.agg.check acctPre) "count ≤ 2: holds at 2 rows"
+  _ ← assert (!acctBounded.agg.check (acctPre ++ [acctRow 3 0]))
+    "count ≤ 2: 3 rows FAIL"
+  _ ← assert (acctExact.agg.check acctPre) "count = 2: holds"
+  _ ← assert (!acctExact.agg.check [acctRow 1 100]) "count = 2: 1 row FAILS"
+  _ ← assert (acctConservation.checkOn acctPre)
+    "checkOn: the guarded executor fires at the item's own fields"
+  _ ← assert (!acctConservation.checkOn acctSabotaged)
+    "checkOn: sabotage refuses through the guard too"
+  _ ← assert (!acctConservation.checkOn ([.cons (.string "s") .nil] : List (RowVals plainFields)))
+    "checkOn: a table for another schema REFUSES (never misreads)"
+  .ok ()
+
+end TableInvSweep
+
+/-! ## The update language v2 (W8.3): multi-SET, INSERT, DELETE
+
+The surface: `schema_update` grew the clause list — multi-column SET
+(`c₁ := e₁, c₂ := e₂`), INSERT of a full row (`+ (e₁, …, eₙ)`, in field
+order, expressions read the guarded row — the INSERT-SELECT reading),
+DELETE (`-`). Insert/delete need the record's DECLARED key (W8.2 —
+resolved from the keys registry at elaboration; a keyless record is an
+elaboration error). The key column is not writable (a key change is a
+delete + insert). The v1 surface (one SET clause, no insert/delete)
+ALSO registers the v1 row — `updateItemExt` stays the emitters' source
+(the byte-tie holds; the v1 count pins above re-assert it).
+
+The laws (SchemaLang.Update2, all kernel-checked):
+- `applySets_perm` — clause-order freedom (distinct names),
+- `apply2_comm` / `apply2_comm_perm` — the two-update order-freedom
+  under `Update2Compat` (the honest disjoint-keys premise), equality
+  for insert-free pairs, permutation in general;
+- `apply2_eq_foldDeltas` — the effect = the delta fold (Delta.lean's
+  change shape), under `KeyCoherent`;
+- the obligation view: keyed updates carry a key-uniqueness
+  PRESERVATION obligation at `decidableNow`; a duplicate-key insert
+  REFUSES (no fabricated evidence).
+-/
+
+-- The fixture record + the v2 registrations live at TOP LEVEL (the
+-- registries key on FULL Lean names — inside a namespace the command's
+-- ident would not resolve). The mirrors/laws/checks ride the namespace.
+
+/-- The fixture record: registered, with a DECLARED key (the v2 gates'
+    subject). -/
+@[schema]
+structure Upd2Entry where
+  id : UInt64
+  email : String
+  age : UInt64
+
+schema_keys for Upd2Entry := primary id
+
+-- the v2 registrations (the positive lane)
+
+-- multi-SET, guarded: bump age, echo email (the second clause reads
+-- the column it writes — the batch law reads the ORIGINAL row)
+schema_update upd2Promote for Upd2Entry
+  age := VExpr.lit 1, email := VExpr.colOf "email"
+  where VExpr.gt (VExpr.colOf "age") (VExpr.lit 0)
+
+-- INSERT: a full row per guarded row (the key from the template's `id`
+-- position — the declared key)
+schema_update upd2DupAsNine for Upd2Entry
+  + (VExpr.lit 9, VExpr.colOf "email", VExpr.colOf "age")
+  where VExpr.gt (VExpr.colOf "age") (VExpr.lit 100)
+
+-- DELETE by guard
+schema_update upd2Retire for Upd2Entry
+  - where VExpr.gt (VExpr.colOf "id") (VExpr.lit 150)
+
+-- DELETE + INSERT (the upsert reading — a same-key replace: the row
+-- leaves and the fresh row lands, deterministically)
+schema_update upd2Rekey for Upd2Entry
+  -, + (VExpr.lit 7, VExpr.colOf "email", VExpr.lit 0)
+  where VExpr.eq (VExpr.colOf "id") (VExpr.lit 7)
+
+-- the NEGATIVE controls (the command's gates — each fails THIS
+-- module's build if it stops failing)
+
+/-- error: schema_update `upd2BadKey`: insert/delete updates need `User`'s DECLARED key (W8.2) — register it first (`schema_keys for User := primary <field>`) -/
+#guard_msgs in
+schema_update upd2BadKey for User - where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `upd2DupInsert`: duplicate insert clause — one `+ (…)` per update -/
+#guard_msgs in
+schema_update upd2DupInsert for Upd2Entry
+  + (VExpr.lit 1, VExpr.colOf "email", VExpr.lit 0),
+    + (VExpr.lit 2, VExpr.colOf "email", VExpr.lit 0)
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `upd2DupCol`: duplicate set column `age` — the multi-write's columns must be distinct (the clause order is unobservable under that premise) -/
+#guard_msgs in
+schema_update upd2DupCol for Upd2Entry
+  age := VExpr.lit 1, age := VExpr.lit 2
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `upd2WritesKey`: `id` is `Upd2Entry`'s declared key — the key column cannot be written (a key change is a delete + insert) -/
+#guard_msgs in
+schema_update upd2WritesKey for Upd2Entry id := VExpr.lit 0
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `upd2ShortRow`: the insert row has 1 fields — `Upd2Entry` has 3 (a FULL row, in field order) -/
+#guard_msgs in
+schema_update upd2ShortRow for Upd2Entry
+  + (VExpr.lit 1)
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `upd2WrongInsert`: the insert row's field `email` has type SchemaLang.Ty.u64 — the field is SchemaLang.Ty.string — each insert expression must have the FIELD'S OWN TYPE (the GADT gate) -/
+#guard_msgs in
+schema_update upd2WrongInsert for Upd2Entry
+  + (VExpr.lit 1, VExpr.lit 0, VExpr.lit 0)
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+/-- error: schema_update `upd2VolatileInsert`: func `updClockFn` is volatile but `schema_update upd2VolatileInsert` requires purity — valid determinisms in a pure context: pure, stable -/
+#guard_msgs in
+schema_update upd2VolatileInsert for Upd2Entry
+  + (VExpr.lit (updClockFn 1), VExpr.colOf "email", VExpr.lit 0)
+  where VExpr.eq (VExpr.lit 0) (VExpr.lit 0)
+
+-- the registration pins: the v2 registry accumulates EVERY
+-- `schema_update` (Demo's three, the Tests' determinism probe, the
+-- four v2 rows above); the v1 registry holds EXACTLY the v1-shaped
+-- rows (the byte-tie)
+open Lean Elab Command in
+run_cmd do
+  let ups := SchemaLang.Meta.registeredUpdates2 (← getEnv)
+  unless ups.length == 8 do
+    throwError s!"expected 8 registered v2 updates, got {ups.length}"
+  unless (ups.map (·.update.name)) == ["reset_id", "echo_email", "self_bump",
+      "updPureCall", "upd2Promote", "upd2DupAsNine", "upd2Retire", "upd2Rekey"] do
+    throwError s!"v2 registry names out of sync: {ups.map (·.update.name)}"
+  -- the key adoption: Demo's rows are keyless (User has no declared
+  -- keys); the Upd2Entry rows carry the DECLARED key
+  unless (ups.map (·.update.key?)) == [none, none, none, none,
+      some "id", some "id", some "id", some "id"] do
+    throwError "v2 registry: the declared-key adoption is wrong"
+  -- the v1 registry (the emitters' source): EXACTLY the v1-shaped four
+  let ups1 := SchemaLang.Meta.registeredUpdates (← getEnv)
+  unless ups1.length == 4 do
+    throwError s!"v1 registry drifted: expected 4 rows, got {ups1.length}"
+  -- the registration-emitted `Update2Pure` instances exist
+  for n in ["reset_id", "upd2Promote", "upd2Rekey"] do
+    let base := ((`SchemaLang).str "instUpdate2Pure").str n
+    unless (← getEnv).contains base do
+      throwError s!"instUpdate2Pure.{n}: the emitted instance is missing"
+
+namespace Update2Sweep
+
+/-- The fixture schema (the mirrors' index — `abbrev`, the
+    reducibility rule). -/
+abbrev upd2Fields : List Field := [⟨"id", .u64⟩, ⟨"email", .string⟩, ⟨"age", .u64⟩]
+
+/-- A fixture row. -/
+def upd2Row (i : UInt64) (e : String) (a : UInt64) : RowVals upd2Fields :=
+  .cons (.u64 i) (.cons (.string e) (.cons (.u64 a) .nil))
+
+def upd2Id (row : RowVals upd2Fields) : UInt64 := evalU (.colOf "id") row
+def upd2Age (row : RowVals upd2Fields) : UInt64 := evalU (.colOf "age") row
+def upd2Email (row : RowVals upd2Fields) : String :=
+  match evalV (.colOf "email") row with | .string s => s | _ => ""
+
+/-- The SET clauses, standalone (the Law-1 fixture needs them
+    reorderable). -/
+def upd2SetAge : SetClause upd2Fields :=
+  { field := ⟨"age", .u64⟩, path := .there (.there .here), value := .lit 1 }
+def upd2SetEmail : SetClause upd2Fields :=
+  { field := ⟨"email", .string⟩, path := .there .here, value := .colOf "email" }
+
+/-- The mirrors of the registered v2 rows (the runtime pins evaluate
+    THESE; the run_cmd above pins the registration). -/
+def upd2PromoteMirror : Update2Item upd2Fields :=
+  { name := "upd2Promote", record := "Upd2Entry"
+  , guard := .gt (.colOf "age") (.lit 0)
+  , sets := [upd2SetAge, upd2SetEmail], key? := some "id" }
+
+def upd2DupMirror : Update2Item upd2Fields :=
+  { name := "upd2DupAsNine", record := "Upd2Entry"
+  , guard := .gt (.colOf "age") (.lit 100), sets := [], key? := some "id"
+  , insert? := some (.cons (.lit 9)
+      (.cons (.colOf "email") (.cons (.colOf "age") .nil))) }
+
+def upd2RetireMirror : Update2Item upd2Fields :=
+  { name := "upd2Retire", record := "Upd2Entry"
+  , guard := .gt (.colOf "id") (.lit 150), sets := [], key? := some "id"
+  , delete := true }
+
+def upd2RekeyMirror : Update2Item upd2Fields :=
+  { name := "upd2Rekey", record := "Upd2Entry"
+  , guard := .eq (.colOf "id") (.lit 7), sets := [], key? := some "id"
+  , insert? := some (.cons (.lit 7)
+      (.cons (.colOf "email") (.cons (.lit 0) .nil)))
+  , delete := true }
+
+/-- A duplicate-key inserter (the obligation REFUSAL fixture): the
+    unconditional guard fires on the default row and the template's
+    key is the default's OWN key (0) — the post-update table has a
+    duplicate key. -/
+def upd2DupKeyMirror : Update2Item upd2Fields :=
+  { name := "dup-key", record := "Upd2Entry"
+  , guard := .eq (.lit 0) (.lit 0), sets := [], key? := some "id"
+  , insert? := some (.cons (.lit 0)
+      (.cons (.colOf "email") (.cons (.colOf "age") .nil))) }
+
+/-! ### The laws, exercised -/
+
+/-- LAW 1, exercised: the SET clause order is unobservable. -/
+theorem upd2_clause_order_free (r : RowVals upd2Fields) :
+    applySets [upd2SetAge, upd2SetEmail] r
+      = applySets [upd2SetEmail, upd2SetAge] r :=
+  applySets_perm (List.Perm.swap _ _ []) (by decide) r
+
+/-- The promote/retire fixture: two rows (one retired). -/
+def upd2TablePR : List (RowVals upd2Fields) :=
+  [upd2Row 1 "a" 5, upd2Row 200 "b" 7]
+
+/-- The compat pack for the fixture, DECIDED field by field (every
+    premise is decidable over the concrete table; the `insertSep`
+    fields' antecedents are false — no inserts here). -/
+def upd2CompatPR : Update2Compat upd2PromoteMirror upd2RetireMirror upd2TablePR where
+  ni₁₂ := by decide
+  ni₂₁ := by decide
+  setDisj := by decide
+  refuse₁₂ := by decide
+  refuse₂₁ := by decide
+  insertSep₁₂ := fun h => absurd h (by decide)
+  insertSep₂₁ := fun h => absurd h (by decide)
+
+/-- LAW 5b, exercised: the two updates compute the SAME table in
+    either order (plain equality — no inserts). -/
+theorem upd2_order_free_eq :
+    upd2PromoteMirror.apply (upd2RetireMirror.apply upd2TablePR)
+      = upd2RetireMirror.apply (upd2PromoteMirror.apply upd2TablePR) :=
+  apply2_comm upd2CompatPR rfl rfl
+
+/-- The two-insert fixtures (disjoint key-guards). -/
+def upd2InsAMirror : Update2Item upd2Fields :=
+  { name := "insA", record := "Upd2Entry"
+  , guard := .eq (.colOf "id") (.lit 1), sets := [], key? := some "id"
+  , insert? := some (.cons (.lit 10)
+      (.cons (.colOf "email") (.cons (.lit 0) .nil))) }
+def upd2InsBMirror : Update2Item upd2Fields :=
+  { name := "insB", record := "Upd2Entry"
+  , guard := .eq (.colOf "id") (.lit 2), sets := [], key? := some "id"
+  , insert? := some (.cons (.lit 20)
+      (.cons (.colOf "email") (.cons (.lit 0) .nil))) }
+
+def upd2Table12 : List (RowVals upd2Fields) :=
+  [upd2Row 1 "a" 5, upd2Row 2 "b" 6]
+
+/-- The two-insert compat pack (each side's guard refuses the other's
+    inserted row — the inserted keys are 10/20, the guards read 1/2). -/
+def upd2CompatIns : Update2Compat upd2InsAMirror upd2InsBMirror upd2Table12 where
+  ni₁₂ := by decide
+  ni₂₁ := by decide
+  setDisj := by decide
+  refuse₁₂ := by decide
+  refuse₂₁ := by decide
+  insertSep₁₂ := fun _ h => absurd h (by decide)
+  insertSep₂₁ := fun _ h => absurd h (by decide)
+
+/-- LAW 5a, exercised: two insert updates PERMUTE the final table (the
+    insert blocks swap — the tick's row-order invariance). -/
+theorem upd2_order_free_perm :
+    (upd2InsAMirror.apply (upd2InsBMirror.apply upd2Table12)).Perm
+      (upd2InsBMirror.apply (upd2InsAMirror.apply upd2Table12)) :=
+  apply2_comm_perm upd2CompatIns
+
+/-- The same-key conflict fixtures: an inserter whose fresh rows carry
+    key 7, and a delete of id-7 rows. -/
+def upd2Ins7Mirror : Update2Item upd2Fields :=
+  { name := "ins7", record := "Upd2Entry"
+  , guard := .gt (.colOf "age") (.lit 0), sets := [], key? := some "id"
+  , insert? := some (.cons (.lit 7)
+      (.cons (.colOf "email") (.cons (.colOf "age") .nil))) }
+def upd2Del7Mirror : Update2Item upd2Fields :=
+  { name := "del7", record := "Upd2Entry"
+  , guard := .eq (.colOf "id") (.lit 7), sets := [], key? := some "id"
+  , delete := true }
+
+def upd2Tab1 : List (RowVals upd2Fields) := [upd2Row 1 "a" 5]
+
+/-- NEGATIVE (the premise's non-vacuity): the inserter's fresh row
+    CARRIES key 7 — the deleter's guard does NOT refuse it — the
+    `refuse` premise decides FALSE. -/
+theorem upd2_sameKey_refuse_fails :
+    ¬ (∀ r ∈ upd2Tab1, (upd2Ins7Mirror.newRow r).elim true
+        (fun new => !validates upd2Del7Mirror.guard new) = true) := by decide
+
+/-- The same-key conflict is ORDER-DEPENDENT (the truth the law
+    states — later-wins is NOT reachable here; the row order
+    observably differs). Insert-then-delete drops the fresh row;
+    delete-then-insert keeps it. -/
+theorem upd2_sameKey_order_matters :
+    (upd2Ins7Mirror.apply (upd2Del7Mirror.apply upd2Tab1)).map upd2Id = [1, 7]
+      ∧ (upd2Del7Mirror.apply (upd2Ins7Mirror.apply upd2Tab1)).map upd2Id = [1] :=
+  ⟨rfl, rfl⟩
+
+/-- THE ROW-LEVEL LOWERING, exercised (the keep channel IS the patch
+    fold): on the rekey mirror (delete + insert). -/
+theorem upd2_keepRow_is_deltaFold (r : RowVals upd2Fields) :
+    upd2RekeyMirror.keepRow r
+      = (upd2RekeyMirror.lowerRow r).foldl (fun acc d => d.patchKeep acc)
+          (some r) :=
+  keepRow_eq_fold_patchKeep upd2RekeyMirror "id" rfl r
+    (fun _ _ => by cases r with | cons v vs => exact ⟨_, rfl⟩)
+
+/-- The insert channel's row-level correspondence. -/
+theorem upd2_newRow_is_deltaFold (r : RowVals upd2Fields) :
+    upd2RekeyMirror.newRow r
+      = (upd2RekeyMirror.lowerRow r).foldl (fun acc d => d.patchNew acc) none :=
+  newRow_eq_fold_patchNew upd2RekeyMirror "id" rfl r
+
+/-- The correspondence fixture: the insert mirror over a two-row table
+    (one guarded row; keys 1 and 200 distinct; the fresh key 9 free). -/
+def upd2TableAB : List (RowVals upd2Fields) :=
+  [upd2Row 1 "a" 5, upd2Row 200 "b" 150]
+
+/-- The coherence pack, discharged: `keyOf`/`proj`/`nodup2` by
+    computation; `fresh` by the per-row case split (the insert fires
+    only on the guarded row). -/
+def upd2CohDup : KeyCoherent upd2DupMirror "id" upd2TableAB where
+  keyOf := rfl
+  keyImmutable := by decide
+  proj := by decide
+  -- (`decide` cannot evaluate `FieldVal.beq` — the encoder's
+  -- `encVarNat` is wf-recursive, opaque to the kernel's whnf — so the
+  -- distinctness rides `FieldVal.beq_u64_ne`, the module's own
+  -- u64-key specialisation. `keyImgs` itself reduces by rfl.)
+  nodup2 := by
+    have himgs : keyImgs upd2Fields "id" upd2TableAB
+        = [⟨.u64, .u64 1⟩, ⟨.u64, .u64 200⟩] := rfl
+    rw [himgs]
+    have h₁ : FieldVal.beq ⟨.u64, .u64 1⟩ ⟨.u64, .u64 200⟩ = false :=
+      FieldVal.beq_u64_ne (by decide)
+    have h₂ : FieldVal.beq ⟨.u64, .u64 200⟩ ⟨.u64, .u64 1⟩ = false :=
+      FieldVal.beq_u64_ne (by decide)
+    simp [FieldVal.nodup2, h₁, h₂]
+  fresh := by
+    intro r hr new hnew
+    have hr' : r = upd2Row 1 "a" 5 ∨ r = upd2Row 200 "b" 150 := by
+      simpa [upd2TableAB] using hr
+    cases hr' with
+    | inl h =>
+        subst h
+        have hn : upd2DupMirror.newRow (upd2Row 1 "a" 5) = none := rfl
+        rw [hn] at hnew
+        nomatch hnew
+    | inr h =>
+        subst h
+        have hn : upd2DupMirror.newRow (upd2Row 200 "b" 150)
+            = some (upd2Row 9 "b" 150) := rfl
+        rw [hn] at hnew
+        cases hnew
+        intro k' hpk wk hwk
+        have hp : RowVals.project? upd2Fields (upd2Row 9 "b" 150) "id"
+            = some ⟨.u64, .u64 9⟩ := rfl
+        rw [hp] at hpk
+        cases hpk
+        have himgs : keyImgs upd2Fields "id" upd2TableAB
+            = [⟨.u64, .u64 1⟩, ⟨.u64, .u64 200⟩] := rfl
+        rw [himgs] at hwk
+        have hwk' : wk = ⟨.u64, .u64 1⟩ ∨ wk = ⟨.u64, .u64 200⟩ := by
+          simpa using hwk
+        cases hwk' with
+        | inl hw1 =>
+            subst hw1
+            exact ⟨FieldVal.beq_u64_ne (by decide),
+              FieldVal.beq_u64_ne (by decide)⟩
+        | inr hw2 =>
+            subst hw2
+            exact ⟨FieldVal.beq_u64_ne (by decide),
+              FieldVal.beq_u64_ne (by decide)⟩
+
+/-- LAW 6, exercised: the update's table effect IS the fold of its
+    per-row deltas through the keyed table semantics. -/
+theorem upd2_lowering :
+    upd2DupMirror.apply upd2TableAB
+      = (upd2TableAB.flatMap upd2DupMirror.lowerRow).foldl
+          (fun t d => applyRowDelta "id" d t) upd2TableAB :=
+  apply2_eq_foldDeltas upd2DupMirror "id" upd2TableAB upd2CohDup
+
+/-! ### The obligation view -/
+
+/-- upd2Promote's obligation, hand-assembled (the enumeration pin). -/
+def promoteObligation : Update2Obligation :=
+  { label := "Upd2Entry.upd2Promote-preserves-unique(id)"
+  , tier := .decidableNow
+  , payload := .keyUnique upd2Fields upd2PromoteMirror "id"
+  , provenance := "Upd2Entry".toName }
+
+/-- The pinned-table claim HOLDS (the default row's guard refuses —
+    the antecedent fires, the consequent is the untouched singleton) —
+    the `.decided true` discharge IS the claim (the soundness theorem,
+    CITED — the `userKeyUnique_holds` pattern). -/
+theorem promoteObligation_holds : promoteObligation.decidableClaim :=
+  promoteObligation.discharge_decidableNow_sound rfl rfl
+
+/-- The completeness theorem, CITED: the true claim FIRES the backend. -/
+theorem promoteObligation_discharges :
+    promoteObligation.discharge = some (.decided true) :=
+  promoteObligation.discharge_decidableNow_of_claim rfl promoteObligation_holds
+
+/-- The duplicate-key insert's obligation: the claim decides FALSE
+    (the pinned table gains a second key-0 row) and the backend
+    REFUSES — no fabricated evidence. -/
+def dupKeyObligation : Update2Obligation :=
+  { label := "Upd2Entry.dup-key-preserves-unique(id)"
+  , tier := .decidableNow
+  , payload := .keyUnique upd2Fields upd2DupKeyMirror "id"
+  , provenance := "Upd2Entry".toName }
+
+-- the claim decides FALSE: the post-update table's key images are
+-- [0, 0] — `nodup` refuses them (the refl beq is kernel-computable;
+-- the DISTINCT-value beq is not — the wf-recursive encoder — which is
+-- why this cannot be `rfl`/`decide` like the promote pin above)
+theorem dupKey_claim_false : ¬ dupKeyObligation.decidableClaim := by
+  unfold Update2Obligation.decidableClaim dupKeyObligation
+  intro hc
+  have hc' : (if KeyDecl.uniqueOn ⟨"Upd2Entry", upd2Fields, "id", []⟩
+                [upd2Row 0 "" 0] = true then
+              KeyDecl.uniqueOn ⟨"Upd2Entry", upd2Fields, "id", []⟩
+                (upd2DupKeyMirror.apply [upd2Row 0 "" 0])
+            else true) = true := hc
+  have hant : KeyDecl.uniqueOn ⟨"Upd2Entry", upd2Fields, "id", []⟩
+      [upd2Row 0 "" 0] = true := rfl
+  rw [if_pos hant] at hc'
+  have hkeys : KeyDecl.keyImages? ⟨"Upd2Entry", upd2Fields, "id", []⟩
+      (upd2DupKeyMirror.apply [upd2Row 0 "" 0])
+      = some [⟨.u64, .u64 0⟩, ⟨.u64, .u64 0⟩] := rfl
+  simp only [KeyDecl.uniqueOn] at hc'
+  rw [hkeys] at hc'
+  have hc'' : FieldVal.nodup [⟨.u64, .u64 0⟩, ⟨.u64, .u64 0⟩] = true := hc'
+  have hnd : FieldVal.nodup [⟨.u64, .u64 0⟩, ⟨.u64, .u64 0⟩] = false := by
+    simp [FieldVal.nodup, FieldVal.beq_refl]
+  rw [hnd] at hc''
+  exact absurd hc'' (by decide)
+
+theorem dupKey_refused : dupKeyObligation.discharge = none := by
+  unfold Update2Obligation.discharge
+  cases hd : decide dupKeyObligation.decidableClaim with
+  | true => exact absurd (of_decide_eq_true hd) dupKey_claim_false
+  | false => rfl
+
+/-! ### The runtime lane -/
+
+def update2Checks : CheckResult := do
+  -- the multi-SET: the guarded row takes BOTH writes (values read the
+  -- ORIGINAL row — the email echo reads the pre-write email)
+  _ ← assertEq "v2 multi-set: ids"
+    ((upd2PromoteMirror.apply upd2TablePR).map upd2Id) [1, 200]
+  _ ← assertEq "v2 multi-set: ages written"
+    ((upd2PromoteMirror.apply upd2TablePR).map upd2Age) [1, 1]
+  _ ← assertEq "v2 multi-set: emails self-read (batch)"
+    ((upd2PromoteMirror.apply upd2TablePR).map upd2Email) ["a", "b"]
+  -- the guard refuses: age 0 fails `age > 0`, the row passes through
+  _ ← assertEq "v2 multi-set: refused row untouched"
+    ((upd2PromoteMirror.apply [upd2Row 1 "a" 0]).map upd2Age) [0]
+  -- LAW 1 at runtime: the swapped clause list computes the same rows
+  _ ← assertEq "v2 law-1: clause order unobservable (ages)"
+    (([upd2Row 1 "a" 5].map (applySets [upd2SetAge, upd2SetEmail])).map upd2Age)
+    (([upd2Row 1 "a" 5].map (applySets [upd2SetEmail, upd2SetAge])).map upd2Age)
+  -- INSERT: the fresh row is APPENDED; its non-key fields are read
+  -- from the GUARDED row (the INSERT-SELECT batch read)
+  _ ← assertEq "v2 insert: appended (ids)"
+    ((upd2DupMirror.apply upd2TableAB).map upd2Id) [1, 200, 9]
+  _ ← assertEq "v2 insert: the fresh row reads the guarded row"
+    ((upd2DupMirror.apply upd2TableAB).map upd2Email) ["a", "b", "b"]
+  _ ← assertEq "v2 insert: the fresh row reads the guarded row (age)"
+    ((upd2DupMirror.apply upd2TableAB).map upd2Age) [5, 150, 150]
+  -- DELETE: the guarded row leaves
+  _ ← assertEq "v2 delete: the id-200 row retires"
+    ((upd2RetireMirror.apply upd2TablePR).map upd2Id) [1]
+  -- DELETE + INSERT, same key (the upsert reading): the row leaves,
+  -- the fresh row lands — deterministically; the template read the
+  -- ORIGINAL row's email
+  _ ← assertEq "v2 rekey: the row is replaced"
+    ((upd2RekeyMirror.apply [upd2Row 7 "x" 3]).map upd2Id) [7]
+  _ ← assertEq "v2 rekey: the fresh row's email came from the deleted row"
+    ((upd2RekeyMirror.apply [upd2Row 7 "x" 3]).map upd2Email) ["x"]
+  _ ← assertEq "v2 rekey: the fresh row's age is the template's"
+    ((upd2RekeyMirror.apply [upd2Row 7 "x" 3]).map upd2Age) [0]
+  -- LAW 5b at runtime: the two orders agree (ids)
+  _ ← assertEq "v2 order-free (set+delete): both orders agree"
+    ((upd2PromoteMirror.apply (upd2RetireMirror.apply upd2TablePR)).map upd2Id)
+    ((upd2RetireMirror.apply (upd2PromoteMirror.apply upd2TablePR)).map upd2Id)
+  -- LAW 5a at runtime: the insert orders PERMUTE
+  let insAB := (upd2InsAMirror.apply (upd2InsBMirror.apply upd2Table12)).map upd2Id
+  let insBA := (upd2InsBMirror.apply (upd2InsAMirror.apply upd2Table12)).map upd2Id
+  _ ← assertEq "v2 perm: B-then-A's ids" insAB [1, 2, 20, 10]
+  _ ← assertEq "v2 perm: A-then-B's ids" insBA [1, 2, 10, 20]
+  _ ← assert (insAB != insBA)
+    "v2 perm: the orders differ as LISTS (the law is a permutation)"
+  -- the same-key negative: order-dependence, executed
+  _ ← assertEq "v2 same-key: delete-then-insert keeps the fresh row"
+    ((upd2Ins7Mirror.apply (upd2Del7Mirror.apply upd2Tab1)).map upd2Id) [1, 7]
+  _ ← assertEq "v2 same-key: insert-then-delete drops the fresh row"
+    ((upd2Del7Mirror.apply (upd2Ins7Mirror.apply upd2Tab1)).map upd2Id) [1]
+  -- LAW 6 at runtime: the delta fold reproduces the table effect
+  _ ← assertEq "v2 lowering: the delta fold = the update (ids)"
+    (((upd2TableAB.flatMap upd2DupMirror.lowerRow).foldl
+        (fun t d => applyRowDelta "id" d t) upd2TableAB).map upd2Id)
+    [1, 200, 9]
+  -- the lowering's delta SHAPE (Delta.lean's contract): remove carries
+  -- the KEY image, insert the full row
+  _ ← assert (match upd2RekeyMirror.lowerRow (upd2Row 7 "x" 3) with
+    | [.remove ⟨.u64, .u64 7⟩, .insert _] => true | _ => false)
+    "v2 lowering: rekey lowers to [remove ⟨key⟩, insert ⟨row⟩]"
+  _ ← assert (match upd2DupMirror.lowerRow (upd2Row 1 "a" 5) with
+    | [] => true | _ => false)
+    "v2 lowering: a guard-refused row lowers to NO deltas"
+  -- the registered-row cast discipline: a matching table executes, a
+  -- foreign one passes through untouched
+  let su : SomeUpdate2 := { fields := upd2Fields, update := upd2RetireMirror }
+  _ ← assertEq "SomeUpdate2.apply: matching table executes"
+    ((su.apply upd2TablePR).map upd2Id) [1]
+  _ ← assert (match su.apply [RowVals.nil] with | [_] => true | _ => false)
+    "SomeUpdate2.apply: a foreign table passes through"
+  -- the obligation view: enumeration + computed tiers (over the
+  -- mirrors — the run_cmd above pins the registry)
+  let obs := update2Obligations
+    [ { fields := upd2Fields, update := upd2PromoteMirror }
+    , { fields := upd2Fields, update := upd2DupMirror }
+    , { fields := upd2Fields, update := upd2RetireMirror }
+    , { fields := upd2Fields, update := upd2RekeyMirror } ]
+  _ ← assertEq "v2 obligations: one per keyed update"
+    (obs.map (·.label))
+    [ "Upd2Entry.upd2Promote-preserves-unique(id)"
+    , "Upd2Entry.upd2DupAsNine-preserves-unique(id)"
+    , "Upd2Entry.upd2Retire-preserves-unique(id)"
+    , "Upd2Entry.upd2Rekey-preserves-unique(id)" ]
+  _ ← assertEq "v2 obligations: the computed tier"
+    (obs.map (·.tier))
+    [.decidableNow, .decidableNow, .decidableNow, .decidableNow]
+  -- a KEYLESS update carries NO obligation (the key? = none shape —
+  -- the Demo rows' shape)
+  _ ← assertEq "v2 obligations: keyless updates have none"
+    ((Update2Item.obligations { upd2PromoteMirror with key? := none }).map
+      (·.label)) []
+  -- the discharge: fires on the preservation claim, REFUSES the
+  -- duplicate-key insert (the loud gap — no fabricated evidence)
+  _ ← assertEq "v2 obligation: promote discharges"
+    promoteObligation.discharge (some (.decided true))
+  _ ← assertEq "v2 obligation: promote's evidence tier"
+    (promoteObligation.discharge.map (·.tier)) (some .decidableNow)
+  _ ← assertEq "v2 obligation: the duplicate-key insert REFUSES"
+    dupKeyObligation.discharge none
+  _ ← assert (promoteObligation.discharge != dupKeyObligation.discharge)
+    "v2 obligation: discharge DISTINGUISHES sound from broken"
+  .ok ()
+
+end Update2Sweep
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let ctx ← loadDemoCtx
@@ -3502,19 +5672,31 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("validate", validateChecks)
      , ("strlen", strlenChecks)
      , ("exprLang", exprLangChecks)
+     , ("exprEmit", exprEmitChecks)
      , ("dsl", dslChecks)
      , ("variant", variantChecks)
      , ("invariantChecks", invariantChecks ctx.invariants)
+     , ("decidableNow", decidableNowChecks)
      , ("updateChecks", updateChecks ctx)
      , ("trace", traceChecks)
      , ("migration", migrationChecks)
      , ("subschema", subschemaChecks)
      , ("batch", batchChecks)
      , ("enumWire", enumWireChecks)
+     , ("wireCodec", wireCodecChecks)
      , ("rowGen", rowGenChecks)
      , ("docs", docsChecks)
     , ("moduleDocs", moduleDocsChecks)
      , ("diagGolden", diagGoldenChecks)
+     , ("witness", WitnessSweep.witnessChecks)
+     , ("witnessCheck", WitnessCheckSweep.witnessCheckChecks)
+     , ("guestVerified", GuestVerifiedSweep.guestVerifiedChecks)
+     , ("witnessEmit", WitnessEmitSweep.witnessEmitChecks)
+     , ("migrationGate", MigrationGateSweep.migrationGateChecks)
+     , ("mapSet", MapSetSweep.mapSetChecks)
+     , ("keys", KeySweep.keyChecks)
+     , ("tableInv", TableInvSweep.tableInvChecks)
+     , ("update2", Update2Sweep.update2Checks)
      ])
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control
@@ -3522,8 +5704,20 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- must be caught — a vacuous sweep fails the gate)
   -- the generated enum wires' PropSpecs (Item.lean's three enums:
   -- the round-trip sweep + the mandatory tag+1 sabotage control)
-  TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec,
-    NullSem.wirePropSpec, Determinism.wirePropSpec, Delivery.wirePropSpec]
+  let specCode ← TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec,
+    NullSem.wirePropSpec, Determinism.wirePropSpec, Delivery.wirePropSpec,
+    -- W7.14: the derived wire codecs' RoundTripSpecs (the PropSpec bridge
+    -- carries the sweep AND the mandatory byte-sabotage control)
+    WireCodecFixture.roundTripSpec.propSpec, WireCodecOuter.roundTripSpec.propSpec]
+  if specCode != 0 then return specCode
+  -- W9.4: the witness artifact round trip THROUGH THE FILE — the
+  -- committed byte-tied artifact's own row bytes, parsed back out,
+  -- decoded + re-checked (the in-memory value is not the evidence)
+  let witnessFileCode ← WitnessEmitSweep.artifactFileChecks
+  if witnessFileCode != 0 then return witnessFileCode
+  -- W9.1: the witness RoundTripSpec — the PropSpec bridge (sweep +
+  -- mandatory byte-sabotage control) + the golden byte-tie
+  WitnessSweep.witnessSpec.runIO (update := update)
 
 /-! ## Debug commands (the author's REPL) — #guard_msgs smokes
 
@@ -3535,7 +5729,7 @@ GRACEFULNESS: if `#world gatway` ever threw, the build fails here.
 No registry side effects: the pins are deterministic replays.
 -/
 
-/-- info: registered schema items (13):
+/-- info: registered schema items (14):
   User : record user (4 fields)
   OrderItem : record order-item (3 fields)
   Order : record order (3 fields)
@@ -3548,7 +5742,8 @@ No registry side effects: the pins are deterministic replays.
   probeBothAxesFn : func probe-both-axes-fn(x: option<u32>) -> option<u32> delivery=once — Probe: the dot-joined pair sets BOTH axes (either order).
   probeDefaultFn : func probe-default-fn(x: u32, y: u32) -> u32 delivery=once — Probe: no args — the defaults. (Two params: bodies of the one-param
   updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once — The volatile probe: a clock-reading fn (the volatilities probe
-  updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once — The pure probe: same shape, default determinism — registers clean -/
+  updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once — The pure probe: same shape, default determinism — registers clean
+  Upd2Entry : record upd2-entry (3 fields) — The fixture record: registered, with a DECLARED key (the v2 gates' -/
 #guard_msgs in
 #schema
 
@@ -3582,6 +5777,11 @@ variant order-error {
   insufficient-funds(f64),
 }
 resource db;
+record upd2-entry {
+  id: u64,
+  email: string,
+  age: u64,
+}
 }
 
 interface gateway-exports {
@@ -3631,6 +5831,11 @@ variant order-error {
   insufficient-funds(f64),
 }
 resource db;
+record upd2-entry {
+  id: u64,
+  email: string,
+  age: u64,
+}
 }
 
 interface gatway-exports {
@@ -3731,3 +5936,165 @@ deriving BEq, Repr, DecidableEq
 structure EsBadFloat where
   id : UInt64
   x : Float
+
+/-! ## W8.2 — the `schema_keys` command + the `@[schema key.<field>]`
+attr arg + the `@[event_sourced]` key migration (the meta lane)
+
+The pure lane (checker/bridge/obligation pins) is `KeySweep` above.
+Here: the declaration surfaces against the LIVE registry, and the
+event-sourced lane's key read (`Item.keyOfWith` — the declared key
+WINS when the attr arg declares it at registration time). -/
+
+-- the command dogfood: declared = first field on the existing
+-- event-sourced fixture (the ledger shape — the migration equivalence
+-- says NOTHING changes)
+schema_keys for EsFixture := primary id
+
+-- the foreign-key surface: target declared FIRST (the
+-- forward-reference rule)
+@[schema]
+structure KeyAuthor where
+  id : UInt64
+  nick : String
+
+schema_keys for KeyAuthor := primary id
+
+@[schema]
+structure KeyPost where
+  id : UInt64
+  authorId : UInt64
+  title : String
+
+schema_keys for KeyPost := primary id, authorId → KeyAuthor
+
+-- the registration pin: the command stored the DECLARED keys (the
+-- registry read, not a hand mirror)
+open Lean Elab Command in
+run_cmd do
+  let keys := SchemaLang.Meta.registeredKeys (← getEnv)
+  let get (r : String) : CommandElabM SchemaLang.KeyDecl :=
+    match keys.find? (·.record == r) with
+    | some kd => pure kd
+    | none => throwError s!"key declaration for `{r}` not registered"
+  let es ← get "EsFixture"
+  unless es.key == "id" && es.foreign.isEmpty do
+    throwError "EsFixture: wrong declared key"
+  let ka ← get "KeyAuthor"
+  unless ka.key == "id" && ka.fields.map (·.name) == ["id", "nick"] do
+    throwError "KeyAuthor: wrong declaration"
+  let kp ← get "KeyPost"
+  unless kp.key == "id"
+      && kp.foreign == [{ field := "authorId", target := "KeyAuthor" }] do
+    throwError "KeyPost: wrong declaration"
+
+/-- The attr-arg dogfood: the primary key declared AT REGISTRATION
+    (`@[schema key.code]`), so the event-sourced lane — which runs at
+    declaration time — sees the DECLARED key, and it WINS over the
+    first-field convention (`code` is the SECOND field). -/
+@[schema key.code, event_sourced]
+structure RekeyedFixture where
+  note : String
+  code : UInt64
+deriving BEq, Repr, DecidableEq
+
+-- the declared key WINS: esKey projects `code` (the second field; the
+-- first-field convention would project `note` — a type error, so the
+-- projection's TYPE is itself the pin)
+#guard RekeyedFixture.esKey ⟨"a", 7⟩ = 7
+
+-- the event semantics ride the declared key: two inserts with the
+-- same CODE upsert (the note is payload, not identity)
+#guard RekeyedFixture.replay [.insert ⟨"a", 1⟩, .insert ⟨"b", 1⟩] [] == [⟨"b", 1⟩]
+
+-- NEGATIVE CONTROL: under the first-field convention the two inserts
+-- would NOT upsert (distinct notes) — the replay above is the
+-- declared key's behavior, not the convention's
+#guard RekeyedFixture.replay [.insert ⟨"a", 1⟩, .insert ⟨"b", 1⟩] [] != [⟨"a", 1⟩, ⟨"b", 1⟩]
+
+-- the lane's laws still land with a non-first-field key (checked
+-- types — a stub would not elaborate)
+#check @RekeyedFixture.replay_snoc
+#check @RekeyedFixture.esJournal_roundtrip
+#check @RekeyedFixture.esDelta_inverse
+
+-- the conventional fixture is unchanged (the command declared the
+-- first field — `keyOfWith_eq_keyOf_of_decl_head`)
+#guard EsFixture.esKey ⟨1, "a", 5⟩ = 1
+
+-- the elaboration gate, negative controls (the tightest tier — the
+-- pure checker's diagnostics as ELABORATION errors):
+
+/-- error: @[schema key.score] `KeyBadScalar`: key declaration for `KeyBadScalar`: key field `score` has type `SchemaLang.Ty.f64` — a key must inject from the KeyTy scalar sub-universe (W8.1): bool, u8, u16, u32, u64, i8, i16, i32, i64, string -/
+#guard_msgs in
+@[schema key.score]
+structure KeyBadScalar where
+  id : UInt64
+  score : Float
+
+/-- error: schema_keys for `EsFixture`: duplicate key declaration for `EsFixture` — one declaration per record -/
+#guard_msgs in
+schema_keys for EsFixture := primary id
+
+/-- error: schema_keys: `KeyAuthorTypo` is not a registered record -/
+#guard_msgs in
+schema_keys for KeyPost := primary id, authorId → KeyAuthorTypo
+
+/-! ## W8.8 — the `schema_table_invariant` command (the meta lane)
+
+The pure lane (checker/obligation/discharge pins) is `TableInvSweep`
+above. Here: the declaration surface against the LIVE registry — the
+ledger-shaped fixture (the conservation surface's canonical client
+shape), the registration pin, and the elaboration gate's negative
+controls. -/
+
+/-- The ledger-shaped fixture: accounts with a u64 stock. -/
+@[schema]
+structure AcctFixture where
+  id : UInt64
+  nick : String
+  balance : UInt64
+
+schema_table_invariant "acct-ids-unique" for AcctFixture := unique id
+schema_table_invariant "acct-conserves" for AcctFixture := sum balance = 0
+schema_table_invariant "acct-bounded" for AcctFixture := count ≤ 4
+schema_table_invariant "acct-exact" for AcctFixture := count = 2
+
+-- the registration pin: the command stored the declarations (the
+-- registry read, not a hand mirror)
+open Lean Elab Command in
+run_cmd do
+  let tis := SchemaLang.Meta.registeredTableInvariants (← getEnv)
+  let get (n : String) : CommandElabM SchemaLang.TableInvItem :=
+    match tis.find? (·.name == n) with
+    | some ti => pure ti
+    | none => throwError s!"table invariant `{n}` not registered"
+  let u ← get "acct-ids-unique"
+  unless u.schemaRef == "AcctFixture" && u.agg == .unique "id"
+      && u.fields.map (·.name) == ["id", "nick", "balance"] do
+    throwError "acct-ids-unique: wrong registration"
+  let c ← get "acct-conserves"
+  unless c.agg == .sum "balance" 0 do
+    throwError "acct-conserves: wrong registration"
+  let b ← get "acct-bounded"
+  unless b.agg == .countLe 4 do throwError "acct-bounded: wrong registration"
+  let e ← get "acct-exact"
+  unless e.agg == .countEq 2 do throwError "acct-exact: wrong registration"
+
+-- the elaboration gate, negative controls (the tightest tier — the
+-- pure checker's diagnostics as ELABORATION errors):
+
+/-- error: schema_table_invariant `acct-ids-unique`: duplicate table-invariant name `acct-ids-unique` -/
+#guard_msgs in
+schema_table_invariant "acct-ids-unique" for AcctFixture := unique id
+
+/-- error: schema_table_invariant: `ZzzNope` is not a registered record -/
+#guard_msgs in
+schema_table_invariant "bad-record" for ZzzNope := unique id
+
+/-- error: schema_table_invariant `bad-field`: field `zz` is not on record `AcctFixture` — did you mean: id? -/
+#guard_msgs in
+schema_table_invariant "bad-field" for AcctFixture := unique zz
+
+/-- error: schema_table_invariant `bad-sum`: field `nick` has type `SchemaLang.Ty.string` — the conservation sum reads a u64 column (v1) -/
+#guard_msgs in
+schema_table_invariant "bad-sum" for AcctFixture := sum nick = 3

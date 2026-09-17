@@ -30,7 +30,7 @@ executed test to theorems).
 Deliberate exclusions: `Ty` is FIXED to SchemaLang's closed universe
 (packing an abstract `Ty` is the substrait port's step); the variant
 family (`VCase`) joins when a consumer needs it; emission algebras
-live in Emit.Invariant (the consumer), not here.
+live in Emit.Expr (the shared consumer lowering), not here.
 -/
 
 module

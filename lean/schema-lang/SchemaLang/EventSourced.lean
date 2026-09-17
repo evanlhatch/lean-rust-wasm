@@ -41,6 +41,17 @@ Contents:
    `encJournal`/`decJournal?` over `Codec.encList`/`decList?`.
 7. `unbox*` — the one-level `Value` projections for the flat-scalar
    fragment (the generated key codec's decode half).
+8. THE WITNESS-GATED MIGRATION CHECKPOINT (W9.5 —
+   notes/design-guest-verified.md §4 steps 3–5):
+   `replayMigrated?` replays an upcast segment ONLY under a witness
+   that ACCEPTS through the `WitnessCheck.verifyWitness` seam over the
+   DERIVED decoded context (`migrationCtx` — built from the data under
+   application, never caller-supplied). Refusal is loud, total, and
+   classified: `MigrationRefusal` names the obligation's label + the
+   class (`diverged` / `fuelExhausted`), the events are NOT applied,
+   and there is no host fallback (owner decision 2). The soundness-
+   cited wrapper is `replayMigrated?_ok`: acceptance returns the replay
+   AND the claim's denotation over the derived context.
 
 Deliberate exclusions (v1): diff generation (`Dbsp.Difference` — the
 engine's job, same as Delta.lean), wire-level upcasting (the
@@ -53,6 +64,7 @@ sum over a fixed account universe).
 module
 
 public import SchemaLang.CodecValue
+public import SchemaLang.WitnessCheck
 public import Dbsp.ChangeSpec
 public import Machines.Rewind
 
@@ -457,6 +469,135 @@ def unboxI16 : Value .i16 → Int16 | .i16 v => v
 def unboxI32 : Value .i32 → Int32 | .i32 v => v
 def unboxI64 : Value .i64 → Int64 | .i64 v => v
 def unboxString : Value .string → String | .string s => s
+
+/-! ## The witness-gated migration checkpoint (W9.5 — design-guest-verified §4)
+
+The consumer side of the fifth obligation tier: replaying an old log
+through a migration is GATED on the migration's witness. The flow is
+§4 steps 3–5 exactly, at the Lean-data level (the byte-level decode —
+envelope version check, `decJournal?`, `decWitnessFor?` — is W9.1's
+proved codec, exercised at the ledger dogfood): upcast the committed
+segment, derive the decoded context from the MIGRATED data itself,
+check the certificate through the `WitnessCheck.verifyWitness` seam,
+and only then `replay`. ONE refusal path: bad witness, false claim,
+unresolvable field, exhausted fuel — all refuse, loudly, naming the
+obligation's label and the class; the events are not applied; no
+silent skip, no host fallback (owner decision 2). -/
+
+/-- The row a delta carries (insert/update: the full-row payload — the
+    Delta.lean v1 lowering; remove carries a key, no post-row to
+    certify). The migration checkpoint's decoded context ranges over
+    exactly these. -/
+def Delta.row? {ρ κ : Type} : Delta ρ κ → Option ρ
+  | .insert r | .update r => some r
+  | .remove _ => none
+
+/-- THE REFUSAL (design §4 step 5's typed fault — the ONE refusal
+    path): the obligation's label + the class. `diverged`: the
+    certificate's claim does not hold of the derived decoded context
+    (a tampered or stale witness, a false claim, an unresolvable field
+    — `WitnessCheck.checkWitness_fuel_sufficient` proves the verdict is
+    fuel-free at sufficient fuel, so this class is PERMANENT: no retry
+    could change it). `fuelExhausted`: the artifact's shipped cap is
+    below the checker's structural minimum (`WitnessCheck.fuelNeed`) —
+    exhaustion IS refusal (§7.3), and
+    `WitnessCheck.checkWitness_eq_false_of_fuel_lt` proves the
+    exhausted run could not have accepted (the classes never blur). -/
+inductive MigrationRefusal where
+  | diverged (label : String)
+  | fuelExhausted (label : String)
+
+deriving Repr, BEq, DecidableEq
+
+/-- The refusal, rendered LOUD: the obligation's label and the class,
+    named (the operator-facing fault text — §4 step 5's "availability
+    impact is observable, not silent"). -/
+def MigrationRefusal.render : MigrationRefusal → String
+  | .diverged label =>
+      s!"migration REFUSED — obligation `{label}`: the witness's claim diverges \
+        from the decoded segment (tampered/stale certificate, false claim, or \
+        unresolvable field); the events are NOT applied"
+  | .fuelExhausted label =>
+      s!"migration REFUSED — obligation `{label}`: witness fuel exhausted (the \
+        shipped cap is below the checker's structural minimum — §7.3: no retry, \
+        a claim-shape finding); the events are NOT applied"
+
+/-- The decoded context the checkpoint certifies against, DERIVED from
+    the data under application — never caller-supplied (a witness
+    checked against rows other than the ones under application is
+    vacuous). `init` is the migrated BASE row (the chain claim's
+    initial row — the segment's pre-state, shipped migrated); the
+    log is the upcast segment's full-row payloads in order. -/
+def migrationCtx {ρ₁ κ₁ ρ₂ κ₂ : Type} {fs : List Field} (rowOf : ρ₂ → RowVals fs)
+    (upcast : Delta ρ₁ κ₁ → Delta ρ₂ κ₂) (init : ρ₂) (log : List (Delta ρ₁ κ₁)) :
+    WitnessCheck.RowValsP :=
+  ⟨fs, rowOf init, ((log.map upcast).filterMap Delta.row?).map rowOf⟩
+
+/-- THE APPLY-GATE (design §4 steps 3–5): replay the migrated segment
+    ONLY under an accepting witness. Upcast the committed (old-schema)
+    log, derive the decoded context from the migrated data, classify
+    the fuel against `WitnessCheck.fuelNeed`, check the certificate
+    through THE SEAM (`WitnessCheck.verifyWitness` — the W9.6 mount
+    point), and only then `replay`. Refusal is loud, total, and never
+    downgraded (§7.1): the events are NOT applied and the verdict
+    names the obligation's label + the class. -/
+def replayMigrated? {ρ₁ κ₁ ρ₂ κ₂ : Type} {fs : List Field} (key : ρ₂ → κ₂)
+    [BEq κ₂] (rowOf : ρ₂ → RowVals fs) (upcast : Delta ρ₁ κ₁ → Delta ρ₂ κ₂)
+    (w : Witness.Witness) (init : ρ₂) (log : List (Delta ρ₁ κ₁))
+    (state : List ρ₂) : Except MigrationRefusal (List ρ₂) :=
+  if w.fuel < WitnessCheck.fuelNeed w.claim then .error (.fuelExhausted w.label)
+  else if WitnessCheck.verifyWitness w (migrationCtx rowOf upcast init log) then
+    .ok (replay key (log.map upcast) state)
+  else .error (.diverged w.label)
+
+/-- The fuel class, pinned: a below-minimum shipped cap refuses with
+    `fuelExhausted`, naming the obligation — BEFORE any checking (the
+    §7.3 exhaustion path). -/
+theorem replayMigrated?_fuelExhausted {ρ₁ κ₁ ρ₂ κ₂ : Type} {fs : List Field}
+    (key : ρ₂ → κ₂) [BEq κ₂] (rowOf : ρ₂ → RowVals fs)
+    (upcast : Delta ρ₁ κ₁ → Delta ρ₂ κ₂) (w : Witness.Witness) (init : ρ₂)
+    (log : List (Delta ρ₁ κ₁)) (state : List ρ₂)
+    (h : w.fuel < WitnessCheck.fuelNeed w.claim) :
+    replayMigrated? key rowOf upcast w init log state =
+      .error (.fuelExhausted w.label) := by
+  unfold replayMigrated?
+  rw [if_pos h]
+
+/-- The divergence class, pinned: sufficient fuel + a refusing seam
+    verdict refuses with `diverged`, naming the obligation. -/
+theorem replayMigrated?_diverged {ρ₁ κ₁ ρ₂ κ₂ : Type} {fs : List Field}
+    (key : ρ₂ → κ₂) [BEq κ₂] (rowOf : ρ₂ → RowVals fs)
+    (upcast : Delta ρ₁ κ₁ → Delta ρ₂ κ₂) (w : Witness.Witness) (init : ρ₂)
+    (log : List (Delta ρ₁ κ₁)) (state : List ρ₂)
+    (hf : ¬ w.fuel < WitnessCheck.fuelNeed w.claim)
+    (hc : WitnessCheck.verifyWitness w (migrationCtx rowOf upcast init log) = false) :
+    replayMigrated? key rowOf upcast w init log state =
+      .error (.diverged w.label) := by
+  unfold replayMigrated?
+  rw [if_neg hf, if_neg (by simp [hc])]
+
+/-- THE ACCEPTANCE THEOREM (the soundness-cited wrapper): an accepting
+    gate returns the replay of the migrated segment AND the
+    certificate's claim HOLDS over the derived decoded context — the
+    applied rows are guest-certified per step (cites the seam's
+    `WitnessCheck.verifyWitness_sound`; the compiled-reading bridge is
+    `WitnessCheck.WHolds.chain_validates`). -/
+theorem replayMigrated?_ok {ρ₁ κ₁ ρ₂ κ₂ : Type} {fs : List Field}
+    (key : ρ₂ → κ₂) [BEq κ₂] (rowOf : ρ₂ → RowVals fs)
+    (upcast : Delta ρ₁ κ₁ → Delta ρ₂ κ₂) (w : Witness.Witness) (init : ρ₂)
+    (log : List (Delta ρ₁ κ₁)) (state : List ρ₂) (st : List ρ₂)
+    (h : replayMigrated? key rowOf upcast w init log state = .ok st) :
+    st = replay key (log.map upcast) state ∧
+      WitnessCheck.WHolds w.claim (rowOf init)
+        (migrationCtx rowOf upcast init log).log := by
+  unfold replayMigrated? at h
+  split at h
+  · simp at h
+  · split at h
+    · rename_i _hfuel hcheck
+      exact ⟨(Except.ok.inj h).symm,
+        WitnessCheck.verifyWitness_sound _ _ hcheck⟩
+    · simp at h
 
 end SchemaLang.EventSourced
 

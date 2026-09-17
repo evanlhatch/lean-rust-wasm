@@ -36,6 +36,7 @@ public import SchemaLang.Emit.Invariant
 public import SchemaLang.Emit.Update
 public import SchemaLang.Emit.Machine
 public import SchemaLang.Emit.Circuit
+public import SchemaLang.Emit.Witness
 public import SchemaLang.Emit.Typestate
 public import SchemaLang.Vortex.Emit
 public import SchemaLang.Vortex.ExtDType
@@ -186,6 +187,7 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   , SchemaLang.Emit.Typestate.typestateEmitter
   , SchemaLang.Emit.Machine.orderMachineEmitter
   , SchemaLang.Emit.Circuit.circuitEmitter
+  , SchemaLang.Emit.Witness.witnessEmitter
   , pipelineEmitter
   , WitFixture.fixtureEmitter
   , WitFixture.manifestEmitter

@@ -4,8 +4,13 @@
 Wire-faithful model of Substrait's `plan.proto`: version, extension URNs,
 simple extension declarations, and the top-level relations.
 -/
-import Substrait.Proto.Rel
-import Substrait.Proto.Extensions
+
+module
+
+public import Substrait.Proto.Rel
+public import Substrait.Proto.Extensions
+
+@[expose] public section
 
 namespace Substrait.Proto
 
@@ -50,3 +55,5 @@ def Plan.empty : Plan :=
   { version := none, extensionUrns := [], extensions := [], relations := [] }
 
 end Substrait.Proto
+
+end -- @[expose] public section

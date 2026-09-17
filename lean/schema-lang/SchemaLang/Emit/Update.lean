@@ -16,13 +16,16 @@ in leaf payloads (fn bodies — the audited concession). Names are
 pre-mangled via `Emit.snake`/`rustIdent`/`pascal` — the AST never
 case-converts.
 
-Lowering (reuses Emit.Invariant — imported, NOT copied):
-- the guard via `boolRust` (the `evalB` discipline: raw u64 ops over
-  the struct's fields; strlen = `.len()` on strings),
+Lowering (reuses Emit.Expr — the interface lowering, imported, NOT
+copied; W7.2 phase 2 — the phase-1 COMPAT spellings are gone):
+- the guard via `Emit.Expr.boolRustI` at the `vexprLang` instance
+  (the `evalB` discipline: raw u64 ops over the struct's fields;
+  strlen = `.len()` on strings),
 - the value via `valueRust` (below): u64 value exprs delegate to
-  `u64Rust`; a `.col`-of-string value → `(<ref>).clone()` (string
-  assignment). ANY other shape → no emitted fn for that row + a
-  comment (the honest-skip discipline).
+  `Emit.Expr.u64RustI` (the interface's `HasU64` view); a
+  `.col`-of-string value → `(<ref>).clone()` (string assignment —
+  GADT-direct, justified below). ANY other shape → no emitted fn for
+  that row + a comment (the honest-skip discipline).
 
 The emitter contract (v2, Emit.Invariant's discipline): `run` takes
 the FULL registry state (`Emit.GenCtx`) — the update lane reads
@@ -46,7 +49,8 @@ module
 public import CodegenCore
 public import SchemaLang.Item
 public import SchemaLang.Update
-public import SchemaLang.Emit.Invariant
+public import SchemaLang.ExprLang
+public import SchemaLang.Emit.Expr
 public import SchemaLang.Emit.GenCtx
 public import SchemaLang.Meta.Reflect
 
@@ -56,19 +60,25 @@ namespace SchemaLang.Emit.Update
 
 open CodegenCore.Emit (pascal snake rustIdent)
 
-/-! ## The value lowering (the guard rides Emit.Invariant's `boolRust`) -/
+/-! ## The value lowering (the guard rides Emit.Expr's `boolRustI`) -/
 
 /-- The field-ref rendering (the emitted fn iterates `rows` by `&mut`
     — every field read is `r.<field>`). -/
 def refOf : String → String := fun n => s!"r.{rustIdent n}"
 
 /-- The WRITTEN VALUE's Rust text. u64 value exprs delegate to
-    `Emit.Invariant.u64Rust` (the evalB discipline); a string value is
+    `Emit.Expr.u64RustI` (the interface's u64 view); a string value is
     the `.col`-ref shape ONLY (`VExpr` has no string literal) →
     `.clone()`; any other Ty — or any shape not representable — is
     `none` (the honest skip). -/
 def valueRust : {fs : List Field} → {t : Ty} → VExpr fs t → Option String
-  | _, .u64, e => some (SchemaLang.Emit.Invariant.u64Rust refOf e)
+  -- the u64 arm rides the interface (`HasU64.view`)
+  | fs, .u64, e => some (Emit.Expr.u64RustI (vexprLang fs) refOf e)
+  -- GADT-direct, JUSTIFIED: a string-typed WRITE value is a
+  -- syntax-directed shape (`.col`-ref → `.clone()`) at the `.string`
+  -- index — the interface's views cover `.u64`/`.bool` only; no
+  -- `HasString` capability exists (one joins when a second consumer
+  -- needs it — capabilities follow consumers)
   | _, .string, .col n _ => some s!"({refOf n}).clone()"
   | _, _, _ => none
 
@@ -103,7 +113,8 @@ def applyFn (u : DemoUpdate) : List CodegenCore.Emit.Rust.Item :=
           ++ "has no Rust lowering — honest skip, no fn emitted")
       ]
   | some v =>
-      let guardTxt := SchemaLang.Emit.Invariant.boolRust refOf u.u.update.guard
+      let guardTxt :=
+        Emit.Expr.boolRustI (vexprLang u.u.fields) refOf u.u.update.guard
       [ .comment s!"update `{u.u.update.name}` on {u.recName} — writes `{u.u.field.name}`"
       , .comment "  guard + value read the ORIGINAL row (UpdateItem.applyRow discipline)"
       , .fn s!"fn {applyFnName u}(rows: &mut Vec<{pascal u.recName}>)"

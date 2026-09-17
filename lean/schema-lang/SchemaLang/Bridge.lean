@@ -30,8 +30,12 @@ the third component of a `SchemaCol`. `ofField` is the junction: it
 peels option constructors and emits the nullable flag.
 -/
 
-import SchemaLang.Item
-import Substrait.Typed.Expr
+module
+
+public import SchemaLang.Item
+public import Substrait.Typed.Expr
+
+@[expose] public section
 
 namespace SchemaLang
 
@@ -64,6 +68,11 @@ def Ty.toSType? : Ty → Option SType
   -- `SchemaCol.ofField`, which owns the column context)
   | .option _ => none
   | .result _ _ => none
+  -- maps/sets are not queryable in the Substrait lane (no map/entry
+  -- encoding is pinned; a refusal beats a wrong column — the `result`
+  -- precedent). The Vortex lane lowers them (list-of-structs).
+  | .map _ _ => none
+  | .set _ => none
   | .future _ => none
   | .stream _ => none
   | .bytes => none
@@ -108,3 +117,5 @@ def Schema.ofItems : List Item → List (String × Schema) :=
       | _ => none
 
 end SchemaLang
+
+end -- @[expose] public section

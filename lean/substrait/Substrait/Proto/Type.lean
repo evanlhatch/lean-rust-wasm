@@ -14,6 +14,11 @@ The inductive is named `PType` (not `Type`) to avoid colliding with Lean's
 type-universe keyword; `Param` became `PParam`.  (A "P-Type"/"P-Param" naming
 is the package's way to say "proto Type"/"proto Param".)
 -/
+
+module
+
+@[expose] public section
+
 namespace Substrait.Proto
 
 /-- Proto `Type.Nullability` (values 0,1,2). -/
@@ -77,3 +82,5 @@ def PType.nullability : PType → Nullability
   | .userDefined _ _ n => n
 
 end Substrait.Proto
+
+end -- @[expose] public section

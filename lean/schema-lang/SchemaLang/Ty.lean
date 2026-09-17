@@ -1,10 +1,13 @@
 /-
 # SchemaLang.Ty — the schema language's type universe
 
-Target-NEUTRAL by design (the schema-lang rule): option/result/future/stream
-are constructors HERE; how each target renders them is the target lowering's
-job (WIT: option<T>/result<T,E>/future<T>/stream<T>; OpenAPI: nullable +
+Target-NEUTRAL by design (the schema-lang rule): option/result/map/set/
+future/stream are constructors HERE; how each target renders them is the
+target lowering's job (WIT: option<T>/result<T,E>/list<tuple<K,V>>/
+future<T>/stream<T>; Rust: BTreeMap/BTreeSet; OpenAPI: nullable +
 oneOf; Vortex: nullable flag). No wire knowledge lives in this module.
+Map/set KEYS ride the `KeyTy` scalar sub-universe — a non-scalar key is
+unrepresentable (enforcement in the type; W8.1's default).
 
 Type-driven surfaces, per the four-addresses axis (TOOLKIT Part 1):
 
@@ -44,6 +47,22 @@ namespace SchemaLang
     universe (checked by `wellFormed`, not by this type). -/
 abbrev TyRef := String
 
+/-- The hashable/comparable SCALAR sub-universe: map keys and set
+    elements (W8.1's default — keys/elements are scalars). Floats are
+    OUT (NaN breaks the total order a canonical map form needs);
+    `bytes`, composites and named refs are OUT (no canonical hash).
+    A non-scalar key is UNREPRESENTABLE — enforcement in the type, not
+    a checker pass (the `RowVals` wrong-shape discipline; a predicate
+    field on `Ty.map` would forfeit the derived `DecidableEq`/`BEq`).
+    Every key injects into `Ty` via `KeyTy.toTy` (below, once `Ty`
+    exists). -/
+inductive KeyTy where
+  | bool
+  | u8 | u16 | u32 | u64
+  | i8 | i16 | i32 | i64
+  | string
+deriving Repr, BEq, DecidableEq, Inhabited
+
 /-- The schema type universe. -/
 inductive Ty where
   | bool
@@ -55,6 +74,25 @@ inductive Ty where
   | option (α : Ty)
   | result (ok err : Ty)
   | list (α : Ty)
+  /-- A map with SCALAR keys (the `KeyTy` sub-universe) and arbitrary
+      values. Boundary rendering is the TARGET's job (the tensor
+      precedent): WIT `list<tuple<K,V>>` (WIT has no map — the
+      association-list form, key uniqueness a documented invariant);
+      Rust `BTreeMap<K,V>` (deterministic iteration — the runbook
+      default, NOT `HashMap`); snapshot `map(K,V)`; Vortex a list of
+      key/value structs (the parquet convention); the wire a
+      length-prefixed entry list. The payload (`VMap` below) is an
+      INSERTION-ORDERED association list — the `list` discipline:
+      order is payload data, canonicalization (sort/dedup) is the
+      emitter boundary's job. W8.2's declared-keys work is the first
+      consumer of the key story. -/
+  | map (k : KeyTy) (v : Ty)
+  /-- A set of SCALAR elements (the `KeyTy` sub-universe, same row as
+      map keys). WIT `list<T>` (uniqueness a documented invariant);
+      Rust `BTreeSet<T>`; snapshot `set(T)`; the wire a
+      length-prefixed element list. The payload rides `VList` —
+      insertion-ordered, the `list` discipline. -/
+  | set (α : KeyTy)
   | future (α : Ty)
   | stream (α : Ty)
   /-- A dense row-major tensor: static DIMS (outermost first, the
@@ -86,10 +124,50 @@ inductive Ty where
   | ty (name : TyRef)
 deriving Repr, BEq, DecidableEq, Inhabited
 
+/-- The key sub-universe INJECTS into `Ty`: every key is a scalar
+    type. Emitters/codecs route key rendering through this — below the
+    first fold a key position is a plain `Ty` again. -/
+def KeyTy.toTy : KeyTy → Ty
+  | .bool => .bool
+  | .u8 => .u8 | .u16 => .u16 | .u32 => .u32 | .u64 => .u64
+  | .i8 => .i8 | .i16 => .i16 | .i32 => .i32 | .i64 => .i64
+  | .string => .string
+
+/-- The key's Lean reification, DIRECT (not `toTy`-routed — the
+    indirection breaks `toType`'s structural recursion). Coherent with
+    the injection by `toType_toTy`. -/
+def KeyTy.toType : KeyTy → Type
+  | .bool => Bool
+  | .u8 => UInt8 | .u16 => UInt16 | .u32 => UInt32 | .u64 => UInt64
+  | .i8 => Int8 | .i16 => Int16 | .i32 => Int32 | .i64 => Int64
+  | .string => String
+
+/-- The partial inverse: the scalar `Ty`s that ARE map/set keys
+    (the snapshot parser's key gate — `map(f32,u64)` is a parse
+    error, the type-level negative control). -/
+def Ty.toKeyTy? : Ty → Option KeyTy
+  | .bool => some .bool
+  | .u8 => some .u8 | .u16 => some .u16 | .u32 => some .u32
+  | .u64 => some .u64
+  | .i8 => some .i8 | .i16 => some .i16 | .i32 => some .i32
+  | .i64 => some .i64
+  | .string => some .string
+  | _ => none
+
+/-- `toKeyTy?` undoes `toTy` (the snapshot round trip's key arm). -/
+theorem Ty.toKeyTy?_toTy (k : KeyTy) : Ty.toKeyTy? k.toTy = some k := by
+  cases k <;> rfl
+
 /-- `ReflBEq`/`LawfulBEq` for the derived structural `BEq` (core's
     `DecidableEq → LawfulBEq` instance is tied to the decidable-equality
     `BEq`, not the derived one — so the instances are discharged here
     with Init's own deriving tactics, `Init.LawfulBEqTactics`). -/
+instance : ReflBEq KeyTy where
+  rfl := by deriving_ReflEq_tactic
+
+instance : LawfulBEq KeyTy where
+  eq_of_beq := by deriving_LawfulEq_tactic
+
 instance : ReflBEq Ty where
   rfl := by deriving_ReflEq_tactic
 
@@ -121,6 +199,8 @@ inductive Value : Ty → Type where
   | ok : {ok err : Ty} → Value ok → Value (.result ok err)
   | err : {ok err : Ty} → Value err → Value (.result ok err)
   | list : {t : Ty} → VList t → Value (.list t)
+  | map : {k : KeyTy} → {v : Ty} → VMap k v → Value (.map k v)
+  | set : {k : KeyTy} → VList k.toTy → Value (.set k)
   | future : {t : Ty} → Value t → Value (.future t)
   | stream : {t : Ty} → VList t → Value (.stream t)
   /-- A tensor payload: shape-indexed by construction (the TVal
@@ -134,6 +214,18 @@ inductive Value : Ty → Type where
 inductive VList : Ty → Type where
   | nil : {t : Ty} → VList t
   | cons : {t : Ty} → Value t → VList t → VList t
+
+/-- The map payload: an association list (the `VList` sibling rule —
+    a nested `List (Value k.toTy × Value v)` under the GADT is
+    kernel-forbidden). INSERTION-ORDERED, duplicate keys
+    REPRESENTABLE: the `list` discipline — canonical form is the
+    emitter boundary's concern (Rust's `BTreeMap` sorts, last-wins on
+    duplicates; the wire preserves order) and the codec's round trip
+    is per-payload. A consumer needing map EQUALITY canonicalizes
+    first (none does yet — W8.2). -/
+inductive VMap : KeyTy → Ty → Type where
+  | nil : {k : KeyTy} → {v : Ty} → VMap k v
+  | cons : {k : KeyTy} → {v : Ty} → Value k.toTy → Value v → VMap k v → VMap k v
 
 /-- The shape-indexed tensor payload (the TorchLean `View` shape —
     `scalar`/`dim` over static dims). The outer dimension's slices ride
@@ -238,12 +330,23 @@ def Ty.toType : Ty → TySem → Type
   | .option a, sem => Option (a.toType sem)
   | .result ok err, sem => Sum (ok.toType sem) (err.toType sem)
   | .list a, sem => List (a.toType sem)
+  -- the map/set Lean payload is the ASSOCIATION-LIST / element-list
+  -- form (the wire shape — BTreeMap/BTreeSet are the Rust emitter's
+  -- rendering, not the reification's)
+  | .map k v, sem => List (k.toType × v.toType sem)
+  | .set k, _ => List k.toType
   | .future a, sem => a.toType sem
   | .stream a, sem => a.toType sem
   -- the tensor's Lean payload is the ROW-MAJOR FLAT form (the dims are
   -- static verified data — TVal carries them; the Lean reading flattens)
   | .tensor _ a, sem => List (a.toType sem)
   | .ty n, sem => sem n
+
+/-- The two key reifications agree (the direct one is the structural
+    recursion's; the injected one is the emitters'). -/
+theorem KeyTy.toType_toTy (k : KeyTy) (sem : TySem) :
+    k.toTy.toType sem = k.toType := by
+  cases k <;> rfl
 
 /-- The `ToExpr` instance: a hand-written walk of the `Ty` universe
     (the deriving handler is unavailable because `ToExpr` lives in the
@@ -254,6 +357,17 @@ instance : ToExpr Ty where
   toTypeExpr := .const ``Ty []
   toExpr := go
 where
+  keyExpr : KeyTy → Expr
+    | .bool => .const ``KeyTy.bool []
+    | .u8 => .const ``KeyTy.u8 []
+    | .u16 => .const ``KeyTy.u16 []
+    | .u32 => .const ``KeyTy.u32 []
+    | .u64 => .const ``KeyTy.u64 []
+    | .i8 => .const ``KeyTy.i8 []
+    | .i16 => .const ``KeyTy.i16 []
+    | .i32 => .const ``KeyTy.i32 []
+    | .i64 => .const ``KeyTy.i64 []
+    | .string => .const ``KeyTy.string []
   go : Ty → Expr
     | .bool => .const ``Ty.bool []
     | .u8 => .const ``Ty.u8 []
@@ -272,6 +386,8 @@ where
     | .result ok err =>
         .app (.app (.const ``Ty.result []) (go ok)) (go err)
     | .list a => .app (.const ``Ty.list []) (go a)
+    | .map k v => .app (.app (.const ``Ty.map []) (keyExpr k)) (go v)
+    | .set k => .app (.const ``Ty.set []) (keyExpr k)
     | .future a => .app (.const ``Ty.future []) (go a)
     | .stream a => .app (.const ``Ty.stream []) (go a)
     | .tensor dims a =>

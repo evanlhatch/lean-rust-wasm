@@ -4,8 +4,13 @@
 W5.3 phase 1: split of the monolithic Decode.lean along its section
 structure (pure code-motion; statements unchanged).
 -/
-import Substrait.Decode.Basic
-import Substrait.Grammar
+
+module
+
+public import Substrait.Decode.Basic
+public import Substrait.Grammar
+
+@[expose] public section
 
 namespace Substrait.Decode
 
@@ -1590,3 +1595,5 @@ abbrev nullabilityOf (t : Proto.PType) : Proto.Nullability := t.nullability
 
 
 end Substrait.Decode
+
+end -- @[expose] public section

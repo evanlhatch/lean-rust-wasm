@@ -23,10 +23,18 @@ semantics: arithmetic/comparison return null when any argument is null
 tied to a signature (aggregate grouping keys): Lean forbids `Σ`/nested
 inductives under the GADT, so the sigma-pair is encoded as its own inductive.
 -/
-import Substrait.Typed.Schema
-import Substrait.Typed.Binop
+
+module
+
+public import Substrait.Typed.Schema
+public import Substrait.Typed.Binop
+-- `#guard` over generated sigs evaluates through `BEq SType` at elaboration
+-- (meta) time — additive meta import for the instance.
+public meta import Substrait.Typed.Schema
 
 namespace Substrait.Typed
+
+@[expose] public section
 
 /--
 A scalar function signature.  `urn + name` identify the extension function;
@@ -187,6 +195,10 @@ declare_binop or "or", "extension:io.substrait:functions_boolean", .bool, .bool
 #guard (opGtSig true false).ret == .bool
 #guard (opOrSig false false).urn == "extension:io.substrait:functions_boolean"
 
+end -- @[expose] public section
+
+public meta section
+
 -- Infix operator sugar.  Dotted to avoid colliding with `=`/`==`.
 
 /-- `a +. b` — i32 addition. -/
@@ -212,5 +224,7 @@ scoped infixr:35 " &&. " => Expr.and
 
 /-- `a ||. b` — logical disjunction. -/
 scoped infixr:30 " ||. " => Expr.or
+
+end -- public meta section
 
 end Substrait.Typed

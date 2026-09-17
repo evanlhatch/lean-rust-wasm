@@ -341,7 +341,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms kernel-check manifest-check coverage check-schema breaking splice-smoke rt-conformance lean-lint
+gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms kernel-check manifest-check coverage check-schema breaking splice-smoke rt-conformance lean-lint budget-check
 	@echo "gates: clean"
 
 # Axiom gate (delegated to the gates exe — Gates.Axioms): one process,
@@ -869,3 +869,56 @@ mutation-proof:
 	  exit 1
 	fi
 	echo "mutation-proof: 5/5 gates caught their engineered mutations"
+
+
+# ── Size/perf budget gates — tighten on sight; loosening needs a commit message justification ──
+#
+# Budgets as of 2026-09-17:
+#   SIZE: lean/wasm-backend/target/demo.component.wasm = 52524 bytes -> budget 80000 (1.5x rounded up)
+#   PERF: double(21) median @ 20 runs = 0.044s -> budget 0.135s (3x rounded up)
+#
+budget-check:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	WTS=$(command -v wasmtime || true)
+	[ -x "$WTS" ] || WTS=$(find /nix/store -maxdepth 3 -name wasmtime -type f 2>/dev/null | head -1)
+	[ -x "$WTS" ] || { echo "FAIL: wasmtime not found in PATH or nix store"; exit 1; }
+	COMP=lean/wasm-backend/target/demo.component.wasm
+	[ -f "$COMP" ] || { echo "FAIL: $COMP missing - run 'just wasm-compile'"; exit 1; }
+	SIZE_BUDGET=80000
+	PERF_BUDGET_SEC=0.135
+	fail=0
+	# SIZE check
+	actual=$(stat --format=%s "$COMP")
+	echo "size: $actual bytes (budget $SIZE_BUDGET)"
+	if [ "$actual" -gt "$SIZE_BUDGET" ]; then
+	  echo "FAIL: size $actual > budget $SIZE_BUDGET"
+	  fail=1
+	else
+	  echo "  ok: $actual <= $SIZE_BUDGET"
+	fi
+	# PERF smoke: instantiate + invoke double(21) 20x, compute median wall time
+	raw=$(mktemp)
+	trap "rm -f $raw" EXIT
+	for i in $(seq 1 20); do
+	  T0=$(date +%s%N)
+	  result=$("$WTS" run --invoke 'double(21)' "$COMP" 2>/dev/null)
+	  T1=$(date +%s%N)
+	  [ "$result" = 42 ] || { echo "FAIL: double(21) returned $result (expected 42)"; exit 1; }
+	  echo $((T1 - T0)) >> "$raw"
+	done
+	sort -n "$raw" > "$raw.sorted"
+	p10=$(awk 'NR==10{print; exit}' "$raw.sorted")
+	p11=$(awk 'NR==11{print; exit}' "$raw.sorted")
+	median_ns=$(( (p10 + p11) / 2 ))
+	median_sec=$(awk -v ns="$median_ns" 'BEGIN{printf "%.3f", ns/1e9}')
+	echo "perf: $median_sec s median over 20 runs (budget $PERF_BUDGET_SEC s)"
+	budget_ns=$(awk -v b="$PERF_BUDGET_SEC" 'BEGIN{printf "%d", b*1e9 + 0.5}')
+	if [ "$median_ns" -gt "$budget_ns" ]; then
+	  echo "FAIL: median $median_sec s > budget $PERF_BUDGET_SEC s"
+	  fail=1
+	else
+	  echo "  ok: $median_sec s <= $PERF_BUDGET_SEC s"
+	fi
+	[ "$fail" = 0 ] || { echo "budget-check: RED"; exit 1; }
+	echo "budget-check: green - size + perf within budgets"

@@ -38,6 +38,7 @@ public import SchemaLang.Emit.Machine
 public import SchemaLang.Meta.Derive
 public import SchemaLang.Meta.Gen
 public import SchemaLang.Invariant
+public import SchemaLang.Emit.Expr
 public import SchemaLang.Emit.Invariant
 public import SchemaLang.Obligation
 public import SchemaLang.Update
@@ -46,6 +47,14 @@ public import SchemaLang.Emit.Update
 public import SchemaLang.Emit.Typestate
 public import SchemaLang.Trace
 public import SchemaLang.EventSourced
+public import SchemaLang.Keys
+public import SchemaLang.Meta.Keys
+public import SchemaLang.TableInvariant
+public import SchemaLang.Meta.TableInvariant
 public import SchemaLang.Meta.EventSourced
+public import SchemaLang.Bridge
 public import SchemaLang.Session
 public import SchemaLang.Debug
+public import SchemaLang.Witness
+public import SchemaLang.WitnessCheck
+public import SchemaLang.WitnessSpec

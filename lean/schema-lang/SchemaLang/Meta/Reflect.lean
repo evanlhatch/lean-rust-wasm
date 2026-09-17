@@ -42,6 +42,13 @@ public meta import SchemaLang.Ty
 public meta import SchemaLang.Item
 public meta import SchemaLang.Invariant
 public meta import SchemaLang.Update
+public meta import SchemaLang.Keys
+-- Update2 is mathlib-FREE by construction (the neutrality family moved
+-- to Update.lean at W8.3 — TickCascade's `Dbsp.Effects` dependency
+-- must NOT reach legacy `Meta.Reflect` consumers: the feature-flags
+-- `Flag` collision lesson). Keep it that way: Update2 imports
+-- Update/Keys/CodegenCore only.
+public meta import SchemaLang.Update2
 
 public meta section
 
@@ -190,6 +197,73 @@ def ctorArgTypes : Expr → List Expr
   | .letE _ _ _ b _ => ctorArgTypes b
   | _ => []
 
+/-! ## Keys — the W8.2 declared-key registry
+
+The key registry rides its OWN extension (the `invariantItemExt`
+precedent — `Item` is the closed boundary universe and carries no key
+metadata, so the emitters' `List Item` fold is untouched and the
+byte-tie holds by construction). The DATA, the WF lane, and the
+obligation view live in `SchemaLang.Keys`; the `schema_keys` command
+(the full surface: primary + foreign keys) lives in `Meta.Keys`. This
+section: the extension, the `@[schema key.<field>]` attr-arg parse,
+and the SHARED registration gate (the pure checker is the single
+authority — one gate, two mount points). -/
+
+/-- The key registry: record schema-name ↦ declared keys, append-only,
+    replayed from oleans at import (the `CodegenCore.mkRegistryExt`
+    semantics). -/
+initialize schemaKeyExt :
+    SimplePersistentEnvExtension KeyDecl (List KeyDecl) ←
+  CodegenCore.mkRegistryExt `schemaKeyExt
+
+/-- The registered key declarations from an environment (the
+    Meta.EventSourced + Meta.Keys + tests entry point). -/
+def registeredKeys (env : Environment) : List KeyDecl :=
+  schemaKeyExt.getState env
+
+/-- The registered key declaration for one record schema name, if any. -/
+def registeredKeyDecl? (env : Environment) (record : String) : Option KeyDecl :=
+  (registeredKeys env).find? (·.record == record)
+
+/-- The optional `@[schema key.<field>]` argument (the `simple` attr
+    parser's ONE optional ident, dot-split — the `funcSemOfStx`
+    precedent). `none` = no primary key declared. -/
+def schemaKeyArgOfStx (stx : Syntax) : Except String (Option String) := do
+  let opts := match stx with
+    | .missing => []
+    | _ => stx.getArgs.toList.drop 1
+  let mut args : List String := []
+  for o in opts do
+    if o.isNone then pure ()
+    else if o[0]!.isIdent then args := args ++ [o[0]!.getId.toString]
+    else throw s!"unexpected @[schema] argument: {o}"
+  match args with
+  | [] => .ok none
+  | [arg] =>
+      match String.splitOn arg "." with
+      | ["key", field] => .ok (some field)
+      | _ => throw (s!"unexpected @[schema] argument `{arg}` — valid: "
+          ++ "`key.<field>` (the primary key, declared at registration; "
+          ++ "foreign keys ride the `schema_keys` command)")
+  | _ => throw "@[schema] takes at most one argument (`key.<field>`)"
+
+/-- THE SHARED KEY-REGISTRATION GATE (the `checkStruct` pattern: the
+    mount resolves names, the PURE checker judges): reject a duplicate
+    declaration, then run `keyDeclsCheck` over the replayed registry
+    PLUS the new declaration — every rejection mode (missing key
+    field, non-scalar key, missing/keyless/mismatched target, stale
+    fields, duplicate) fails ELABORATION with the rendered
+    diagnostics. Mounted by the `@[schema key.<field>]` attr arg (this
+    module) and the `schema_keys` command (Meta.Keys). -/
+def registerSchemaKeys (kd : KeyDecl) (ctx : String) : CoreM Unit := do
+  let env ← getEnv
+  if ((registeredKeys env).map (·.record)).contains kd.record then
+    throwError s!"{ctx}: {SchemaDiag.render (.dupKeyDecl kd.record)}"
+  let items := (schemaItemExt.getState env).map (·.2)
+  match keyDeclsCheck items (registeredKeys env ++ [kd]) with
+  | [] => modifyEnv fun env => schemaKeyExt.addEntry env kd
+  | ds => throwError s!"{ctx}: {SchemaDiag.renderList ds}"
+
 /-! ## Records — `@[schema]` on a structure -/
 
 /-- Pure structural check: diagnostics or fields. NO monad — the
@@ -228,8 +302,10 @@ def checkStruct (env : Environment) (declName : Name) :
           else .inr fields
     | _ => .inl [SchemaDiag.noCtor declName.toString]
 
-/-- Register one reflected structure. -/
-def registerSchemaStruct (declName : Name) : CoreM Unit := do
+/-- Register one reflected structure; returns the registered fields
+    (the `@[schema key.<field>]` handler builds the `KeyDecl` from
+    them — the registration-time read, no re-derivation). -/
+def registerSchemaStruct (declName : Name) : CoreM (List Field) := do
   let env ← getEnv
   match checkStruct env declName with
   | .inl ds => throwError ("@[schema] `" ++ declName.toString ++ "`: "
@@ -237,6 +313,7 @@ def registerSchemaStruct (declName : Name) : CoreM Unit := do
   | .inr fields => do
     registerSchemaItem declName (.record (schemaNameOf declName) fields)
     registerSchemaItemDoc declName
+    pure fields
 
 /-! ## Variants — `@[schema]` on a non-parameterized inductive -/
 
@@ -291,14 +368,35 @@ def registerSchemaVariant (declName : Name) : CoreM Unit := do
     registerSchemaItemDoc declName
 
 /- `@[schema]` — reflect a structure OR a non-parameterized inductive
-    into the schema registry. -/
-register_check_attribute `schema : "register a structure or inductive as a schema item (the boundary universe)" := fun decl _stx _kind => do
+    into the schema registry. The optional argument declares the
+    record's PRIMARY KEY at registration time: `@[schema key.id]`
+    (W8.2 — the one optional ident the `simple` attr parser admits,
+    dot-joined, the `funcSemOfStx` precedent). The attribute-time
+    declaration is what lanes running AT declaration time see
+    (`@[schema key.code, event_sourced]` — the declared key WINS over
+    the first-field convention, `Item.keyOfWith`); the `schema_keys`
+    command (Meta.Keys) is the full surface (primary + foreign keys)
+    for records whose consumers run later. -/
+register_check_attribute `schema : "register a structure or inductive as a schema item (the boundary universe); optional arg `key.<field>` declares the primary key (W8.2)" := fun decl stx _kind => do
+    let keyArg? ← match schemaKeyArgOfStx stx with
+      | .ok k => pure k
+      | .error msg => throwError msg
     let env ← getEnv
     if Lean.isStructure env decl then
-      registerSchemaStruct decl
+      let fields ← registerSchemaStruct decl
+      if let some keyField := keyArg? then
+        let kd : KeyDecl :=
+          { record := schemaNameOf decl, fields := fields
+          , key := keyField, foreign := [] }
+        registerSchemaKeys kd s!"@[schema key.{keyField}] `{decl}`"
     else
       match env.find? decl with
-      | some (.inductInfo _) => registerSchemaVariant decl
+      | some (.inductInfo _) =>
+        if keyArg?.isSome then
+          throwError ("@[schema key.…] declares a PRIMARY KEY — records only "
+            ++ s!"(`{decl}` is an inductive; a variant has no fields)")
+        else
+          registerSchemaVariant decl
       | _ => throwError ("@[schema] supports structures and inductives only: `"
         ++ decl.toString ++ "`")
 
@@ -663,6 +761,24 @@ def registeredUpdates (env : Environment) : List SomeUpdate :=
 def registeredUpdateNames (env : Environment) : List String :=
   (registeredUpdates env).map (fun u => u.update.name)
 
+/-- The v2 update registry (W8.3): append-only, replayed from oleans
+    at import. SEPARATE from `updateItemExt` — the v1 registry stays
+    the EMITTERS' source (the byte-tie holds by construction: no
+    emitter reads this one); every `schema_update` registers HERE,
+    and v1-shaped ones (exactly one set clause, no insert/delete)
+    ALSO register there. -/
+initialize update2ItemExt :
+    SimplePersistentEnvExtension SomeUpdate2 (List SomeUpdate2) ←
+  CodegenCore.mkRegistryExt `update2ItemExt
+
+/-- The registered v2 update rows. -/
+def registeredUpdates2 (env : Environment) : List SomeUpdate2 :=
+  update2ItemExt.getState env
+
+/-- Registered v2 update names (dup detection). -/
+def registeredUpdate2Names (env : Environment) : List String :=
+  (registeredUpdates2 env).map (fun u => u.update.name)
+
 /-- The volatile schema-func names referenced by an elaborated term:
     the post-elaboration constant walk — collect the `.const` refs and
     match them against the registry's func bodies (a func item whose
@@ -689,28 +805,139 @@ where
     | .proj _ _ s, acc => go s acc
     | _, acc => acc
 
--- `schema_update <name> for <Record> <col> := <valueTerm>
---    where <guardTerm>` — the `where` clause is REQUIRED (no
--- literal-true in `VExpr .bool`; see the section header). The `set`
--- position is marked by `:=` alone — NOT by a `set` token: declaring
--- `" set "` in a syntax RESERVES the word globally (the lexer makes it
--- a keyword everywhere — identifiers named `set` stop parsing; the
--- WasmBackend do-block casualty that taught this trap, the `prefix`
--- lesson's class). Never declare common words as syntax tokens.
+-- `schema_update <name> for <Record> <clause>,* where <guardTerm>` —
+-- the `where` clause is REQUIRED (no literal-true in `VExpr .bool`;
+-- see the section header). The `set` position is marked by `:=`
+-- alone — NOT by a `set` token: declaring `" set "` in a syntax
+-- RESERVES the word globally (the lexer makes it a keyword everywhere
+-- — identifiers named `set` stop parsing; the WasmBackend do-block
+-- casualty that taught this trap, the `prefix` lesson's class). Never
+-- declare common words as syntax tokens. W8.3's insert/delete markers
+-- are PUNCTUATION (`+` / `-`), same lesson.
+--
+-- v2 clauses (W8.3 — SchemaLang.Update2):
+--   `<col> := <valueTerm>`  a SET clause (one or more — the
+--                           simultaneous multi-write; every value
+--                           reads the ORIGINAL row — the batch law)
+--   `+ (e₁, …, eₙ)`         INSERT: a FULL row, one expression per
+--                           field in field order, computed per guarded
+--                           row (the INSERT-SELECT reading); the
+--                           record's DECLARED key is required (W8.2)
+--   `-`                     DELETE the guarded rows (keyed)
+-- v1 is the singleton-SET case: it ALSO registers the v1 row
+-- (`updateItemExt` — the emitters' source; the byte-tie holds).
+
+-- The clause syntax category parks in Lean's namespace BY DESIGN
+-- because declare_syntax_cat cannot live in a library namespace (the
+-- `vexpr` precedent). Syntax-category bodies are identical by
+-- construction, hence the dupDefBodies opt-out too.
+set_option linter.guestlang.packageNamespace false in -- because declare_syntax_cat parks the category in Lean's namespace by design
+declare_syntax_cat updateClause
+
+-- Syntax-category bodies are identical by construction (a category
+-- carries no payload) — the dupDefBodies pair with `vexpr` is structural.
+attribute [nolint linter.guestlang.dupDefBodies "syntax-category bodies are identical by construction (a category carries no payload)"]
+  Lean.Parser.Category.updateClause
+
+syntax ident " := " term : updateClause
+syntax "+ " "(" term,* ")" : updateClause
+syntax "-" : updateClause
+
 syntax (name := schemaUpdate) "schema_update " ident " for " ident
-  ident " := " term " where " term : command
+  updateClause,* " where " term : command
+
+/-- One SET clause as a typed quotation (the per-clause assembly —
+    the `fieldToExpr` projection discipline: `path`/`e`'s indices are
+    projections OF the `fQ` binder so the quotation elaborator keeps
+    them shared). -/
+def setClauseQ (fsList : Q(List Field)) (fQ : Q(Field))
+    (path : Q(ColPath ($fQ).name ($fQ).ty $fsList))
+    (e : Q(VExpr $fsList ($fQ).ty)) : Q(SetClause $fsList) :=
+  q(SetClause.mk (fs := $fsList) $fQ $path $e)
+
+/-- The empty clause list (the fold's seed). -/
+def setClausesNilQ (fsList : Q(List Field)) : Q(List (SetClause $fsList)) :=
+  q([])
+
+/-- `cons` on the clause-list literal. -/
+def setClausesConsQ (fsList : Q(List Field)) (cQ : Q(SetClause $fsList))
+    (accQ : Q(List (SetClause $fsList))) : Q(List (SetClause $fsList)) :=
+  q($cQ :: $accQ)
+
+/-- The empty insert template. -/
+def rowTmplNilQ (fsList : Q(List Field)) :
+    Q(RowTmpl $fsList ([] : List Field)) :=
+  q(RowTmpl.nil)
+
+/-- `cons` on the insert-template literal (the index term's field list
+    grows with the quotation — the `fieldsToExpr` discipline). -/
+def rowTmplConsQ (fsList : Q(List Field)) (fQ : Q(Field))
+    (gsQ : Q(List Field)) (e : Q(VExpr $fsList ($fQ).ty))
+    (acc : Q(RowTmpl $fsList $gsQ)) : Q(RowTmpl $fsList ($fQ :: $gsQ)) :=
+  q(RowTmpl.cons (f := $fQ) (gs := $gsQ) $e $acc)
+
+/-- The registered v2 item as a typed quotation (the `Q(_)` casts are
+    `implicit_reducible` defeq, sound by the gates — the
+    `updatePureInstTyQ` precedent). -/
+def update2ItemQ (fsList : Q(List Field)) (unameQ : Q(String))
+    (recQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
+    (setsQ : Q(List (SetClause $fsList))) (keyQ : Q(Option String))
+    (insQ : Q(Option (RowTmpl $fsList $fsList))) (delQ : Q(Bool)) :
+    Q(Update2Item $fsList) :=
+  q(Update2Item.mk (fs := $fsList) $unameQ $recQ $g $setsQ $keyQ $insQ
+    $delQ [])
+
+/-- The `Update2Pure` instance TYPE for a registered v2 update. -/
+def update2PureInstTyQ (fsList : Q(List Field)) (unameQ : Q(String))
+    (recQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
+    (setsQ : Q(List (SetClause $fsList))) (keyQ : Q(Option String))
+    (insQ : Q(Option (RowTmpl $fsList $fsList))) (delQ : Q(Bool)) :
+    Q(Prop) :=
+  q(Update2Pure $fsList
+    $(update2ItemQ fsList unameQ recQ g setsQ keyQ insQ delQ))
+
+/-- The instance PROOF: `Update2Pure.emptyScan`'s `rfl` reduces on the
+    literal `[]` scan result with the binders still abstract (the
+    `updatePureInstPfQ` precedent — the named lemma is the
+    Qq-compatible discharge). -/
+def update2PureInstPfQ (fsList : Q(List Field)) (unameQ : Q(String))
+    (recQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
+    (setsQ : Q(List (SetClause $fsList))) (keyQ : Q(Option String))
+    (insQ : Q(Option (RowTmpl $fsList $fsList))) (delQ : Q(Bool)) :
+    Q(Update2Pure $fsList
+      $(update2ItemQ fsList unameQ recQ g setsQ keyQ insQ delQ)) :=
+  q(Update2Pure.emptyScan (fs := $fsList) (n := $unameQ) (rec := $recQ)
+    (g := $g) (sets := $setsQ) (key? := $keyQ) (ins := $insQ)
+    (del := $delQ))
 
 open Lean Elab Command Term in
 @[command_elab SchemaLang.Meta.schemaUpdate]
 unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
   let uname := stx[1]!.getId.toString
   let recId := stx[3]!.getId
-  -- the syntax layout ("set" dropped — the reserved-word trap): [4]=col,
-  -- [5]=":=", [6]=value, [7]="where", [8]=guard
-  let colId := stx[4]!.getId.toString
-  let valueStx := stx[6]!
-  let guardStx := stx[8]!
+  -- the v2 syntax layout: [4]=the clause list, [5]="where", [6]=guard
+  let guardStx := stx[6]!
   let env ← getEnv
+  -- partition the clauses: SET assignments / the insert row / the
+  -- delete flag (the v1 surface is the singleton-SET case)
+  let mut setStxs : Array (String × TSyntax `term) := #[]
+  let mut insertTerms : Option (Array (TSyntax `term)) := none
+  let mut deleteFlag := false
+  for c in stx[4]!.getSepArgs do
+    match (⟨c⟩ : TSyntax `updateClause) with
+    | `(updateClause| $x:ident := $v:term) =>
+        setStxs := setStxs.push (x.getId.toString, v)
+    | `(updateClause| + ($es,*)) =>
+        if insertTerms.isSome then
+          throwError s!"schema_update `{uname}`: duplicate insert clause — one `+ (…)` per update"
+        insertTerms := some es.getElems
+    | `(updateClause| -) =>
+        if deleteFlag then
+          throwError s!"schema_update `{uname}`: duplicate delete clause"
+        deleteFlag := true
+    | _ => throwUnsupportedSyntax
+  if setStxs.isEmpty && insertTerms.isNone && !deleteFlag then
+    throwError s!"schema_update `{uname}`: no effect — an update needs at least one `<col> := <value>`, an insert `+ (…)`, or a delete `-`"
   -- the record: a registered `Item.record`, or a did-you-mean error
   -- (the invariant lane's pattern)
   let recordNames := (schemaItemExt.getState env).filterMap
@@ -725,48 +952,106 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
         let hint := if cands.isEmpty then ""
           else s!" — did you mean: {String.intercalate ", " cands}?"
         throwError s!"schema_update `{uname}`: `{recId}` is not a registered record{hint}"
-  -- the written FIELD, looked up by NAME: a misspelled column is a
-  -- did-you-mean error (louder than the bare `HasCol` instance miss)
+  -- the written FIELDs, looked up by NAME: a misspelled column is a
+  -- did-you-mean error (louder than the bare `HasCol` instance miss),
+  -- per SET clause
   let fieldNames := fields.map (·.name)
-  let fVal : Field ←
+  let mut fVals : Array Field := #[]
+  for (colId, _) in setStxs do
     match fields.find? (fun fl => fl.name == colId) with
-    | some f => pure f
+    | some f => fVals := fVals.push f
     | none =>
         let cands := CodegenCore.didYouMean colId fieldNames
         let hint := if cands.isEmpty then ""
           else s!" — did you mean: {String.intercalate ", " cands}?"
         throwError s!"schema_update `{uname}`: `{colId}` is not a column of `{recordName}`{hint}"
-  if (registeredUpdateNames env).contains uname then
+  -- the SET columns are DISTINCT (the `applySets_perm` premise —
+  -- clause-order freedom — is EARNED here, not re-checked downstream)
+  let mut seen : Array String := #[]
+  for (colId, _) in setStxs do
+    if seen.contains colId then
+      throwError s!"schema_update `{uname}`: duplicate set column `{colId}` — the multi-write's columns must be distinct (the clause order is unobservable under that premise)"
+    seen := seen.push colId
+  -- the dup-name gates (each registry's own names — a v1-shaped row
+  -- lands in BOTH)
+  let isV1Shape := setStxs.size == 1 && insertTerms.isNone && !deleteFlag
+  if isV1Shape && (registeredUpdateNames env).contains uname then
     throwError s!"schema_update `{uname}`: duplicate update name"
-  -- elaborate guard + value against the REAL fields, evaluate the GADT
-  -- values, resolve the write path (the `VExpr.colOf` route, its `.col`
-  -- path extracted) — all data by the time it registers
-  let (row, instName, instTy, instVal) ← liftTermElabM do
+  if (registeredUpdate2Names env).contains uname then
+    throwError s!"schema_update `{uname}`: duplicate update name"
+  -- the DECLARED KEY (W8.2): insert/delete updates need it (the
+  -- remove-delta's key image, the obligation view); a set-only update
+  -- adopts the declared key when one is registered
+  let key? : Option String ←
+    if insertTerms.isSome || deleteFlag then
+      match registeredKeyDecl? env recordName with
+      | some kd => pure (some kd.key)
+      | none =>
+          throwError s!"schema_update `{uname}`: insert/delete updates need `{recordName}`'s DECLARED key (W8.2) — register it first (`schema_keys for {recId} := primary <field>`)"
+    else
+      pure ((registeredKeyDecl? env recordName).map (·.key))
+  -- key immutability (a key change is a delete + insert — the
+  -- event-sourcing reading; the lowering correspondence's premise is
+  -- earned here)
+  if let some key := key? then
+    if (fVals.map (·.name)).contains key then
+      throwError s!"schema_update `{uname}`: `{key}` is `{recordName}`'s declared key — the key column cannot be written (a key change is a delete + insert)"
+  -- elaborate the guard + every clause's value against the REAL
+  -- fields, evaluate the GADT values, resolve the write paths (the
+  -- `VExpr.colOf` route per clause), evaluate the insert template —
+  -- all data by the time it registers
+  let (row2, inst2Name, inst2Ty, inst2Val, row1?) ← liftTermElabM do
     let fsList := fieldsToExpr fields
     let expectedFs : Q(Type) := q(List Field)
     let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
-    -- the value: against `VExpr <fields> f.ty` — the FIELD's OWN TYPE
-    -- is the type gate (a u64 expr on a string column fails here)
-    let expectedValue : Expr := vexprTyQ fsList (tyToExpr fVal.ty)
-    let e ← elabTerm valueStx (some expectedValue)
-    Term.synthesizeSyntheticMVarsNoPostponing
-    let e ← instantiateMVars e
-    -- the TYPE GATE, stated loud: the value expression's `Ty` index must
-    -- BE the written field's own type (a u64 expr on a string column
-    -- fails HERE, with the two types named — the did-you-mean grade)
-    let eT ← Meta.whnf (← Meta.inferType e)
-    let tGot : Ty ←
-      if eT.isAppOf ``SchemaLang.VExpr && eT.getAppNumArgs == 2 then
-        Meta.evalExpr Ty (mkConst ``SchemaLang.Ty) eT.getAppArgs[1]!
-      else
-        throwError s!"schema_update `{uname}`: the value is not a `VExpr`"
-    unless tGot == fVal.ty do
-      throwError s!"schema_update `{uname}`: the value expression has type {repr tGot} — "
-        ++ s!"the written column `{colId}` is {repr fVal.ty} — the value expression "
-        ++ "must have the COLUMN'S OWN TYPE (the GADT gate)"
-    if e.hasExprMVar then
-      throwError s!"schema_update `{uname}`: unresolved metavariables in the value"
-    let valueVal : VExpr fsVal fVal.ty ← Meta.evalExpr (VExpr fsVal fVal.ty) expectedValue e
+    -- per SET clause: the value against `VExpr <fields> f.ty` (the
+    -- FIELD's OWN TYPE is the type gate) and the write path
+    let mut setVals : Array (SetClause fsVal) := #[]
+    let mut valueExprs : Array Expr := #[]
+    let mut pathExprs : Array Expr := #[]
+    for i in [:setStxs.size] do
+      let (colId, valueStx) := setStxs[i]!
+      let fVal := fVals[i]!
+      let expectedValue : Expr := vexprTyQ fsList (tyToExpr fVal.ty)
+      let e ← elabTerm valueStx (some expectedValue)
+      Term.synthesizeSyntheticMVarsNoPostponing
+      let e ← instantiateMVars e
+      -- the TYPE GATE, stated loud: the value expression's `Ty` index
+      -- must BE the written field's own type (a u64 expr on a string
+      -- column fails HERE, with the two types named — the
+      -- did-you-mean grade)
+      let eT ← Meta.whnf (← Meta.inferType e)
+      let tGot : Ty ←
+        if eT.isAppOf ``SchemaLang.VExpr && eT.getAppNumArgs == 2 then
+          Meta.evalExpr Ty (mkConst ``SchemaLang.Ty) eT.getAppArgs[1]!
+        else
+          throwError s!"schema_update `{uname}`: the value is not a `VExpr`"
+      unless tGot == fVal.ty do
+        throwError s!"schema_update `{uname}`: the value expression has type {repr tGot} — "
+          ++ s!"the written column `{colId}` is {repr fVal.ty} — the value expression "
+          ++ "must have the COLUMN'S OWN TYPE (the GADT gate)"
+      if e.hasExprMVar then
+        throwError s!"schema_update `{uname}`: unresolved metavariables in the value"
+      let valueVal : VExpr fsVal fVal.ty ← Meta.evalExpr (VExpr fsVal fVal.ty) expectedValue e
+      -- the write path: elaborate `VExpr.colOf <col>`, extract the
+      -- `.col` constructor path (data — the `ColPath` doctrine)
+      let colLit : Term ← Lean.Elab.Term.exprToSyntax (mkStrLit colId)
+      let colStx ← `(SchemaLang.VExpr.colOf $colLit)
+      let pe ← elabTerm colStx (some expectedValue)
+      Term.synthesizeSyntheticMVarsNoPostponing
+      let pe ← instantiateMVars pe
+      if pe.hasExprMVar then
+        throwError s!"schema_update `{uname}`: column `{colId}` is not on `{recordName}`"
+      let peCtor ← Meta.whnf pe
+      unless peCtor.getAppFn.isConstOf ``SchemaLang.VExpr.col do
+        throwError s!"schema_update `{uname}`: internal: `colOf` did not reduce to the .col ctor"
+      let pathE := peCtor.getAppArgs[peCtor.getAppArgs.size - 1]!
+      let pathTyE : Expr := colPathTyQ fsList (toExpr fVal.name) (tyToExpr fVal.ty)
+      let pathVal : ColPath fVal.name fVal.ty fsVal ←
+        Meta.evalExpr (ColPath fVal.name fVal.ty fsVal) pathTyE pathE
+      setVals := setVals.push { field := fVal, path := pathVal, value := valueVal }
+      valueExprs := valueExprs.push e
+      pathExprs := pathExprs.push pathE
     -- the guard: against `VExpr <fields> .bool`
     let expectedGuard : Expr := vexprBoolTyQ fsList
     let g ← elabTerm guardStx (some expectedGuard)
@@ -775,76 +1060,133 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     if g.hasExprMVar then
       throwError s!"schema_update `{uname}`: unresolved metavariables in the guard"
     let guardVal : VExpr fsVal .bool ← Meta.evalExpr (VExpr fsVal .bool) expectedGuard g
+    -- the insert row (W8.3): a FULL row, one expression per field in
+    -- field order, each against the FIELD'S OWN TYPE (the GADT gate,
+    -- per position)
+    let mut insertExprs : Array Expr := #[]
+    if let some es := insertTerms then
+      unless es.size == fields.length do
+        throwError s!"schema_update `{uname}`: the insert row has {es.size} fields — `{recordName}` has {fields.length} (a FULL row, in field order)"
+      for i in [:fields.length] do
+        let f := fields[i]!
+        let expectedI : Expr := vexprTyQ fsList (tyToExpr f.ty)
+        let e ← elabTerm es[i]! (some expectedI)
+        Term.synthesizeSyntheticMVarsNoPostponing
+        let e ← instantiateMVars e
+        let eT ← Meta.whnf (← Meta.inferType e)
+        let tGot : Ty ←
+          if eT.isAppOf ``SchemaLang.VExpr && eT.getAppNumArgs == 2 then
+            Meta.evalExpr Ty (mkConst ``SchemaLang.Ty) eT.getAppArgs[1]!
+          else
+            throwError s!"schema_update `{uname}`: the insert row's field `{f.name}` is not a `VExpr`"
+        unless tGot == f.ty do
+          throwError s!"schema_update `{uname}`: the insert row's field `{f.name}` has type {repr tGot} — the field is {repr f.ty} — each insert expression must have the FIELD'S OWN TYPE (the GADT gate)"
+        if e.hasExprMVar then
+          throwError s!"schema_update `{uname}`: unresolved metavariables in the insert row"
+        insertExprs := insertExprs.push e
     -- the DETERMINISM GATE (the armed `volatileInPureContext` diag's
-    -- firing site): the value and guard terms may reference REGISTERED
-    -- schema functions; a volatile one in this pure-context lane fails
-    -- elaboration, naming the fn and the update. The scan is the
-    -- post-elaboration constant walk of BOTH terms (`volatileSchemaFns`).
+    -- firing site): the value, insert, and guard terms may reference
+    -- REGISTERED schema functions; a volatile one in this pure-context
+    -- lane fails elaboration, naming the fn and the update. The scan
+    -- is the post-elaboration constant walk of EVERY term
+    -- (`volatileSchemaFns`).
     let volatileHits :=
-      (volatileSchemaFns env e ++ volatileSchemaFns env g).eraseDups
+      ((valueExprs.toList ++ insertExprs.toList).flatMap (volatileSchemaFns env)
+        ++ volatileSchemaFns env g).eraseDups
     unless volatileHits.isEmpty do
       throwError s!"schema_update `{uname}`: " ++
         String.intercalate "; " (volatileHits.map fun fn =>
           SchemaDiag.render (.volatileInPureContext fn s!"schema_update {uname}"))
-    -- the write path: elaborate `VExpr.colOf <col>`, extract the
-    -- `.col` constructor path (data — the `ColPath` doctrine)
-    let colLit : Term ← Lean.Elab.Term.exprToSyntax (mkStrLit colId)
-    let colStx ← `(SchemaLang.VExpr.colOf $colLit)
-    let pe ← elabTerm colStx (some expectedValue)
-    Term.synthesizeSyntheticMVarsNoPostponing
-    let pe ← instantiateMVars pe
-    if pe.hasExprMVar then
-      throwError s!"schema_update `{uname}`: column `{colId}` is not on `{recordName}`"
-    let peCtor ← Meta.whnf pe
-    unless peCtor.getAppFn.isConstOf ``SchemaLang.VExpr.col do
-      throwError s!"schema_update `{uname}`: internal: `colOf` did not reduce to the .col ctor"
-    let pathE := peCtor.getAppArgs[peCtor.getAppArgs.size - 1]!
-    let pathTyE : Expr := colPathTyQ fsList (toExpr fVal.name) (tyToExpr fVal.ty)
-    let pathVal : ColPath fVal.name fVal.ty fsVal ←
-      Meta.evalExpr (ColPath fVal.name fVal.ty fsVal) pathTyE pathE
+    -- the insert template: assemble the GADT literal (typed
+    -- quotations), evaluate the value
+    let (insQ, insertVal?) ←
+      match insertTerms with
+      | none =>
+          pure ((q(Option.none) : Q(Option (RowTmpl $fsList $fsList))), none)
+      | some _ => do
+          let rec buildTmpl : (gs : List Field) → List Expr → TermElabM Expr
+            | [], [] => pure (rowTmplNilQ fsList)
+            | gf :: gs', e :: es' => do
+                let acc ← buildTmpl gs' es'
+                pure (rowTmplConsQ fsList (fieldToExpr gf) (fieldsToExpr gs') e acc)
+            | _, _ => throwError s!"schema_update `{uname}`: internal: insert arity"
+          let tmplE : Q(RowTmpl $fsList $fsList) := ← buildTmpl fields insertExprs.toList
+          let tmplVal ← Meta.evalExpr (RowTmpl fsVal fsVal)
+            (mkAppN (mkConst ``SchemaLang.RowTmpl) #[fsList, fsList]) tmplE
+          pure ((q(Option.some $tmplE) : Q(Option (RowTmpl $fsList $fsList))),
+            some tmplVal)
+    -- assemble the v2 item (the scan's decided fact rides
+    -- `volatileRefs` — the `UpdatePure` proof discipline)
+    let item2 : Update2Item fsVal :=
+      { name := uname, record := recordName, guard := guardVal
+      , sets := setVals.toList, key? := key?, insert? := insertVal?
+      , delete := deleteFlag, volatileRefs := volatileHits }
+    let setsQ : Q(List (SetClause $fsList)) :=
+      (List.range setStxs.size).foldr (fun i accQ =>
+        setClausesConsQ fsList
+          (setClauseQ fsList (fieldToExpr fVals[i]!) pathExprs[i]! valueExprs[i]!)
+          accQ) (setClausesNilQ fsList)
+    let keyQ : Q(Option String) := toExpr key?
+    let delQ : Q(Bool) := toExpr deleteFlag
+    let inst2Ty : Expr :=
+      update2PureInstTyQ fsList (toExpr uname) (toExpr recordName) g setsQ keyQ insQ delQ
+    let inst2Pf : Expr :=
+      update2PureInstPfQ fsList (toExpr uname) (toExpr recordName) g setsQ keyQ insQ delQ
     -- THE COMPOSABLE LOCK (the second layer — the scan above stays
     -- the first): the scan's decided fact is discharged as a PROOF.
-    -- The command EMITS the `UpdatePure` instance for the registered
-    -- update; its proof is `rfl` against the STORED `volatileRefs`
-    -- data — if the gate ever stored a nonempty scan, this `rfl`
-    -- FAILS to elaborate (the proof checks the gate). Downstream,
-    -- `UpdateItem.cascade2` assembles legality by instance search —
-    -- no re-scan at the consumer.
-    -- the instance assembly, fully typed (Qq): the elaborated terms
-    -- are passed to the typed-quotation helpers with their CHECKED
-    -- types (the `VExpr`/`ColPath` gates above) — the `Q(_)` casts are
-    -- `implicit_reducible` defeq, sound by the gates. The proof is
-    -- `UpdatePure.emptyScan`, discharging `rfl` against the literal
-    -- `[]` scan result — the kernel checks the gate (was: raw `mkAppN`
-    -- assembly + runtime `elabTerm` of `⟨rfl⟩` + an "internal:
-    -- unresolved metavariables" guard, all dead now that the instance
-    -- is typed at construction)
-    let instTy : Expr :=
-      updatePureInstTyQ fsList (fieldToExpr fVal) (toExpr uname) g e pathE
-    let pf : Expr :=
-      updatePureInstPfQ fsList (fieldToExpr fVal) (toExpr uname) g e pathE
-    pure ({ fields := fsVal, field := fVal
-          , update := { name := uname, guard := guardVal
-                      , value := valueVal, writePath := pathVal
-                      , volatileRefs := volatileHits } : SomeUpdate },
-      ((`SchemaLang).str "instUpdatePure").str uname, instTy, pf)
+    -- The command EMITS the `Update2Pure` instance (and, for
+    -- v1-shaped updates, the v1 `UpdatePure` one); its proof is `rfl`
+    -- against the STORED `volatileRefs` data — if the gate ever stored
+    -- a nonempty scan, this `rfl` FAILS to elaborate (the proof checks
+    -- the gate). The instance assembly is fully typed (Qq): the
+    -- elaborated terms are passed to the typed-quotation helpers with
+    -- their CHECKED types (the `VExpr`/`ColPath` gates above) — the
+    -- `Q(_)` casts are `implicit_reducible` defeq, sound by the gates.
+    let row1? ←
+      if isV1Shape then
+        match setVals.toList with
+        | [c0] =>
+            pure (some ({ fields := fsVal, field := c0.field
+                        , update := { name := uname, guard := guardVal
+                                    , value := c0.value, writePath := c0.path
+                                    , volatileRefs := volatileHits } : SomeUpdate },
+              ((`SchemaLang).str "instUpdatePure").str uname,
+              updatePureInstTyQ fsList (fieldToExpr c0.field) (toExpr uname) g
+                valueExprs[0]! pathExprs[0]!,
+              updatePureInstPfQ fsList (fieldToExpr c0.field) (toExpr uname) g
+                valueExprs[0]! pathExprs[0]!))
+        | _ => pure none
+      else pure none
+    pure ({ fields := fsVal, update := item2 : SomeUpdate2 },
+      ((`SchemaLang).str "instUpdate2Pure").str uname, inst2Ty, inst2Pf,
+      row1?)
   modifyEnv fun env =>
-    updateItemExt.addEntry env row
+    update2ItemExt.addEntry env row2
+  if let some (row1, inst1Name, inst1Ty, inst1Val) := row1? then
+    modifyEnv fun env =>
+      updateItemExt.addEntry env row1
+    liftTermElabM do
+      Lean.addDecl (Declaration.defnDecl {
+        name := inst1Name, levelParams := [], type := inst1Ty
+        , value := inst1Val, hints := Lean.ReducibilityHints.abbrev
+        , safety := Lean.DefinitionSafety.safe })
+      Lean.Meta.addInstance inst1Name .global 1000
   -- the instance: a def with the instance attribute (4.33's `Declaration`
   -- has no `instanceDecl` constructor — the `instance` command's own
   -- route is defn + addInstance)
   -- KNOWN FALSE POSITIVE: `warn.classDefReducibility` flags these
-  -- (`instUpdatePure.*` — Demo/Tests) as "semireducible" EVEN THOUGH the
-  -- hints ARE `.abbrev` — the linter reads only attribute-site
-  -- declarations, not the addDecl route. Accepted (documented), NOT
-  -- silenced: `set_option ... false` would trip the noLinterDisable
-  -- lint, and the instances resolve fine (the consumers prove it).
+  -- (`instUpdatePure.*`/`instUpdate2Pure.*` — Demo/Tests) as
+  -- "semireducible" EVEN THOUGH the hints ARE `.abbrev` — the linter
+  -- reads only attribute-site declarations, not the addDecl route.
+  -- Accepted (documented), NOT silenced: `set_option ... false` would
+  -- trip the noLinterDisable lint, and the instances resolve fine (the
+  -- consumers prove it).
   liftTermElabM do
     Lean.addDecl (Declaration.defnDecl {
-      name := instName, levelParams := [], type := instTy
-      , value := instVal, hints := Lean.ReducibilityHints.abbrev
+      name := inst2Name, levelParams := [], type := inst2Ty
+      , value := inst2Val, hints := Lean.ReducibilityHints.abbrev
       , safety := Lean.DefinitionSafety.safe })
-    Lean.Meta.addInstance instName .global 1000
+    Lean.Meta.addInstance inst2Name .global 1000
 
 end SchemaLang.Meta
 

@@ -2,11 +2,16 @@
 # Gates.Main — the `gates` exe: subcommand dispatch (Cli)
 
     lake exe gates gen-check        — the stripped byte-tie
-    lake exe gates axioms [--write] — the global axiom report
+    lake exe gates axioms [--write] [--package X] — the axiom report
+                                      (sharded: one package's env per
+                                      process — the lean-axioms recipe
+                                      loops this; no --package = the
+                                      monolithic whole-file mode)
     lake exe gates manifest-check   — lakefile ↔ manifest drift
     lake exe gates coverage [--write] [--strict] — the coverage matrix
     lake exe gates kernel-check     — the lean4lean double-check
-    lake exe gates all [--full]     — 1–4 (+ kernel-check) in one run;
+    lake exe gates native-policy    — the native_decide grandfathering gate
+    lake exe gates all [--full]     — 1–5 (+ kernel-check) in one run;
                                       --full also shells out to the
                                       Rust/wasm lane (just wasm-compile,
                                       just test) — subprocess is THEIR
@@ -28,7 +33,7 @@ open Cli
 unsafe def runGenCheck (_p : Parsed) : IO UInt32 := Gates.GenCheck.run
 
 unsafe def runAxioms (p : Parsed) : IO UInt32 :=
-  Gates.Axioms.run (p.hasFlag "write")
+  Gates.Axioms.run (p.hasFlag "write") (p.flag? "package" |>.map (·.as! String))
 
 unsafe def runManifestCheck (_p : Parsed) : IO UInt32 := Gates.Manifest.run
 
@@ -36,6 +41,8 @@ unsafe def runCoverage (p : Parsed) : IO UInt32 :=
   Gates.Coverage.run (p.hasFlag "write") (p.hasFlag "strict")
 
 unsafe def runKernelCheck (_p : Parsed) : IO UInt32 := Gates.KernelCheck.run
+
+unsafe def runNativePolicy (_p : Parsed) : IO UInt32 := Gates.NativePolicy.run
 
 /-- `just <recipe>` from the repo root (gates runs from lean/gates). -/
 def shellJust (args : List String) : IO UInt32 := do
@@ -49,9 +56,10 @@ def shellJust (args : List String) : IO UInt32 := do
 unsafe def runAll (p : Parsed) : IO UInt32 := do
   for (name, step) in
     [ ("gen-check",     Gates.GenCheck.run)
-    , ("axioms",        Gates.Axioms.run false)
+    , ("axioms",        Gates.Axioms.run false none)
     , ("manifest-check", Gates.Manifest.run)
-    , ("coverage",      Gates.Coverage.run false false) ] do
+    , ("coverage",      Gates.Coverage.run false false)
+    , ("native-policy", Gates.NativePolicy.run) ] do
     IO.println s!"══ gates all: {name} ══"
     let code ← step
     if code != 0 then
@@ -84,7 +92,12 @@ unsafe def axiomsCmd : Cmd := `[Cli|
    (consumed, not re-encoded); diffs against notes/axiom-report.md."
 
   FLAGS:
-    write; "Update the committed notes/axiom-report.md instead of diffing it."
+    write;            "Update the committed notes/axiom-report.md instead of diffing it."
+    package : String; "Check ONE gated package (its Gates.Packages dir) — one \
+      environment in this process, the sharded mode the lean-axioms recipe \
+      loops over (the monolithic all-envs run peaks at ~26.5GB RSS). With \
+      --write, rewrites only that package's `## <dir>` section of \
+      notes/axiom-report.md in place; the check diffs only that section."
 ]
 
 unsafe def manifestCheckCmd : Cmd := `[Cli|
@@ -115,9 +128,20 @@ unsafe def kernelCheckCmd : Cmd := `[Cli|
    not independence."
 ]
 
+unsafe def nativePolicyCmd : Cmd := `[Cli|
+  "native-policy" VIA runNativePolicy; ["0.1.0"]
+  "The native_decide grandfathering gate (W9.7, design-guest-verified.md \
+   §6.3): every decl in every gated package gets its CollectAxioms cone; \
+   a `_native.native_decide.` axiom outside the grandfathered set \
+   (Gates.NativePolicy.grandfatheredNative — edgepython's Parity module, \
+   schema-lang's Emit/Circuit) FAILS. lean4lean cannot re-check \
+   reduceBool, so a decl on that trust base is outside the independent \
+   kernel's checking. Stale grandfather entries fail too."
+]
+
 unsafe def allCmd : Cmd := `[Cli|
   "all" VIA runAll; ["0.1.0"]
-  "gen-check + axioms + manifest-check + coverage in one run."
+  "gen-check + axioms + manifest-check + coverage + native-policy in one run."
 
   FLAGS:
     full; "Also shell out to the Rust/wasm lane (just wasm-compile, just test)."
@@ -127,7 +151,7 @@ unsafe def gatesCmd : Cmd := `[Cli|
   "gates" NOOP; ["0.1.0"]
   "The Lean-side gates driver (the pipeline-as-machine row)."
 
-  SUBCOMMANDS: genCheckCmd; axiomsCmd; manifestCheckCmd; coverageCmd; kernelCheckCmd; allCmd
+  SUBCOMMANDS: genCheckCmd; axiomsCmd; manifestCheckCmd; coverageCmd; kernelCheckCmd; nativePolicyCmd; allCmd
 ]
 
 unsafe def main (args : List String) : IO UInt32 :=

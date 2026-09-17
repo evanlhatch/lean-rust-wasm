@@ -20,6 +20,7 @@ public import SchemaLang.Meta.Reflect
 public import SchemaLang.Meta.Derive
 public import SchemaLang.Migration
 public import SchemaLang.Validate
+public import SchemaLang.WitnessSpec
 
 @[expose] public section
 
@@ -173,3 +174,44 @@ schema_update self_bump for User id := SchemaLang.VExpr.colOf "id"
 def registeredMigrations : List SchemaLang.Migration :=
   [ { item := "OrderItem"
     , fields := [SchemaLang.widenU32U64 "qty"] } ]
+
+/-! ## The guestVerified witness registry (W9.4 — design-guest-verified §4)
+
+The FIRST consumer of the fifth obligation tier: the User record's
+v1→v2 migration segment. `SchemaLang.EventSourced` ships the identity
+upcaster (its documented v1 exclusion — wire-level upcasting is the
+Migration/Snapshot lane), so this segment's migrated rows ARE the
+journal rows; a real retype migration lands as a remedy row above and
+regenerates this witness against the NEW surface (the envelope
+fingerprint changes — a stale witness is a decode-level refusal). The
+claim is W9.1's chain rule: the `id-positive` invariant's mirror
+(`id > 0`) holds of the initial row AND of every referenced log row.
+The data rides the DERIVED field list (`userNameLenFields` — a User
+field rename fails THIS module's elaboration; the spec cannot drift
+from the record). The emitter (`SchemaLang.Emit.Witness`) generates +
+self-checks + byte-ties the certificate; `SchemaObligation.discharge`'s
+guestVerified arm consumes it. -/
+
+/-- The initial row the chain claim certifies from (id 1 — the
+    invariant holds). -/
+def demoWitnessInitRow : SchemaLang.RowVals userNameLenFields :=
+  userNameLenRowOf ⟨1, "ab", "a@x", []⟩
+
+/-- The committed log segment the chain references by OFFSET (design
+    §7.2: offsets, never copies — the guest already holds the log). -/
+def demoWitnessLog : List (SchemaLang.RowVals userNameLenFields) :=
+  [userNameLenRowOf ⟨2, "cd", "c@x", []⟩, userNameLenRowOf ⟨3, "ef", "e@x", []⟩]
+
+/-- The obligation's registration row: replaying the segment preserves
+    `id-positive` — claim + decoded context + the artifact name the
+    discharge's evidence cites. -/
+def demoWitnessSpecUserV1V2 : SchemaLang.WitnessSpec :=
+  { label := "user-v1-v2-id-positive"
+  , artifact := "witnesses/user-v1-v2-id-positive.wtn"
+  , claim := .chain [⟨0⟩, ⟨1⟩] (.gt (.col "id") (.lit 0))
+  , ctx := ⟨userNameLenFields, demoWitnessInitRow, demoWitnessLog⟩ }
+
+/-- THE REGISTRY (the `registeredMigrations` precedent: spec data lives
+    in the spec module; the emitter driver reads the module it already
+    imports). One row per guestVerified obligation. -/
+def demoWitnesses : List SchemaLang.WitnessSpec := [demoWitnessSpecUserV1V2]

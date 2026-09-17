@@ -165,6 +165,21 @@ def decNat? (bs : List UInt8) : Option (Nat × List UInt8) := some (decVarNat bs
     decNat? (encVarNat n ++ rest) = some (n, rest) := by
   simp [decNat?, decVarNat_append]
 
+/-- A varint is never the empty byte string (every Nat emits at least
+    one digit) — the bound the fueled tree decoders' entry fuel
+    (`bytes + 1`) rides: one byte per tree node at minimum. -/
+theorem length_encVarNat_pos (n : Nat) : 0 < (encVarNat n).length := by
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+      rw [encVarNat]
+      split
+      · simp
+      · rename_i hlt
+        have hdiv : n / 128 < n := Nat.div_lt_self (by omega) (by decide : 1 < 128)
+        have := ih (n / 128) hdiv
+        simp only [List.length_cons]
+        omega
+
 /-! ## Generic combinators -/
 
 /-- `Option`: tag byte 0 = none, 1 = some followed by the element. -/
@@ -286,6 +301,84 @@ def decBytes? (bs : List UInt8) : Option (List UInt8 × List UInt8) :=
 theorem decBytes_encBytes (bs : List UInt8) :
     decBytes? (encBytes bs) = some (bs, []) := by
   simpa using decBytes_encBytes_append bs []
+
+/-! ## UInt64 + String atoms (W9.1 — the witness lane's scalars)
+
+UInt64 rides its `toNat` varint (canonical on encode; decode accepts —
+and wraps — any varint; the law is decode∘encode). Strings are
+length-prefixed CHAR LISTS, not UTF-8 bytes: core ships no
+`fromUTF8? ∘ toUTF8` round-trip lemma (the gap this module's header
+documents), so the provable atom is `encList` of `Char.toNat` varints
+and the law rides `String.ofList_toList` + `Char.ofNat_toNat`. -/
+
+/-- UInt64 as its `toNat` varint. -/
+def encU64 (v : UInt64) : List UInt8 := encVarNat v.toNat
+
+/-- Decode a UInt64 varint (accepts any varint, wrapping — the
+    encoder's range is always in-domain). -/
+def decU64? (bs : List UInt8) : Option (UInt64 × List UInt8) :=
+  (decNat? bs).map fun (n, r) => (UInt64.ofNat n, r)
+
+@[simp] theorem decU64_encU64_append (v : UInt64) (rest : List UInt8) :
+    decU64? (encU64 v ++ rest) = some (v, rest) := by
+  simp [encU64, decU64?, UInt64.ofNat_toNat]
+
+/-- Char as its `toNat` varint. -/
+def encChar (c : Char) : List UInt8 := encVarNat c.toNat
+
+/-- Decode a char varint (`Char.ofNat` is total; the law needs only
+    the encoder's range). -/
+def decChar? (bs : List UInt8) : Option (Char × List UInt8) :=
+  (decNat? bs).map fun (n, r) => (Char.ofNat n, r)
+
+@[simp] theorem decChar_encChar_append (c : Char) (rest : List UInt8) :
+    decChar? (encChar c ++ rest) = some (c, rest) := by
+  simp [encChar, decChar?, Char.ofNat_toNat]
+
+/-- String as a length-prefixed char list (see the section note). -/
+def encString (s : String) : List UInt8 := encList encChar s.toList
+
+/-- Decode a char-list string. -/
+def decString? (bs : List UInt8) : Option (String × List UInt8) :=
+  (decList? decChar? bs).map fun (cs, r) => (String.ofList cs, r)
+
+@[simp] theorem decString_encString_append (s : String) (rest : List UInt8) :
+    decString? (encString s ++ rest) = some (s, rest) := by
+  simp [encString, decString?,
+    decList_encList_append encChar decChar? (fun c r => decChar_encChar_append c r),
+    String.ofList_toList]
+
+/-! ## Membership-restricted element laws (W9.1)
+
+`decManyBind_enc_append`/`decList_encList_append` demand the element
+law for EVERY `a : α`. A recursive wire (a node whose children decode
+under a depth cap) has the element law only for list MEMBERS (the
+depth bound holds per element, not universally). These variants
+restrict the hypothesis accordingly — same proofs, `mem`-guarded. -/
+
+theorem decManyBind_enc_append_of_mem (dec : List UInt8 → Option (α × List UInt8))
+    (enc : α → List UInt8) (as : List α)
+    (h : ∀ a ∈ as, ∀ (rest : List UInt8), dec (enc a ++ rest) = some (a, rest))
+    (rest : List UInt8) :
+    decManyBind? dec as.length ((as.map enc).flatten ++ rest) = some (as, rest) := by
+  induction as generalizing rest with
+  | nil => simp [decManyBind?]
+  | cons a as ih =>
+      simp only [decManyBind?, List.length_cons, List.map_cons, List.flatten_cons,
+        List.append_assoc]
+      rw [h a List.mem_cons_self ((as.map enc).flatten ++ rest)]
+      simp [ih (fun b hb => h b (List.mem_cons_of_mem _ hb))]
+
+theorem decList_encList_append_of_mem (enc : α → List UInt8)
+    (dec : List UInt8 → Option (α × List UInt8)) (as : List α)
+    (h : ∀ a ∈ as, ∀ (rest : List UInt8), dec (enc a ++ rest) = some (a, rest))
+    (rest : List UInt8) :
+    decList? dec (encList enc as ++ rest) = some (as, rest) := by
+  show decManyBind? dec (decVarNat (encList enc as ++ rest)).1
+      (decVarNat (encList enc as ++ rest)).2 = some (as, rest)
+  rw [show encList enc as = encVarNat as.length ++ (as.map enc).flatten from rfl,
+    List.append_assoc, decVarNat_append]
+  exact decManyBind_enc_append_of_mem dec enc as h rest
 
 /-! ## The versioned envelope (5.5.7)
 

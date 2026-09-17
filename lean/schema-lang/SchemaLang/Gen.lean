@@ -75,6 +75,24 @@ def genU8 : Gen UInt8 := do
 
 /-! ## The value generator (lifted verbatim-shape) -/
 
+/-- One key payload (the scalar generator arms, DIRECT — the
+    `encodeKey` pattern: the `KeyTy.toTy` indirection would break
+    `genVal`'s structural recursion). Duplicate keys are generatable
+    — insertion order and duplicates are payload data (the `list`
+    discipline); canonicalization is the emitter boundary's job. -/
+def genKey : (k : KeyTy) → Gen (Value k.toTy)
+  | .bool => do pure (.bool ((← Gen.chooseNat) % 2 == 0))
+  | .u8 => do pure (.u8 (← genU8))
+  | .u16 => do pure (.u16 ((← Gen.chooseNat) % 65536).toUInt16)
+  | .u32 => do pure (.u32 ((← Gen.chooseNat) % 4294967296).toUInt32)
+  | .u64 => do pure (.u64 ((← Gen.chooseNat) % 18446744073709551616).toUInt64)
+  | .i8 => do pure (.i8 (Int8.ofInt (unzigzag ((← Gen.chooseNat) % 200))))
+  | .i16 => do pure (.i16 (Int16.ofInt (unzigzag ((← Gen.chooseNat) % 40000))))
+  | .i32 => do pure (.i32 (Int32.ofInt (unzigzag ((← Gen.chooseNat) % 4000000000))))
+  | .i64 => do
+      pure (.i64 (Int64.ofInt (unzigzag ((← Gen.chooseNat) % 1000000000000000000))))
+  | .string => do pure (.string (String.ofList (← genShortList genChar 4)))
+
 /-- One value of type `t` (must be codec-closed), size-bounded by fuel.
     The tensor arm is SHAPE-FILLED: the dims are the type's data, the
     generator fills them — flat elements at `dims.prod`, assembled by
@@ -105,6 +123,14 @@ def genVal : (t : Ty) → CodecClosed t → Nat → Gen (Value t)
       else pure (.err (← genVal err herr fuel))
   | .list t, .list h, fuel + 1 => do
       pure (.list (listToVList (← genShortList (genVal t h fuel) 3)))
+  | .map k v, .map hv, fuel + 1 => do
+      -- a short association list: keys at the KEY generator (direct),
+      -- values at the value generator; the two lists zip-pair
+      let ks ← genShortList (genKey k) 3
+      let vs ← genShortList (genVal v hv fuel) 3
+      pure (.map (listToVMap (ks.zip vs)))
+  | .set k, .set, _ + 1 => do
+      pure (.set (listToVList (← genShortList (genKey k) 3)))
   | .future t, .future h, fuel + 1 => do pure (.future (← genVal t h fuel))
   | .stream t, .stream h, fuel + 1 => do
       pure (.stream (listToVList (← genShortList (genVal t h fuel) 3)))

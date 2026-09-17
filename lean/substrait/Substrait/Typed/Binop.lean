@@ -52,7 +52,12 @@ Core-only: imports `Lean` (elaboration machinery) and nothing else.  This
 module deliberately does NOT import `Substrait.Typed.Expr` (the command must
 be usable FROM it); the referenced constants are named, not imported.
 -/
-import Lean
+
+module
+
+public import Lean
+
+public meta section
 
 namespace Substrait.Meta
 
@@ -98,3 +103,5 @@ def elabDeclareBinop : CommandElab := fun stx => do
   | _ => Lean.Elab.throwUnsupportedSyntax
 
 end Substrait.Meta
+
+end -- public meta section

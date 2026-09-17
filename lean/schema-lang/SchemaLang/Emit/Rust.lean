@@ -9,6 +9,8 @@ Lowering (target-neutral universe → Rust):
 - scalars 1:1 (`bool`, `u8`…`u64`, `i8`…`i64`, `f32`, `f64`)
 - `string` → `String`, `bytes` → `Vec<u8>`
 - `option`/`result`/`list` → `Option`/`Result`/`Vec` (1:1)
+- `map`/`set` → `BTreeMap`/`BTreeSet` (deterministic — the runbook
+  default; `KeyTy` scalars are all `Ord`)
 - `future`/`stream` unreachable in field position (wellFormed bans —
   the flatland audit doctrine: the emitter may assume checked input)
 - `.ty n` → `Pascal n`
@@ -43,6 +45,8 @@ def hasFloatWith (sem : String → Bool) : Ty → Bool
   | .option a => hasFloatWith sem a
   | .result ok err => hasFloatWith sem ok || hasFloatWith sem err
   | .list a => hasFloatWith sem a
+  | .map _ v => hasFloatWith sem v  -- the key is a `KeyTy` scalar: float-free
+  | .set _ => false                 -- a `KeyTy` scalar: float-free
   | .future a => hasFloatWith sem a
   | .stream a => hasFloatWith sem a
   | .ty n => sem n
@@ -80,6 +84,15 @@ def hasFloat (items : List Item) (t : Ty) (fuel : Nat := 8) : Bool :=
 def derivesFor (items : List Item) (tys : List Ty) : List String :=
   if tys.any (hasFloat items) then baseDerives else baseDerives ++ ["Eq"]
 
+/-- The map/set KEY rendering, DIRECT (the `KeyTy.toTy` indirection
+    breaks `tyRust`'s structural recursion; the arms are exactly the
+    scalar text `tyRust` gives the injected types). -/
+def keyRust : KeyTy → String
+  | .bool => "bool"
+  | .u8 => "u8" | .u16 => "u16" | .u32 => "u32" | .u64 => "u64"
+  | .i8 => "i8" | .i16 => "i16" | .i32 => "i32" | .i64 => "i64"
+  | .string => "String"
+
 /-- Lower a `Ty` to Rust type text. `future`/`stream` cannot reach this
     in field position (wellFormed bans them); if a func-signature
     emitter reuses this, the future unwraps at `async`. -/
@@ -93,6 +106,12 @@ def tyRust : Ty → String
   -- the flat form: `Vec<elem>` (row-major; the dims are schema
   -- metadata — a shape-bearing newtype is v2 with the derives work)
   | .tensor _ a => s!"Vec<{tyRust a}>"
+  -- BTreeMap/BTreeSet, NOT HashMap/HashSet: deterministic iteration
+  -- order (the runbook default — generated artifacts and any
+  -- order-observing downstream code are stable). `KeyTy` scalars are
+  -- all `Ord`, so the tree types' bounds hold by construction
+  | .map k v => s!"BTreeMap<{keyRust k}, {tyRust v}>"
+  | .set k => s!"BTreeSet<{keyRust k}>"
   | .option a => s!"Option<{tyRust a}>"
   | .result ok err => s!"Result<{tyRust ok}, {tyRust err}>"
   | .list a => s!"Vec<{tyRust a}>"

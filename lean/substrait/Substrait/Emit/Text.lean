@@ -29,8 +29,14 @@ Write/Update/Ddl and Extension* rels are **not in the grammar**: any plan
 containing them is rejected with an `Except` error — this emitter is
 intentionally strict, matching the parser's hard-failure style.
 -/
-import Substrait.Proto.Plan
-import Substrait.Grammar
+
+module
+
+public import Substrait.Proto.Plan
+public import Substrait.Grammar
+
+@[expose] public section
+
 open Substrait.Grammar
 
 namespace Substrait.Emit.Text
@@ -595,3 +601,7 @@ def emit (plan : Proto.Plan) : Except String String := do
   let rels ← relationsLines ctx plan.relations
   lines := lines ++ rels
   pure (sep "\n" lines ++ "\n")
+
+end Substrait.Emit.Text
+
+end -- @[expose] public section
