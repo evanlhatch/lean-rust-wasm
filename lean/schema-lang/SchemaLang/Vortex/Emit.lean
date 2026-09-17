@@ -304,6 +304,32 @@ theorem checked_field_ne_stream (cu : SchemaLang.CheckedUniverse)
   rw [heq] at hna
   nomatch hna
 
+/-! ## The emission law (W7.3 phase 2 — `Emitter.law` populated) -/
+
+/-- The vortex emitter's law: whenever the ctx's checked view exists,
+    every field of every record in the checked universe is async-free —
+    the banAsync evidence AND both impossibilities, bundled as one
+    `GenCtx → Prop` (the shape `Emitter.law` takes). The content is the
+    three theorems above — this definition is where they stop being
+    uncited statements. -/
+def vortexLaw (ctx : SchemaLang.Emit.GenCtx) : Prop :=
+  ∀ cu : SchemaLang.CheckedUniverse, ctx.checkedItems? = some cu →
+    ∀ {n : String} {fields : List SchemaLang.Field},
+      SchemaLang.Item.record n fields ∈ cu.val →
+      ∀ {f : SchemaLang.Field}, f ∈ fields →
+        f.ty.banAsync = true
+          ∧ (∀ a, f.ty ≠ SchemaLang.Ty.future a)
+          ∧ (∀ a, f.ty ≠ SchemaLang.Ty.stream a)
+
+/-- The discharge: one citation per clause (`checked_field_banAsync`,
+    `checked_field_ne_future`, `checked_field_ne_stream`). Certified
+    drivers hand `vortexLaw_discharged ctx` to `Emitter.runCertified`. -/
+theorem vortexLaw_discharged (ctx : SchemaLang.Emit.GenCtx) : vortexLaw ctx := by
+  intro cu _ n fields hit f hf
+  exact ⟨checked_field_banAsync cu hit hf,
+    fun _ => checked_field_ne_future cu hit hf,
+    fun _ => checked_field_ne_stream cu hit hf⟩
+
 /-! ## The module -/
 
 /-- Module header: the short paths `dtypeRust` emits rely on. -/
@@ -334,6 +360,11 @@ def recordItems (rec : String × StructFields) : List CodegenCore.Emit.Rust.Item
     that never ran the check (test fixtures) — the paths agree, so
     either way the output is identical.
 
+    W7.3 phase 2: `law` is POPULATED (`vortexLaw` — the three
+    impossibility theorems as the emission contract), discharged by
+    `vortexLaw_discharged`; Tests execute the certified lane
+    (`runCertified` = `run`, asserted over the demo ctx).
+
     FOLLOW-UP (W7.9 phase 3): migrate the remaining `Emitter GenCtx`
     consumers — Emit/Wit.lean, Emit/Rust.lean, Emit/Invariant.lean,
     Emit/Update.lean, Emit/Machine.lean, Emit/Typestate.lean,
@@ -355,5 +386,6 @@ def vortexEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
           CodegenCore.Emit.Rust.renderModule
             (useItems ++ table.flatMap recordItems) }
     ]
+  law := some vortexLaw
 
 end SchemaLang.Vortex.Emit

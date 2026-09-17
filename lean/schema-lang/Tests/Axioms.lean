@@ -81,3 +81,25 @@ import Demo
 #print axioms SchemaLang.EventSourced.witnessOf_valid
 #print axioms SchemaLang.EventSourced.decDelta_encDelta_append
 #print axioms SchemaLang.EventSourced.decJournal_encJournal_append
+
+-- W6.11 check-eliminates-error (SchemaLang/Error.lean): every lane's
+-- sufficiency theorem, the two exact-checker iffs, the CheckedProp packs
+-- (defs — their completeness proofs ride in the value), and the review's
+-- outstanding Obligation pin ("add the axiom pin now").
+#print axioms SchemaLang.flatIdx_eq_some_of_inB
+#print axioms SchemaLang.Coords.ofList?_isSome_of_inB
+#print axioms SchemaLang.Coords.ofList?_ne_none_of_inB
+#print axioms SchemaLang.Coords.inB_of_ofList?_eq_some
+#print axioms SchemaLang.coordsChecked
+#print axioms SchemaLang.Vortex.Ty.lower_isSome_iff
+#print axioms SchemaLang.Vortex.Ty.lower_ne_none_of_checks
+#print axioms SchemaLang.Subschema.ofMem?_isSome_iff_forall_mem
+#print axioms SchemaLang.subschemaChecked
+#print axioms SchemaLang.Item.keyOf_isSome_of_fields_ne_nil
+#print axioms SchemaLang.Item.changeTy_isSome_of_fields_ne_nil
+#print axioms SchemaLang.Snapshot.Open.close_isOk_of_ret
+#print axioms SchemaLang.CasePath.mem_map_fst
+#print axioms SchemaLang.VRow.isName_eq_false_of_not_mem
+#print axioms SchemaLang.CasePath.payloadOf_isSome_of_isName
+#print axioms SchemaLang.universeWellFormed_iff
+#print axioms SchemaLang.SchemaObligation.discharge_isSome_of_computed

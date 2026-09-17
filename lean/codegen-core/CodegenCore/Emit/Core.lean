@@ -188,8 +188,9 @@ def Emitter.runCertified (e : Emitter Spec) (spec : Spec) (_cert : e.Cert spec) 
 
     (Phase 2 carries the proof INSIDE the registry type, making collisions
     unconstructible; this wave keeps the check data-level. schema-lang's
-    `pathsUnique` and faults' audit row are the existing instances of the
-    pattern.) -/
+    registry consumes this check directly (W7.3 phase 2 — its inline
+    `pathsUnique` re-implementation was deleted); faults' audit row is
+    the remaining hand copy.) -/
 def Emitter.checkNodup (es : List (Emitter Spec)) : Bool :=
   (es.flatMap (·.outputs)).Nodup
 

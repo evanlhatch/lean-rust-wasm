@@ -249,14 +249,13 @@ lean-lint: lean-build
 gen:
 	cargo run -p forge -- gen
 
+# The byte-tie, delegated to the gates exe (Gates.GenCheck): in-process
+# regen from the replayed registries + stripped compare (body bytes +
+# embedded content hash; the header's timestamp/spec-sha exempt). Never
+# writes — closes forge gen --check's `just gen dirties the tree`
+# weakness. Same artifact surface as the old forge check.
 gen-check:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	# Host-cargo builds under devenv need the profile cc (ring's C bits
-	# fail under the devenv clang — the established fix, same as `demo`).
-	PCC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc"
-	[ -x "$PCC" ] && export CC="$PCC"
-	cargo run -p forge -- gen --check
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates gen-check
 
 # Every output declared in a forge jobs manifest exists and carries the
 # GENERATED header (a headerless file at a declared path = hand-written
@@ -342,49 +341,43 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms check-schema breaking splice-smoke rt-conformance lean-lint
+gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms kernel-check manifest-check coverage check-schema breaking splice-smoke rt-conformance lean-lint
 	@echo "gates: clean"
 
-# Axiom gate (delegated to guestlang-lint): every declaration's axiom
-# dependencies checked against allowlist (propext, Classical.choice,
-# Quot.sound, disclosed _native.native_decide./_native.bv_decide. trust
-# bases) via LintKit.AxiomAllowlist env-linter, per-declaration coverage.
-# Requires `lean-build` (the guestlang-lint binary from LintKit).
+# Axiom gate (delegated to the gates exe — Gates.Axioms): one process,
+# per gated package every declaration's kernel axiom cone (CollectAxioms)
+# checked against LintKit's allowlist (consumed via LintKit's own runner,
+# not re-encoded), plus a diff against the committed
+# notes/axiom-report.md — a silent axiom-surface change fails the gate.
+# Re-baseline with `cd lean/gates && lake exe gates axioms --write`.
+# Requires `lean-build` (the gated packages' oleans).
 lean-axioms:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	LK="{{justfile_directory()}}/lean/LintKit/.lake/build/bin/guestlang-lint"
-	# Disable every non-axiom linter so this gate checks ONLY the axiom
-	# allowlist. Sync with LintKit.Runner.guestlangLinters + TextLints.lean.
-	DISABLE="--disable=linter.guestlang.dupDefBodies"
-	DISABLE="$DISABLE --disable=linter.guestlang.packageNamespace"
-	DISABLE="$DISABLE --disable=linter.guestlang.recursiveSimpEqns"
-	DISABLE="$DISABLE --disable=linter.guestlang.noLinterDisable"
-	DISABLE="$DISABLE --disable=linter.guestlang.testImportDiscipline"
-	DISABLE="$DISABLE --disable=linter.guestlang.noNewPartial"
-	DISABLE="$DISABLE --disable=linter.guestlang.noReprInEmit"
-	DISABLE="$DISABLE --disable=linter.guestlang.noFormatInDebug"
-	DISABLE="$DISABLE --disable=linter.guestlang.coreHasNoClaim"
-	DISABLE="$DISABLE --disable=linter.guestlang.staleNotesPath"
-	DISABLE="$DISABLE --disable=linter.guestlang.nolintReason"
-	# wasm-backend's Tests exe not in defaultTargets (guide 2.4)
+	# wasm-backend's Tests exe not in defaultTargets (guide 2.4) — the
+	# report covers Tests.Main, so its oleans must exist.
 	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build WasmBackendTests)
-	run() { (cd "lean/$1" && shift && PATH="{{lean_tc}}:$PATH" && {{lean_tc}}/lake env "$LK" $DISABLE "$@"); }
-	run LintKit LintKit
-	run TestKit TestKit Tests.Main
-	run Machines Machines Tests.Main
-	run codegen-core CodegenCore Tests.Main
-	run substrait Substrait Tests.Main
-	run qlang QLang Tests.Main
-	run proofkit Proofkit Tests.Main
-	run schema-lang SchemaLang Demo Tests.Main
-	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
-	run dbsp Dbsp Tests.Main
-	run std GuestlangStd
-	run ledger Ledger LedgerFn LedgerES
-	run feature-flags FeatureFlags FeatureFlagsFn
-	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
-	run edgepython EdgePython Tests.Main
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates axioms
+
+# Lakefile ↔ manifest drift (delegated to the gates exe — Gates.Manifest):
+# every lean/*/lake-manifest.json agrees with its lakefile.toml
+# (require↔entry, rev pins, checkout HEADs). Structural + offline.
+manifest-check:
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates manifest-check
+
+# The coverage matrix (delegated to the gates exe — Gates.Coverage):
+# Ty ctors x registered emitters x the oracle's replay surface; diffs the
+# committed notes/coverage-matrix.md (`--strict` fails on quiet ctors —
+# pass it via the exe: `cd lean/gates && lake exe gates coverage --strict`).
+coverage:
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates coverage
+
+# The lean4lean double-check (delegated to the gates exe —
+# Gates.KernelCheck): every gated package's modules replayed through the
+# pure-Lean kernel. Requires `lean-build`. Disagreements are ledgered in
+# notes/divergences.md (investigated before the gate is bypassed).
+kernel-check:
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates kernel-check
 
 # ── The compiler line: LCNF → WAT → binary WASM ──────────────────────
 # The backend re-runs Lean's LCNF pipeline (the leanir pattern) and emits

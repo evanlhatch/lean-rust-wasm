@@ -2,13 +2,14 @@
 # Gates.KernelCheck — the lean4lean double-check (`gates kernel-check`)
 
 Replays every gated package's modules through lean4lean
-(github.com/digama0/lean4lean — a Lean 4 kernel written in pure Lean 4):
-`lake env <lean4lean> <Module>...` per package (NON-fresh mode —
-lean4lean's whole-path multithreaded mode: each target module's own
-declarations are re-checked by the pure-Lean kernel against the imported
-environment; imported decls are trusted, so mathlib is NOT replayed).
-Per the project owner: perf is explicitly a non-goal here; correctness
-only.
+(github.com/digama0/lean4lean — a Lean 4 kernel written in pure Lean 4).
+Per package, all of its modules in ONE lean4lean invocation (NON-fresh
+mode: imported decls are trusted — mathlib is NOT re-inferred — and only
+the target modules' own declarations are checked; observed: the imports
+are still REPLAYED into lean4lean's environment, which is where the
+memory goes). On a failed batch the package is re-run per module so the
+report names the failures. Per the project owner: perf is explicitly a
+non-goal here; correctness only.
 
 The three caveats this gate ships with (read before trusting a green
 run):
@@ -36,19 +37,43 @@ run):
     batteries v4.33.0 (the root require in gates' lakefile overrides
     lean4lean's rc2 batteries pin; lean4lean itself is NOT patched).
 
-Mechanics: the lean4lean exe builds on demand
-(`lake build lean4lean:exe` — the package's exe facet: its ONLY exe
-target, never the Theory/Verify libs) into
-`.lake/packages/lean4lean/.lake/build/bin/`.
-Each package runs under its own `lake env` (cwd `../<pkg>`), so LEAN_PATH
-is that package's closure. Target modules are enumerated from the
-package's OWN `.lake/build/lib/lean` (`*.olean`, exact suffix — the
-module system also writes `.olean.private`/`.olean.server` parts, which
-are not separate modules). Known wrinkle: for same-named modules across
-the closure (`Tests.Main`), lean4lean's olean resolution follows
-`lake env`'s path order (deps first), so a package's `Tests.Main` check
-may replay a dependency's copy instead; lib roots never collide, so the
-library surface — the gate's point — is always the package's own.
+Mechanics (first-sweep lessons, 2026-09-17 — the full sweep's findings
+were all harness/resource artifacts, ZERO kernel disagreements; see
+notes/divergences.md):
+
+* The lean4lean exe builds on demand
+  (`lake build lean4lean:exe` — the package's exe facet: its ONLY exe
+  target, never the Theory/Verify libs) into
+  `.lake/packages/lean4lean/.lake/build/bin/`.
+* Each package is spawned DIRECTLY (not via `lake env`) with
+  `LEAN_PATH := <pkg's own .lake/build/lib/lean> : <lake env's LEAN_PATH>`.
+  Own-dir-FIRST is the fix for the same-named-module wrinkle: with
+  `lake env`'s deps-first order, `feature-flags/Tests.Stress` resolved
+  into substrait's tree and `wasm-backend/Tests.Axioms`/`Tests.Audit`
+  into Machines' tree (oleans absent there → hard "object file does not
+  exist" failures). With own-first order every module resolves to the
+  package's own olean (verified on all three former collision sites).
+* IMPORT-ONLY ROOT AGGREGATES ARE SKIPPED, with the precondition checked
+  in code (`sourceHasDecls` — a root that gains declarations is NOT
+  skipped). Rationale: non-fresh lean4lean checks only the target
+  module's OWN declarations; the W5.4 roots are `module` + `public
+  import` only, so checking one checks zero declarations — while the
+  import replay still loads the package's FULL closure. Observed: the
+  `Dbsp` and `SchemaLang` root replays peaked at 20–22GB RSS and were
+  SIGTERM-killed by earlyoom (this host: 29GB, earlyoom's 20% line);
+  every other module — including each of those packages' real modules —
+  replayed clean. Skipping loses no kernel coverage: every declaration
+  lives in a child module that IS replayed.
+* Signal-killed runs (exit ≥ 128 — earlyoom) are reported as KILLED,
+  distinct from kernel REJECTIONS (lean4lean prints "found a problem"
+  and exits 1). Both fail the gate; only rejections are divergence
+  candidates for notes/divergences.md.
+* Target modules are enumerated from the package's OWN
+  `.lake/build/lib/lean` (`*.olean`, exact suffix — the module system
+  also writes `.olean.private`/`.olean.server` parts, which are not
+  separate modules). A package with no oleans is an ERROR (the gate
+  requires `just lean-build` first — a skipped package is NOT a checked
+  package).
 
 Pure Lean core + Gates.Packages — no LintKit/schema-lang imports.
 -/
@@ -105,66 +130,146 @@ def modulesOf (libDir : System.FilePath) : IO (Array Name) := do
       | some s => s.toString | none => rel
     String.intercalate "." (stem.splitOn "/") |>.toName
 
+/-- Column-0 declaration openers. Root aggregates after the W5.4 module
+    migration are `module` + `public import` lines inside a `/- -/`
+    header-comment — none of these at column 0. -/
+def declOpeners : Array String := #[
+  "@[", "def ", "theorem ", "instance", "abbrev ", "inductive ",
+  "structure ", "class ", "opaque ", "axiom ", "example", "initialize",
+  "macro ", "syntax ", "elab ", "export ", "noncomputable"]
+
+/-- Does a source file declare anything? Fail-closed: any column-0
+    declaration opener (even inside a comment — our headers never put
+    one there) counts as declarations, and then the module is CHECKED,
+    not skipped. -/
+def sourceHasDecls (path : System.FilePath) : IO Bool := do
+  let text ← IO.FS.readFile path
+  return text.splitOn "\n" |>.any fun l =>
+    !l.isEmpty && !l.startsWith " " && !l.startsWith "\t" &&
+      declOpeners.any (l.startsWith ·)
+
+/-- A package's own LEAN_PATH entry first, then its `lake env` closure
+    (the same-named-module fix — see the header). -/
+def leanPathOf (pkgDir : System.FilePath) : IO String := do
+  let out ← IO.Process.output
+    { cmd := "lake", args := #["env", "printenv", "LEAN_PATH"]
+    , cwd := some pkgDir }
+  unless out.exitCode == 0 do
+    throw <| IO.userError s!"`lake env printenv LEAN_PATH` failed in {pkgDir}:\n{out.stderr}"
+  return s!"{pkgDir}/.lake/build/lib/lean:{out.stdout.trimAscii}"
+
+/-- Spawn lean4lean over `mods` in `pkgDir` (direct spawn — `lake env`
+    would re-prepend the closure deps-first; the env entry merges over
+    the inherited one, so PATH keeps the toolchain `lean` lean4lean
+    shells out to). -/
+def runLean4lean (exe : System.FilePath) (pkgDir : System.FilePath)
+    (leanPath : String) (mods : Array Name) : IO IO.Process.Output := do
+  let absExe := (← IO.currentDir) / exe
+  IO.Process.output
+    { cmd := absExe.toString
+    , args := mods.map toString
+    , cwd := some pkgDir
+    , env := #[("LEAN_PATH", some leanPath)] }
+
+/-- One package's outcome. `rejected` = the kernel reported a problem
+    (divergence candidates); `killed` = the process died by signal
+    (resource limit — investigated class, see the header); `skipRoots` =
+    import-only root aggregates, skipped with the precondition verified
+    (zero own declarations — nothing to check). -/
+structure PkgOutcome where
+  checked : Nat := 0
+  skipRoots : Array Name := #[]
+  killed : Array Name := #[]
+  rejected : Array Name := #[]
+
 /-- Kernel-check one package: all its modules in ONE lean4lean
-    invocation (whole-path multithreaded mode). `.error` = the package's
-    oleans are absent (the gate requires `just lean-build` first — a
-    skipped package is NOT a checked package). On a failed batch run we
-    re-run per module so the report names the failures (perf is a
-    non-goal per the project owner). -/
-def checkPkg (exe : System.FilePath) (pkg : PkgSpec) : IO (Except String (Array Name)) := do
+    invocation; on a failed batch, per-module isolation so the report
+    names the failures (perf is a non-goal per the project owner). -/
+def checkPkg (exe : System.FilePath) (pkg : PkgSpec) : IO (Except String PkgOutcome) := do
   let pkgDir : System.FilePath := s!"../{pkg.dir}"
   let libDir := pkgDir / ".lake" / "build" / "lib" / "lean"
   unless ← libDir.pathExists do
     return .error s!"{pkg.dir}: no oleans at {libDir} — run `just lean-build` first"
-  let mods ← modulesOf libDir
-  let absExe := (← IO.currentDir) / exe
-  let out ← IO.Process.output
-    { cmd := "lake"
-    , args := #["env", absExe.toString] ++ mods.map toString
-    , cwd := some pkgDir }
+  let leanPath ← leanPathOf pkgDir
+  -- partition: import-only single-segment roots are skipped (verified
+  -- per module — a root that gained decls is checked, not skipped)
+  let mut skipRoots : Array Name := #[]
+  let mut checkMods : Array Name := #[]
+  for m in ← modulesOf libDir do
+    let src := pkgDir / (m.toString ++ ".lean")
+    -- nested `if`s, NOT `&&` over monadic operands: do-notation hoists
+    -- every `←` out of `&&` eagerly (the short-circuit never engages —
+    -- observed: sourceHasDecls read a nonexistent Tests.Main.lean)
+    let mut skip := false
+    if m.getRoot == m && !m.isAnonymous then
+      if ← src.pathExists then
+        unless ← sourceHasDecls src do
+          skip := true
+    if skip then
+      skipRoots := skipRoots.push m
+    else
+      checkMods := checkMods.push m
+  let out ← runLean4lean exe pkgDir leanPath checkMods
   if out.exitCode == 0 then
-    IO.println s!"{pkg.dir}: {mods.size} module(s) replayed by the pure-Lean kernel — clean"
-    return .ok #[]
+    IO.println s!"{pkg.dir}: {checkMods.size} module(s) replayed by the pure-Lean kernel — clean"
+    return .ok { checked := checkMods.size, skipRoots }
   -- isolate: re-run per module so the report names the failures
   IO.println s!"{pkg.dir}: batch run exited {out.exitCode} — isolating per module"
-  let mut failed : Array Name := #[]
-  for m in mods do
-    let one ← IO.Process.output
-      { cmd := "lake"
-      , args := #["env", absExe.toString, toString m]
-      , cwd := some pkgDir }
+  let mut killed : Array Name := #[]
+  let mut rejected : Array Name := #[]
+  for m in checkMods do
+    let one ← runLean4lean exe pkgDir leanPath #[m]
     if one.exitCode != 0 then
-      failed := failed.push m
-      let tail := String.intercalate "\n" (((one.stderr ++ one.stdout).splitOn "\n").reverse.take 6).reverse
-      IO.println s!"  {pkg.dir}/{m}: FAILED\n{tail}"
-  return .ok failed
+      let tail := String.intercalate "\n"
+        (((one.stderr ++ one.stdout).splitOn "\n").reverse.take 6).reverse
+      if one.exitCode ≥ 128 && !((one.stderr ++ one.stdout).contains "found a problem") then
+        killed := killed.push m
+        IO.println s!"  {pkg.dir}/{m}: KILLED (exit {one.exitCode} — signal, no kernel verdict)"
+      else
+        rejected := rejected.push m
+        IO.println s!"  {pkg.dir}/{m}: REJECTED\n{tail}"
+  return .ok { checked := checkMods.size - killed.size - rejected.size
+             , skipRoots, killed, rejected }
 
 unsafe def run : IO UInt32 := do
   let exe ← ensureExe
   let mut failures : Array (String × Name) := #[]
+  let mut killed : Array (String × Name) := #[]
   let mut gaps : Array (String × Name) := #[]
   let mut skipped : Array String := #[]
+  let mut roots : Array (String × Name) := #[]
   for pkg in gatedPackages do
     match ← checkPkg exe pkg with
     | .error e => skipped := skipped.push e; IO.println s!"kernel-check: {e}"
-    | .ok mods =>
-      for m in mods do
+    | .ok o =>
+      for m in o.skipRoots do roots := roots.push (pkg.dir, m)
+      for m in o.killed do killed := killed.push (pkg.dir, m)
+      for m in o.rejected do
         if knownReduceBoolGaps.contains (pkg.dir, m) then
           gaps := gaps.push (pkg.dir, m)
         else
           failures := failures.push (pkg.dir, m)
   IO.println ""
+  unless roots.isEmpty do
+    IO.println "kernel-check: import-only root aggregates skipped (zero own declarations — \
+      their decls are replayed via the child modules; a root that gains decls is checked):"
+    for (d, m) in roots do IO.println s!"  {d}/{m}"
   unless gaps.isEmpty do
     IO.println "kernel-check: known reduceBool gaps (caveat (a) — the axiom gate owns these):"
     for (d, m) in gaps do IO.println s!"  {d}/{m}"
-  if failures.isEmpty && skipped.isEmpty then
+  if failures.isEmpty && killed.isEmpty && skipped.isEmpty then
     IO.println "kernel-check: clean — every gated module replayed by the pure-Lean kernel"
     return 0
   unless skipped.isEmpty do
     IO.println "kernel-check: SKIPPED packages (not built — not the same as checked):"
     for s in skipped do IO.println s!"  {s}"
+  unless killed.isEmpty do
+    IO.println "kernel-check: KILLED by signal (resource limit — NOT a kernel rejection; \
+      investigate before accepting):"
+    for (d, m) in killed do IO.println s!"  {d}/{m}"
   unless failures.isEmpty do
-    IO.println "kernel-check: FAILURES outside the known reduceBool gaps:"
+    IO.println "kernel-check: REJECTIONS outside the known reduceBool gaps \
+      (divergence candidates — ledger in notes/divergences.md):"
     for (d, m) in failures do IO.println s!"  {d}/{m}"
   return 1
 

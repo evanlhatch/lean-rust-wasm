@@ -710,6 +710,17 @@ unsafe def vortexWellFormedChecks : IO (String × CheckResult) := do
       "valid decimal accepted"
   pure ("vortexWellFormed", r)
 
+/-- CITATION (W7.3 phase 2): the checked/unchecked byte-agreement
+    theorem's only prior evidence was existence — it is referenced
+    here so it cannot silently vanish. (The three impossibility
+    theorems' citation is the vortex emitter's populated `law`; the
+    certified-lane execution pins live in `emitterAuditChecks`.) -/
+theorem recordDTypesChecked_eq_cited
+    (cu : SchemaLang.CheckedUniverse) (fuel : Nat := 8) :
+    SchemaLang.Vortex.Emit.recordDTypesChecked cu fuel =
+      SchemaLang.Vortex.Emit.recordDTypes cu.val fuel :=
+  SchemaLang.Vortex.Emit.recordDTypesChecked_eq cu fuel
+
 /-! ## PType byteWidth / engineName wiring (3.5) -/
 
 def ptypeChecks : CheckResult := do
@@ -911,10 +922,28 @@ def pipelineRunChecks : CheckResult := do
   .ok ()
 
 /-- The one-writer audit: no two emitters claim the same output path.
-    The advertised discipline (`Emit.Registry.pathsUnique`) is ASSERTED
-    here, not just stated in a header. -/
+    The advertised discipline (codegen-core's `Emitter.checkNodup` —
+    W7.3 phase 2 deduped schema-lang's inline `pathsUnique` copy) is
+    ASSERTED here, not just stated in a header. -/
 def emitterAuditChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
-  _ ← assertEq "emitter paths unique" SchemaLang.Emit.pathsUnique true
+  _ ← assertEq "emitter paths unique"
+    (CodegenCore.Emit.Emitter.checkNodup SchemaLang.Emit.emitters) true
+  -- W7.3 phase 2: the emission laws are POPULATED (the phase-1 `none`
+  -- default would leave the impossibility theorems uncited), and the
+  -- certified lane executes — discharging the cert changes no bytes
+  -- (`runCertified = run` by definition; asserted over this ctx).
+  _ ← assert (SchemaLang.Vortex.Emit.vortexEmitter.law.isSome)
+    "vortex law populated"
+  _ ← assert (SchemaLang.Emit.Circuit.circuitEmitter.law.isSome)
+    "circuit law populated"
+  _ ← assertEq "vortex certified run = run"
+    ((SchemaLang.Vortex.Emit.vortexEmitter.runCertified ctx
+      (SchemaLang.Vortex.Emit.vortexLaw_discharged ctx)).map (·.contents))
+    ((SchemaLang.Vortex.Emit.vortexEmitter.run ctx).map (·.contents))
+  _ ← assertEq "circuit certified run = run"
+    ((SchemaLang.Emit.Circuit.circuitEmitter.runCertified ctx
+      (SchemaLang.Emit.Circuit.circuitLaw_discharged ctx)).map (·.contents))
+    ((SchemaLang.Emit.Circuit.circuitEmitter.run ctx).map (·.contents))
   -- the forge-driver audit: every registered emitter's output is in the
   -- job manifest forge consumes — no artifact silently outside byte-tie
   _ ← assertEq "jobs cover emitters" SchemaLang.Emit.jobsCoverEmitters true
@@ -3346,6 +3375,82 @@ the elaborated term — the pins ARE the pp output. -/
   (VExpr.and (VExpr.eq (VExpr.colOf "id") (VExpr.lit 7))
     (VExpr.eq (VExpr.colOf "id") (VExpr.lit 7)))) :
   VExpr dslUserSchema .bool)
+
+/-! ## W6.11 — check-eliminates-error (SchemaLang/Error.lean)
+
+Each Error.lean theorem is CITED against a concrete fixture; drift on
+either side fails this build. `by decide`/`rfl` negative controls pin
+the failure surface the checks eliminate, and the two documented
+INSUFFICIENCY witnesses pin what the checks do NOT cover (reported
+per the order; the checkers are deliberately not patched). -/
+
+/-- A total semantics for the lowering fixtures (every ref resolves —
+    the dtype choice is irrelevant to the guard). -/
+def elimSem : Vortex.VortexSem := fun _ => some (.bool .nonNullable)
+
+-- Lane 1 (Layout): the bounds check eliminates the coordinate parse's none
+example : (Coords.ofList? [2, 3] [1, 2]).isSome = true :=
+  Option.isSome_iff_exists.mpr (Coords.ofList?_isSome_of_inB [2, 3] [1, 2] (by decide))
+example : flatIdx [2, 3] [1, 2] = some 5 :=
+  flatIdx_eq_some_of_inB (by decide)
+-- negative control: out of bounds, the parse fails (the check is exact)
+example : (Coords.ofList? [2, 3] [1, 3]).isNone = true := by decide
+
+-- Lane 2 (Vortex lowering): the exact guard is the banAsync / noResult /
+-- refs-resolve triple.
+example : (Vortex.Ty.lower elimSem .nonNullable (.list (.ty "x"))).isSome = true :=
+  (Vortex.Ty.lower_isSome_iff _ _ _).mpr ⟨by decide, by decide, fun n hn => by
+    rw [show Ty.tyRefs (.list (.ty "x")) = ["x"] from rfl, List.mem_singleton] at hn
+    subst n; rfl⟩
+-- INSUFFICIENCY witness: `banAsync` ALONE does not eliminate the
+-- lowering's `none` — the check passes on `.result`, the deliberate
+-- refusal arm still fires. Reported, not patched.
+example : Ty.banAsync (.result .u64 .string) = true ∧
+    (Vortex.Ty.lower elimSem .nonNullable (.result .u64 .string)).isNone = true :=
+  ⟨rfl, rfl⟩
+-- negative control: an unresolvable ref fails even async-free/result-free
+example : (Vortex.Ty.lower (fun _ => none) .nonNullable (.ty "ghost")).isNone = true := rfl
+
+-- Lane 3 (migration): the exact checker, both directions cited
+example : (Subschema.ofMem? [⟨"id", .u64⟩, ⟨"n", .string⟩]
+      [⟨"id", .u64⟩]).isSome = true :=
+  Subschema.ofMem?_isSome_iff_forall_mem.mpr (fun f hf => by
+    rw [List.mem_singleton] at hf; subst f; exact List.mem_cons_self)
+-- negative control: a RETYPED old field is breaking (name match is not enough)
+example : (Subschema.ofMem? [⟨"id", .string⟩] [⟨"id", .u64⟩]).isNone = true := by decide
+-- the CheckedProp consumption (the canon row's first consumer): the
+-- executable check agrees with the Prop on a fixture, completeness loud
+example : subschemaChecked.check ([⟨"id", .u64⟩], [⟨"id", .u64⟩, ⟨"n", .string⟩]) = true := rfl
+example : subschemaChecked.isComplete = true := rfl
+
+-- Lane 4 (delta): the first-field key convention
+example : (Item.changeTy (.record "r" [⟨"id", .u64⟩])).isSome = true :=
+  Item.changeTy_isSome_of_fields_ne_nil (by simp)
+example : (Item.changeTy (.record "empty" [])).isNone = true := rfl  -- negative control
+
+-- Lane 5 (snapshot close-out): a `ret`-bearing func always closes
+example : (Snapshot.Open.close (.func "f" [] (some .u64) none)).isOk = true :=
+  Snapshot.Open.close_isOk_of_ret
+example : (Snapshot.Open.close (.func "f" [] none none)).isOk = false := rfl  -- negative control
+
+-- Lane 6 (variant access): under unique case names the tag check is exact
+example : (CasePath.payloadOf
+      (CasePath.here : CasePath "a" .u64 [("a", some .u64), ("b", some .bool)])
+      (VRow.here (.u64 7))).isSome = true :=
+  CasePath.payloadOf_isSome_of_isName _ (by decide) _ (by decide)
+-- INSUFFICIENCY witness: with DUPLICATE case names the check passes but
+-- the read misses (the deeper `a` fired; the first-`a` path finds none).
+-- Reported, not patched.
+example :
+    let cs : List VariantCase := [("a", some .u64), ("a", some .u64)]
+    let path : CasePath "a" .u64 cs := .here
+    let row : VRow cs := .there (.here (.u64 7))
+    row.isName "a" = true ∧ (path.payloadOf row).isNone = true :=
+  ⟨rfl, rfl⟩
+
+-- Lane 7: the Bool gate IS the relation (demo fixture, via the bridge)
+example : universeWellFormed demoItems = true :=
+  universeWellFormed_iff.mpr demoItems_wellFormed
 
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"

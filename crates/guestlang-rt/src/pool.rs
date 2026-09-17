@@ -241,8 +241,8 @@ impl Pool {
                                         .into(),
                                 ))
                             });
-                            let _ = submitted.reply.send(out);
                             in_flight.fetch_sub(1, Ordering::SeqCst);
+                            let _ = submitted.reply.send(out);
                         }
                     })
                     .expect("guestlang-rt pool: worker thread spawn failed"),

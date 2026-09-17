@@ -346,16 +346,17 @@ def TickState.rank : TickState → Nat
   | .idle => 0 | .settled => 1 | .cascaded => 2
   | .resolved => 3 | .committed => 4 | .stale => 0
 
--- W2.3: the `states:` clause makes machine! generate the entourage this
--- file used to hand-write — `tickStates`, `tickTrans` (the transition
--- table, computed from the machine), `tickTableStep?` + the agreement
--- theorem `tickTableStep?_eq_step?`, and the `DecidablePred tick.Inv`
--- instance (same names as the deleted hand copies).
+-- W7.3 phase 2: the `states:` clause is REMOVED — its generated
+-- entourage (`tickStates`, `tickTrans`, `tickTableStep?` +
+-- `tickTableStep?_eq_step?`, the `DecidablePred tick.Inv` instance) had
+-- ZERO consumers (review finding, verified: no conformance battery
+-- sweeps tick — unlike pipeline/orderMachine — and no emitter folds
+-- its table). The machine itself (labels, the `rank:` theorems) is
+-- untouched.
 machine! tick where
   State: TickState
   Inv: fun s => s ≠ .stale
   rank: TickState.rank rewind: reset
-  states: [.idle, .settled, .cascaded, .resolved, .committed, .stale]
   event: settle guard: (fun s => s = .idle) action: (fun _ _ => .settled)
   event: cascade guard: (fun s => s = .settled) action: (fun _ _ => .cascaded)
   event: resolve guard: (fun s => s = .cascaded) action: (fun _ _ => .resolved)
@@ -377,13 +378,6 @@ theorem tick_happy : tick.run .idle [.settle, .cascade, .resolve, .commit]
     = some ([(.settle, .settled), (.cascade, .cascaded),
              (.resolve, .resolved), (.commit, .committed)], .committed) :=
   rfl
-
--- The emitted table (the driver's data — the `Machine.matchArms`
--- discipline) is machine!-GENERATED (W2.3): `tickTrans` (computed from
--- `step?` over the enumerated space, label-major — the deleted hand
--- copy's exact rows), `tickTableStep?` (the structural reading), and
--- `tickTableStep?_eq_step?` (the table IS the machine, over the
--- enumerated states).
 
 end SchemaLang
 

@@ -226,9 +226,11 @@ def forgeJobsEmitter : CodegenCore.Emit.Emitter GenCtx where
 def emitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   coreEmitters ++ [forgeJobsEmitter]
 
-/-- Audit: no two emitters claim the same output path. -/
-def pathsUnique : Bool :=
-  (emitters.flatMap (·.outputs)).Nodup
+/- Audit: no two emitters claim the same output path — consumed from
+   codegen-core (`Emitter.checkNodup emitters`; identical semantics —
+   the inline `(flatMap outputs).Nodup` re-implementation this comment
+   replaced was byte-for-byte the same expression, W7.3 phase 2 dedup).
+   The ASSERTION lives in Tests ("emitter paths unique"). -/
 
 /-- Consistency: the job rows cover EXACTLY the registered emitters'
     outputs (no emitter silently outside byte-tie). PROVED: the

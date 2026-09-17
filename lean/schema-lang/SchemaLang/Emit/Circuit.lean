@@ -309,9 +309,26 @@ def circuitRust : String :=
        ]
     ++ (evaluator.map Item.raw))
 
+/-- The circuit emitter's law (W7.3 phase 2 — `Emitter.law`
+    populated): the emitted incrementalized circuit IS the batch
+    circuit's incremental — `Dbsp.incrementalize_ok` instantiated at
+    the demo circuit. Ctx-independent (the circuit is module data;
+    `run` ignores the ctx), so the law is a constant proposition. -/
+def circuitLaw : GenCtx → Prop := fun _ =>
+  Dbsp.Ckt.denote demoDenoteF (Dbsp.incrementalize demoIsLinear orderTotalCkt) =
+    Dbsp.incremental (Dbsp.Ckt.denote demoDenoteF orderTotalCkt)
+
+/-- The discharge: the module's own `orderTotalCkt_incrementalize_ok`
+    (the citation the emitted header advertises, now riding the emitter
+    itself — `Emitter.Cert circuitEmitter ctx` unfolds to exactly its
+    type). -/
+theorem circuitLaw_discharged (ctx : GenCtx) : circuitLaw ctx :=
+  orderTotalCkt_incrementalize_ok
+
 /-- The emitter. `run` ignores the ctx: the circuit is DATA in this
     module (the demo scale — a registry lane for circuits is the W4.5
-    follow-up), and the byte-tie pins the output. -/
+    follow-up), and the byte-tie pins the output. W7.3 phase 2: `law`
+    populated (`circuitLaw`, discharged by `circuitLaw_discharged`). -/
 def circuitEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "circuit"
   style := .doubleSlash
@@ -320,5 +337,6 @@ def circuitEmitter : CodegenCore.Emit.Emitter GenCtx where
   run _ctx :=
     [{ path := "../../src/circuit_generated.rs"
        contents := circuitRust }]
+  law := some circuitLaw
 
 end SchemaLang.Emit.Circuit

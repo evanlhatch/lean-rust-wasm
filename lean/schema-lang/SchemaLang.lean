@@ -9,6 +9,7 @@ public import SchemaLang.Wf
 public import SchemaLang.Diff
 public import SchemaLang.Migration
 public import SchemaLang.Snapshot
+public import SchemaLang.Error
 public import SchemaLang.Emit.Wit
 public import SchemaLang.Emit.Rust
 public import SchemaLang.Delta
