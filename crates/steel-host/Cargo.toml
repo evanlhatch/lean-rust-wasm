@@ -26,6 +26,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # `instant` = the span accumulator — the observability seam's backend
 # (the spans = the schema's manifest: observability_generated.rs).
 fast-observe = { version = "0.1", features = ["instant"] }
+# The schema hash (sha256 of the canonical schema-surface string) —
+# twin of oracle-runner's schema_hash; see schema.rs's header for why
+# this duplicates instead of sharing.
+sha2 = "0.10"
 
 [dev-dependencies]
 wasmtime = { version = "47", default-features = false, features = ["wat"] }

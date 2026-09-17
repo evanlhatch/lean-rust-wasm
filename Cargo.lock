@@ -2808,6 +2808,7 @@ dependencies = [
  "fast-observe",
  "lean-rust-wasm",
  "serde_json",
+ "sha2",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",

@@ -68,6 +68,9 @@ fn load_jobs_of(root: &Path, manifest: &str) -> Result<Vec<Job>, String> {
         .join("\n");
     // Minimal parse: the manifest is generated, single-line objects, one
     // key-set shape ("package"/"exe" strings + an "outputs" string list).
+    // Unknown fields are TOLERATED deliberately (additive tolerance): a
+    // newer emitter adding a field must not break an older forge — the
+    // byte-tie (`just gen --check`) owns drift control, not the parser.
     let mut jobs = Vec::new();
     for obj in json.split("{").skip(1) {
         let string_val = |key: &str| -> Result<String, String> {
@@ -82,24 +85,30 @@ fn load_jobs_of(root: &Path, manifest: &str) -> Result<Vec<Job>, String> {
         let package = string_val("package")?;
         let exe = string_val("exe")?;
         // Optional subcommand args (absent = none). Same shape as outputs.
+        // The closing `]` MUST be present in the field's raw slice:
+        // `split(']').next()` always yields `Some`, which used to make
+        // the unterminated-list errors dead code — a manifest truncated
+        // inside a list was silently accepted with a PREFIX of the
+        // committed list (fewer byte-tie checks than committed).
         let args: Vec<String> = match obj.split("\"args\": [").nth(1) {
             Some(rest) => rest
-                .split(']')
-                .next()
-                .ok_or("unterminated args")?
+                .find(']')
+                .map(|end| &rest[..end])
+                .ok_or_else(|| format!("{manifest}: unterminated args ({package})"))?
                 .split(", ")
                 .map(|s| s.trim().trim_matches('"').to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
             None => Vec::new(),
         };
-        let outputs: Vec<String> = obj
+        let outputs_rest = obj
             .split("\"outputs\": [")
             .nth(1)
-            .ok_or_else(|| format!("{manifest}: job missing outputs ({package})"))?
-            .split(']')
-            .next()
-            .ok_or("unterminated outputs")?
+            .ok_or_else(|| format!("{manifest}: job missing outputs ({package})"))?;
+        let outputs: Vec<String> = outputs_rest
+            .find(']')
+            .map(|end| &outputs_rest[..end])
+            .ok_or_else(|| format!("{manifest}: unterminated outputs ({package})"))?
             .split(", ")
             .map(|s| s.trim().trim_matches('"').to_string())
             .filter(|s| !s.is_empty())

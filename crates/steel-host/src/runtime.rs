@@ -151,6 +151,24 @@ impl ComponentRuntime {
         self.store.get_fuel().map_err(fault)
     }
 
+    /// The skew-checked startup: verify the guest's export surface
+    /// against the host's committed expectation
+    /// ([`crate::schema::verify_surface`] — derived from the component
+    /// TYPE, pre-instantiation), THEN instantiate. A divergence refuses
+    /// to start with both schema hashes + the first differing
+    /// `fn/arity` named — never a wasm trap mid-request.
+    pub async fn instantiate_checked(
+        &mut self,
+        component: &wasmtime::component::Component,
+        expected_surface: &str,
+    ) -> Result<(), crate::schema::StartError> {
+        crate::schema::verify_surface(self.engine.engine(), component, expected_surface)
+            .map_err(crate::schema::StartError::Skew)?;
+        self.instantiate(component)
+            .await
+            .map_err(crate::schema::StartError::Engine)
+    }
+
     /// Pre-instantiate for typed (bindgen-generated) callers: the generated
     /// `XxxPre::new(store, &pre)` + `Xxx::new` path. The untyped [`call`]
     /// stays the default; this is the typed escape hatch.

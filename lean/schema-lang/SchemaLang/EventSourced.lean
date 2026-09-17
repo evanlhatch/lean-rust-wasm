@@ -120,23 +120,25 @@ structure WDelta (ρ : Type) where
   new : Option ρ
 deriving Repr, BEq, DecidableEq
 
-/-- Patch by a witnessed delta: positional replace / erase / insert. -/
+/-- Patch by a witnessed delta: positional replace / erase / insert.
+    (Matched on the delta directly — the tactic `match` in the law
+    proofs needs the literal-constructor arms.) -/
 def patchW (rows : List ρ) (d : WDelta ρ) : List ρ :=
-  match d.old, d.new with
-  | some _, some n => rows.set d.idx n
-  | some _, none => rows.eraseIdx d.idx
-  | none, some n => rows.insertIdx d.idx n
-  | none, none => rows
+  match d with
+  | ⟨i, some _, some n⟩ => rows.set i n
+  | ⟨i, some _, none⟩ => rows.eraseIdx i
+  | ⟨i, none, some n⟩ => rows.insertIdx i n
+  | ⟨_, none, none⟩ => rows
 
 /-- Validity: a witnessed delta is meaningful for a table when the
     recorded OLD row is exactly what's at the position (replace/erase),
     or the position is in append range (insert). -/
 def validW (rows : List ρ) (d : WDelta ρ) : Prop :=
-  match d.old, d.new with
-  | some o, some _ => ∃ h : d.idx < rows.length, rows[d.idx]'h = o
-  | some o, none => ∃ h : d.idx < rows.length, rows[d.idx]'h = o
-  | none, some _ => d.idx ≤ rows.length
-  | none, none => True
+  match d with
+  | ⟨i, some o, some _⟩ => ∃ h : i < rows.length, rows[i]'h = o
+  | ⟨i, some o, none⟩ => ∃ h : i < rows.length, rows[i]'h = o
+  | ⟨i, none, some _⟩ => i ≤ rows.length
+  | ⟨_, none, none⟩ => True
 
 /-- Inversion: swap old and new (rollback = group subtraction, the
     canon's undo row). -/
@@ -162,7 +164,7 @@ theorem insertIdx_eraseIdx_eq_set (l : List ρ) (i : Nat) (a : ρ)
       show (x :: xs.eraseIdx i).insertIdx (i + 1) a = x :: xs.set i a
       rw [show (x :: xs.eraseIdx i).insertIdx (i + 1) a =
           x :: (xs.eraseIdx i).insertIdx i a from rfl]
-      rw [ih h']
+      rw [ih i h']
 
 /-- The witnessed deltas form a change structure with inversion (the
     ChangeInversion row, instantiated at keyed tables).
@@ -175,35 +177,47 @@ instance wDeltaChangeInversion : ChangeInversion (List ρ) (WDelta ρ) where
   invert := invertW
   valid_invert := by
     intro t dt hv
-    obtain ⟨i, o, n⟩ := dt
-    cases o <;> cases n <;>
-      simp only [patchW, invertW, validW] at hv ⊢ <;> try trivial
-    · -- (some o, some n): the patched table has n at i
+    match dt with
+    | ⟨i, some o, some n⟩ =>
+      -- the patched table has n at i
       obtain ⟨h, _⟩ := hv
-      exact ⟨List.length_set ▸ h, List.getElem_set_self _⟩
-    · -- (some o, none): erasing keeps i in append range
+      show ∃ h' : i < (t.set i n).length, (t.set i n)[i]'h' = n
+      exact ⟨by rw [List.length_set]; exact h, List.getElem_set_self _⟩
+    | ⟨i, some o, none⟩ =>
+      -- erasing keeps i in append range
       obtain ⟨h, _⟩ := hv
+      show i ≤ (t.eraseIdx i).length
       rw [List.length_eraseIdx, if_pos h]
-      omega
-    · -- (none, some n): the inserted table has n at i
+      exact Nat.le_pred_of_lt h
+    | ⟨i, none, some n⟩ =>
+      -- the inserted table has n at i
+      show ∃ h' : i < (t.insertIdx i n).length, (t.insertIdx i n)[i]'h' = n
       have hl : (t.insertIdx i n).length = t.length + 1 :=
         List.length_insertIdx_of_le_length hv _
-      exact ⟨by omega, List.getElem_insertIdx_self _⟩
+      have hv' : i ≤ t.length := hv
+      refine ⟨?_, List.getElem_insertIdx_self _⟩
+      rw [hl]; omega
+    | ⟨_, none, none⟩ => trivial
   correct_invert := by
     intro t dt hv
-    obtain ⟨i, o, n⟩ := dt
-    cases o <;> cases n <;>
-      simp only [patchW, invertW, validW] at hv ⊢ <;> try trivial
-    · -- (some o, some n): replace, then replace back
+    match dt with
+    | ⟨i, some o, some n⟩ =>
+      -- replace, then replace back
       obtain ⟨h, ho⟩ := hv
+      show (t.set i n).set i o = t
       rw [List.set_set, ← ho]
       exact List.set_getElem_self h
-    · -- (some o, none): erase, then re-insert at i
+    | ⟨i, some o, none⟩ =>
+      -- erase, then re-insert at i
       obtain ⟨h, ho⟩ := hv
+      show (t.eraseIdx i).insertIdx i o = t
       rw [insertIdx_eraseIdx_eq_set _ _ _ h, ← ho]
       exact List.set_getElem_self h
-    · -- (none, some n): insert, then erase at i
+    | ⟨i, none, some n⟩ =>
+      -- insert, then erase at i
+      show (t.insertIdx i n).eraseIdx i = t
       exact List.eraseIdx_insertIdx_self _
+    | ⟨_, none, none⟩ => rfl
 
 /-! ## The witness (what the journal records per event) -/
 
@@ -230,12 +244,27 @@ theorem upsert_eq_set (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
   induction rows with
   | nil => simp at h
   | cons r rs ih =>
-    rw [List.findIdx_cons] at h ⊢
-    simp only [upsert]
-    split at h ⊢
-    · rfl
-    · have h' : rs.findIdx (fun r' => key r' == key row) < rs.length := by omega
-      rw [ih h']
+    cases hr : (key r == key row) with
+    | true =>
+      have h0 : (r :: rs).findIdx (fun r' => key r' == key row) = 0 := by
+        rw [List.findIdx_cons]
+        simp [hr]
+      rw [h0]
+      show (if key r == key row then row :: rs else r :: upsert key row rs) = row :: rs
+      rw [if_pos hr]
+    | false =>
+      have hs : (r :: rs).findIdx (fun r' => key r' == key row) =
+          rs.findIdx (fun r' => key r' == key row) + 1 := by
+        rw [List.findIdx_cons]
+        simp [hr]
+      rw [hs] at h ⊢
+      have h' : rs.findIdx (fun r' => key r' == key row) < rs.length := by
+        have hlen : (r :: rs).length = rs.length + 1 := rfl
+        omega
+      have hih := ih h'
+      show (if key r == key row then row :: rs else r :: upsert key row rs) =
+        (r :: rs).set (rs.findIdx (fun r' => key r' == key row) + 1) row
+      rw [if_neg (by simp [hr]), hih, List.set_cons_succ]
 
 /-- Upsert at an absent key IS append. -/
 theorem upsert_eq_append (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
@@ -244,17 +273,27 @@ theorem upsert_eq_append (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
   induction rows with
   | nil => rfl
   | cons r rs ih =>
-    rw [List.findIdx_cons] at h
-    simp only [upsert]
-    split at h
-    · simp at h  -- 0 = (r :: rs).length: contradiction
-    · rename_i hr
+    cases hr : (key r == key row) with
+    | true =>
+      have h0 : (r :: rs).findIdx (fun r' => key r' == key row) = 0 := by
+        rw [List.findIdx_cons]
+        simp [hr]
+      rw [h0] at h
+      simp at h  -- 0 = (r :: rs).length: contradiction
+    | false =>
+      have hs : (r :: rs).findIdx (fun r' => key r' == key row) =
+          rs.findIdx (fun r' => key r' == key row) + 1 := by
+        rw [List.findIdx_cons]
+        simp [hr]
+      rw [hs] at h
       have h' : rs.findIdx (fun r' => key r' == key row) = rs.length := by
         have hlen : (r :: rs).length = rs.length + 1 := rfl
         omega
-      split
-      · exact absurd rfl hr
-      · rw [ih h']
+      have hih := ih h'
+      show (if key r == key row then row :: rs else r :: upsert key row rs) =
+        (r :: rs) ++ [row]
+      rw [if_neg (by simp [hr]), hih]
+      rfl
 
 /-- Firing an event IS patching the table by the recorded delta — the
     `RewindableMachine.action_is_patch` obligation, discharged once

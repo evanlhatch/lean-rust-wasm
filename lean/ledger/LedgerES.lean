@@ -1,0 +1,252 @@
+/-
+# LedgerES — the event-sourced ledger dogfood (W5.1 phase 2)
+
+The verified-ledger study's shape, expressed on the toolkit: the
+`@[event_sourced]` records (`Account`/`Entry` in Ledger.lean) supply the
+delta variant + journal codec + replay + upcaster + RewindableMachine;
+this module is the MODEL layer:
+
+- **Posting an entry = appending a delta.** `postEntry e log = log ++
+  [.insert e]` — the entry log is append-only (an entry is never
+  edited; a reversal is a compensating entry, the accounting rule).
+- **Balance = replay.** `balances log = Entry.replay log []` — the
+  entry table is the materialization of the log; `balanceOf a` derives
+  an account's balance from it (credits minus debits, in `Int` — the
+  amount's machine width is the wire's concern; the model sums in ℤ,
+  and the transfer identity `+amt`/`−amt` is exact there).
+- **Conservation** (`total_post_conserves`): over a FIXED account
+  universe `ids`, posting an entry whose endpoints are both in the
+  universe leaves the total balance invariant. Stated over the model
+  and PROVED — so the obligation row (`conservationObligation`) rides
+  the OBLIGATION substrate at the tightest tier that computes:
+  `.provedAtElab`, evidence `.citedProof`.
+- **Reversal = the inverse delta**: `Account.esMachine` is THE first
+  constructed `Machines.RewindableMachine` (the review's pin-only
+  island graduates here); `transfer_rewind` instantiates
+  `rewind_runLogged` — reverting the recorded journal restores the
+  initial table — and `transfer_replay` pins the transfer fixture.
+
+The negative controls (sabotaged replay log / journal bytes / journal
+length / one-legged posting) live in Tests/Main.lean beside the
+positive fixtures.
+-/
+
+import SchemaLang
+import Machines
+import Ledger
+
+namespace LedgerES
+
+/-! ## Posting and derived balances -/
+
+/-- Posting an entry IS appending its insert-delta to the log. -/
+def postEntry (e : Entry) (log : List Entry.Event) : List Entry.Event :=
+  log ++ [.insert e]
+
+/-- The entry table: the log's replay (balance = replay — the table is
+    a derived view; the log is the truth). -/
+def balances (log : List Entry.Event) : List Entry := Entry.replay log []
+
+/-- The derived balance of account `a` from an entry table: credits
+    (entries with `dst = a`) minus debits (`src = a`), summed in `Int`. -/
+def balanceOf (a : UInt64) (es : List Entry) : Int :=
+  ((es.filter (fun e => e.dst == a)).map (fun e => e.amount.toInt)).sum
+  - ((es.filter (fun e => e.src == a)).map (fun e => e.amount.toInt)).sum
+
+/-- The total balance over a fixed account universe. -/
+def total (ids : List UInt64) (es : List Entry) : Int :=
+  (ids.map (fun a => balanceOf a es)).sum
+
+/-! ## The conservation proof -/
+
+/-- Posting touches the derived balance of exactly the two endpoints:
+    `dst` gains the amount, `src` loses it (as Int — exact). -/
+theorem balanceOf_snoc (a : UInt64) (es : List Entry) (e : Entry) :
+    balanceOf a (es ++ [e])
+      = balanceOf a es
+        + (if e.dst = a then e.amount.toInt else 0)
+        - (if e.src = a then e.amount.toInt else 0) := by
+  by_cases hto : e.dst = a <;> by_cases hfr : e.src = a <;>
+    simp [balanceOf, hto, hfr, List.sum_append] <;> try omega
+
+/-- Sum distributes over pointwise addition of mapped functions (Int). -/
+theorem sum_map_add (f g : α → Int) (l : List α) :
+    (l.map fun a => f a + g a).sum = (l.map f).sum + (l.map g).sum := by
+  induction l with
+  | nil => rfl
+  | cons a as ih => simp [List.map_cons, List.sum_cons, ih]; omega
+
+/-- Sum distributes over pointwise subtraction (Int). -/
+theorem sum_map_sub (f g : α → Int) (l : List α) :
+    (l.map fun a => f a - g a).sum = (l.map f).sum - (l.map g).sum := by
+  induction l with
+  | nil => rfl
+  | cons a as ih => simp [List.map_cons, List.sum_cons, ih]; omega
+
+/-- An indicator sum over a list the key is ABSENT from is zero. -/
+theorem sum_indicator_eq_zero (ids : List UInt64) (x : UInt64) (hx : x ∉ ids) (m : Int) :
+    (ids.map fun a => if x = a then m else 0).sum = 0 := by
+  induction ids with
+  | nil => rfl
+  | cons a as ih =>
+    simp only [List.mem_cons, not_or] at hx
+    simp [List.map_cons, List.sum_cons, hx.1, ih hx.2]
+
+/-- An indicator sum over a NODUP list containing the key is the mass:
+    exactly one position matches. -/
+theorem sum_indicator_eq_single (ids : List UInt64) (h : ids.Nodup)
+    (x : UInt64) (hx : x ∈ ids) (m : Int) :
+    (ids.map fun a => if x = a then m else 0).sum = m := by
+  induction ids with
+  | nil => contradiction
+  | cons a as ih =>
+    simp only [List.nodup_cons] at h
+    simp only [List.map_cons, List.sum_cons]
+    by_cases hxa : x = a
+    · subst hxa
+      have hzero := sum_indicator_eq_zero as x h.1 m
+      simp [hzero]
+    · have hx' : x ∈ as := by
+        rcases List.mem_cons.mp hx with h_eq | h_mem
+        · exact absurd h_eq hxa
+        · exact h_mem
+      simp [hxa, ih h.2 hx']
+
+/-- CONSERVATION over the table: appending an entry whose endpoints are
+    both in the universe leaves the total invariant (the credit leg and
+    the debit leg cancel — the double-entry rule as a theorem). -/
+theorem total_snoc_closed (ids : List UInt64) (hids : ids.Nodup)
+    (es : List Entry) (e : Entry)
+    (hfrom : e.src ∈ ids) (hto : e.dst ∈ ids) :
+    total ids (es ++ [e]) = total ids es := by
+  have hmap : ids.map (fun a => balanceOf a (es ++ [e]))
+      = ids.map (fun a => balanceOf a es
+          + (if e.dst = a then e.amount.toInt else 0)
+          - (if e.src = a then e.amount.toInt else 0)) :=
+    List.map_congr_left (fun a _ => balanceOf_snoc a es e)
+  show (ids.map (fun a => balanceOf a (es ++ [e]))).sum
+    = (ids.map fun a => balanceOf a es).sum
+  rw [hmap, sum_map_sub, sum_map_add,
+    sum_indicator_eq_single ids hids e.dst hto,
+    sum_indicator_eq_single ids hids e.src hfrom]
+  ring
+
+/-- A fresh key's findIdx is the length (no match anywhere). -/
+theorem findIdx_fresh_eq_length (tbl : List Entry) (e : Entry)
+    (hfresh : ∀ x ∈ tbl, x.id ≠ e.id) :
+    tbl.findIdx (fun r => Entry.esKey r == Entry.esKey e) = tbl.length := by
+  apply List.findIdx_eq_length_of_false
+  intro x hx
+  show (Entry.esKey x == Entry.esKey e) = false
+  exact beq_eq_false_iff_ne.mpr (hfresh x hx)
+
+/-- CONSERVATION, the event-sourced statement: posting an entry to the
+    LOG (append its insert-delta) leaves the total balance of a fixed
+    account universe invariant — replay-after-append, the fresh-key
+    upsert, and the closed-universe sum telescope. -/
+theorem total_post_conserves (ids : List UInt64) (hids : ids.Nodup)
+    (log : List Entry.Event) (e : Entry)
+    (hfrom : e.src ∈ ids) (hto : e.dst ∈ ids)
+    (hfresh : ∀ x ∈ Entry.replay log [], x.id ≠ e.id) :
+    total ids (balances (postEntry e log)) = total ids (balances log) := by
+  show total ids (Entry.replay (log ++ [.insert e]) [])
+    = total ids (Entry.replay log [])
+  rw [Entry.replay_snoc]
+  have happly :
+      SchemaLang.EventSourced.apply Entry.esKey (.insert e) (Entry.replay log [])
+        = Entry.replay log [] ++ [e] := by
+    show SchemaLang.EventSourced.upsert Entry.esKey e _ = _
+    exact SchemaLang.EventSourced.upsert_eq_append Entry.esKey e _
+      (findIdx_fresh_eq_length _ e hfresh)
+  rw [happly]
+  exact total_snoc_closed ids hids _ e hfrom hto
+
+/-! ## The obligation row (the tightest tier that computes) -/
+
+/-- The ledger's obligations: the kit's shape (`CodegenCore.Obligation`)
+    instantiated with the cited theorem's name as the payload. -/
+abbrev LedgerObligation := CodegenCore.Obligation Lean.Name
+
+/-- The discharge: a proved row's evidence is its citation (the
+    `SchemaObligation.discharge` pattern — a `none` here would be the
+    loud gap). -/
+def LedgerObligation.discharge (o : LedgerObligation) :
+    Option CodegenCore.Obligation.Evidence :=
+  match o.tier with
+  | .provedAtElab => some (.citedProof o.payload)
+  | _ => none
+
+/-- CONSERVATION as an obligation: the proof IS statable over the model
+    (`total_post_conserves`), so the tier is `.provedAtElab` — the
+    tightest rung — and the evidence is the citation. -/
+def conservationObligation : LedgerObligation :=
+  { label := "ledger-conservation"
+  , tier := .provedAtElab
+  , payload := ``LedgerES.total_post_conserves
+  , provenance := ``LedgerES.total_post_conserves }
+
+/-- The conservation obligation discharges (the armed-and-FIRED check:
+    a proved-tier row that cannot name its evidence fails here). -/
+theorem conservation_discharges :
+    conservationObligation.discharge.isSome = true := rfl
+
+/-- The discharge's evidence tier always matches the obligation's tier
+    (the kit's mis-wired check, discharged for this lane). -/
+theorem discharge_tier_agrees (o : LedgerObligation)
+    (ev : CodegenCore.Obligation.Evidence) (h : o.discharge = some ev) :
+    ev.tier = o.tier := by
+  obtain ⟨label, tier, payload, provenance⟩ := o
+  cases tier <;> simp [LedgerObligation.discharge] at h ⊢
+  · subst h; rfl
+
+/-! ## The RewindableMachine instance, exercised (reversal = the inverse delta) -/
+
+/-- The fixture's two accounts. -/
+def alice : Account := ⟨1, "alice", 100⟩
+def bob : Account := ⟨2, "bob", 50⟩
+
+/-- A transfer as account-log deltas: open both accounts, then the two
+    update legs (debit alice, credit bob). -/
+def transferEvents (amount : Int64) : List Account.Event :=
+  [ .insert alice, .insert bob
+  , .update { alice with balance := alice.balance - amount }
+  , .update { bob with balance := bob.balance + amount } ]
+
+/-- The replay materializes the post-transfer table (the fixture pin —
+    `decide` over the generated replay). -/
+theorem transfer_replay :
+    Account.replay (transferEvents 30) [] = [⟨1, "alice", 70⟩, ⟨2, "bob", 80⟩] := by
+  decide
+
+/-- THE REWIND LAW, instantiated: reverting the recorded journal
+    restores the initial table (reversal = the inverse delta — the
+    `RewindableMachine.rewind_runLogged` family, the island's first
+    resident). -/
+theorem transfer_rewind (tr ds fin) :
+    Machines.RewindableMachine.runLogged Account.esMachine [] (transferEvents 30)
+      = some (tr, ds, fin) →
+    Account.esMachine.rewind ds.reverse fin = [] :=
+  fun h => Machines.RewindableMachine.rewind_runLogged Account.esMachine _ _ _ _ _ h
+
+/-- REWIND-K = UNDO-K, instantiated: reverting the last K deltas
+    restores the state after the first length−K events (the
+    `RewindableMachine.rewind_suffix` family). -/
+theorem transfer_rewind_suffix (tr ds fin) (K : Nat)
+    (h : Machines.RewindableMachine.runLogged Account.esMachine []
+      (transferEvents 30) = some (tr, ds, fin))
+    (hK : K ≤ (transferEvents 30).length) :
+    ∃ mid tr1 ds1,
+      Machines.RewindableMachine.runLogged Account.esMachine []
+        ((transferEvents 30).take ((transferEvents 30).length - K)) = some (tr1, ds1, mid) ∧
+      Account.esMachine.rewind (ds.drop ((transferEvents 30).length - K)).reverse fin = mid :=
+  Machines.RewindableMachine.rewind_suffix Account.esMachine _ _ _ _ _ h K hK
+
+/-- The logged run's delta count IS the event count (the journal has
+    one entry per posting). -/
+theorem transfer_journal_length (tr ds fin) :
+    Machines.RewindableMachine.runLogged Account.esMachine [] (transferEvents 30)
+      = some (tr, ds, fin) →
+    ds.length = (transferEvents 30).length :=
+  fun h => Machines.RewindableMachine.runLogged_length Account.esMachine _ _ _ _ _ h
+
+end LedgerES

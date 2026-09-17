@@ -45,6 +45,14 @@ STILL OPEN (a later phase): the replay REQUEST carrying row + batch
 context with Lean answering over the wire, and `modeOf` becoming a
 real column (`.ignore`/`.identity` rows on the wire).
 
+W6.3 follow-up, bytes unchanged: `schemaSurface`'s HOST-side consumer
+landed — steel-host's `schema.rs` fails FAST on version skew at
+startup, deriving the guest's surface from the component TYPE (ground
+truth — the embedded-string channel was rejected: WAT can't express
+custom sections, and an embedded string is a claim that can drift
+from the real exports). The canonical string below is the contract;
+the hash stays consumer-side (sha256 of the string).
+
 Ownership: this module owns the row universe + row resolution; the
 script owns only the emission loop. Deliberately excluded: the component
 replay itself (steel-host, Rust-side), and `just wasm-compile`'s

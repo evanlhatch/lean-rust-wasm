@@ -13,6 +13,7 @@ import SchemaLang.Emit.Update
 import SchemaLang.Bridge
 import Demo
 import SchemaLang.Trace
+import Machines
 import TestKit
 
 -- the Tests' own `schema_update` probe (updPureCall) emits its instance
@@ -3571,3 +3572,57 @@ runs here (this file is not a module; drift = test build error). -/
     (f : Dbsp.Ckt Func a b),
     Dbsp.Ckt.denote denoteF (Dbsp.incrementalize isLinear f) =
       Dbsp.incremental (Dbsp.Ckt.denote denoteF f)
+
+/-! ## W5.1 — `@[event_sourced]` (the event-log row: delta variant +
+journal codec + replay + upcaster + laws + RewindableMachine, derived)
+
+The attribute's own pin (the ledger package carries the full dogfood);
+each generated surface exercised with its sabotaged negative control. -/
+
+/-- The fixture: a flat-scalar record (the v1 fragment). -/
+@[schema, event_sourced]
+structure EsFixture where
+  id : UInt64
+  note : String
+  amount : Int64
+deriving BEq, Repr, DecidableEq
+
+-- the delta variant + replay (positive): upsert by key, remove by key
+#guard EsFixture.replay [.insert ⟨1, "a", 5⟩, .insert ⟨2, "b", 1⟩, .update ⟨1, "a", 9⟩, .remove 2] []
+  == [⟨1, "a", 9⟩]
+
+-- replay (negative control): a sabotaged log (the update dropped) does
+-- NOT reconstruct the state — replay is faithful to the log
+#guard EsFixture.replay [.insert ⟨1, "a", 5⟩, .insert ⟨2, "b", 1⟩, .remove 2] [] != [⟨1, "a", 9⟩]
+
+-- the journal codec (positive): the log round-trips the wire
+#guard EsFixture.esDecodeJournal?
+    (EsFixture.esEncodeJournal [.insert ⟨1, "a", 5⟩, .remove 1])
+  == some ([.insert ⟨1, "a", 5⟩, .remove 1], [])
+
+-- the journal codec (negative control): a corrupted tag byte (9) does
+-- not decode to the original event
+#guard (match EsFixture.esDecodeEvent? (9 :: EsFixture.esEncodeEvent (.insert ⟨1, "a", 5⟩)) with
+        | some (e, _) => e != .insert ⟨1, "a", 5⟩
+        | none => true)
+
+-- the machine (positive): the logged run's journal rewinds to the
+-- initial table (rewind = the inverse deltas, the ChangeInversion row)
+#guard (Machines.RewindableMachine.runLogged EsFixture.esMachine [⟨7, "m", 1⟩]
+    [.insert ⟨1, "a", 5⟩, .update ⟨1, "a", 9⟩]).map
+  (fun (_, ds, fin) => EsFixture.esMachine.rewind ds.reverse fin) == some [⟨7, "m", 1⟩]
+
+-- the laws land as theorems (checked types — a stub would not elaborate)
+#check @EsFixture.replay_snoc
+#check @EsFixture.esJournal_roundtrip
+#check @EsFixture.esDelta_inverse
+#check @EsFixture.upcast_id
+
+-- the fragment gate (negative control): a float field is a LOUD
+-- elaboration error naming the field (no codec-closed round trip exists)
+/-- error: @[event_sourced] `EsBadFloat`: field `x` has type SchemaLang.Ty.f64, outside the v1 event-sourcing fragment (flat scalars: Bool/UInt8–UInt64/Int8–Int64/String) — the journal codec needs the codec-closed round trip and the native↔row boxing needs a one-level `Value` ctor -/
+#guard_msgs in
+@[schema, event_sourced]
+structure EsBadFloat where
+  id : UInt64
+  x : Float

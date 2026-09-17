@@ -44,5 +44,7 @@ public import SchemaLang.TickCascade
 public import SchemaLang.Emit.Update
 public import SchemaLang.Emit.Typestate
 public import SchemaLang.Trace
+public import SchemaLang.EventSourced
+public import SchemaLang.Meta.EventSourced
 public import SchemaLang.Session
 public import SchemaLang.Debug

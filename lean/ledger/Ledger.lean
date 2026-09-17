@@ -29,7 +29,8 @@ registered before the referencing declaration — keep the record above
 the functions that mention it.
 -/
 
-import SchemaLang.Meta.Reflect
+import SchemaLang
+import Machines
 
 /-! ## Records -/
 
@@ -61,3 +62,35 @@ def ledger_valid (_a : Ledger) : Bool :=
 @[schema_fn]
 def deposit (balance amount : UInt64) : UInt64 :=
   0
+
+/-! ## The event-sourced dogfood (W5.1 phase 2)
+
+`Account`/`Entry` carry the full `@[event_sourced]` assembly: the delta
+variant (`Account.Event` = insert/update/remove over the first-field
+key), the journal codec (`esEncodeJournal`/`esDecodeJournal?` + the
+proved round trip), replay (`replay` = the I operator), the identity
+upcaster hook, and the `RewindableMachine` (`esMachine` — firing =
+patching by the recorded delta; reversal = the inverse delta). The
+model layer (posting, derived balances, conservation) is `LedgerES`. -/
+
+/-- An account. The event log over `Account.Event` IS the account
+table's history: posting = appending a delta, the table = replay,
+reversal = the inverse delta (the journal's rewind). -/
+@[schema, event_sourced]
+structure Account where
+  id : UInt64
+  label : String
+  balance : Int64
+deriving BEq, Repr, DecidableEq
+
+/-- A posting entry: moves `amount` from account `src` to account
+    `dst` (the double-entry leg pair in ONE row — the journal entry).
+    Entry logs are insert-only by convention (an entry is never edited;
+    a reversal is a compensating entry). -/
+@[schema, event_sourced]
+structure Entry where
+  id : UInt64
+  src : UInt64
+  dst : UInt64
+  amount : Int64
+deriving BEq, Repr, DecidableEq

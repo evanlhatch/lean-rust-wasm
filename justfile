@@ -154,7 +154,7 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython"
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython gates"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -240,7 +240,7 @@ lean-lint: lean-build
 	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
 	run dbsp Dbsp Tests.Main
 	run std GuestlangStd
-	run ledger Ledger LedgerFn
+	run ledger Ledger LedgerFn LedgerES
 	run feature-flags FeatureFlags FeatureFlagsFn
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
 	run edgepython EdgePython Tests.Main
@@ -381,7 +381,7 @@ lean-axioms:
 	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
 	run dbsp Dbsp Tests.Main
 	run std GuestlangStd
-	run ledger Ledger LedgerFn
+	run ledger Ledger LedgerFn LedgerES
 	run feature-flags FeatureFlags FeatureFlagsFn
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
 	run edgepython EdgePython Tests.Main

@@ -6,11 +6,19 @@ scaffolded impl, elaboration-checked (`#guard` fails the BUILD on
 drift, not just the run). Grow this into TestKit's discipline as the
 project does: PropSpec sweeps with the MANDATORY negative control,
 DiffSpec for differential gates (TestKit/README, notes/reuse-map.md).
+
+The W5.1 block: the `@[event_sourced]` dogfood — replay, journal codec,
+rewind (the RewindableMachine instance), conservation — each law with
+its sabotaged negative control (the doctrine: a control the sabotage
+cannot pass).
 -/
 import Lean
 import TestKit
 import Ledger
 import LedgerFn
+import LedgerES
+
+open LedgerES
 
 -- Negative control first: the sentinel id → none.
 #guard (LedgerImpl.ledger_get 0).isNone
@@ -20,6 +28,69 @@ import LedgerFn
 
 -- The spec type survived the rename: the record exists with its fields.
 #guard (LedgerImpl.ledger_get 1).map (·.label) == some "ledger"
+
+/-! ## W5.1 — the `@[event_sourced]` dogfood (positive + negative controls) -/
+
+-- the two-entry posting fixture
+def e1 : Entry := ⟨1, 1, 2, 30⟩   -- 30 from account 1 to account 2
+def e2 : Entry := ⟨2, 2, 1, 10⟩   -- 10 back
+def entryLog : List Entry.Event := [.insert e1, .insert e2]
+
+-- REPLAY (positive): the transfer fixture materializes the post-state.
+#guard Account.replay (transferEvents 30) [] == [⟨1, "alice", 70⟩, ⟨2, "bob", 80⟩]
+
+-- REPLAY (negative control): a sabotaged log (the credit leg dropped)
+-- does NOT reconstruct the state.
+#guard Account.replay ((transferEvents 30).take 3) [] != [⟨1, "alice", 70⟩, ⟨2, "bob", 80⟩]
+
+-- REPLAY LAW exercised (replay-after-append = one more apply).
+#guard Entry.replay (entryLog ++ [.insert e1]) [] ==
+  SchemaLang.EventSourced.apply Entry.esKey (.insert e1) (Entry.replay entryLog [])
+
+-- JOURNAL CODEC (positive): the entry log round-trips the wire.
+#guard Entry.esDecodeJournal? (Entry.esEncodeJournal entryLog) == some (entryLog, [])
+
+-- JOURNAL CODEC (negative control): a corrupted tag byte does not
+-- decode to the original event (the EnumWire tag-sabotage pattern).
+#guard (match Entry.esDecodeEvent? (7 :: Entry.esEncodeEvent (.insert e1)) with
+        | some (e, _) => e != .insert e1
+        | none => true)
+
+-- the rewind fixture rides a NON-empty initial table (from empty, the
+-- insert-inverses erase everything and no sabotage is observable)
+def mallory : Account := ⟨7, "mallory", 999⟩
+
+-- REWIND / the RewindableMachine (positive): the logged run's journal
+-- rewinds to the initial table (reversal = the inverse delta).
+#guard (Machines.RewindableMachine.runLogged Account.esMachine [mallory] (transferEvents 30)).map
+  (fun (_, ds, fin) => Account.esMachine.rewind ds.reverse fin) == some [mallory]
+
+-- REWIND-K = UNDO-K (positive): reverting the last two deltas (the
+-- transfer legs) restores the post-open table.
+#guard (Machines.RewindableMachine.runLogged Account.esMachine [mallory] (transferEvents 30)).map
+  (fun (_, ds, fin) => Account.esMachine.rewind (ds.drop 2).reverse fin)
+    == some [mallory, alice, bob]
+
+-- REWIND (negative control): a TAMPERED suffix journal (the recorded
+-- old balances shifted by one) does NOT restore the post-open table —
+-- the recorded deltas are the undo information, not decoration. (The
+-- control rides the suffix form: a full rewind ends in the
+-- insert-inverses, whose erases wipe any tampered row.)
+#guard (Machines.RewindableMachine.runLogged Account.esMachine [mallory] (transferEvents 30)).map
+  (fun (_, ds, fin) => Account.esMachine.rewind
+    ((ds.drop 2).reverse.map fun d => { d with old := d.old.map fun a => { a with balance := a.balance + 1 } })
+    fin) != some [mallory, alice, bob]
+
+-- CONSERVATION (positive): a balanced posting keeps the universe's total.
+#guard total [1, 2] (balances (postEntry e1 [])) == total [1, 2] (balances [])
+
+-- CONSERVATION (negative control): a one-legged posting (the debit leg
+-- outside the universe — an external deposit) GROWS the total. The
+-- conservation theorem's endpoint hypotheses are load-bearing.
+#guard total [1, 2] (balances (postEntry ⟨9, 0, 2, 30⟩ [])) == total [1, 2] (balances []) + 30
+
+-- The obligation row discharges at the proved tier.
+#guard conservationObligation.discharge.isSome
 
 def main : IO UInt32 := do
   IO.println "LedgerTests: guards green (elab-time)"

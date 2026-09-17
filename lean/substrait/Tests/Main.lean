@@ -539,6 +539,182 @@ def relSpec : TestKit.PropSpec :=
 
 end RelSweep
 
+/- ── Literal decode∘emit sweep ──────────────────────────────────────────
+
+`parseLiteral ∘ Emit.Text.literal = id` over GENERATED literal shapes.
+The known asymmetry: `{{binary}}` is a one-way sentinel (the emitter
+drops the payload), so binary literals are EXCLUDED. Float canonicalization
+is handled by Float BEq (IEEE value equality) — same approach as the
+per-type float pins (W5.3 phase 2a). -/
+namespace LiteralSweep
+
+open Plausible
+open Substrait.Proto
+open Substrait.Decode
+open Substrait.Emit.Text
+
+-- Nullability: `PropSweep.genNull` (shared — the dupDefBodies lint).
+
+/-- Random small i8-range int (-128..127, incl. 0, 1, -1). -/
+def genInt8 : Gen Int := do
+  let v ← Gen.chooseNat; let e ← Gen.chooseNat
+  match e % 6 with
+  | 0 => pure 0 | 1 => pure 1 | 2 => pure (-1 : Int)
+  | 3 => pure (127 : Int) | 4 => pure (-128 : Int)
+  | _ => pure ((v % 256 : Int) - 128)
+
+/-- Random i16-range int (-32768..32767). -/
+def genInt16 : Gen Int := do
+  let v ← Gen.chooseNat; let e ← Gen.chooseNat
+  match e % 6 with
+  | 0 => pure 0 | 1 => pure 1 | 2 => pure (-1 : Int)
+  | 3 => pure (32767 : Int) | 4 => pure (-32768 : Int)
+  | _ => pure ((v % 65536 : Int) - 32768)
+
+/-- Random i32-range int. -/
+def genInt32 : Gen Int := do
+  let v ← Gen.chooseNat; let e ← Gen.chooseNat
+  match e % 6 with
+  | 0 => pure 0 | 1 => pure 1 | 2 => pure (-1 : Int)
+  | 3 => pure (2147483647 : Int) | 4 => pure (-2147483648 : Int)
+  | _ => pure ((v % 65536 : Int) - 32768)
+
+/-- Random i64-range int. -/
+def genInt64 : Gen Int := do
+  let v ← Gen.chooseNat; let e ← Gen.chooseNat
+  match e % 6 with
+  | 0 => pure 0 | 1 => pure 1 | 2 => pure (-1 : Int)
+  | 3 => pure (9223372036854775807 : Int)
+  | 4 => pure (-9223372036854775808 : Int)
+  | _ => pure ((v % 65536 : Int) - 32768)
+
+/-- Random float value over the round-trippable set: 0.0, negatives,
+    fractionals with possible trailing-zero rendering. -/
+def genFloatVal : Gen Float := do
+  let v ← Gen.chooseNat; let cat ← Gen.chooseNat
+  match cat % 7 with
+  | 0 => pure (0.0 : Float)
+  | 1 => pure (0.5 : Float)
+  | 2 => pure (-3.25 : Float)
+  | 3 => pure (3.14 : Float)
+  | 4 => pure (-0.5 : Float)
+  | 5 => pure (Nat.toFloat (v % 100))
+  | _ => pure (-Nat.toFloat (v % 100))
+
+/-- Literal-value characters including escapes. -/
+def genStrChar : Gen Char :=
+  Gen.oneOfWithDefault (pure 'a')
+    [pure 'b', pure '9', pure '_', pure ' ', pure '\'', pure '\\', pure '\n']
+
+/-- String of bounded length (0–5 chars), exercises escapes.  Sized by the
+    argument so the recursion is structurally terminating. -/
+def genStr : Nat → Gen String
+  | 0 => pure ""
+  | k + 1 => do
+    let c ← genStrChar
+    let cs ← genStr k
+    pure (toString c ++ cs)
+
+/-- Random literal over the round-trippable fragment.
+    Binary EXCLUDED by design: Emit.Text.literal always writes `{{binary}}`
+    (the `show_literal_binaries=false` sentinel from Substrait.Grammar),
+    so binary payloads are destroyed — one-way sentinel, no round-trip. -/
+def genLiteral (_tfuel : Nat) : Gen Proto.Literal := do
+  let branch ← Gen.chooseNat
+  let n ← PropSweep.genNull
+  let b := branch % 9
+  if b == 0 then
+    let v ← Gen.chooseNat
+    pure { literalType := .bool (v % 2 == 0), nullable := n == .nullable }
+  else if b == 1 then
+    let v ← genInt8
+    pure { literalType := .i8 v, nullable := n == .nullable }
+  else if b == 2 then
+    let v ← genInt16
+    pure { literalType := .i16 v, nullable := n == .nullable }
+  else if b == 3 then
+    let v ← genInt32
+    pure { literalType := .i32 v, nullable := n == .nullable }
+  else if b == 4 then
+    let v ← genInt64
+    pure { literalType := .i64 v, nullable := n == .nullable }
+  else if b == 5 then
+    let v ← genFloatVal
+    pure { literalType := .fp32 v, nullable := n == .nullable }
+  else if b == 6 then
+    let v ← genFloatVal
+    pure { literalType := .fp64 v, nullable := n == .nullable }
+  else if b == 7 then
+    let s ← genStr 5
+    pure { literalType := .string s, nullable := n == .nullable }
+  else do
+    -- null: emitter writes `null:t`, parser always sets nullable := true
+    -- (the generator matches by forcing nullable).  Vary the nulled type
+    -- across i32/i64/string so the type-text arm is exercised.
+    let ty ← Gen.chooseNat
+    let t : Proto.PType := match ty % 3 with
+      | 0 => .i32 .nullable | 1 => .string .nullable | _ => .i64 .nullable
+    pure { literalType := .null t, nullable := true }
+
+/-- The plausible instance: fueled generation. -/
+instance : ArbitraryFueled Proto.Literal where
+  arbitraryFueled := genLiteral
+
+instance : Arbitrary Proto.Literal where
+  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
+
+/-- Shrink toward simpler literals. -/
+def shrinkLiteral : Proto.Literal → List Proto.Literal
+  | { literalType := .string _, nullable := _ } =>
+    [{ literalType := .string "", nullable := false }]
+  | { literalType := .null _, nullable := _ } =>
+    [{ literalType := .null (.i64 .required), nullable := true }]
+  | _ => []
+
+instance : Shrinkable Proto.Literal where
+  shrink l := shrinkLiteral l
+
+/-- The round-trip property: emit then parse recovers the original literal.
+    Float BEq handles canonicalization (IEEE value equality — the same
+    `==` the per-type float pins use).  Null literals: always nullable
+    (both generator and parser agree), so `l' == l` works. -/
+def literalRoundtripOk (l : Proto.Literal) : Bool :=
+  match literal l with
+  | .error _ => false
+  | .ok txt =>
+    match parseLiteral txt.toList with
+    | some (l', []) => l' == l
+    | _ => false
+
+/-- Helper for the control suite: returns true iff the literal's type is i64. -/
+def isI64 (l : Proto.Literal) : Bool :=
+  match l.literalType with | .i64 _ => true | _ => false
+
+/-- The suite: 2000 instances, PINNED SEED — a CI failure replays
+    byte-identically, and plausible's shrinker minimizes any counterexample. -/
+def suite : TestSeq :=
+  checkPlausibleIO "decode∘emit = id (generated literals)"
+    (∀ l : Proto.Literal, literalRoundtripOk l = true)
+    .done { numInst := 2000, randomSeed := some 20261001 }
+
+/-- The negative control (TestKit.PropSpec discipline): claims every literal
+    is an i64 (the syntax-default integer).  Caught only if the generator
+    actually produces bool/fp/string/null literals — which it does by
+    construction. -/
+def controlSuite : TestSeq :=
+  checkPlausibleIO "sabotaged: all literals are i64 (must be caught)"
+    (∀ l : Proto.Literal, isI64 l = true)
+    .done { numInst := 2000, randomSeed := some 20261001 }
+
+/-- The property spec: sweep + mandatory negative control. -/
+def literalSpec : TestKit.PropSpec :=
+  { name := "literal decode∘emit round-trip"
+  , suite := suite
+  , control := controlSuite
+  , controlName := "reject-all-non-i64" }
+
+end LiteralSweep
+
 /-- Run the check suite via TestKit.CheckM: named checks accumulate;
     hard errors on intermediate IO (eval failures feeding later checks)
     `errorAbort` — the remaining sections are skipped with the error
@@ -962,4 +1138,5 @@ def main (args : List String) : IO UInt32 := do
         -- must be caught — a sweep whose generator never reaches the failing
         -- fragment is flagged as vacuous)
         TestKit.runSpecs [PropSweep.spec, PropSweep.exprSpecCalls,
-          PropSweep.exprSpecIfThen, PropSweep.exprSpecCast, RelSweep.relSpec]
+          PropSweep.exprSpecIfThen, PropSweep.exprSpecCast, RelSweep.relSpec,
+          LiteralSweep.literalSpec]

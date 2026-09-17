@@ -70,3 +70,14 @@ import Demo
 #print axioms SchemaLang.cascade_two_commute
 #print axioms SchemaLang.cascade_disj_commutes
 #print axioms SchemaLang.cascade_applySeq_perm
+
+-- W5.1: the event-sourcing core (the generic laws the attribute cites)
+#print axioms SchemaLang.EventSourced.replay_snoc
+#print axioms SchemaLang.EventSourced.insertIdx_eraseIdx_eq_set
+#print axioms SchemaLang.EventSourced.wDeltaChangeInversion
+#print axioms SchemaLang.EventSourced.upsert_eq_set
+#print axioms SchemaLang.EventSourced.upsert_eq_append
+#print axioms SchemaLang.EventSourced.apply_eq_patchW
+#print axioms SchemaLang.EventSourced.witnessOf_valid
+#print axioms SchemaLang.EventSourced.decDelta_encDelta_append
+#print axioms SchemaLang.EventSourced.decJournal_encJournal_append

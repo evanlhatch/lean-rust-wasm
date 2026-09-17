@@ -8,6 +8,13 @@
 //! wasmtime-28-era `WasiView` (separate `table`/`ctx` accessors) is gone —
 //! wasmtime 47's `WasiView` is a single `ctx()` accessor yielding
 //! [`wasmtime_wasi::WasiCtxView`].
+//!
+//! SKEW CONTRACT: a host must start against the schema it was built for
+//! — [`schema::verify_surface`] / `ComponentRuntime::instantiate_checked`
+//! refuse at startup when the guest component's export surface diverges
+//! from the host's committed expectation (the canonical `fn/arity`
+//! string = Lean's `Oracle.schemaSurface`; the guest's surface is read
+//! from its component TYPE, pre-instantiation).
 
 // error! emits Error::provide — nightly-only (same gate as the root crate).
 #![feature(error_generic_member_access)]
@@ -18,6 +25,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 pub mod bindings;
 pub mod engine;
 pub mod runtime;
+pub mod schema;
 pub mod valves;
 
 /// The OBSERVABILITY MANIFEST (generated, byte-tied): the spans are

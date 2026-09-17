@@ -1,5 +1,5 @@
 name = "Ledger"
-defaultTargets = ["Ledger", "LedgerFn", "LedgerTests"]
+defaultTargets = ["Ledger", "LedgerFn", "LedgerES", "LedgerTests"]
 
 # LSpec's @[test_driver]-registered runner for `lake test`.
 testDriver = "LedgerTests"
@@ -41,3 +41,15 @@ root = "Tests.Main"
 # Registry replay needs the interpreter (the initializers' unsafe init
 # path) — same as schema-lang's test/gen exes.
 supportInterpreter = true
+
+# The machine substrate (RewindableMachine — the event-sourced dogfood's
+# rewind laws) — a DIRECT dep (the fragile inherited form is banned).
+[[require]]
+name = "Machines"
+path = "../Machines"
+
+# The event-sourced dogfood model (posting, derived balances,
+# conservation, the obligation row).
+[[lean_lib]]
+name = "LedgerES"
+roots = ["LedgerES"]
