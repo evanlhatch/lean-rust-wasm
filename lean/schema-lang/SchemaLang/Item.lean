@@ -250,6 +250,11 @@ inductive SchemaDiag where
   -- must pass `list` — the boxed position; option/result/direct
   -- fields/tensor/map VALUES embed their payload inline)
   | inlineCycle (name : String)
+  -- the emitter-bug lane (the two caught WIT emitter bugs, moved into
+  -- the WF gate): APPEND-ONLY — the derived E-code allocation (faults'
+  -- `derive_ctor_kinds` block) is order-sensitive
+  | mangledCollision (mangled : String) (preimages : List String)
+  | emptyVariant (name : String)
 deriving Repr, BEq, Inhabited
 
 /-! ## Reserved words — the identifier gate (elab-time, via the
@@ -373,6 +378,13 @@ def render : SchemaDiag → String
         ++ "the cycle is a finite-size type); `option`/`result`/direct "
         ++ "fields/tensor/map values embed their payload inline — such a "
         ++ "cycle is an infinite-size Rust type (W8.13)"
+  | .mangledCollision mangled preimages =>
+      s!"names `{String.intercalate "`, `" preimages}` all mangle to the WIT "
+        ++ s!"identifier `{mangled}` — the kebab mangling is not injective; "
+        ++ "post-mangle names must be unique (rename one)"
+  | .emptyVariant n =>
+      s!"`{n}`: a variant must have at least one case — a zero-case variant "
+        ++ "has no wire meaning (WIT grammar: `variant` needs ≥1 case)"
 
 end SchemaDiag
 
@@ -417,7 +429,13 @@ def Item.check (known : List String) : Item → List SchemaDiag
           ++ checkSchemaIdent (s!"field of `{n}`") f.name
           ++ f.ty.check known
   | .variant n cases =>
-      cases.flatMap fun (c, payload) =>
+      -- the empty-variant gate (the caught emitter bug, WF lane): a
+      -- zero-case variant emits `variant v { }` — WIT the canonical
+      -- parser rejects. A legal universe emits legal WIT.
+      (match cases with
+        | [] => [.emptyVariant n]
+        | _ :: _ => [])
+        ++ cases.flatMap fun (c, payload) =>
         match payload with
         | some t =>
             (if t.banAsync then [] else [.asyncField n c])
@@ -467,13 +485,30 @@ def inlineCycleDiags (items : List Item) : List SchemaDiag :=
     if (inlineSucc items n).any (inlineReaches? items n (items.length + 1))
     then some (SchemaDiag.inlineCycle n) else none
 
+/-- The post-mangle collision scan (the caught kebab-collision bug,
+    moved into the WF gate): item names whose kebab MANGLED forms collide
+    (`kebab` is not injective: "FooBar"/"foo-bar"/"foo_bar" → "foo-bar")
+    — the emitted WIT would declare one identifier multiple times and
+    wit-parser rejects it ("defined more than once"). The pre-mangle dup
+    scan passes these (the names differ); this is the rule the emitted
+    surface actually needs. One diagnostic per colliding mangled name,
+    naming ALL its preimages. Deliberate exclusion: FIELD/case/param
+    names are not gated here — the audit's bug is item-level; extend
+    when an audit demands it. -/
+def mangleCollDiags (ns : List String) : List SchemaDiag :=
+  ((ns.map CodegenCore.Emit.kebab).filter
+      fun m => (ns.map CodegenCore.Emit.kebab).countP (· == m) > 1).eraseDups.map
+    fun m => SchemaDiag.mangledCollision m
+      (ns.filter fun n => CodegenCore.Emit.kebab n == m)
+
 /-- The universe check: ALL diagnostics. Empty list = well formed. -/
 def universeCheck (items : List Item) : List SchemaDiag :=
   let known := Item.typeNames items
   let ns := items.map Item.name
   let dupNames := ns.filter (fun n => ns.countP (· == n) > 1)
   let dupDiags := dupNames.eraseDups.map SchemaDiag.dupName
-  items.flatMap (Item.check known) ++ dupDiags ++ inlineCycleDiags items
+  items.flatMap (Item.check known) ++ dupDiags
+    ++ mangleCollDiags ns ++ inlineCycleDiags items
 
 /-! ## The Bool projection (derived from the diagnostic authority) -/
 

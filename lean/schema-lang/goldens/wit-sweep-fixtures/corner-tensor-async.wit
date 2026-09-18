@@ -1,0 +1,18 @@
+package demo:corner-tensor-async;
+
+interface corner-tensor-async-types {
+record tensors {
+  t-2x3: list<u64>,
+  t-1d: list<list<option<u8>>>,
+  t-nested: list<list<f64>>,
+}
+}
+
+interface corner-tensor-async-exports {
+    watch-tensor: async func(id: u32) -> list<u64>;
+    stream-tensor: func() -> stream<list<f32>>;
+}
+
+world corner-tensor-async {
+  export corner-tensor-async-exports;
+}

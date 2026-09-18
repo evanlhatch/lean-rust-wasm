@@ -16,8 +16,11 @@ FAILS THE BUILD rather than shipping a page of gap markers).
 
 Provenance and deliberate scope:
 - The manifest (`internalsModules`) is DATA — one def, extensible by
-  one line. Today: schema-lang's Item / Diff / Validate / Session and
-  Machines' Session / Sim.
+  one line. Today: schema-lang's core (Item / Diff / Validate / Session),
+  the W8+ wave modules (Witness / WitnessCheck / WitnessSpec / Update2 /
+  Refine / PrePost / TableInvariant / Scheduling / Commands /
+  EntityMachine, the Meta elaborator lanes) and Machines' Session / Sim /
+  Fusion.
 - WasmBackend's modules are NOT in the manifest: schema-lang cannot
   import wasm-backend (std → schema-lang, wasm-backend → std — a back
   edge would cycle the package graph). Reported to the owning lane.
@@ -64,6 +67,27 @@ import all SchemaLang.Session
 public import SchemaLang.Emit.GenCtx
 import all Machines.Session
 import all Machines.Sim
+-- W15-25 waves (the consolidation batch): `import all` stays NON-public
+-- (constraint 14 — Update2/Scheduling/Fusion are mathlib-carrying; the
+-- leak rule forbids public imports of them into a module consumed by
+-- legacy/downstream packages).
+import all SchemaLang.Witness
+import all SchemaLang.WitnessCheck
+import all SchemaLang.WitnessSpec
+import all SchemaLang.Update2
+import all SchemaLang.Refine
+import all SchemaLang.PrePost
+import all SchemaLang.TableInvariant
+import all SchemaLang.Scheduling
+import all SchemaLang.Commands
+import all SchemaLang.EntityMachine
+import all SchemaLang.Meta.EventSourced
+public meta import SchemaLang.Meta.EventSourced
+import all SchemaLang.Meta.Keys
+import all SchemaLang.Meta.WireCodec
+import all SchemaLang.Meta.TableInvariant
+import all SchemaLang.Meta.Mono
+import all Machines.Fusion
 
 public meta section
 
@@ -74,10 +98,16 @@ namespace SchemaLang.ModuleDocs
 /-! ## The extraction core (pure: `Environment → String`) -/
 
 /-- One module's docstrings, VERBATIM, joined. `none` = the module has
-    no module docstrings visible in the environment. -/
+    no module docstrings visible in the environment. A whitespace-only
+    doc block counts as none: a module whose header is a plain `/- -/`
+    block comment registers an EMPTY docstring entry (observed:
+    WitnessSpec / Meta.Keys / Meta.TableInvariant / Meta.Mono) — the
+    gap marker, not silence, is the doctrine's answer to that. -/
 def moduleDocBlock (env : Lean.Environment) (mod : Lean.Name) : Option String :=
-  (Lean.getModuleDoc? env mod).map fun docs =>
-    String.intercalate "\n\n" (docs.toList.map (·.doc))
+  match (Lean.getModuleDoc? env mod).map fun docs =>
+    String.intercalate "\n\n" (docs.toList.map (·.doc)) with
+  | some docs => if docs.trimAscii.isEmpty then none else some docs
+  | none => none
 
 /-- The page body over an ALREADY-EXTRACTED manifest: one `## <module>`
     section per entry; doc-less entries render the explicit gap marker.
@@ -114,6 +144,22 @@ def internalsModules : List Lean.Name :=
   , `SchemaLang.Session
   , `Machines.Session
   , `Machines.Sim
+  , `SchemaLang.Witness
+  , `SchemaLang.WitnessCheck
+  , `SchemaLang.WitnessSpec
+  , `SchemaLang.Update2
+  , `SchemaLang.Refine
+  , `SchemaLang.PrePost
+  , `SchemaLang.TableInvariant
+  , `SchemaLang.Scheduling
+  , `SchemaLang.Commands
+  , `SchemaLang.EntityMachine
+  , `SchemaLang.Meta.EventSourced
+  , `SchemaLang.Meta.Keys
+  , `SchemaLang.Meta.WireCodec
+  , `SchemaLang.Meta.TableInvariant
+  , `SchemaLang.Meta.Mono
+  , `Machines.Fusion
   ]
 
 /-! ## The build-time capture (the probe) -/

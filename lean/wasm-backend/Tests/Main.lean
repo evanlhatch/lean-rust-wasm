@@ -226,6 +226,46 @@ def oracleIdentitySpec : DiffSpec := ⟨"oracle rejects sabotaged rows by error 
   , corrupt "arity sabotage" (fun rs => ("double", ["3", "4"]) :: rs) rows oracleRowsIdentities
       ["arityDrift", "double"] ]⟩
 
+/-! ## W9.x — the witness differential batch (the fuzz-gap audit's gap #1)
+
+`Oracle.witnessBatch`: 33 LCG-seeded witnesses (pinned seed 0x9EED7A11,
+row i = family i % 11 — cycling, so every family appears 3×) across the
+WProp/WProof ctor space: valid/eqU/chain claims, byEval/byValidEval/
+steps proofs, strlenCol + col refs, nested and/not, fuel-0 and fuel-1
+boundaries, multi-label, plus the byte-flip and truncation TAMPER
+families. The rows ride `rowUniverse` (the manifest replays them against
+the compiled checker); here the batch gets its own corruption-negative
+gate + the verdict-mix CONTRACT (the seed is pinned, so 14 accept / 19
+refuse is a fact about the seed, and a drift is a batch regression). -/
+
+/-- The witness batch rides the same corruption-negative gate. -/
+def witnessDiffSpec : DiffSpec := ⟨"witness batch rejects sabotaged rows",
+  oracleRowsResolve witnessBatch.probes,
+  [ corrupt "unknown fn" (fun rs => ("verify-witnes", ["1,0"]) :: rs)
+      witnessBatch.probes oracleRowsResolve ["unknown fn", "verify-witnes"]
+  , corrupt "arity sabotage" (fun rs => ("verify-witness", ["1,0", "2"]) :: rs)
+      witnessBatch.probes oracleRowsResolve ["'verify-witness' expects 1 args", "got 2"] ]⟩
+
+/-- The batch's verdict mix: (accepts, refuses, decode-nones) — the
+    pinned-seed contract. Non-vacuity is built in: 14 accepts prove the
+    sweep isn't refuse-only; 19 refusals (all ctor mispairings + fuel-0
+    + the tamper families) prove it isn't accept-only. The decode-none
+    count pins the tamper families' refusal CLASS (a semantic refuse
+    and a decode refuse are different guest code paths). -/
+def witnessVerdictMix : Nat × Nat × Nat :=
+  let mix := witnessBatch.probes.map fun (fn, args) =>
+    match resolve fn args with
+    | .ok "1" => (1, 0, 0)
+    | .ok "0" =>
+      let bs := ((args.getD 0 "").splitOn ",").map (fun x => UInt8.ofNat (String.toNat! x))
+      match SchemaLang.Witness.decWitness? 1 bs with
+      | none => (0, 1, 1)
+      | some _ => (0, 1, 0)
+    | _ => (0, 1, 0)
+  (mix.map (·.1) |>.foldl (· + ·) 0,
+   (mix.map (·.2.1) |>.foldl (· + ·) 0,
+   mix.map (·.2.2) |>.foldl (· + ·) 0))
+
 open Plausible
 open Plausible.Gen
 open WasmBackend.Wat
@@ -341,7 +381,7 @@ def watPropSpec : TestKit.PropSpec :=
 -- point runs the oracle DiffSpec (plus its own vacuous-control demo), and
 -- the WAT printer PropSpec.
 def main : IO UInt32 := do
-  let code ← runDiffs [oracleDiffSpec, oracleIdentitySpec]
+  let code ← runDiffs [oracleDiffSpec, oracleIdentitySpec, witnessDiffSpec]
   if code != 0 then return code
   -- Negative control for the control: an identity "corruption" must be
   -- flagged (proves the runner can't go vacuously green here either).
@@ -357,4 +397,10 @@ def main : IO UInt32 := do
   if propCode != 0 then
     IO.eprintln "FAIL: WAT printer sweep failed"
     return propCode
+  -- THE WITNESS BATCH's verdict mix (the pinned-seed contract —
+  -- see witnessVerdictMix): 14 accept / 19 refuse / 4 decode-none
+  -- (three truncations + one byte-flip).
+  if witnessVerdictMix != (14, (19, 4)) then do
+    IO.eprintln s!"FAIL: witness batch verdict mix drifted: {witnessVerdictMix}"
+    return 1
   return 0

@@ -144,7 +144,13 @@
   local.tee $rc
   i32.store
   ;; rc == 0 → return the block to its class pool
+  ;; (the guard MUST be eqz: push ONLY when the count HIT zero. An
+  ;; inverted guard recycles LIVE blocks — every 2→1 decrement of a
+  ;; shared/borrowed reference pushed the still-referenced block to the
+  ;; freelist and the next alloc aliased it — observed as the
+  ;; evalWBool? verdict corruption + the alloc fault / component wedge.)
   local.get $rc
+  i32.eqz
   if
     local.get $p
     i32.load8_u offset=5

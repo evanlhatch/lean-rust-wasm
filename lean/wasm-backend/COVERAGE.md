@@ -25,9 +25,9 @@ Schema surface (the canonical string the verdict schema hash is sha256 of):
 | `user-valid` | 4 | 40 | `record-arg`, `validator`, `negative-gate:id-zero` |
 | `order-error-valid` | 2 | 13 | `variant-arg`, `validator`, `negative-empty-cart`, `f64-payload-arm` |
 | `user-complete` | 4 | 38 | `record-arg`, `validator`, `strlen-gate`, `tags-count-gate` |
-| `verify-witness` | 1 | 5 | `witness-decode`, `guest-checker`, `negative-tampered`, `fuel-refusal` |
+| `verify-witness` | 1 | 38 | `witness-decode`, `guest-checker`, `negative-tampered`, `fuel-refusal`, `witness-ctor-sweep` |
 
-## Batch coverage (one shared context, five probe batches)
+## Batch coverage (one shared context, six probe batches)
 
 | batch | probes | adds |
 | --- | --- | --- |
@@ -36,6 +36,7 @@ Schema surface (the canonical string the verdict schema hash is sha256 of):
 | `boundary` | 72 | u64 limits 0/1/2/2^31/2^32±1/2^63±1/max, adder/pick complement pairs |
 | `sweep` | 120 | second LCG over the fns the first fuzz skips (str-len-demo, watch-counts) |
 | `gen` | 95 | Plausible edge rows: nested-id sentinels, the "a,,b" splitOn edge, length boundaries, off-grid u64 leaves |
+| `witness` | 33 | the witness differential sweep (gap #1): 33 LCG-seeded witnesses across the WProp/WProof ctor space — eqU/gt claims, valid+chain claims, steps proofs, strlenCol/col refs, nested and/not, fuel-0, multi-label — plus the byte-flip and truncation tamper families; expected = the interpreted checker's verdict |
 
 ## Negative controls
 

@@ -12,8 +12,11 @@ alternatives with reasons.
    name your row; no row = a finding.
 3. `lean-doctrine.md` — the rules, each with its enforcement level
    (convention → lint → structural → gate).
-4. `runbook-2026-09-15.md` — THE work plan: agent primer, global
-   protocol, 40+ prescriptive work orders, dispatch order.
+4. `runbook-2026-09-15.md` — ARCHIVED (pointer): the work plan ran to
+   completion 2026-09-18; the full runbook (agent primer, global
+   protocol, 40+ prescriptive work orders, dispatch order) lives in
+   `archive/runbook-2026-09-15.md` — lineage only, never cite from
+   archive/ in new work.
 5. `lean-cohesion-plan.md` + `code-review-2026-09-15.md` — the
    analysis + evidence behind the plan.
 6. `studies/` — external evidence (cedar-spec, verified-ledger).

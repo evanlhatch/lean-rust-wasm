@@ -1,0 +1,22 @@
+package demo:sweep-06;
+
+interface sweep-06-types {
+record order {
+  f0: f64,
+}
+record summary {
+  f0: list<list<list<u8>>>,
+  f1: list<f64>,
+}
+variant shape {
+  c0,
+}
+}
+
+interface sweep-06-exports {
+    watch: async func(p0: f32, p1: option<list<list<u8>>>) -> result<list<list<u8>>, list<u8>>;
+}
+
+world sweep-06 {
+  export sweep-06-exports;
+}

@@ -1,0 +1,24 @@
+package demo:sweep-04;
+
+interface sweep-04-types {
+record order {
+  f0: list<s16>,
+  f1: list<tuple<u32, option<list<tuple<string, option<list<s16>>>>>>>,
+  f2: string,
+}
+record summary {
+  f0: bool,
+}
+variant shape {
+  c0(list<u8>),
+  c1(option<f64>),
+}
+}
+
+interface sweep-04-exports {
+    watch: func() -> list<u8>;
+}
+
+world sweep-04 {
+  export sweep-04-exports;
+}

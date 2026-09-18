@@ -32,6 +32,7 @@ public import SchemaLang.Emit.Rust
 public import SchemaLang.Emit.GenRust
 public import SchemaLang.Delta
 public import SchemaLang.Emit.WitFixture
+public import SchemaLang.Emit.WitSweep
 public import SchemaLang.Emit.Invariant
 public import SchemaLang.Emit.Update
 public import SchemaLang.Emit.Machine
@@ -191,6 +192,8 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   , pipelineEmitter
   , WitFixture.fixtureEmitter
   , WitFixture.manifestEmitter
+  , WitSweep.sweepFixtureEmitter
+  , WitSweep.sweepManifestEmitter
   , SchemaLang.Docs.docsEmitter
   , SchemaLang.ModuleDocs.internalsEmitter
   ]
@@ -241,6 +244,11 @@ def emitters : List (CodegenCore.Emit.Emitter GenCtx) :=
 def jobsCoverEmitters : Bool :=
   (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2.2)
 
+/- The fold grew to ~50 outputs (the seeded WIT sweep joined): the
+    kernel's decide needs more than the default 512 recursion steps.
+    `maxRecDepth` raised for THIS proof only — the statement is
+    unchanged. -/
+set_option maxRecDepth 50000 in
 theorem jobsCoverEmitters_true : jobsCoverEmitters = true := rfl
 
 /-- 6.5.3 — the emitter self-audit rule-set: constructs NO generated

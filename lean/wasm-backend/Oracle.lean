@@ -38,6 +38,55 @@ unchanged (append-only, the header's rule); the manifest hash above
 covers the pre-W9.6 universe and is superseded by the regenerated
 target/diff.json (`just wasm-diff-check` = the tie).
 
+W9.x (the witness DIFFERENTIAL batch — the fuzz-gap audit's gap #1):
+the row universe grew again, append-only: `witnessBatch` (33 rows,
+seed 0x9EED7A11, appended AFTER the Gen supplement) sweeps the
+WProp/WProof ctor space the five fixtures never tried — eqU AND gt
+claims, valid + chain claims, byEval/byValidEval/steps proofs,
+strlenCol + col refs, nested and/not, fuel-0, multi-label, and two
+byte-tamper families (XOR flip, truncation). Expected = the
+interpreted checker's verdict, unchanged authority. Tests pin the
+verdict mix (14 accept / 19 refuse / 4 decode-none) as the
+pinned-seed contract. Manifest delta: 779 → 812 rows, sha256
+6aa479b9c15ff64867154b7cb52771c5940a9d33c6ed748ccb1bbfeecd9d5fcf →
+8e15118eb4204c7db74e4101403b6a64a1473b9c7d3480893db79657e8278918.
+
+W9.x RESOLVED (the backend repair — this header's "left red" state
+superseded): the batch's predicted bug was REAL and FIXED at the
+runtime/emitter, not the checked code. THREE defects, all found by the
+differential duel + a WAT-level unit probe (export the internals, build
+the objects, read the boxes):
+1. `runtime.wat`'s `$rc_dec`: the freelist-push guard was INVERTED —
+   the block returned to its class pool whenever the DECREMENTED rc
+   was NONZERO (a 2→1 decrement of a shared/borrowed ref recycled a
+   LIVE block) and the true 1→0 free never re-pooled. Every
+   `alloc` after a shared-ref drop could alias a live object: the
+   `evalWBool?` result's `some` box came back SELF-REFERENTIAL
+   (payload = its own address), so every verdict compare read garbage
+   — all valid/chain claims refused where the interpreted checker
+   accepts. Fix: push only when the count HIT zero (`i32.eqz`).
+2. The trampolines never consumed the closure: Lean's `lean_apply_N`
+   decrements the closure after the call (the LCNF's `inc[ref] f`
+   before a fap protects f for later uses). Without the dec, closures
+   leaked (and the pass's accounting assumed the consumption).
+3. The trampolines forwarded CAPTURED fields without INCing them: the
+   target-wrapper decs its borrowed params, so a closure applied twice
+   lost its captured field's only ref at the first application
+   (use-after-free → freelist poisoning → the `alloc` fault + the
+   "cannot enter component instance" wedge on the shared-instance
+   gate). Fix: INC each forwarded captured field; the wrapper's dec
+   consumes THAT ref, the closure keeps its own.
+Repairs 2+3 together took the tampered rows from TRAP to clean
+refusal. The minimal counterexample shape (a `valid` claim over a
+`gt` of two lits, `byValidEval`, fuel 1) is IN the batch (rows
+replayed by the isolate probe + the wasm_diff gate); the duel is
+33/33 byte-agreements, every suite green. NOTE: an earlier revision
+of this header quoted "minimal case" bytes
+(`1,0,10,1,105,110,118,45,97,0,0,0,42,0,0,1,1`) that do NOT decode
+(the payload length byte is wrong); the canonical minimal encoding is
+`encWitness 1 0 ⟨"inv-a", .valid (.gt (.lit 42) (.lit 0)),
+.byValidEval, 1⟩` = `1,0,14,5,105,110,118,45,97,0,0,0,42,0,0,1,1`.
+
 W6.3 (phase 2) landed, bytes unchanged: the VERDICT layer —
 `DivergenceClass`/`Divergence`/`Verdict` + `CompareMode.verdict` (the
 first-divergence triple: both outcomes + the category as a CTOR +
@@ -429,10 +478,125 @@ def genRows (n seed : Nat) : List Probe :=
 def genBatch (n seed : Nat) : ProbeBatch :=
   ⟨"demo-component", genRows n seed⟩
 
+-- ── THE WITNESS DIFFERENTIAL BATCH (the fuzz-gap audit's gap #1) ─────
+-- The guest-compiled checker (`verify-witness`) was pinned at ONE
+-- witness shape (an eqU claim, one label — the five fixtures above)
+-- while the Lean-side checker is swept over generated witnesses: a
+-- backend miscompilation of ANY untried WProp/WProof arm would have
+-- been silent. This batch sweeps the ctor space: N LCG-seeded
+-- witnesses (TestKit.lcg, pinned seed — failures replay
+-- byte-identically), each row's arg = the witness's encoded bytes
+-- (`encWitness 1 0`, the codec) and the expected = the interpreted
+-- checker's verdict (resultOf's verify-witness arm: decWitness? +
+-- checkWitness at the artifact's own fuel over the v1 demo's EMPTY
+-- certification context — the exact shape DemoFn.verifyWitness
+-- compiles). The authority never moved: expected = Lean's eval.
+--
+-- FAMILY MAP (row i uses family i % 11 — cycling, so the pinned count
+-- 33 covers every family 3×; the VALUES ride the LCG draws):
+--   0 valid + gt + byValidEval  → ACCEPT (lit-only invariant, true)
+--   1 eqU + byEval              → ACCEPT (equal literals)
+--   2 nested and/not            → ACCEPT (not(gt 0 v) ∧ gt v 0, v ≥ 1)
+--   3 chain [] + steps []       → ACCEPT (the chain rule's empty walk —
+--     the only chain shape that accepts with no log)
+--   4 chain 2 steps + steps 2   → REFUSE (empty log: the offsets deref
+--     none — the context-free convention the guest compiles)
+--   5 strlenCol ref             → REFUSE (unresolved on the empty fields)
+--   6 eqU with a col ref        → REFUSE (same, the eqU path)
+--   7 wrong proof shape         → REFUSE (eqU+byValidEval /
+--     valid+byEval — the LCG picks the sub-arm)
+--   8 fuel 0                    → REFUSE (exhaustion IS refusal, §7.3)
+--   9 TAMPERED: one XOR-flipped byte of the family-0 witness → the
+--     Lean verdict pins whatever the flip yields (decode-none or a
+--     semantic flip — refusal is first-class)
+--   10 TAMPERED: family-1's bytes truncated one byte → decode none
+--
+-- Multi-label: the label supply varies the decode path's string
+-- lengths (5..21 chars). The streq lowering rides the compiled closure
+-- (lookupString?'s name BEq) but the pinned-empty context never
+-- executes a nonempty name comparison — the duel pins the compiled
+-- closure's VERDICTS, arm for arm. Non-empty chains always refuse in
+-- this lane (no log on the wire); the rows still pin the guest's
+-- compiled chain walk against the interpreted one.
+
+/-- The witness batch's labels (multi-label: the decode path's string
+    lengths vary — 5..21 chars). -/
+def witnessLabels : List String :=
+  ["inv-a", "mig-v1-v2", "step-ok", "demo/eq42", "w9-differential-batch"]
+
+open SchemaLang.Witness in
+/-- The family-`fam` witness (fam < 9 — the tamper families 9/10 build
+    on families 0/1's encodings; see `witnessRowAt`). `v` is a nonzero
+    u64 leaf, `s1` picks family 7's sub-arm. -/
+def witnessOf (fam : Nat) (v : UInt64) (s1 : UInt64) (fuel : Nat)
+    (label : String) : SchemaLang.Witness.Witness :=
+  ⟨label,
+   match fam with
+   | 0 => .valid (.gt (.lit v) (.lit 0))
+   | 1 => .eqU (.lit v) (.lit v)
+   | 2 => .valid (.and (.not (.gt (.lit 0) (.lit v))) (.gt (.lit v) (.lit 0)))
+   | 3 => .chain [] (.gt (.lit v) (.lit 0))
+   | 4 => .chain [⟨0⟩, ⟨1⟩] (.gt (.lit v) (.lit 0))
+   | 5 => .valid (.gt (.strlenCol "note") (.lit 0))
+   | 6 => .eqU (.col "amount") (.lit v)
+   | 7 => if (s1 % 2).toNat == 0 then .eqU (.lit v) (.lit v)
+          else .valid (.gt (.lit v) (.lit 0))
+   | _ => .eqU (.lit v) (.lit v),
+   match fam with
+   | 0 => (.byValidEval : SchemaLang.Witness.WProof)
+   | 1 => (.byEval v : SchemaLang.Witness.WProof)
+   | 2 => (.byValidEval : SchemaLang.Witness.WProof)
+   | 3 => (.steps [] : SchemaLang.Witness.WProof)
+   | 4 => (.steps [.byValidEval, .byValidEval] : SchemaLang.Witness.WProof)
+   | 5 => (.byValidEval : SchemaLang.Witness.WProof)
+   | 6 => (.byEval v : SchemaLang.Witness.WProof)
+   | 7 => if (s1 % 2).toNat == 0 then
+            (.byValidEval : SchemaLang.Witness.WProof)
+          else (.byEval v : SchemaLang.Witness.WProof)
+   | _ => (.byEval v : SchemaLang.Witness.WProof),
+   if fam == 8 then 0 else fuel⟩
+
+/-- One witness row: family `i % 11`, the LCG values, the arg = the
+    encoded bytes comma-joined (the byte-row convention). -/
+def witnessRowAt (i : Nat) (s1 s2 s3 : UInt64) : Probe :=
+  let v : UInt64 := (s2 % 1000) + 1
+  let fuel : Nat := (s3 % 8).toNat + 1
+  let label :=
+    witnessLabels[(s3 % UInt64.ofNat witnessLabels.length).toNat]?.getD "inv-a"
+  let bs : List UInt8 :=
+    match i % 11 with
+    | 9 => -- the byte-FLIP tamper: one XORed byte of the family-0 witness
+      let ok := SchemaLang.Witness.encWitness 1 0 (witnessOf 0 v s1 fuel label)
+      let k := s3.toNat % ok.length
+      ok.take k ++ [(ok[k]?.getD 0 ^^^ 1)] ++ ok.drop (k + 1)
+    | 10 => -- the TRUNCATION tamper: family-1's bytes minus one byte
+      (SchemaLang.Witness.encWitness 1 0 (witnessOf 1 v s1 fuel label)).dropLast
+    | fam => SchemaLang.Witness.encWitness 1 0 (witnessOf fam v s1 fuel label)
+  ("verify-witness", [String.intercalate "," (bs.map fun b => toString b.toNat)])
+
+/-- The witness batch's rows: `n` LCG draws, each at an advanced seed,
+    family = the row index mod 11 (cycling — the pinned count covers
+    every family). Same seed → same rows (the fuzz sweeps' contract). -/
+def witnessRows : Nat → UInt64 → List Probe
+  | 0, _ => []
+  | n+1, seed =>
+      let s1 := lcg seed
+      let s2 := lcg s1
+      let s3 := lcg s2
+      witnessRowAt n s1 s2 s3 :: witnessRows n s3
+
+/-- The witness differential batch (the fuzz-gap audit's gap #1): 33
+    LCG-seeded rows, 3 per ctor family (see the map at witnessRowAt).
+    Seed PINNED — same seed, same bytes, failures replay
+    byte-identically. -/
+def witnessBatch : ProbeBatch :=
+  ⟨"demo-component", witnessRows 33 0x9EED7A11⟩
+
 /-- The manifest's full replay list — the emitter's row universe, the
-    Gen supplement's batch appended last. -/
+    Gen supplement's batch + the witness differential batch appended
+    last. -/
 def rowUniverse : List Probe :=
-  (preGenBatches ++ [genBatch 130 0xBEA57]).flatMap (·.probes)
+  ((preGenBatches ++ [genBatch 130 0xBEA57, witnessBatch]).flatMap (·.probes))
 
 /-- The expected-result fold (Lean's semantics is the authority). "?" is
     unreachable for well-formed rows — `resolve` guards fn/arity first. -/
@@ -741,7 +905,7 @@ def featuresOf : String → List String
   | "user-valid" => ["record-arg", "validator", "negative-gate:id-zero"]
   | "user-complete" => ["record-arg", "validator", "strlen-gate", "tags-count-gate"]
   | "order-error-valid" => ["variant-arg", "validator", "negative-empty-cart", "f64-payload-arm"]
-  | "verify-witness" => ["witness-decode", "guest-checker", "negative-tampered", "fuel-refusal"]
+  | "verify-witness" => ["witness-decode", "guest-checker", "negative-tampered", "fuel-refusal", "witness-ctor-sweep"]
   | _ => []
 
 /-- The batch table for COVERAGE.md: name, probe count, the feature the
@@ -756,7 +920,9 @@ def batchTable : List (String × Nat × String) :=
   , ("sweep", (sweepBatch 120 0xA11CE).probes.length,
      "second LCG over the fns the first fuzz skips (str-len-demo, watch-counts)")
   , ("gen", (genBatch 130 0xBEA57).probes.length,
-     "Plausible edge rows: nested-id sentinels, the \"a,,b\" splitOn edge, length boundaries, off-grid u64 leaves") ]
+     "Plausible edge rows: nested-id sentinels, the \"a,,b\" splitOn edge, length boundaries, off-grid u64 leaves")
+  , ("witness", witnessBatch.probes.length,
+     "the witness differential sweep (gap #1): 33 LCG-seeded witnesses across the WProp/WProof ctor space — eqU/gt claims, valid+chain claims, steps proofs, strlenCol/col refs, nested and/not, fuel-0, multi-label — plus the byte-flip and truncation tamper families; expected = the interpreted checker's verdict") ]
 
 /-- COVERAGE.md's content (the emitter is PURE — the driver writes the
     file). GENERATED; do not hand-edit. -/
@@ -781,7 +947,7 @@ def coverageMd : String :=
   , "| --- | --- | --- | --- |" ]
   ++ perExport ++
   [ ""
-  , "## Batch coverage (one shared context, five probe batches)"
+  , "## Batch coverage (one shared context, six probe batches)"
   , ""
   , "| batch | probes | adds |"
   , "| --- | --- | --- |" ]

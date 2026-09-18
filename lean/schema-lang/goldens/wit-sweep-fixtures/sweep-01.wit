@@ -1,0 +1,23 @@
+package demo:sweep-01;
+
+interface sweep-01-types {
+record order {
+  f0: option<s64>,
+  f1: result<s16, string>,
+}
+record summary {
+  f0: s64,
+}
+variant shape {
+  c0(list<option<s32>>),
+  c1(f32),
+}
+}
+
+interface sweep-01-exports {
+    watch: func() -> u64;
+}
+
+world sweep-01 {
+  export sweep-01-exports;
+}

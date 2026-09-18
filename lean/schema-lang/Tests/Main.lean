@@ -22,8 +22,10 @@ import SchemaLang.EntityMachine
 import SchemaLang.Meta.EntityMachine
 import Demo
 import SchemaLang.Trace
+import SchemaLang.Emit.WitSweep
 import Machines
 import TestKit
+import Tests.SnapshotRT
 
 -- the Tests' own `schema_update` probe (updPureCall) emits its instance
 -- into SchemaLang by the framework's construction — same as Demo
@@ -106,6 +108,67 @@ theorem broken_not_wellFormed : ¬ WellFormed wfBrokenItems := by
   have hlen : (universeCheck wfBrokenItems).length = 1 := rfl
   rw [hnil] at hlen
   exact absurd hlen (by decide)
+
+/-! ## W10.x — the caught emitter bugs refuse at ELABORATION (the pins flipped)
+
+The seeded WIT sweep caught two emitter bugs: (1) the kebab collision —
+three DISTINCT names, ONE mangled WIT identifier; (2) the zero-case
+variant — legal in the universe, illegal WIT. Both universes used to
+pass `universeCheck` and get rejected by wit-parser AFTER emission.
+The fix is the WF lane's two rules (post-mangle name uniqueness,
+nonempty variants), so the refusals moved to ELABORATION with named
+diagnostics — these pins hold the NEW (better) behavior. The legal
+controls (`cornerKebabNear`, `cornerMinVariant`) are in the emitted
+corpus (the agreement sweep parses them). -/
+
+/-- Bug 1's universe (the audit's probe): three distinct names, one
+    mangled identifier. -/
+def kebabCollisionItems : List Item := SchemaLang.Emit.WitSweep.cornerKebab
+
+/-- Bug 2's universe: the zero-case variant. -/
+def emptyVariantItems : List Item := [.variant "empty-variant" []]
+
+-- Bug 1's WF refusal, with the named diagnostic: the colliding
+-- mangled identifier + ALL its preimages.
+#guard universeCheck kebabCollisionItems ==
+  [SchemaDiag.mangledCollision "foo-bar" ["FooBar", "foo-bar", "foo_bar"]]
+
+-- Bug 2's WF refusal, with the named diagnostic.
+#guard universeCheck emptyVariantItems ==
+  [SchemaDiag.emptyVariant "empty-variant"]
+
+/-- Bug 1 through the bridge: the relation refuses too (complete
+direction: WF would certify a clean checker run — the checker is loud). -/
+theorem kebabCollision_not_wellFormed : ¬ WellFormed kebabCollisionItems := by
+  intro hwf
+  have hnil := universeCheck_complete hwf
+  rw [show universeCheck kebabCollisionItems =
+    [SchemaDiag.mangledCollision "foo-bar" ["FooBar", "foo-bar", "foo_bar"]] from rfl] at hnil
+  exact absurd hnil (by simp)
+
+/-- Bug 2 through the bridge. -/
+theorem emptyVariant_not_wellFormed : ¬ WellFormed emptyVariantItems := by
+  intro hwf
+  have hnil := universeCheck_complete hwf
+  rw [show universeCheck emptyVariantItems =
+    [SchemaDiag.emptyVariant "empty-variant"] from rfl] at hnil
+  exact absurd hnil (by simp)
+
+-- OVER-BREADTH CONTROLS: the gate passes the legal siblings — near
+-- collisions (`foo-bar` vs `foo-bar2`), the minimal one-case variant,
+-- and the empty RECORD (zero-member braces are legal WIT).
+#guard universeCheck SchemaLang.Emit.WitSweep.cornerKebabNear == []
+#guard universeCheck SchemaLang.Emit.WitSweep.cornerMinVariant == []
+#guard universeCheck [.record "empty-record" []] == []
+
+/-- The gate over the WHOLE emitted corpus: every sweep fixture universe
+    is well-formed (a legal universe must emit legal WIT — the lane's
+    point). A generator-added universe that trips the gate fails HERE. -/
+def sweepCorpusWfChecks : CheckResult := do
+  for (name, items) in SchemaLang.Emit.WitSweep.sweepFixtures do
+    _ ← assertEq s!"sweep universe {name} well-formed"
+      (universeWellFormed items) true
+  .ok ()
 
 /-! ## The linen patterns, exercised -/
 
@@ -1029,28 +1092,11 @@ def anchors : List Item :=
 /-- Small field/case/param name supply (not the property's subject). -/
 def fieldSupply : List String := ["id", "name", "data"]
 
-/-- Pick a name from a supply. -/
-def pickName (supply : List String) : Gen String := do
-  let n ← Gen.chooseNat
-  pure (supply[n % supply.length]?.getD "alpha")
-
-/-- Leaf types: the closed scalars plus a named ref from the supply.
-    `oneOfWithDefault`, NOT `chooseNat % 14` — `chooseNat` ranges over
-    [0, size], so a modulo with more branches than the size silently
-    starves the tail branches (the 2026-11 `.ty`-leaf starvation: the
-    coverage witness caught a generator that never emitted named refs). -/
-def genTyLeaf (supply : List String) : Gen Ty :=
-  Gen.oneOfWithDefault (pure .bool)
-    [pure .u8, pure .u16, pure .u32, pure .u64,
-     pure .i8, pure .i16, pure .i32, pure .i64,
-     pure .f32, pure .f64, pure .string, pure .bytes,
-     do pure (.ty (← pickName supply))]
-
 /-- Sized random `Ty` over the closed universe: option/result/list/
     future/stream wrap smaller types; leaves are scalars or a named ref
     drawn from the supply. -/
 def genTy (supply : List String) : Nat → Gen Ty
-  | 0 => genTyLeaf supply
+  | 0 => SnapshotRT.genTyLeaf supply
   | fuel + 1 => do
     let branch ← Gen.chooseNat
     match branch % 9 with
@@ -1059,7 +1105,7 @@ def genTy (supply : List String) : Nat → Gen Ty
     | 2 => pure (.list (← genTy supply fuel))
     | 3 => pure (.future (← genTy supply fuel))
     | 4 => pure (.stream (← genTy supply fuel))
-    | _ => genTyLeaf supply
+    | _ => SnapshotRT.genTyLeaf supply
 
 /-- The plausible instances: fueled generation driven by the size
     parameter. -/
@@ -1085,28 +1131,28 @@ instance : Shrinkable Ty where
 /-- A generated field: name from the field supply, type from the fueled
     type generator. -/
 def genField (supply : List String) (fuel : Nat) : Gen Field := do
-  pure { name := (← pickName fieldSupply), ty := (← genTy supply fuel) }
+  pure { name := (← SnapshotRT.pickName fieldSupply), ty := (← genTy supply fuel) }
 
 /-- Sized random item over the closed vocabulary: record / variant /
     func / resource, all names from the supply, all types constructible. -/
 def genItem (supply : List String) (fuel : Nat) : Gen Item := do
   let branch ← Gen.chooseNat
   match branch % 4 with
-  | 0 => pure (.record (← pickName supply) (← genShortList (genField supply fuel) 3))
+  | 0 => pure (.record (← SnapshotRT.pickName supply) (← genShortList (genField supply fuel) 3))
   | 1 => do
     let genCase : Gen VariantCase := do
-      let c ← pickName fieldSupply
+      let c ← SnapshotRT.pickName fieldSupply
       let p ← Gen.chooseNat
       if p % 2 == 0 then pure (c, none)
       else pure (c, some (← genTy supply fuel))
-    pure (.variant (← pickName supply) (← genShortList genCase 3))
+    pure (.variant (← SnapshotRT.pickName supply) (← genShortList genCase 3))
   | 2 => do
     let genParam : Gen (String × Ty) := do
-      pure (← pickName fieldSupply, ← genTy supply fuel)
-    pure (.func { name := (← pickName supply)
+      pure (← SnapshotRT.pickName fieldSupply, ← genTy supply fuel)
+    pure (.func { name := (← SnapshotRT.pickName supply)
                 , params := (← genShortList genParam 2)
                 , ret := (← genTy supply fuel) })
-  | _ => pure (.resource (← pickName supply))
+  | _ => pure (.resource (← SnapshotRT.pickName supply))
 
 instance : ArbitraryFueled Item where
   arbitraryFueled := genItem nameSupply
@@ -1171,11 +1217,6 @@ def spec : TestKit.PropSpec :=
   , control := controlSuite
   , controlName := "inject-ghost-ref" }
 
-/-- Run a generator deterministically, purely (fixed seed and size) —
-    the coverage witness below needs samples WITHOUT IO. -/
-def runGenPure (g : Gen α) (seed : Nat) (size : Nat) : Except Plausible.GenError α :=
-  (ReaderT.run (StateT.run g (ULift.up (mkStdGen seed))) ⟨size⟩).map (·.1)
-
 /-- All types appearing in an item, constructors included (the coverage
     witness flattens generated universes with this). -/
 partial def tysOf (t : Ty) : List Ty :=
@@ -1198,7 +1239,7 @@ def itemTys : Item → List Ty
     property predicate on hand-built cases. -/
 def propCoverageChecks : CheckResult := do
   let tails := (List.range 20).filterMap fun s =>
-    match runGenPure (Arbitrary.arbitrary (α := UniverseTail)) (20261104 + s) 8 with
+    match SnapshotRT.runGenPure (Arbitrary.arbitrary (α := UniverseTail)) (20261104 + s) 8 with
     | .ok t => some t.items
     | .error _ => none
   _ ← assertEq "generator produced samples" tails.isEmpty false
@@ -1613,7 +1654,7 @@ derive_row_gen for User
 -- decRowVals_encRowVals_append law, executed on a GENERATED row — the
 -- generator feeds the proved law; pinned seed, deterministic).
 def rowGenChecks : CheckResult := do
-  match PropSweep.runGenPure (userRowGen 3) 20261105 5 with
+  match SnapshotRT.runGenPure (userRowGen 3) 20261105 5 with
   | .ok row =>
       -- decode (encode row) = some (r, []) with r re-encoding to the
       -- same bytes (the valueEq discipline at row level — RowVals has
@@ -2619,10 +2660,17 @@ def moduleDocsChecks : CheckResult := do
   -- cannot drift — the page is folded FROM the manifest)
   for m in SchemaLang.ModuleDocs.internalsModules do
     _ ← assert (md.contains s!"## {m}") s!"manifest heading {m}"
-  -- no gap markers today: every manifest module has docstrings (a gap
-  -- marker would mean a plain-comment header landed on the manifest)
-  _ ← assert (!md.contains "no module docstrings in the environment")
-    "no gap markers over today's manifest"
+  -- no UNEXPECTED gap markers: real prose for every manifest module
+  -- EXCEPT the four plain-comment-header entries (WitnessSpec,
+  -- Meta/Keys, Meta/TableInvariant, Meta/Mono — their empty docstring
+  -- entries are doc-less, and the explicit marker is the doctrine:
+  -- missing documentation is information, not silence). They graduate
+  -- when their headers become `/-!` docstrings. Exactly those four
+  -- markers; a fifth means a NEW plain-comment header landed on the
+  -- manifest.
+  _ ← assert ((md.splitOn "no module docstrings in the environment").length == 5)
+    "gap markers: exactly the four known plain-comment-header modules"
+  _ ← assert (md.contains "## SchemaLang.Meta.Mono") "Mono section present (marker under it)"
   -- negative control 1: the EMPTY manifest → intro only, no sections
   let empty := SchemaLang.ModuleDocs.pageOf []
   _ ← assert (empty.contains "# Lean internals") "empty control: intro present"
@@ -2787,16 +2835,19 @@ run_cmd do
   if ups.any (·.update.name == "updVolatileGuard") then
     throwError "updVolatileGuard: the volatile update REGISTERED — the gate did not fire"
 
-/-! ### The composable law classes: `UpdatePure` / `NonInterfering`
+/-! ### The composable law classes: `UpdatePure` / `NonInterfering` (v1, demoted)
 
 The second layer: the registration's scan emits an `UpdatePure`
 INSTANCE per registered update (its proof is `rfl` against the STORED
-`volatileRefs` — the scan's decided fact), and the consumers
+`volatileRefs` — the scan's decided fact), and the v1 consumers
 (`UpdateItem.cascade2`) take legality as instance binders — a composite
 assembled from a volatile or interfering part is UNCONSTRUCTIBLE.
-Pins here: the emitted instances' presence, ONE composite construction
-(positive), the class-level negative (no instance can exist for a
-dirty update), and the composite's order-freedom law.
+v1→v2: the v2 surface's lock is `Update2Pure` + the `Update2Compat`
+pack (Update2Sweep below pins those); these v1 pins stay because the
+emitter's registry rows and the downstream suites still construct the
+v1 surface. Pins here: the emitted instances' presence and the
+class-level negative (no instance can exist for a dirty update); the
+composite-law pins migrated to the v2 cascade (next section).
 -/
 
 -- the registration-emitted instances: Demo's three + the pure-fn probe
@@ -2826,72 +2877,71 @@ example : ¬ UpdatePure updUserFields ⟨"id", .u64⟩ updDirty := by
   have hf := h.volatileFree
   simp [updDirty] at hf
 
--- THE COMPOSITE CONSTRUCTION (the positive): two pure, non-interfering
--- updates over the User schema. The `UpdatePure` instances are `⟨rfl⟩`
--- against the stored (default-empty) data; `NonInterfering` is decided
--- over the DERIVED reads/writes (the folds — no hand lists).
-def updCompA : UpdateItem updUserFields ⟨"id", .u64⟩ :=
-  { name := "comp-a", guard := .eq (.lit 0) (.lit 0), value := .lit 0
-  , writePath := .here }
+/-! ### The cascade at v2 (the v1→v2 migration)
 
-def updCompB : UpdateItem updUserFields ⟨"email", .string⟩ :=
-  { name := "comp-b", guard := .eq (.lit 0) (.lit 0), value := .colOf "name"
-  , writePath := .there (.there .here) }
+The v1 composite pins (the `cascade2` construction + its order-freedom
+via `cascade_two_commute`/`cascadeSystem`) MIGRATED to the v2 surface:
+TickCascade's cascade is the v2 application (`Update2Item.apply`) and
+its laws CITE Update2's (`apply2_comm` through the `Dbsp.DeltaSystem`
+instance; the `Update2Compat` pack replaces the `NonInterfering`
+binders — the derived reads, never hand-listed). The v1 machinery
+above stays pinned (the emitter's registry rows + the downstream
+suites still construct it); the composite-law pins live HERE, at v2.
+-/
 
-instance : UpdatePure updUserFields ⟨"id", .u64⟩ updCompA := ⟨rfl⟩
-instance : UpdatePure updUserFields ⟨"email", .string⟩ updCompB := ⟨rfl⟩
+/-- A no-insert v2 update over the User schema: reset the id (the v1
+    `updCompA`'s v2 image — one SET clause, same guard/value/path). -/
+def v2CompA : Update2Item updUserFields :=
+  { name := "comp-a", record := "User", guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"id", .u64⟩, path := .here, value := .lit 0 }] }
 
-instance : NonInterfering updUserFields ⟨"id", .u64⟩ ⟨"email", .string⟩
-    updCompA updCompB := ⟨by
-  simp only [VExpr.reads, updCompA, updCompB]
-  decide⟩
+/-- The v1 `updCompB`'s v2 image: copy name → email. -/
+def v2CompB : Update2Item updUserFields :=
+  { name := "comp-b", record := "User", guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"email", .string⟩
+             , path := .there (.there .here), value := .colOf "name" }] }
 
--- the legal composite CONSTRUCTS (the instances assemble the legality)
-def compCascade : List (RowVals updUserFields) → List (RowVals updUserFields) :=
-  UpdateItem.cascade2 updCompA updCompB
-
--- the composite's runtime pin: comp-a resets the id, comp-b copies
--- name → email (both guards unconditional)
+/-- The composite's runtime pin (the v1 `compCascade` pin's v2 form):
+    comp-a resets the id, comp-b copies name → email (both guards
+    unconditional; every value reads the ORIGINAL row — the batch
+    law). -/
 example :
-    (compCascade [invRow 150 "abcd"]).map updRowId = [0] := by
-  simp [compCascade, UpdateItem.cascade2, UpdateItem.applyRow, validates,
-    evalB, evalU, evalRaw, evalV, updRowId, invRow, updCompA, updCompB, boolToU64]
+    (v2CompA.apply (v2CompB.apply [invRow 150 "abcd"])).map updRowId = [0] := by
+  simp [Update2Item.apply, Update2Item.keepRow, Update2Item.newRow,
+    validates, applySets, evalB, evalU, evalRaw, evalV, updRowId, invRow,
+    v2CompA, v2CompB, boolToU64]
   rfl
 
--- THE LAW: the legal composite is order-free — `cascade_two_commute`
--- recovered STRUCTURALLY (the swap needs only the `symm` instance; the
--- four non-interference hypotheses come from the class field alone).
--- Stated HERE: `cascade_two_commute` lives in `TickCascade`, which
--- imports Update — the theorem cannot sit next to `cascade2` without
--- an import cycle (Update.lean's doc note).
-theorem cascade2_commutes {fs : List Field} {f₁ f₂ : Field}
-    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂)
-    [_hP₁ : UpdatePure fs f₁ u₁] [_hP₂ : UpdatePure fs f₂ u₂]
-    [hNI : NonInterfering fs f₁ f₂ u₁ u₂]
-    (rows : List (RowVals fs)) :
-    UpdateItem.cascade2 u₁ u₂ rows = UpdateItem.cascade2 u₂ u₁ rows := by
-  show (rows.map u₂.applyRow).map u₁.applyRow
-     = (rows.map u₁.applyRow).map u₂.applyRow
-  obtain ⟨hg₁, hv₁, hg₂, hv₂, hne⟩ := hNI.cascadeHyps
-  exact cascade_two_commute u₁ u₂ hg₁ hv₁ hg₂ hv₂ hne rows
-
+-- THE LAW (cited, not re-proved): the influence-disjoint pair computes
+-- the SAME table in either order — `cascade_disj_commutes` = the
+-- DeltaSystem contract = `Update2.apply2_comm` (the `Update2Compat`
+-- pack's non-interference fields ride the DERIVED reads).
 example :
-    UpdateItem.cascade2 updCompB updCompA [invRow 150 "abcd"]
-      = UpdateItem.cascade2 updCompA updCompB [invRow 150 "abcd"] :=
-  cascade2_commutes updCompB updCompA [invRow 150 "abcd"]
+    v2CompA.apply (v2CompB.apply [invRow 150 "abcd"])
+      = v2CompB.apply (v2CompA.apply [invRow 150 "abcd"]) :=
+  cascade_disj_commutes v2CompA v2CompB rfl rfl (by
+    have h1 : cascadeInfluence v2CompA = ["id"] := rfl
+    have h2 : cascadeInfluence v2CompB = ["name", "email"] := rfl
+    rw [h1, h2]
+    exact List.disjoint_left.mpr (fun a ha hb => by
+      have e1 : a = "id" := by simpa using ha
+      have e2 : a = "name" ∨ a = "email" := by simpa using hb
+      subst e1
+      cases e2 with
+      | inl h => exact absurd h (by decide)
+      | inr h => exact absurd h (by decide))) [invRow 150 "abcd"]
 
--- THE N-UPDATE ORDER-FREEDOM (W4.3), EXECUTED on the composite pair:
--- the influence-disjoint batch computes the same table in either
+-- THE N-UPDATE ORDER-FREEDOM (W4.3), EXECUTED on the pair: the
+-- influence-disjoint batch computes the same table in either
 -- order — `cascade_applySeq_perm` (= dbsp's `applySeq_perm` read off
--- the `cascadeSystem` instance); the pairwise premise is DECIDED over
--- the derived influence sets (never hand-listed).
+-- the `cascadeSystem` instance at the no-insert fragment); the
+-- pairwise premise is DECIDED over the derived influence sets (never
+-- hand-listed).
 example :
     Dbsp.applySeq (cascadeSystem updUserFields)
-        [⟨⟨"id", .u64⟩, updCompA⟩, ⟨⟨"email", .string⟩, updCompB⟩]
-        [invRow 150 "abcd"]
+        [⟨v2CompA, rfl⟩, ⟨v2CompB, rfl⟩] [invRow 150 "abcd"]
       = Dbsp.applySeq (cascadeSystem updUserFields)
-        [⟨⟨"email", .string⟩, updCompB⟩, ⟨⟨"id", .u64⟩, updCompA⟩]
-        [invRow 150 "abcd"] :=
+        [⟨v2CompB, rfl⟩, ⟨v2CompA, rfl⟩] [invRow 150 "abcd"] :=
   cascade_applySeq_perm (List.Perm.swap _ _ _) (by
     refine List.pairwise_cons.mpr ⟨?_, List.pairwise_cons.mpr
       ⟨fun y hy => (List.not_mem_nil hy).elim, List.Pairwise.nil⟩⟩
@@ -2899,10 +2949,10 @@ example :
     obtain rfl := List.mem_singleton.mp hy
     intro x hx₁ hx₂
     have h1 : x = "id" := by
-      simpa [cascadeInfluence, updCompA, UpdateItem.reads, UpdateItem.writes,
+      simpa [cascadeInfluence, v2CompA, Update2Item.reads, Update2Item.setNames,
         VExpr.reads, VExpr.colOf] using hx₁
     have h2 : x = "name" ∨ x = "email" := by
-      simpa [cascadeInfluence, updCompB, UpdateItem.reads, UpdateItem.writes,
+      simpa [cascadeInfluence, v2CompB, Update2Item.reads, Update2Item.setNames,
         VExpr.reads, VExpr.colOf] using hx₂
     subst h1
     cases h2 with
@@ -3102,7 +3152,8 @@ API documentation — the text is regression-tested. One golden row per
 ctor: the rendered string must equal the pinned text EXACTLY (an
 assertEq per row — a wording drift, a lost did-you-mean, a dropped
 valid-space enumeration all fail the suite). The ctor lists ride
-too: ten ctors, ten goldens.
+too: twelve ctors, twelve goldens (W10.x added the two emitter-bug
+lanes: `mangledCollision`, `emptyVariant`).
 -/
 
 /-- The golden inputs: one representative diag per ctor (the ctor
@@ -3117,7 +3168,9 @@ def diagGoldenInputs : List SchemaDiag :=
   , .binderMismatch "X"
   , .multiPayload "X"
   , .reservedWord "type" "field of `user`"
-  , .volatileInPureContext "clock" "aggregator" ]
+  , .volatileInPureContext "clock" "aggregator"
+  , .mangledCollision "foo-bar" ["FooBar", "foo-bar", "foo_bar"]
+  , .emptyVariant "empty-variant" ]
 
 /-- The goldens: ctor → the EXACT rendered text (the API docs). -/
 def diagGolden : List (String × String) :=
@@ -3130,10 +3183,12 @@ def diagGolden : List (String × String) :=
   , ("binderMismatch", "`X`: field/binder count mismatch — flat structures without typeclass fields only (v1)")
   , ("multiPayload", "`X`: variant cases carry at most one payload type (v1 — WIT case shape)")
   , ("reservedWord", "`type` is a reserved word in field of `user` — rename it (WIT/Rust would reject the emitted identifier)")
-  , ("volatileInPureContext", "func `clock` is volatile but `aggregator` requires purity — valid determinisms in a pure context: pure, stable") ]
+  , ("volatileInPureContext", "func `clock` is volatile but `aggregator` requires purity — valid determinisms in a pure context: pure, stable")
+  , ("mangledCollision", "names `FooBar`, `foo-bar`, `foo_bar` all mangle to the WIT identifier `foo-bar` — the kebab mangling is not injective; post-mangle names must be unique (rename one)")
+  , ("emptyVariant", "`empty-variant`: a variant must have at least one case — a zero-case variant has no wire meaning (WIT grammar: `variant` needs ≥1 case)") ]
 
 def diagGoldenChecks : CheckResult := do
-  _ ← assertEq "diagGolden covers every ctor" diagGolden.length 10
+  _ ← assertEq "diagGolden covers every ctor" diagGolden.length 12
   let actual := diagGoldenInputs.map SchemaDiag.render
   for (a, (label, golden)) in actual.zip diagGolden do
     _ ← assertEq s!"diagGolden[{label}]" a golden
@@ -6729,6 +6784,51 @@ def refusalPins : CheckResult := do
 
 end WitLosslessSweep
 
+/-! ## Snapshot codec differential (fuzz-gap audit gap #2) — pins
+
+Support (the full-vocabulary generator + the round-trip PropSpec
+`SnapshotRT.spec` + the fixture emission) lives in `Tests/SnapshotRT.lean`,
+shared with the `snapshot-fixtures` exe whose output the Rust
+differential (`steel-host/tests/snapshot_differential.rs`) replays.
+Here only the pins: the three known cross-parser drifts, each fixed on
+the side that was WRONG (Lean is the format's authority; parse is
+lossless and LF-only):
+
+(a) empty `ty()` ref — Lean ACCEPTED it (a hole: the writer never
+    emits one, `namesEncodable` forbids empty names); now rejects (the
+    Rust twin already did);
+(b) kebab-at-parse — Rust kebab-cased every name at parse; parse is
+    LOSSLESS on both sides now (the WIT wire spelling is the
+    PROJECTION layer's job — hostgen's `surface_entries`); the pin
+    locks Lean's verbatim spelling;
+(c) CRLF — Rust's `lines()` silently stripped `\r` while Lean
+    rejected; the writer never emits `\r`, so CRLF is corruption: the
+    Rust twin now rejects too (both sides loud). -/
+namespace SnapshotRTPins
+
+/-- The three drifts' regression pins (Lean side). -/
+def pins : CheckResult := do
+  -- drift (a): the empty ref rejects (it PARSED before the gate)
+  _ ← assert (Snapshot.parseTyText "ty()").toOption.isNone
+    "empty ty() ref rejects"
+  _ ← assert (Snapshot.parseTyText "list(ty())").toOption.isNone
+    "empty ty() ref rejects through nesting"
+  -- drift (b): parse is LOSSLESS — mixed-case names survive verbatim
+  -- (no kebab at the format boundary)
+  let u : List Item := [ .record "OrderItem" [{ name := "unitPrice", ty := .ty "User" }]
+                       , .func { name := "getUser", params := [("orderId", .u64)]
+                               , ret := .option (.ty "OrderItem") } ]
+  _ ← assert ((Snapshot.parse (Snapshot.render u)).toOption == some u)
+    "mixed-case names round-trip verbatim (no kebab at parse)"
+  -- drift (c): CRLF is corruption — LOUD on both sides
+  _ ← assert (Snapshot.parse "record User\r\nfield id u64\r\n").toOption.isNone
+    "CRLF line endings reject (the LF-only law)"
+  _ ← assert (Snapshot.parse "record User\nfield id u64\n").toOption.isSome
+    "the LF rendering parses (the drift pin's control)"
+  .ok ()
+
+end SnapshotRTPins
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let ctx ← loadDemoCtx
@@ -6743,6 +6843,7 @@ unsafe def main (args : List String) : IO UInt32 := do
   let code ← mainOfChecks "SchemaLang"
     ([ ("resolution", resolutionChecks)
      , ("fieldRes", fieldResolutionChecks)
+     , ("wfEmitterGate", sweepCorpusWfChecks)
      , ("codec", codecChecks)
      , ("codecCombinators", codecCombinatorChecks)
      , ("envelope", envelopeChecks)
@@ -6752,6 +6853,8 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("ptype", ptypeChecks)
      , ("eqAnsRouting", eqAnsRoutingChecks)
      , ("snapshot", snapshotChecks)
+     , ("snapshotRT", SnapshotRTPins.pins)
+     , ("snapshotRTCoverage", SnapshotRT.coverageChecks)
      ] ++ goldens ++
      [ invGolden
      , updGolden
@@ -6821,7 +6924,7 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- must be caught — a vacuous sweep fails the gate)
   -- the generated enum wires' PropSpecs (Item.lean's three enums:
   -- the round-trip sweep + the mandatory tag+1 sabotage control)
-  let specCode ← TestKit.runSpecs [PropSweep.spec, CodecValueSweep.spec,
+  let specCode ← TestKit.runSpecs [PropSweep.spec, SnapshotRT.spec, CodecValueSweep.spec,
     NullSem.wirePropSpec, Determinism.wirePropSpec, Delivery.wirePropSpec,
     -- W7.14: the derived wire codecs' RoundTripSpecs (the PropSpec bridge
     -- carries the sweep AND the mandatory byte-sabotage control)

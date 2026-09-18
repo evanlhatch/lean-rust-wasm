@@ -172,3 +172,199 @@ skip: the mismatched conversation does not compile.
 ## The queue diamond — two deliveries, either order 
 
 ## The demo — the CRDT point: schedule-independence 
+
+## SchemaLang.Witness
+
+## The claim language (design §2.1 — the first-order VExpr mirror) 
+
+## The wire tags (ctor order — the EnumWire wire-breaking rule) 
+
+## Encoders (structural on the data) 
+
+## The flat decoders (WU64, WStep) 
+
+## The tree decoders (depth-capped — see the module header) 
+
+## The proof-term decoder 
+
+## The claim decoder 
+
+## The witness wire (design §1: envelope + label + claim + proof + fuel) 
+
+## Field resolution (design §2.1): names checked against the record 
+
+## SchemaLang.WitnessCheck
+
+## The mirror evaluators (the guest lane — `@[guest_std]`-gated)
+
+Name-based field lookup over the decoded row (the wire carries NAMES;
+the guest resolves them against the record's decoded field list). The
+box match is `match h : f.ty with` + `h ▸ v` — matching `Value f.ty`
+at an ABSTRACT `f.ty` does not elaborate (the index is a variable),
+and splitting the tag in the LHS pattern makes the catch-all's
+equation CONDITIONAL (a negative HEq side condition simp cannot
+discharge); the equality-refined scrutinee compiles to ONE clean
+equation (verified against the equation lemmas). The cast is
+proof-irrelevant — identity at runtime. First-hit on duplicate names,
+and a wrong-typed name-hit is `none`, not a skip — loud; the tie
+theorems carry the uniqueness hypothesis (the header). 
+
+## The checker (design §2.2–2.3) 
+
+## The reasoning authority (design §2.4 — the Wf.lean template) 
+
+## Soundness (the deliverable) 
+
+## The fuel discipline (the substrait `parseType_mono` precedent) 
+
+## The CheckedProp pack (the canon row — gaps LOUD) 
+
+## The semantic tie to the compiled reading (design §2.4)
+
+The mirror reflects a `VExpr` when field names resolve to paths; under
+name uniqueness the name-based guest reading IS the path-based
+compiled reading. 
+
+## The W9.5 seam (the W9.6 mount point) 
+
+## The fuel classifier (the apply-gate's refusal classes, made exact) 
+
+## SchemaLang.WitnessSpec
+
+> (no module docstrings in the environment — the header is a plain block comment, or the module has none)
+
+## SchemaLang.Update2
+
+## The v2 data 
+
+## The semantics 
+
+## The membership kit (derived sets earn the premises) 
+
+## Law 1 — clause-order freedom WITHIN one update 
+
+## Law 2 — neutrality under the multi-write 
+
+## Law 3 — two write folds with disjoint columns commute 
+
+## Laws 4/5 — the two-update order-freedom 
+
+## Law 6 — the lowering to deltas (Delta.lean's change shape) 
+
+### The keyed table semantics + the table-level correspondence 
+
+## The obligation view (W7.1's substrate, the keys-lane shape) 
+
+## SchemaLang.Refine
+
+## The range 
+
+## The obligation tier (W7.1p2's decidableNow backend) 
+
+## The word lane (the order's bv_decide backend) 
+
+## The validator lane (the generated boundary check) 
+
+## The monus tie (the canon row) 
+
+## SchemaLang.PrePost
+
+## The contract 
+
+## The caller's boundary — the typed refusal 
+
+## The post = the contract the correctness story cites 
+
+## The obligation view (W7.1's substrate, the keys-lane shape) 
+
+### The decidableNow backend (the uncited post's rung) 
+
+## SchemaLang.TableInvariant
+
+## The aggregation shapes 
+
+## The item 
+
+## The elaboration-gate checker (String diagnostics — the `checkCitation?` precedent) 
+
+## The obligation view (what a table invariant MEANS, as data)
+
+The substrate is the kit's `Obligation` (`SchemaLang.Keys`' sibling
+lane): a table-invariant declaration produces ONE obligation; the
+computed tier is `decidableNow`; the discharge's evidence is the
+kernel's decide over a PROVIDED materialized table. 
+
+## SchemaLang.Scheduling
+
+## Time as input 
+
+## Rates ("every N ticks") 
+
+## Delays ("visible next tick") 
+
+## Deadlines (the comparison) 
+
+## SchemaLang.Commands
+
+## The declaration data 
+
+## The well-formedness lane (the Keys shape: checker + relation + bridge) 
+
+## The derived session — commands out, events in 
+
+### The session row's laws — CITED, not re-proved
+
+Every theorem below is the generic `Machines.Session` fact instantiated
+at the derived protocol. The mechanism (duality, mid-protocol
+deadlock-freedom, termination) is proved ONCE, generically; a world
+declaration INHERITS the laws by composition — the session row's
+inheritance rule. 
+
+### The WIT view — the ONE renderer 
+
+## SchemaLang.EntityMachine
+
+## The declaration data 
+
+## The legality relation (the canon: DFA membership) 
+
+## The journal: the event log as deltas — the antijoin check, replay 
+
+## The typestate hook (the Emit/Typestate projection, generalized) 
+
+### The Rust items (the hook's emission shape) 
+
+## The obligation view 
+
+## The transition delta 
+
+## SchemaLang.Meta.EventSourced
+
+## The term builders (CoreM; the `Meta.Derive`/`Meta.Gen` builders
+    are CommandElabM-typed and cannot ride an attribute handler — the
+    shapes are theirs, the monad is the difference) 
+
+## SchemaLang.Meta.Keys
+
+> (no module docstrings in the environment — the header is a plain block comment, or the module has none)
+
+## SchemaLang.Meta.WireCodec
+
+## The codec-supported atom instances (Codec.lean's atoms, once each) 
+
+## SchemaLang.Meta.TableInvariant
+
+> (no module docstrings in the environment — the header is a plain block comment, or the module has none)
+
+## SchemaLang.Meta.Mono
+
+> (no module docstrings in the environment — the header is a plain block comment, or the module has none)
+
+## Machines.Fusion
+
+## Bridge 1 — the D/I pair as a Kit Iso 
+
+## Bridge 2 — the convergence bridge (cascade settle = machine
+termination = dbsp fixpoint) 
+
+## Bridge 3 — bisimulation as stream equality 

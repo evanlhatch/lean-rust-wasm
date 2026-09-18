@@ -190,18 +190,15 @@ private partial def reportUnsupportedLCNF (decls2Names : NameSet) (d : Lean.Comp
     let _ ← walk "" c
     pure ()
 
-/-- The undefined-callee CLOSURE COMPLETION (the audit's gap-4 fix,
-    general form): scan the local decls' final LCNF for fap callees the
-    emitter cannot resolve (not a binop, not an intrinsic, not a
-    spec-BEq product, not itself local) and — when the callee EXISTS in
-    the env as compilable code — add it to the compile set and re-run
-    the pipeline. This is how the checker's core-List helpers join
-    (`List.get?Internal._redArg` etc. are created ONLY when their ROOT
-    is a target; the checker's LCNF calls them, so the roots must
-    compile). Fixpoint-bounded (8 rounds); a callee that stays
-    undefined is the diagnostic's job (below), never a silent call. -/
-private partial def fapCalleesOf : Lean.Compiler.LCNF.Code .impure → NameSet
-  | .let decl k =>
+/-- `fapCalleesOf`'s algebra over `Code.foldImpure` (the ONE
+    impure-`Code` traversal skeleton — WasmBackend.lean's layering-audit
+    consolidation): the spine threads `k`; the jp/fun bodies and the
+    case alts UNION in (the nested rule folds them with the seed —
+    `NameSet` union is order-free, the seed is `{}`). -/
+private def fapCalleesOfStep :
+    Lean.Compiler.LCNF.Code .impure → NameSet → List NameSet → List NameSet →
+    Option NameSet → NameSet
+  | .let decl _, _, _, _, k =>
       let here : NameSet :=
         match decl.value with
         | .fap fn args =>
@@ -216,21 +213,31 @@ private partial def fapCalleesOf : Lean.Compiler.LCNF.Code .impure → NameSet
         | .pap fn args =>
             if WasmBackend.inlineNatFap? fn args.size then {} else ({} : NameSet).insert fn
         | _ => {}
-      (fapCalleesOf k).union here
-  | .jp fd k => (fapCalleesOf fd.value).union (fapCalleesOf k)
-  | .fun fd k _ => (fapCalleesOf fd.value).union (fapCalleesOf k)
-  | .cases c =>
-      c.alts.foldl (fun acc a => acc.union
-        (match a with
-          | .ctorAlt _ code => fapCalleesOf code
-          | .default code => fapCalleesOf code
-          | .alt _ _ _ h => absurd h (by simp))) {}
-  | .sset _ _ _ _ _ k => fapCalleesOf k
-  | .inc _ _ _ _ k => fapCalleesOf k
-  | .dec _ _ _ _ _ k => fapCalleesOf k
-  | .del _ k => fapCalleesOf k
-  | .unreach _ | .return _ | .jmp ..
-  | .oset .. | .uset .. | .setTag .. => {}
+      (k.getD {}).union here
+  | .jp _ _, _, nested, _, k => (k.getD {}).union (nested.foldl (·.union ·) {})
+  | .fun _ _ _, _, nested, _, k => (k.getD {}).union (nested.foldl (·.union ·) {})
+  | .cases _, _, _, alts, _ => alts.foldl (·.union ·) {}
+  | .unreach _, _, _, _, _ => {}
+  | .return _, _, _, _, _ => {}
+  | .jmp .., _, _, _, _ => {}
+  | .oset .., _, _, _, _ => {}
+  | .uset .., _, _, _, _ => {}
+  | .setTag .., _, _, _, _ => {}
+  -- sset/inc/dec/del: the spine threads through `k`
+  | _, _, _, _, k => k.getD {}
+
+/-- The undefined-callee CLOSURE COMPLETION (the audit's gap-4 fix,
+    general form): scan the local decls' final LCNF for fap callees the
+    emitter cannot resolve (not a binop, not an intrinsic, not a spec-BEq
+    product, not itself local) and — when the callee EXISTS in the env as
+    compilable code — add it to the compile set and re-run the pipeline.
+    This is how the checker's core-List helpers join
+    (`List.get?Internal._redArg` etc. are created ONLY when their ROOT
+    is a target; the checker's LCNF calls them, so the roots must
+    compile). Fixpoint-bounded (8 rounds); a callee that stays
+    undefined is the diagnostic's job (below), never a silent call. -/
+private def fapCalleesOf : Lean.Compiler.LCNF.Code .impure → NameSet :=
+  fun c => WasmBackend.Code.foldImpure (fun _ a => a) fapCalleesOfStep {} c {}
 
 /-- The undefined callees across the local decls (the emitter's
     resolution surface: binop / intrinsic / spec-BEq / local = defined). -/

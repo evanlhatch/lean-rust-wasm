@@ -39,9 +39,15 @@
 //! host would then run the real emitters rather than project from the
 //! snapshot. The snapshot projection is the dependency-free v1.
 //!
-//! Normalization: every name this module stores (items, fields, cases,
-//! params, `ty()` refs) is kebab-cased at parse — the single canonical
-//! spelling shared with the WIT side (`record user`, `invalid-item`).
+//! Losslessness: parse stores every name VERBATIM (the format's own
+//! spelling, the Lean authority's law — `parse ∘ render = id`), with NO
+//! case normalization: the snapshot writer never kebab-cases, so a
+//! parser that did would be a second, LOSSY codec. The WIT wire
+//! spelling (`order-item`) is the PROJECTION layer's job — see
+//! [`Universe::surface_entries`], the one place this module kebabs.
+//! Regression pins: `tests/snapshot_differential.rs` (the Lean↔Rust
+//! differential over generated fixtures) + the `ty()`/CRLF laws in
+//! this module's tests.
 
 use std::fmt;
 
@@ -114,7 +120,8 @@ pub enum Ty {
     Stream(Box<Ty>),
     /// `tensor(dims…;elem)` — dims ride `;`-separated before the element
     Tensor(Vec<u64>, Box<Ty>),
-    /// `ty(<name>)` — a named ref into the same universe, kebab-cased
+    /// `ty(<name>)` — a named ref into the same universe, VERBATIM
+    /// (parse is lossless; the writer never kebab-cases)
     Named(String),
 }
 
@@ -152,28 +159,29 @@ pub struct FuncSem {
 }
 
 /// One universe item — record / variant / func / resource, members in
-/// registry order, names kebab-cased.
+/// registry order, names VERBATIM (parse is lossless; the kebab WIT
+/// spelling is the projection layer's).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     /// `record <name>` + `field` lines
     Record {
-        /// kebab-cased record name
+        /// record name, verbatim
         name: String,
-        /// fields in order: (kebab name, type)
+        /// fields in order: (name, type)
         fields: Vec<(String, Ty)>,
     },
     /// `variant <name>` + `case` lines
     Variant {
-        /// kebab-cased variant name
+        /// variant name, verbatim
         name: String,
-        /// cases in order: (kebab name, payload type — `None` = bare)
+        /// cases in order: (name, payload type — `None` = bare)
         cases: Vec<(String, Option<Ty>)>,
     },
     /// `func <name>` + `param`/`ret` (+ optional `sem`) lines
     Func {
-        /// kebab-cased func name
+        /// func name, verbatim
         name: String,
-        /// params in order: (kebab name, type)
+        /// params in order: (name, type)
         params: Vec<(String, Ty)>,
         /// the return type (`future(…)` = the async marker)
         ret: Ty,
@@ -182,7 +190,7 @@ pub enum Item {
     },
     /// `resource <name>`
     Resource {
-        /// kebab-cased resource name
+        /// resource name, verbatim
         name: String,
     },
 }
@@ -343,7 +351,7 @@ fn parse_ty_at(cs: &[u8], depth: usize) -> Result<(Ty, &[u8]), String> {
                 if name.is_empty() {
                     return Err("snapshot: empty ty ref".to_string());
                 }
-                Ok((Ty::Named(kebab(name)), &rest[1 + end + 1..]))
+                Ok((Ty::Named(name.to_string()), &rest[1 + end + 1..]))
             }
             _ => Err("snapshot: expected '(' after `ty`".to_string()),
         },
@@ -459,7 +467,11 @@ fn parse_sem(tokens: &[&str]) -> Result<FuncSem, String> {
 
 /// Parse snapshot text back to a universe (the faithful port of
 /// `SchemaLang.Snapshot.parse`: line-based, first error sticks, blank
-/// lines skipped, names kebab-cased).
+/// lines skipped, names VERBATIM — parse is lossless on both sides).
+/// LF-only, like the Lean authority: the writer never emits `\r`, so a
+/// `\r` sticks to its line's last token and fails loud (unrecognized
+/// line / trailing garbage) — `split('\n')`, NOT `lines()` (which
+/// silently strips `\r`; the CRLF drift's fix).
 ///
 /// # Errors
 /// A [`ParseError`] naming the 1-based line and corruption class for
@@ -467,12 +479,14 @@ fn parse_sem(tokens: &[&str]) -> Result<FuncSem, String> {
 pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
     let mut done: Vec<Item> = Vec::new();
     let mut cur: Option<Open> = None;
+    let mut last_line: usize = 0;
 
-    for (idx, line) in text.lines().enumerate() {
+    for (idx, line) in text.split('\n').enumerate() {
         let n = idx + 1;
         if line.is_empty() {
             continue;
         }
+        last_line = n;
         // close the open item (if any) and start the new one
         let restart = |done: &mut Vec<Item>, cur: &mut Option<Open>, o: Open| {
             if let Some(open) = cur.take() {
@@ -492,7 +506,7 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
                     &mut done,
                     &mut cur,
                     Open::Record {
-                        name: kebab(name),
+                        name: name.to_string(),
                         fields: Vec::new(),
                     },
                 )
@@ -503,7 +517,7 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
                     &mut done,
                     &mut cur,
                     Open::Variant {
-                        name: kebab(name),
+                        name: name.to_string(),
                         cases: Vec::new(),
                     },
                 )
@@ -514,7 +528,7 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
                     &mut done,
                     &mut cur,
                     Open::Func {
-                        name: kebab(name),
+                        name: name.to_string(),
                         params: Vec::new(),
                         ret: None,
                         sem: None,
@@ -523,33 +537,33 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
                 .map_err(|e: (usize, String)| err(&e.1))?;
             }
             ["resource", name] => {
-                restart(&mut done, &mut cur, Open::Resource(kebab(name)))
+                restart(&mut done, &mut cur, Open::Resource(name.to_string()))
                     .map_err(|e: (usize, String)| err(&e.1))?;
             }
             ["field", name, ty_text] => match &mut cur {
                 Some(Open::Record { fields, .. }) => {
                     let t = parse_ty_text(ty_text).map_err(|e| err(&e))?;
-                    fields.push((kebab(name), t));
+                    fields.push((name.to_string(), t));
                 }
                 _ => return Err(err("snapshot: `field` outside a record")),
             },
             ["case", name] => match &mut cur {
                 Some(Open::Variant { cases, .. }) => {
-                    cases.push((kebab(name), None));
+                    cases.push((name.to_string(), None));
                 }
                 _ => return Err(err("snapshot: `case` outside a variant")),
             },
             ["case", name, ty_text] => match &mut cur {
                 Some(Open::Variant { cases, .. }) => {
                     let t = parse_ty_text(ty_text).map_err(|e| err(&e))?;
-                    cases.push((kebab(name), Some(t)));
+                    cases.push((name.to_string(), Some(t)));
                 }
                 _ => return Err(err("snapshot: `case` outside a variant")),
             },
             ["param", name, ty_text] => match &mut cur {
                 Some(Open::Func { params, ret, .. }) if ret.is_none() => {
                     let t = parse_ty_text(ty_text).map_err(|e| err(&e))?;
-                    params.push((kebab(name), t));
+                    params.push((name.to_string(), t));
                 }
                 Some(Open::Func { .. }) => {
                     return Err(err("snapshot: `param` after `ret`"));
@@ -584,7 +598,7 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
     }
     if let Some(open) = cur.take() {
         let item = open.close().map_err(|e| ParseError {
-            line: text.lines().count(),
+            line: last_line,
             message: e,
         })?;
         done.push(item);
@@ -593,7 +607,7 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<Item>, ParseError> {
 }
 
 /// A parsed universe: the committed snapshot's items in registry
-/// order, names kebab-cased.
+/// order, names VERBATIM (parse is lossless).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Universe {
     items: Vec<Item>,
@@ -612,7 +626,7 @@ impl Universe {
         &self.items
     }
 
-    /// Find an item by kebab name.
+    /// Find an item by its VERBATIM (snapshot-spelling) name.
     #[must_use]
     pub fn find(&self, name: &str) -> Option<&Item> {
         self.items.iter().find(|it| match it {
@@ -648,7 +662,10 @@ impl Universe {
     /// PRODUCE the schema-derived surface entries: `(kebab fn name,
     /// flat arity)` per func, in registry order (the oracle's
     /// first-occurrence order). This is the host GENERATING its side
-    /// of the surface contract from the committed universe.
+    /// of the surface contract from the committed universe — and the
+    /// ONE place this module kebab-cases: the WIT wire spelling is the
+    /// PROJECTION's convention, never the parser's (parse is lossless;
+    /// the kebab-at-parse drift's fix).
     ///
     /// # Errors
     /// A param type referencing an unknown item (corrupt snapshot).
@@ -660,7 +677,7 @@ impl Universe {
                 for (_, pt) in params {
                     arity += self.flat_arity(pt)?;
                 }
-                out.push((name.clone(), arity));
+                out.push((kebab(name), arity));
             }
         }
         Ok(out)
@@ -869,7 +886,7 @@ mod tests {
         // spot-check the recursive shapes structurally
         assert_eq!(
             parse_ty_text("list(ty(User))").ok(),
-            Some(Ty::List(Box::new(Ty::Named("user".to_string()))))
+            Some(Ty::List(Box::new(Ty::Named("User".to_string()))))
         );
         assert_eq!(
             parse_ty_text("result(u64,string)").ok(),
@@ -904,5 +921,51 @@ mod tests {
             s = format!("option({s})");
         }
         assert!(parse_ty_text(&s).is_err());
+    }
+
+    #[test]
+    fn parse_is_lossless_verbatim_names() {
+        // the kebab-at-parse drift's pin: names survive VERBATIM (the
+        // kebab WIT spelling is `surface_entries`' projection, never
+        // the parser's)
+        let items = parse_snapshot(
+            "record OrderItem\nfield unitPrice ty(User)\n\
+             func getUser\nparam orderId u64\nret option(ty(OrderItem))\n",
+        )
+        .unwrap_or_else(|e| panic!("verbatim round trip: {e}"));
+        assert_eq!(
+            items,
+            vec![
+                Item::Record {
+                    name: "OrderItem".to_string(),
+                    fields: vec![("unitPrice".to_string(), Ty::Named("User".to_string()))],
+                },
+                Item::Func {
+                    name: "getUser".to_string(),
+                    params: vec![("orderId".to_string(), Ty::U64)],
+                    ret: Ty::Option(Box::new(Ty::Named("OrderItem".to_string()))),
+                    sem: None,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn crlf_is_corruption_not_whitespace() {
+        // the CRLF drift's pin: `lines()` used to silently strip `\r`;
+        // the writer never emits it, so CRLF is corruption — both this
+        // parser and the Lean authority reject it, loudly (the `\r`
+        // lands on its line's LAST token: an unrecognized line on the
+        // header, trailing garbage on a type token — either class is
+        // the loud rejection the pin asserts)
+        let err = parse_snapshot("record User\r\nfield id u64\r\n")
+            .err()
+            .unwrap_or_else(|| panic!("CRLF must fail"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unrecognized line") || msg.contains("trailing garbage"),
+            "{msg}"
+        );
+        assert!(msg.contains("snapshot: line"), "line number named: {msg}");
     }
 }

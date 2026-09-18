@@ -1,0 +1,23 @@
+package demo:sweep-09;
+
+interface sweep-09-types {
+record order {
+  f0: list<list<list<tuple<u8, option<s32>>>>>,
+  f1: result<u16, option<s64>>,
+}
+record summary {
+  f0: list<list<bool>>,
+  f1: result<list<u8>, list<f32>>,
+}
+variant shape {
+  c0(list<s16>),
+}
+}
+
+interface sweep-09-exports {
+    watch: func() -> list<f64>;
+}
+
+world sweep-09 {
+  export sweep-09-exports;
+}

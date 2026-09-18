@@ -1,0 +1,26 @@
+package demo:sweep-10;
+
+interface sweep-10-types {
+record order {
+  f0: list<list<tuple<string, option<list<tuple<u32, option<u8>>>>>>>,
+}
+record summary {
+  f0: list<tuple<s32, option<string>>>,
+  f1: s64,
+  f2: option<list<f32>>,
+  f3: result<list<u8>, s8>,
+}
+variant shape {
+  c0,
+  c1(u16),
+  c2(bool),
+}
+}
+
+interface sweep-10-exports {
+    watch: async func(p0: bool) -> option<list<f32>>;
+}
+
+world sweep-10 {
+  export sweep-10-exports;
+}

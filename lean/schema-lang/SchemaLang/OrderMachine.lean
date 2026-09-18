@@ -29,6 +29,27 @@ lifecycle trace against the generated step fn. The battery
 Deliberate exclusion: no effectful transition payloads (Machines v1 has
 no output channel — see Machines/Core.lean); the machine is the
 DISCIPLINE model, the data effects ride the schema funcs.
+
+Hand-built by choice (W8.4 consolidation verdict) — the
+`schema_entity_machine` preset does NOT subsume this machine:
+1. the preset requires a registered record with a u64 state column;
+   `OrderStatus` is deliberately NOT wire data (see above) and no demo
+   record carries the lifecycle state — empirically, the preset's own
+   gate rejects `schema_entity_machine orderMachine for Order :=
+   status : OrderStatus` ("`status` is not a column of `Order`");
+   adding the column would change the emitted schema artifacts and
+   break the byte-tie.
+2. the preset hardcodes `Inv := True` ("the closed enum IS the
+   invariant"), while here the stray-exclusion invariant is
+   LOAD-BEARING: it is the battery's non-vacuity control (the
+   invariant is FALSE on `stray`, so the check has something to see)
+   and the discipline the generated step rejects.
+3. the preset's rank is the state CODE (distinct per constructor); the
+   hand rank ties the terminal states at 3 and parks `stray` at 0 —
+   `rank_advances`' statement differs.
+Migrate when the wire carries the order's lifecycle state (a u64
+status column on a registered record) AND the preset grows an
+invariant clause (or a rank override).
 -/
 
 module

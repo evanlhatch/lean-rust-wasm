@@ -79,8 +79,10 @@ fn follow_alias(resolve: &Resolve, mut id: TypeId) -> TypeId {
 }
 
 /// Translate a wit-parser type into hostgen's `Ty` — the common
-/// vocabulary both sides of the tie are compared in. Named refs come
-/// back kebab-cased (hostgen stores kebab).
+/// vocabulary both sides of the tie are compared in. WIT names are
+/// ALREADY the kebab wire spelling (the Lean emitter's convention),
+/// so they pass through verbatim; the SNAPSHOT side is kebab'd at the
+/// comparison site (hostgen's parse is lossless).
 fn wit_ty(resolve: &Resolve, ty: &Type) -> Ty {
     match ty {
         Type::Bool => Ty::Bool,
@@ -121,7 +123,7 @@ fn wit_ty(resolve: &Resolve, ty: &Type) -> Ty {
                         .name
                         .clone()
                         .unwrap_or_else(|| fail("anonymous typedef where a name was needed"));
-                    Ty::Named(hostgen::kebab(&name))
+                    Ty::Named(name)
                 }
             }
         }
@@ -138,12 +140,31 @@ fn committed_universe() -> hostgen::Universe {
     hostgen::Universe::new(items)
 }
 
+/// The WIT-vocabulary projection of a snapshot type: kebab every
+/// named ref (the comparison seam — hostgen's parse stays VERBATIM;
+/// the WIT side is already the kebab wire spelling).
+fn wire_ty(ty: &Ty) -> Ty {
+    match ty.clone() {
+        Ty::Option(t) => Ty::Option(Box::new(wire_ty(&t))),
+        Ty::Result(a, b) => Ty::Result(Box::new(wire_ty(&a)), Box::new(wire_ty(&b))),
+        Ty::List(t) => Ty::List(Box::new(wire_ty(&t))),
+        Ty::Map(k, v) => Ty::Map(Box::new(wire_ty(&k)), Box::new(wire_ty(&v))),
+        Ty::Set(t) => Ty::Set(Box::new(wire_ty(&t))),
+        Ty::Future(t) => Ty::Future(Box::new(wire_ty(&t))),
+        Ty::Stream(t) => Ty::Stream(Box::new(wire_ty(&t))),
+        Ty::Tensor(d, t) => Ty::Tensor(d, Box::new(wire_ty(&t))),
+        Ty::Named(n) => Ty::Named(hostgen::kebab(&n)),
+        scalar => scalar,
+    }
+}
+
 // ── (a) the happy path ──────────────────────────────────────────────
 
 #[test]
 fn committed_snapshot_parses_to_the_expected_universe() {
     let universe = committed_universe();
-    // the eight committed items, in registry order, kebab-named
+    // the eight committed items, in registry order, names VERBATIM
+    // (parse is lossless — the snapshot's own spelling)
     let names: Vec<&str> = universe
         .items()
         .iter()
@@ -157,14 +178,14 @@ fn committed_snapshot_parses_to_the_expected_universe() {
     assert_eq!(
         names,
         [
-            "user",
-            "order-item",
-            "order",
-            "role",
-            "order-error",
-            "get-user",
-            "watch-orders",
-            "db"
+            "User",
+            "OrderItem",
+            "Order",
+            "Role",
+            "OrderError",
+            "getUser",
+            "watchOrders",
+            "Db"
         ],
         "committed snapshot items (registry order)"
     );
@@ -216,13 +237,13 @@ fn snapshot_types_equal_the_wit_bindgen_consumed() {
     for item in universe.items() {
         match item {
             Item::Record { name, fields } => {
-                let id = types
-                    .types
-                    .get(name)
-                    .unwrap_or_else(|| fail(&format!("gateway-types is missing record `{name}`")));
+                let wit_name = hostgen::kebab(name);
+                let id = types.types.get(&wit_name).unwrap_or_else(|| {
+                    fail(&format!("gateway-types is missing record `{wit_name}`"))
+                });
                 let TypeDefKind::Record(r) = &resolve.types[*id].kind else {
                     fail(&format!(
-                        "`{name}`: snapshot record but WIT says {:?}",
+                        "`{wit_name}`: snapshot record but WIT says {:?}",
                         resolve.types[*id].kind
                     ));
                 };
@@ -231,18 +252,25 @@ fn snapshot_types_equal_the_wit_bindgen_consumed() {
                     .iter()
                     .map(|f| (f.name.to_string(), wit_ty(&resolve, &f.ty)))
                     .collect();
-                let want: Vec<(String, Ty)> =
-                    fields.iter().map(|(n, t)| (n.clone(), t.clone())).collect();
-                assert_eq!(got, want, "record `{name}` fields (names, order, TYPES)");
+                let want: Vec<(String, Ty)> = fields
+                    .iter()
+                    // the kebab projection at the comparison seam (the
+                    // snapshot side is verbatim)
+                    .map(|(n, t)| (hostgen::kebab(n), wire_ty(t)))
+                    .collect();
+                assert_eq!(
+                    got, want,
+                    "record `{wit_name}` fields (names, order, TYPES)"
+                );
             }
             Item::Variant { name, cases } => {
-                let id = types
-                    .types
-                    .get(name)
-                    .unwrap_or_else(|| fail(&format!("gateway-types is missing variant `{name}`")));
+                let wit_name = hostgen::kebab(name);
+                let id = types.types.get(&wit_name).unwrap_or_else(|| {
+                    fail(&format!("gateway-types is missing variant `{wit_name}`"))
+                });
                 let TypeDefKind::Variant(v) = &resolve.types[*id].kind else {
                     fail(&format!(
-                        "`{name}`: snapshot variant but WIT says {:?}",
+                        "`{wit_name}`: snapshot variant but WIT says {:?}",
                         resolve.types[*id].kind
                     ));
                 };
@@ -256,18 +284,23 @@ fn snapshot_types_equal_the_wit_bindgen_consumed() {
                         )
                     })
                     .collect();
+                let want: Vec<(String, Option<Ty>)> = cases
+                    .iter()
+                    .map(|(n, t)| (hostgen::kebab(n), t.as_ref().map(wire_ty)))
+                    .collect();
                 assert_eq!(
-                    got, *cases,
-                    "variant `{name}` cases (names, order, payload TYPES)"
+                    got, want,
+                    "variant `{wit_name}` cases (names, order, payload TYPES)"
                 );
             }
             Item::Resource { name } => {
-                let id = types.types.get(name).unwrap_or_else(|| {
-                    fail(&format!("gateway-types is missing resource `{name}`"))
+                let wit_name = hostgen::kebab(name);
+                let id = types.types.get(&wit_name).unwrap_or_else(|| {
+                    fail(&format!("gateway-types is missing resource `{wit_name}`"))
                 });
                 assert!(
                     matches!(&resolve.types[*id].kind, TypeDefKind::Resource),
-                    "`{name}`: snapshot resource but WIT says {:?}",
+                    "`{wit_name}`: snapshot resource but WIT says {:?}",
                     resolve.types[*id].kind
                 );
             }
@@ -307,31 +340,43 @@ fn snapshot_funcs_equal_the_wit_bindgen_consumed() {
         };
         let f: &Function = exports
             .functions
-            .get(name)
-            .unwrap_or_else(|| fail(&format!("gateway-exports is missing `{name}`")));
-        // params: names + types
-        let got: Vec<(&str, Ty)> = f
+            .get(&hostgen::kebab(name))
+            .unwrap_or_else(|| {
+                fail(&format!(
+                    "gateway-exports is missing `{}`",
+                    hostgen::kebab(name)
+                ))
+            });
+        // params: names + types (the kebab projection at the seam)
+        let got: Vec<(String, Ty)> = f
             .params
             .iter()
-            .map(|p| (p.name.as_str(), wit_ty(&resolve, &p.ty)))
+            .map(|p| (p.name.to_string(), wit_ty(&resolve, &p.ty)))
             .collect();
-        let want: Vec<(&str, Ty)> = params
+        let want: Vec<(String, Ty)> = params
             .iter()
-            .map(|(n, t)| (n.as_str(), t.clone()))
+            .map(|(n, t)| (hostgen::kebab(n), wire_ty(t)))
             .collect();
-        assert_eq!(got, want, "func `{name}` params (names, order, TYPES)");
+        assert_eq!(
+            got,
+            want,
+            "func `{}` params (names, order, TYPES)",
+            hostgen::kebab(name)
+        );
         // the async marker: snapshot `future(…)` ret == wit `async func`
         let snapshot_async = matches!(ret, Ty::Future(_));
         let wit_async = matches!(f.kind, FunctionKind::AsyncFreestanding);
         assert_eq!(
-            snapshot_async, wit_async,
-            "func `{name}`: the async marker must agree"
+            snapshot_async,
+            wit_async,
+            "func `{}`: the async marker must agree",
+            hostgen::kebab(name)
         );
         // the ret type: a future ret compares UNWRAPPED (the emitter
         // renders `future(list(ty(User)))` as `async func -> list<user>`)
         let payload = match ret {
-            Ty::Future(inner) => inner.as_ref().clone(),
-            other => other.clone(),
+            Ty::Future(inner) => wire_ty(inner),
+            other => wire_ty(other),
         };
         let wit_ret = f
             .result
@@ -339,7 +384,8 @@ fn snapshot_funcs_equal_the_wit_bindgen_consumed() {
         assert_eq!(
             wit_ty(&resolve, &wit_ret),
             payload,
-            "func `{name}` ret type"
+            "func `{}` ret type",
+            hostgen::kebab(name)
         );
     }
 }
@@ -371,10 +417,10 @@ fn tampered_committed_snapshot_is_caught() {
     let (resolve, pkg) = resolve_gateway().unwrap_or_else(|e| fail(&e.to_string()));
     let types = interface(&resolve, pkg, "gateway-types").unwrap_or_else(|e| fail(&e.to_string()));
     let order_item = universe
-        .find("order-item")
-        .unwrap_or_else(|| fail("tampered universe lost order-item"));
+        .find("OrderItem")
+        .unwrap_or_else(|| fail("tampered universe lost OrderItem"));
     let Item::Record { fields, .. } = order_item else {
-        fail("order-item is a record");
+        fail("OrderItem is a record");
     };
     let id = types
         .types
@@ -386,7 +432,7 @@ fn tampered_committed_snapshot_is_caught() {
     let drifted: Vec<bool> = fields
         .iter()
         .zip(wit_rec.fields.iter())
-        .map(|((_, snap), wit)| *snap != wit_ty(&resolve, &wit.ty))
+        .map(|((_, snap), wit)| wire_ty(snap) != wit_ty(&resolve, &wit.ty))
         .collect();
     assert_eq!(
         drifted,
@@ -413,8 +459,8 @@ fn dropped_field_is_caught_by_the_type_tie() {
     // the surface still agrees (arity unchanged) — the TYPE tie catches it
     let (resolve, pkg) = resolve_gateway().unwrap_or_else(|e| fail(&e.to_string()));
     let types = interface(&resolve, pkg, "gateway-types").unwrap_or_else(|e| fail(&e.to_string()));
-    let Item::Record { fields, .. } = universe.find("user").unwrap_or_else(|| fail("user")) else {
-        fail("user is a record");
+    let Item::Record { fields, .. } = universe.find("User").unwrap_or_else(|| fail("User")) else {
+        fail("User is a record");
     };
     assert_eq!(fields.len(), 3, "email dropped from the snapshot");
     let id = types.types["user"];
@@ -439,8 +485,8 @@ fn renamed_case_is_caught_by_the_type_tie() {
     let universe = hostgen::Universe::new(
         hostgen::parse_snapshot(&text).unwrap_or_else(|e| fail(&format!("{e}"))),
     );
-    let Item::Variant { cases, .. } = universe.find("role").unwrap_or_else(|| fail("role")) else {
-        fail("role is a variant");
+    let Item::Variant { cases, .. } = universe.find("Role").unwrap_or_else(|| fail("Role")) else {
+        fail("Role is a variant");
     };
     let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["root", "editor", "viewer"]);

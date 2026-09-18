@@ -1,0 +1,14 @@
+package demo:corner-min-variant;
+
+interface corner-min-variant-types {
+variant one-case {
+  only(u8),
+}
+}
+
+interface corner-min-variant-exports {
+}
+
+world corner-min-variant {
+  export corner-min-variant-exports;
+}

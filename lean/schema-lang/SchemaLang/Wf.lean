@@ -100,6 +100,7 @@ inductive ItemWf (known : List String) : Item → Prop where
       (∀ c t, (c, some t) ∈ cases → NoAsyncTy t) →
       (∀ c p, (c, p) ∈ cases → LegalIdent c) →
       (∀ c t, (c, some t) ∈ cases → TyRefsOk known t) →
+      cases ≠ [] →
       ItemWf known (.variant n cases)
   | func {s : FuncSig} :
       (∀ p t, (p, t) ∈ s.params → TyRefsOk known t) →
@@ -211,14 +212,35 @@ theorem inlineCycleDiags_eq_nil_iff {items : List Item} :
     have ⟨q, hq, hqr⟩ := List.any_eq_true.mp hany
     exact hacy n hn ⟨hq, inlineReaches?_sound items n (items.length + 1) q hqr⟩
 
+/-! ## W10.x — the emitter-bug lane (relation side)
+
+Two more rules, both found by the WIT sweep's caught emitter bugs:
+
+1. POST-MANGLE NAME UNIQUENESS — `kebab` is NOT injective ("FooBar",
+   "foo-bar", "foo_bar" → "foo-bar"), so the pre-mangle nodup does not
+   imply the emitted surface's uniqueness. The rule: the MANGLED name
+   list is nodup (`names.map mangle` — the mangler is a pure function,
+   so the rule is executable and the checker scans it directly).
+2. NONEMPTY VARIANTS — a zero-case variant has no wire meaning and no
+   value constructs; WIT's grammar refuses it ("empty variant"). The
+   rule lives on the `ItemWf.variant` arm (it is a per-item fact).
+
+With these, Core.lean's mangling claim becomes true BY THE RULE: a
+`WellFormed` universe cannot emit colliding WIT identifiers or an empty
+variant — the emitters consume checked universes.
+
+-/ 
+
 /-- THE REASONING AUTHORITY: every item checks against the universe's
-    type names, item names are unique, and no type item sits on an
-    inline ref-cycle (W8.13's recursive-type discipline —
-    `InlineAcyclic`). -/
+    type names, item names are unique PRE-MANGLE, the MANGLED names are
+    unique too (the kebab mangling is not injective — W10.x), and no
+    type item sits on an inline ref-cycle (W8.13's recursive-type
+    discipline — `InlineAcyclic`). -/
 inductive WellFormed : List Item → Prop where
   | mk {items : List Item} :
       (∀ it, it ∈ items → ItemWf (Item.typeNames items) it) →
       (items.map Item.name).Nodup →
+      ((items.map Item.name).map CodegenCore.Emit.kebab).Nodup →
       InlineAcyclic items →
       WellFormed items
 
@@ -427,53 +449,61 @@ theorem itemCheck_eq_nil_iff {known : List String} {it : Item} :
   | variant n cases =>
       constructor
       · intro h
-        simp only [Item.check] at h
-        rw [List.flatMap_eq_nil_iff] at h
-        refine .variant (fun c t hct => ?_) (fun c p hcp => ?_) (fun c t hct => ?_)
-        · have h1 : (if t.banAsync then ([] : List SchemaDiag)
-                else [.asyncField n c])
-              ++ checkSchemaIdent (s!"case of `{n}`") c
-              ++ t.check known = [] := h (c, some t) hct
-          rw [List.append_eq_nil_iff, List.append_eq_nil_iff] at h1
-          exact banAsync_ite_nil_iff.mp h1.1.1
-        · cases p with
-          | none =>
-              have h1 : checkSchemaIdent (s!"case of `{n}`") c = [] := h (c, none) hcp
-              exact checkSchemaIdent_eq_nil_iff.mp h1
-          | some t =>
-              have h1 : (if t.banAsync then ([] : List SchemaDiag)
+        cases cases with
+        | nil => simp [Item.check] at h
+        | cons c cs =>
+            simp only [Item.check, List.nil_append] at h
+            rw [List.flatMap_eq_nil_iff] at h
+            refine .variant (fun c t hct => ?_) (fun c p hcp => ?_)
+              (fun c t hct => ?_) (List.cons_ne_nil c cs)
+            · have h1 : (if t.banAsync then ([] : List SchemaDiag)
                     else [.asyncField n c])
                   ++ checkSchemaIdent (s!"case of `{n}`") c
-                  ++ t.check known = [] := h (c, some t) hcp
+                  ++ t.check known = [] := h (c, some t) hct
               rw [List.append_eq_nil_iff, List.append_eq_nil_iff] at h1
-              exact checkSchemaIdent_eq_nil_iff.mp h1.1.2
-        · have h1 : (if t.banAsync then ([] : List SchemaDiag)
-                else [.asyncField n c])
-              ++ checkSchemaIdent (s!"case of `{n}`") c
-              ++ t.check known = [] := h (c, some t) hct
-          rw [List.append_eq_nil_iff, List.append_eq_nil_iff] at h1
-          exact tyCheck_eq_nil_iff.mp h1.2
-      · intro h
-        cases h with
-        | variant hna hid href =>
-            simp only [Item.check]
-            rw [List.flatMap_eq_nil_iff]
-            intro x hx
-            cases x with
-            | mk c p =>
-                cases p with
-                | none =>
-                    show checkSchemaIdent (s!"case of `{n}`") c = []
-                    exact checkSchemaIdent_eq_nil_iff.mpr (hid c none hx)
-                | some t =>
-                    show (if t.banAsync then ([] : List SchemaDiag)
+              exact banAsync_ite_nil_iff.mp h1.1.1
+            · cases p with
+              | none =>
+                  have h1 : checkSchemaIdent (s!"case of `{n}`") c = [] :=
+                    h (c, none) hcp
+                  exact checkSchemaIdent_eq_nil_iff.mp h1
+              | some t =>
+                  have h1 : (if t.banAsync then ([] : List SchemaDiag)
                         else [.asyncField n c])
                       ++ checkSchemaIdent (s!"case of `{n}`") c
-                      ++ t.check known = []
-                    rw [List.append_eq_nil_iff, List.append_eq_nil_iff]
-                    exact ⟨⟨banAsync_ite_nil_iff.mpr (hna c t hx),
-                      checkSchemaIdent_eq_nil_iff.mpr (hid c (some t) hx)⟩,
-                      tyCheck_eq_nil_iff.mpr (href c t hx)⟩
+                      ++ t.check known = [] := h (c, some t) hcp
+                  rw [List.append_eq_nil_iff, List.append_eq_nil_iff] at h1
+                  exact checkSchemaIdent_eq_nil_iff.mp h1.1.2
+            · have h1 : (if t.banAsync then ([] : List SchemaDiag)
+                    else [.asyncField n c])
+                  ++ checkSchemaIdent (s!"case of `{n}`") c
+                  ++ t.check known = [] := h (c, some t) hct
+              rw [List.append_eq_nil_iff, List.append_eq_nil_iff] at h1
+              exact tyCheck_eq_nil_iff.mp h1.2
+      · intro h
+        cases h with
+        | variant hna hid href hne =>
+            cases cases with
+            | nil => exact absurd rfl hne
+            | cons c cs =>
+                simp only [Item.check, List.nil_append]
+                rw [List.flatMap_eq_nil_iff]
+                intro x hx
+                cases x with
+                | mk c p =>
+                    cases p with
+                    | none =>
+                        show checkSchemaIdent (s!"case of `{n}`") c = []
+                        exact checkSchemaIdent_eq_nil_iff.mpr (hid c none hx)
+                    | some t =>
+                        show (if t.banAsync then ([] : List SchemaDiag)
+                            else [.asyncField n c])
+                          ++ checkSchemaIdent (s!"case of `{n}`") c
+                          ++ t.check known = []
+                        rw [List.append_eq_nil_iff, List.append_eq_nil_iff]
+                        exact ⟨⟨banAsync_ite_nil_iff.mpr (hna c t hx),
+                          checkSchemaIdent_eq_nil_iff.mpr (hid c (some t) hx)⟩,
+                          tyCheck_eq_nil_iff.mpr (href c t hx)⟩
   | func s =>
       constructor
       · intro h
@@ -549,10 +579,11 @@ theorem nodup_iff_countP_le_one {ns : List String} :
           · rw [if_neg hxn, Nat.add_zero] at hle
             exact hle
 
-/-- The dup-diagnostic arm in Prop form. -/
-theorem dupDiags_eq_nil_iff {ns : List String} :
-    ((ns.filter fun n => ns.countP (· == n) > 1).eraseDups.map
-        SchemaDiag.dupName = []) ↔ ns.Nodup := by
+/-- The dup-diagnostic arm, GENERALIZED over the diag constructor (the
+    pre-mangle dup scan and the post-mangle collision scan share the
+    filter/eraseDups shape — one proof, two instances). -/
+theorem dupFilterDiags_eq_nil_iff {ns : List String} (f : String → SchemaDiag) :
+    ((ns.filter fun n => ns.countP (· == n) > 1).eraseDups.map f) = [] ↔ ns.Nodup := by
   rw [List.map_eq_nil_iff, eraseDups_eq_nil_iff, List.filter_eq_nil_iff]
   constructor
   · intro h
@@ -562,6 +593,21 @@ theorem dupDiags_eq_nil_iff {ns : List String} :
     have hgt : ns.countP (· == n) > 1 := of_decide_eq_true hp
     have hle := nodup_iff_countP_le_one.mp hnd n hn
     omega
+
+/-- The dup-diagnostic arm in Prop form. -/
+theorem dupDiags_eq_nil_iff {ns : List String} :
+    ((ns.filter fun n => ns.countP (· == n) > 1).eraseDups.map
+        SchemaDiag.dupName = []) ↔ ns.Nodup :=
+  dupFilterDiags_eq_nil_iff SchemaDiag.dupName
+
+/-- The post-mangle collision scan's arm (W10.x): the scan is EMPTY iff
+    the MANGLED name list has no duplicates — the same reduction as the
+    pre-mangle dup scan, at the mangling (`names.map mangle` is the
+    rule; the mangler is a pure function). -/
+theorem mangleCollDiags_eq_nil_iff {ns : List String} :
+    mangleCollDiags ns = [] ↔ (ns.map CodegenCore.Emit.kebab).Nodup :=
+  dupFilterDiags_eq_nil_iff (fun m => SchemaDiag.mangledCollision m
+    (ns.filter fun n => CodegenCore.Emit.kebab n == m))
 
 /-! ## The bridge -/
 
@@ -573,17 +619,20 @@ theorem universeCheck_eq_nil_iff {items : List Item} :
         ++ ((items.map Item.name).filter
               fun n => (items.map Item.name).countP (· == n) > 1).eraseDups.map
             SchemaDiag.dupName
+        ++ mangleCollDiags (items.map Item.name)
         ++ inlineCycleDiags items := rfl
-  rw [hUC, List.append_eq_nil_iff, List.append_eq_nil_iff,
-      List.flatMap_eq_nil_iff, dupDiags_eq_nil_iff, inlineCycleDiags_eq_nil_iff]
+  rw [hUC, List.append_eq_nil_iff, List.append_eq_nil_iff, List.append_eq_nil_iff,
+      List.flatMap_eq_nil_iff, dupDiags_eq_nil_iff, mangleCollDiags_eq_nil_iff,
+      inlineCycleDiags_eq_nil_iff]
   constructor
   · intro h
-    exact .mk (fun it hit => itemCheck_eq_nil_iff.mp (h.1.1 it hit)) h.1.2 h.2
+    exact .mk (fun it hit => itemCheck_eq_nil_iff.mp (h.1.1.1 it hit))
+      h.1.1.2 h.1.2 h.2
   · intro h
     cases h with
-    | mk hitems hnodup hacy =>
-        exact ⟨⟨fun it hit => itemCheck_eq_nil_iff.mpr (hitems it hit), hnodup⟩,
-          hacy⟩
+    | mk hitems hnodup hmangle hacy =>
+        exact ⟨⟨⟨fun it hit => itemCheck_eq_nil_iff.mpr (hitems it hit), hnodup⟩,
+          hmangle⟩, hacy⟩
 
 /-- The bridge, sound direction: a clean checker run transports INTO
     the relation (the driver's discharge route). -/
@@ -617,7 +666,7 @@ theorem WellFormed.noAsync_of_record_field {items : List Item}
     (hit : Item.record n fields ∈ items) {f : Field} (hf : f ∈ fields) :
     NoAsyncTy f.ty := by
   cases hwf with
-  | mk hitems _ _ =>
+  | mk hitems _ _ _ =>
       cases hitems _ hit with
       | record hna _ _ => exact hna f hf
 

@@ -1,0 +1,26 @@
+package demo:sweep-03;
+
+interface sweep-03-types {
+record order {
+  f0: list<result<u64, s16>>,
+  f1: list<u8>,
+  f2: list<result<option<list<u8>>, string>>,
+  f3: list<tuple<u32, option<f32>>>,
+}
+record summary {
+  f0: result<s64, f64>,
+}
+variant shape {
+  c0(list<list<f32>>),
+  c1,
+  c2(list<list<u8>>),
+}
+}
+
+interface sweep-03-exports {
+    watch: async func() -> list<tuple<u8, option<u64>>>;
+}
+
+world sweep-03 {
+  export sweep-03-exports;
+}

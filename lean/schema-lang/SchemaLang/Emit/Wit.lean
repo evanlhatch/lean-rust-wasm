@@ -1,35 +1,39 @@
 /-
 # SchemaLang.Emit.Wit — the WIT target
 
-Fold `Item`s to a WIT world. Discipline per codegen-core: names arrive
-pre-mangled (kebab via `Emit.kebab` — WIT identifiers are kebab-case),
-output is `Std.Format` → text, byte-tie CI is the drift guard (validated
-by wit-parser roundtrip in CI — the canonical parser, not this printer,
-is the correctness authority).
+Fold `Item`s to a WIT world. Names arrive pre-mangled (kebab via
+`Emit.kebab`); output is `Std.Format` → text; byte-tie CI is the drift
+guard (wit-parser roundtrip in CI — the canonical parser, not this
+printer, is the correctness authority).
 
 Text assembly: structural `Std.Format` (hard `line`s — NO `group`s, so
-every line breaks and `.pretty` cannot reflow; `nest` for the block
-bodies, `joinSep` for the comma lists, `.pretty` once at the `String`
-boundary). The bytes are pinned identical to the pre-Format emitter by
-the goldens (`goldens/wit/`, `goldens/wit-fixtures/`): the only
-deliberate quirk preserved is the 4-space column of the func decls —
-`worldOf` folds each under `nest 4 (line ++ …)` while every other
-interface member sits at 2 (as emitted since the first emitter). Leaf payloads (`tyFmt`'s type atoms, the `package`
-line) interpolate — never join.
+`.pretty` cannot reflow; `nest` for block bodies, `joinSep` for comma
+lists, `.pretty` once at the `String` boundary). The bytes are pinned
+identical to the pre-Format emitter by the goldens (`goldens/wit/`,
+`goldens/wit-fixtures/`); the one deliberate quirk: func decls sit at a
+4-space column (`worldOf` nests each under `nest 4 (line ++ …)`) while
+every other interface member sits at 2. Leaf payloads (`tyFmt`'s type
+atoms, the `package` line) interpolate — never join.
 
-Lowering decisions (target-neutral universe → WIT):
-- `option t` → `option<t>`, `result ok err` → `result<ok, err>` (1:1)
-- `map k v` → `list<tuple<K, V>>`, `set k` → `list<K>` (WIT has no
-  map/set — the association-list form; key/element uniqueness is a
-  documented payload invariant, not WIT data)
-- `future t` / `stream t` → `future<t>` / `stream<t>` (WASI 0.3-native)
-- records → `record`, variants → `variant` (payload cases → `case(ty)`)
-- funcs → `func` in the world's export interface
-- resources → `resource` declaration
+Lowering (target-neutral universe → WIT): `option t` → `option<t>`;
+`result ok err` → `result<ok, err>`; `map k v` → `list<tuple<K, V>>`,
+`set k` → `list<K>` (WIT has no map/set — the association-list form;
+key/element uniqueness is a documented payload invariant, not WIT
+data); `future`/`stream` native (WASI 0.3); records → `record`,
+variants → `variant` (payload cases → `case(ty)`); funcs → `func` in
+the world's export interface; resources → `resource`.
 
-Deliberately omitted: worlds/packages layout policy (the caller names the
-world; one world per universe today), interface splitting (small
-interfaces are the wasmtron rule — split when a real consumer needs it).
+ILLEGAL EMISSION IS WF-GATED, not an emitter concern: the two caught
+bugs (post-mangle name collisions, zero-case variants) refuse at
+ELABORATION — `SchemaLang.Item.mangleCollDiags` / `Item.check`'s
+`emptyVariant` arm, bridged into `SchemaLang.Wf`'s `WellFormed`. The
+target renderings below assume a checked universe; a raw universe that
+violates the gate must be routed through `universeCheck` first (the
+emitters' `GenCtx.checkedItems?` lane is the route).
+
+Omitted: worlds/packages layout policy (the caller names the world;
+one world per universe today), interface splitting (small interfaces
+are the wasmtron rule).
 -/
 
 module
@@ -64,15 +68,11 @@ def tyFmt : Ty → Std.Format
   | .f32 => "f32" | .f64 => "f64"
   | .string => "string"
   | .bytes => "list<u8>"
-  -- the flat form: WIT has no tensors — a tensor field lowers to
-  -- `list<elem>` (row-major; the dims are schema metadata the WIT
-  -- boundary cannot carry — the canonical-ABI pair-form keeps the
-  -- count, not the shape)
+  -- the flat form: WIT has no tensors — dims dropped (schema metadata
+  -- the WIT boundary cannot carry)
   | .tensor _ a => f!"list<{tyFmt a}>"
-  -- WIT has no map/set: the ASSOCIATION-LIST form (the canonical
-  -- ABI's own shape for it). Key/element uniqueness is a documented
-  -- payload invariant, not WIT data; the keys render via `keyFmt`
-  -- (the direct spelling — they are ordinary WIT scalars)
+  -- WIT has no map/set: the association-list form; keys render via
+  -- `keyFmt` (ordinary WIT scalars)
   | .map k v => f!"list<tuple<{keyFmt k}, {tyFmt v}>>"
   | .set k => f!"list<{keyFmt k}>"
   | .option a => f!"option<{tyFmt a}>"
@@ -112,14 +112,12 @@ def typeDecl : Item → Std.Format
 
 /-- One function as a WIT func declaration (UNINDENTED — `worldOf`
     nests it, giving the 4-space column the goldens pin). A `future a`
-    return becomes an
-    `async func` returning `a` — the wasi 0.3 async ABI: the async-ness
-    lives in the FUNCTION TYPE, not in a sync-func-returning-`future`
-    (the component validator rejects the latter: the `async` canonical
-    lift option requires an async function type). `delivery = stream`
-    renders the result as `stream<a>` — the delta-shaped contract: the
-    host consumes the results incrementally (the elements of the impl's
-    list, delivered by the async-lift's stream builtins). -/
+    return becomes `async func` returning `a` — the wasi 0.3 async
+    ABI: the async-ness lives in the FUNCTION TYPE (the component
+    validator rejects a sync func returning `future`). `delivery =
+    stream` renders the result as `stream<a>` — the delta-shaped
+    contract: the host consumes the impl's list elements
+    incrementally. -/
 def funcDecl : FuncSig → Std.Format :=
   fun s =>
     let params := joinSep (s.params.map fun (p, t) => f!"{kebab p}: {tyFmt t}") (text ", ")
@@ -179,26 +177,23 @@ end SchemaLang.Emit.Wit
 
 The WIT emitter is LOSSY — two distinct `Ty`s can emit identical WIT —
 so WIT-level schema diffing is UNSOUND in general. The lossless
-FRAGMENT is the types whose rendering determines them; the audit of
-`tyFmt`/`funcDecl`'s arms found FOUR lossy corners:
+FRAGMENT is the types whose rendering determines them. The four lossy
+corners (the audit of `tyFmt`/`funcDecl`'s arms):
 
-1. `tensor dims a` → `list<a>` — the DIMS are dropped (Ty.lean's own
-   note). Format- AND byte-lossy.
+1. `tensor dims a` → `list<a>` — the DIMS are dropped.
 2. `bytes` → `list<u8>` — byte-collides with `.list .u8` (single-node
-   vs tree, same `.pretty`). The corner the Format-level lemma cannot
-   see (the trees differ); excluded on the documented byte-level
-   rendering.
+   vs tree, same `.pretty`; the trees differ — the corner the
+   Format-level lemma cannot see), excluded on the documented
+   byte-level rendering.
 3. `set k` → `list<keyFmt k>` — Format-collides with `.list k.toTy`
-   (the witness `wit_collision_set_list` below/Tests pins it).
+   (the witness `wit_collision_set_list` in Tests pins it).
 4. func-ret: `delivery = stream` renders a `.list` return as
-   `stream<…>` — `.list a` and `.stream a` collide at the func-decl
-   site (the delta-shaped contract). A FUNC-level corner — the universe
-   check refuses stream-delivery funcs with list returns.
+   `stream<…>` — a FUNC-level corner; the universe check refuses
+   stream-delivery funcs with list returns.
 
-The `.ty n` arm stays IN the fragment under a NAME condition
-(`witLossless`'s arm): canonical kebab (`kebab n = n`), not a scalar
-atom, no angle bracket — the corners where name normalization could
-collide. -/
+`.ty n` stays IN the fragment under a name condition (`witLossless`'s
+arm): canonical kebab (`kebab n = n`), not a scalar atom, no angle
+bracket. -/
 namespace SchemaLang
 
 open CodegenCore.Emit (kebab)

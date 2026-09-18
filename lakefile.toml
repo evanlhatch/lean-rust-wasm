@@ -1,0 +1,45 @@
+# THE MONOLITH SPIKE (notes/single-lake-migration.md): one root package,
+# many [[lean_lib]]/[[lean_exe]] targets, per-target srcDir/roots. Pilot =
+# edgepython absorbed; its modules stay in lean/edgepython/ (srcDir
+# mount), its old lakefile.toml is DEAD. Downstream packages require this
+# root package (path = "../..") and import any of its libs' modules.
+
+name = "LeanRoot"
+
+# LSpec-free: the #guard blocks gate at BUILD time (the Sem.lean
+# convention); this exe is the driver `lake test` runs.
+testDriver = "EdgePythonTests"
+
+defaultTargets = ["EdgePython", "EdgeWat", "EdgeGen", "EdgePythonTests", "py-gen"]
+
+# The Python-subset frontend over the WAT seam.
+[[lean_lib]]
+name = "EdgePython"
+srcDir = "lean/edgepython"
+roots = ["EdgePython", "EdgePython.Parity"]
+
+# The FROZEN target-IR: WasmBackend.Wat is imported, never edited (the
+# wasm-backend lane's contract). Mounted by srcDir instead of a
+# [[require]] — a require would drag wasm-backend's full dep closure
+# (mathlib et al) into this package for one Init-only module; the srcDir
+# lib reads the module in place and writes nothing back.
+[[lean_lib]]
+name = "EdgeWat"
+srcDir = "lean/wasm-backend"
+roots = ["WasmBackend.Wat"]
+
+# The artifact writer: target/py.wat (the justfile drives wasm-tools).
+[[lean_lib]]
+name = "EdgeGen"
+srcDir = "lean/edgepython"
+roots = ["GenMain"]
+
+[[lean_exe]]
+name = "EdgePythonTests"
+srcDir = "lean/edgepython"
+root = "Tests.Main"
+
+[[lean_exe]]
+name = "py-gen"
+srcDir = "lean/edgepython"
+root = "GenMain"

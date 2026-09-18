@@ -197,8 +197,14 @@ def Emitter.checkNodup (es : List (Emitter Spec)) : Bool :=
 /-! ## Name mangling (one place, every target)
 
 Identifiers arrive as registry names (dot/space/dash separated words).
-Each target gets its convention; collision-safe by construction since
-registry names are unique. -/
+Each target gets its convention. The mangling is NOT injective — kebab:
+`FooBar` / `foo-bar` / `foo_bar` all mangle to `foo-bar` (caught by the
+WIT sweep; `camel`/`snake`/`pascal` have the same shape) — so "registry
+names are unique" is NOT collision-safety. The real rule is POST-mangle
+uniqueness, enforced by the WF lane: `SchemaLang.Item.mangleCollDiags`
+(the checker arm) ↔ `SchemaLang.Wf`'s `WellFormed` post-mangle nodup
+(the relation), bridged by `mangleCollDiags_eq_nil_iff`. A legal
+universe cannot emit colliding target identifiers. -/
 
 /-- Split a registry name into lowercase word parts: separators AND
     lower→Upper humps both split (`maxHealth` → [max, health]). -/

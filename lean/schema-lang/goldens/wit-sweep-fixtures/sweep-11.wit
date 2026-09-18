@@ -1,0 +1,26 @@
+package demo:sweep-11;
+
+interface sweep-11-types {
+record order {
+  f0: list<tuple<s8, option<list<list<f64>>>>>,
+  f1: string,
+  f2: result<bool, list<tuple<u32, option<list<tuple<u8, option<f32>>>>>>>,
+  f3: list<f32>,
+}
+record summary {
+  f0: u32,
+  f1: u64,
+  f2: list<list<f64>>,
+}
+variant shape {
+  c0,
+}
+}
+
+interface sweep-11-exports {
+    watch: async func(p0: s32, p1: list<tuple<s32, option<s64>>>) -> option<u8>;
+}
+
+world sweep-11 {
+  export sweep-11-exports;
+}

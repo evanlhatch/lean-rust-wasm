@@ -1,0 +1,15 @@
+package demo:corner-deep;
+
+interface corner-deep-types {
+record deep {
+  tower: option<list<option<list<option<list<option<list<option<list<option<list<option<list<option<list<u64>>>>>>>>>>>>>>>>,
+  wide: result<list<option<result<list<tuple<u64, option<string>>>, list<u16>>>>, list<list<u8>>>,
+}
+}
+
+interface corner-deep-exports {
+}
+
+world corner-deep {
+  export corner-deep-exports;
+}

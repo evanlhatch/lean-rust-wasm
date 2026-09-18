@@ -209,7 +209,8 @@ def partialAllowance : List (String × Nat) :=
   [("wasm-backend/WasmBackend.lean", 9),
    ("wasm-backend/WasmBackend/Correct.lean", 1),
    ("schema-lang/SchemaLang/Validate.lean", 1),
-   ("schema-lang/SchemaLang/Meta/Reflect.lean", 2),
+   ("schema-lang/SchemaLang/Meta/Register/Provenance.lean", 1),
+   ("schema-lang/SchemaLang/Meta/Register/Updates.lean", 1),
    ("substrait/Substrait/Emit/Text.lean", 3),
    ("codegen-core/CodegenCore/Emit/Rust.lean", 1),
    ("LintKit/LintKit/DupDefBodies.lean", 1)]

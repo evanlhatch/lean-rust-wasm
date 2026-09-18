@@ -1,47 +1,51 @@
-# ── ci-docs: provisioning assumptions ─────────────────────────────────
-# ci.yml: two-lane CI = the `just gates` matrix split into its two halves.
+# ── ci.yml: two-lane CI ──────────────────────────────────────────────
+# Coverage map (what CI guards vs what stays local-only):
 #
-# Job 1 (lean): the Lean-only gates. Justfile gates that touch no Rust:
-#   lean-pkg-inventory, lean-build, lean-axioms, check-schema, breaking,
-#   lean-lint. Toolchain = elan with leanprover/lean4:v4.33.0 (the
-#   justfile's lean_tc hardcodes the
-#   ~/.elan/toolchains/leanprover--lean4---v4.33.0/bin path — a manual
-#   elan-init install lands exactly there; elan SHIMS are bypassed by the
-#   justfile, so no PATH shims needed). Lean-only steps need NO CC: every
-#   recipe is `lake build`/`lake env` — no cc-rs, no ring, nothing native.
-#   Produces the lean-lake artifact (all lean/*/.lake dirs) consumed by
-#   job 2 so wasm-compile's lake build does not rebuild upstream oleans.
+#   Job 1 (lean, every push/PR) — the Lean-only floor:
+#     lean-pkg-inventory, lean-proof-roots, lean-build, lean-test
+#     (= lean-build: it is a dependency-only alias), gen-check (the
+#     byte-tie — pure gates exe, no cargo), manifest-check, lean-axioms,
+#     check-schema, breaking, lean-lint. All are `lake build`/`lake exe`/
+#     `lake env` recipes — no cc-rs, no ring, no CC export needed.
 #
-# Job 2 (rust/wasm): the devenv-profile gates + the test suite.
-#   Toolchain = devenv shell --profile wasm (devenv.nix: rust-overlay
-#   nightly + clang for ring/noq, wasm.nix: nixpkgs wasm-tools/wac/
-#   wit-bindgen/wasmtime). The CC export is REQUIRED for gen-check/test:
-#   `export CC=$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc`
-#   (notes/lean-refactor-guide.md: cc-rs on ring needs the wasm profile's
-#   clang headers). The justfile hardcodes $HOME/lean-rust-wasm paths
-#   (lean_tc, rt-conformance's CC, demo recipe), so job 2 symlinks
-#   $GITHUB_WORKSPACE → $HOME/lean-rust-wasm before running anything.
+#   Job 2 (rust/wasm, WEEKLY SCHEDULE + workflow_dispatch ONLY) — the
+#     devenv-profile gates + the Rust test suite: wasm-compile, wit-check,
+#     splice-smoke, rt-conformance, test (nextest + doctests). Runs on
+#     schedule/dispatch, not per-push: the devenv --profile wasm nix env
+#     plus the full gate battery is a ~1-2h runner bill that does not
+#     belong on every PR. Coverage gap on plain pushes (guarded locally
+#     by `just gates`): clippy/fmt/typos/secrets/deny (the `just check`
+#     Rust lane), wasm-guest-*/check-wasm cross-compiles, demo, docs,
+#     edgepython, budget-check, native-policy, kernel-check, coverage,
+#     wasm-diff-check. Those stay LOCAL — wire `just check` in when the
+#     Rust lane proves stable on the runner.
 #
-#   guestlang-tools: the justfile prefers ~/.local/guestlang-tools/bin
-#   over PATH for wasm-tools/wac (wit-check, splice-smoke, wasm-compile).
-#   Reason (notes/full-remaining-work.md): wit-bindgen 0.61's
-#   wit-component 0.258 async-lift encoding predates nixpkgs' 1.256 CLI —
-#   so CI cargo-installs wasm-tools 1.258.0 + wac-cli 0.11.0 into that
-#   exact root. wit-bindgen 0.61 is a CRATE dependency (Cargo.lock:
-#   wit-bindgen 0.61.1), not a CLI gate — no separate install. nixpkgs'
-#   wasm-tools/wac stay as fallback via the justfile's [ -x ] checks.
-#
-#   wasm32-unknown-unknown: NONE of job 2's gate commands cross-compile
-#   (wasm-compile is Lean→WAT→wasm-tools; the wasm guest builds live in
-#   wasm-guest-*/check-wasm recipes, not in gates). The rustup target add
-#   is best-effort parity with the local profile.
+# Toolchain assumptions (verified against the justfile):
+#   - lean_tc hardcodes ~/.elan/toolchains/leanprover--lean4---v4.33.0/bin
+#     — a manual elan-init install lands exactly there; elan shims are
+#     bypassed by the justfile, so no PATH shim step is needed.
+#   - Machines + dbsp pin mathlib v4.33.0 (git). A fresh runner would
+#     build mathlib FROM SOURCE (~2h) — `lake exe cache get!` pulls
+#     mathlib's public cachix oleans first (the standard downstream
+#     pattern); on failure the build proceeds the slow way.
+#   - The justfile hardcodes $HOME/lean-rust-wasm paths (lean_tc,
+#     rt-conformance's CC, demo recipe), so job 2 symlinks
+#     $GITHUB_WORKSPACE → $HOME/lean-rust-wasm before running anything.
+#   - guestlang-tools: the justfile prefers ~/.local/guestlang-tools/bin
+#     over PATH for wasm-tools/wac. Reason (notes/full-remaining-work.md):
+#     wit-bindgen 0.61's wit-component 0.258 async-lift encoding predates
+#     nixpkgs' 1.256 CLI — job 2 cargo-installs wasm-tools 1.258.0 +
+#     wac-cli 0.11.0 into that exact root. nixpkgs' wasm-tools/wac stay
+#     as fallback via the justfile's [ -x ] checks.
 #
 # Caching: elan toolchains + lean .lake per job, cargo registry + target,
 # the cachix devenv cache, and the cargo-installed guestlang-tools root.
+# devenv.yaml has no private cachix — the cachix-action below is the
+# public devenv cache (pull-only without the optional repo secret).
 #
 # Maintainer setup:
-#   - CACHIX_AUTH_TOKEN repo secret — pushes nix/devenv builds to
-#     cachix.org/devenv. Unset = pull-only (still works, slower).
+#   - CACHIX_AUTH_TOKEN repo secret (OPTIONAL) — pushes nix/devenv builds
+#     to cachix.org/devenv. Unset = pull-only (still works, slower).
 #   - Nothing else: Lean is elan-pinned (v4.33.0 = lean-toolchain),
 #     nix/devenv are the cachix-installed pins, guest tools are pinned
 #     below. deploy.yml handles secrets via secretspec; CI runs no
@@ -55,6 +59,11 @@ on:
         branches: [main]
     pull_request:
         branches: [main]
+    schedule:
+        # Weekly, Mondays 06:00 UTC — runs BOTH lanes (the rust/wasm lane
+        # is if-gated to schedule + workflow_dispatch).
+        - cron: "0 6 * * 1"
+    workflow_dispatch:
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
@@ -62,8 +71,9 @@ concurrency:
 
 jobs:
     lean:
-        name: lean matrix (build + axioms + schema + lint)
+        name: lean floor (build + tests + byte-tie + manifest + axioms + schema + lint)
         runs-on: ubuntu-latest
+        timeout-minutes: 240
         steps:
             - uses: actions/checkout@v4
 
@@ -95,11 +105,33 @@ jobs:
                   restore-keys: |
                       lean-lake-v1-${{ runner.os }}-v4.33.0-
 
-            # Lean-only gates — no CC needed: lake builds/env only, no cc-rs.
-            - name: lean gates
-              run: just lean-pkg-inventory lean-build lean-axioms check-schema breaking lean-lint
+            # Machines + dbsp require mathlib v4.33.0 (git, lakefile.toml).
+            # Without this, lake builds mathlib from source on the runner
+            # (~2h on 4 cores). The cache exe ships with mathlib; `!`
+            # forces the fetch. Non-fatal: a cache miss just builds slow.
+            - name: fetch mathlib olean cache (Machines + dbsp pin mathlib v4.33.0)
+              run: |
+                  set -euo pipefail
+                  TC="$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+                  for p in Machines dbsp; do
+                    (cd "lean/$p" && PATH="$TC:$PATH" "$TC/lake" exe cache get!) \
+                      || echo "WARN: mathlib cache unavailable for $p — building from source"
+                  done
 
+            # Lean-only gates — no CC needed: lake builds/env only, no cc-rs.
+            # gen-check + manifest-check run here (not in job 2): they are
+            # pure `lake exe gates` invocations — no cargo, no devenv.
+            - name: lean gates
+              run: |
+                  just lean-pkg-inventory lean-proof-roots \
+                    lean-build lean-test \
+                    gen-check manifest-check \
+                    lean-axioms check-schema breaking lean-lint
+
+            # Consumed by job 2 so wasm-compile's lake build does not
+            # rebuild upstream oleans. Only when job 2 will run.
             - name: upload lean .lake artifacts (oleans for job 2)
+              if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
               uses: actions/upload-artifact@v4
               with:
                   name: lean-lake
@@ -107,9 +139,13 @@ jobs:
                   retention-days: 1
 
     rust-wasm:
-        name: rust/wasm lane (gates + tests)
+        name: rust/wasm lane (gates + tests — weekly/on-demand)
         needs: lean
         runs-on: ubuntu-latest
+        timeout-minutes: 360
+        # NOT on push/PR: the devenv --profile wasm nix env + the full
+        # battery is a 1-2h bill. Weekly + on-demand.
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         steps:
             - uses: actions/checkout@v4
 
@@ -200,5 +236,5 @@ jobs:
                   devenv shell --profile wasm -- bash -c '
                     set -euo pipefail
                     export CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc"
-                    just wasm-compile gen-check wit-check splice-smoke rt-conformance test
+                    just wasm-compile wit-check splice-smoke rt-conformance test
                   '

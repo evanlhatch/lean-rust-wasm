@@ -65,6 +65,16 @@ check-schema:
 breaking:
 	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema breaking
 
+# The snapshot-codec differential's fixtures (the fuzz-gap audit's gap
+# #2): the Lean authority's seeded (snapshot-text, expected-item-dump)
+# pairs for the Rust twin — crates/steel-host/tests/fixtures/
+# snapshot_fixtures.txt, replayed by tests/snapshot_differential.rs.
+# Byte-tie law: pinned seed, a regen is byte-identical (drift = a
+# reviewable diff; the writer refuses a universe that fails the
+# Lean-authority round trip).
+snapshot-fixtures:
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe snapshot-fixtures
+
 # Watchers — watchexec wraps the SAME commands, no redefinition.
 # --restart: kill in-flight gen on new save (codegen is idempotent).
 watch-gen:
@@ -154,7 +164,10 @@ lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" /
 # LCNF at compile time, importing the oleans).
 # LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
 # is the `lean-lint` gate's driver.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython gates"
+# MONOLITH PILOT (notes/single-lake-migration.md): edgepython is absorbed
+# into the root lakefile (its lakefile.toml is dead) — dropped here; the
+# root package builds in lean-build and lints in lean-lint below.
+lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags gates"
 
 # Inventory gate: every lean/*/lakefile.toml package must appear in
 # lean_pkgs — a missing entry silently skips build/test/axiom gates
@@ -207,6 +220,9 @@ lean-proof-roots:
 lean-build:
 	#!/usr/bin/env bash
 	set -euo pipefail
+	# The monolith root first (pilot: edgepython's libs/exes live here —
+	# notes/single-lake-migration.md).
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build)
 	for p in {{lean_pkgs}}; do
 	  (cd lean/$p && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build)
 	done
@@ -243,7 +259,10 @@ lean-lint: lean-build
 	run ledger Ledger LedgerFn LedgerES
 	run feature-flags FeatureFlags FeatureFlagsFn Templates
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
-	run edgepython EdgePython Tests.Main
+	# edgepython is the monolith pilot: its sources lint from the ROOT
+	# package's env (roots EdgePython + Tests.Main — same module set the
+	# old `run edgepython` line covered).
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" EdgePython Tests.Main)
 
 # Codegen pipeline shim — all logic lives in the forge crate.
 gen:
@@ -357,7 +376,11 @@ lean-axioms:
 	# wasm-backend's Tests exe not in defaultTargets (guide 2.4) — the
 	# report covers Tests.Main, so its oleans must exist.
 	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build WasmBackendTests)
-	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates axioms
+	# SHARDED per package (the monolithic one-process mode peaked ~26.5GB
+	# and OOM'd this box; per-package peaks ~2-4GB — the sharding order).
+	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
+	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates axioms --package $p || exit 1; \
+	done
 
 # Lakefile ↔ manifest drift (delegated to the gates exe — Gates.Manifest):
 # every lean/*/lake-manifest.json agrees with its lakefile.toml
@@ -384,7 +407,13 @@ kernel-check:
 # `_native.native_decide.` trust base outside the grandfathered exiles
 # (doctrine §3 — the lean4lean-checked set must stay kernel-replayable).
 native-policy:
-	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates native-policy
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# SHARDED like lean-axioms (one env per process — the full sweep
+	# accumulates every package's env in one process and OOMs).
+	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
+	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates native-policy --package $p || exit 1; \
+	done
 
 # ── The compiler line: LCNF → WAT → binary WASM ──────────────────────
 # The backend re-runs Lean's LCNF pipeline (the leanir pattern) and emits

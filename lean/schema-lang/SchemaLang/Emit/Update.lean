@@ -42,6 +42,18 @@ least one LOWERABLE update (a record whose updates all skip honestly
 gets no tick — a fn over an empty body would be a lie); `.ty`-ref
 columns, list columns, and non-.col value shapes are not lowerable yet
 (additive — extend `valueRust`, the universe stays closed).
+
+v1→v2 note (the demotion): this emitter reads the V1 registry
+(`ctx.updates` = `updateItemExt` — the byte-tie pins
+`updates_generated.rs` to these rows). Every v1 row is the
+singleton-SET image of the same registration's v2 row
+(`Update2Item` — one `SetClause`, no insert/delete; the command builds
+both from one elaboration), so the emitted text is the v2 reading's
+byte-identical projection: `UpdateItem.applyRow`'s guard-then-write
+discipline IS `Update2.applySets` at one clause. Switching the source
+to `update2ItemExt` is the named follow-up (moves `Emit.GenCtx.updates`
+and the gates' `registeredUpdates` fold together; byte-tie
+re-verification mandatory).
 -/
 
 module

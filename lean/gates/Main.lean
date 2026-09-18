@@ -42,7 +42,7 @@ unsafe def runCoverage (p : Parsed) : IO UInt32 :=
 
 unsafe def runKernelCheck (_p : Parsed) : IO UInt32 := Gates.KernelCheck.run
 
-unsafe def runNativePolicy (_p : Parsed) : IO UInt32 := Gates.NativePolicy.run
+unsafe def runNativePolicy (p : Parsed) : IO UInt32 := Gates.NativePolicy.run (p.flag? "package" |>.map (·.as! String))
 
 /-- `just <recipe>` from the repo root (gates runs from lean/gates). -/
 def shellJust (args : List String) : IO UInt32 := do
@@ -59,7 +59,7 @@ unsafe def runAll (p : Parsed) : IO UInt32 := do
     , ("axioms",        Gates.Axioms.run false none)
     , ("manifest-check", Gates.Manifest.run)
     , ("coverage",      Gates.Coverage.run false false)
-    , ("native-policy", Gates.NativePolicy.run) ] do
+    , ("native-policy", Gates.NativePolicy.run none) ] do
     IO.println s!"══ gates all: {name} ══"
     let code ← step
     if code != 0 then
@@ -137,6 +137,12 @@ unsafe def nativePolicyCmd : Cmd := `[Cli|
    schema-lang's Emit/Circuit) FAILS. lean4lean cannot re-check \
    reduceBool, so a decl on that trust base is outside the independent \
    kernel's checking. Stale grandfather entries fail too."
+
+  FLAGS:
+    package : String; "Check ONE gated package — one environment in this \
+      process (the sharded mode the native-policy recipe loops; the \
+      full sweep in one process accumulates every package's env and \
+      OOMs). The stale-entry check is scoped to the selected package."
 ]
 
 unsafe def allCmd : Cmd := `[Cli|

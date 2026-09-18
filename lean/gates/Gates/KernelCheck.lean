@@ -149,14 +149,20 @@ def sourceHasDecls (path : System.FilePath) : IO Bool := do
       declOpeners.any (l.startsWith ·)
 
 /-- A package's own LEAN_PATH entry first, then its `lake env` closure
-    (the same-named-module fix — see the header). -/
-def leanPathOf (pkgDir : System.FilePath) : IO String := do
-  let out ← IO.Process.output
-    { cmd := "lake", args := #["env", "printenv", "LEAN_PATH"]
-    , cwd := some pkgDir }
-  unless out.exitCode == 0 do
-    throw <| IO.userError s!"`lake env printenv LEAN_PATH` failed in {pkgDir}:\n{out.stderr}"
-  return s!"{pkgDir}/.lake/build/lib/lean:{out.stdout.trimAscii}"
+    (the same-named-module fix — see the header). An ABSORBED package
+    (`pkg.leanPath` set — notes/single-lake-migration.md) has no lakefile
+    to `lake env` against: its entry IS the root build dir, which already
+    carries the whole dep closure. -/
+def leanPathOf (pkg : PkgSpec) (pkgDir : System.FilePath) : IO String := do
+  match pkg.leanPath with
+  | some own => return own
+  | none =>
+    let out ← IO.Process.output
+      { cmd := "lake", args := #["env", "printenv", "LEAN_PATH"]
+      , cwd := some pkgDir }
+    unless out.exitCode == 0 do
+      throw <| IO.userError s!"`lake env printenv LEAN_PATH` failed in {pkgDir}:\n{out.stderr}"
+    return s!"{pkgDir}/.lake/build/lib/lean:{out.stdout.trimAscii}"
 
 /-- Spawn lean4lean over `mods` in `pkgDir` (direct spawn — `lake env`
     would re-prepend the closure deps-first; the env entry merges over
@@ -186,11 +192,11 @@ structure PkgOutcome where
     invocation; on a failed batch, per-module isolation so the report
     names the failures (perf is a non-goal per the project owner). -/
 def checkPkg (exe : System.FilePath) (pkg : PkgSpec) : IO (Except String PkgOutcome) := do
-  let pkgDir : System.FilePath := s!"../{pkg.dir}"
-  let libDir := pkgDir / ".lake" / "build" / "lib" / "lean"
+  let pkgDir := pkg.srcDirOf
+  let libDir := pkg.oleanDirOf
   unless ← libDir.pathExists do
     return .error s!"{pkg.dir}: no oleans at {libDir} — run `just lean-build` first"
-  let leanPath ← leanPathOf pkgDir
+  let leanPath ← leanPathOf pkg pkgDir
   -- partition: import-only single-segment roots are skipped (verified
   -- per module — a root that gained decls is checked, not skipped)
   let mut skipRoots : Array Name := #[]

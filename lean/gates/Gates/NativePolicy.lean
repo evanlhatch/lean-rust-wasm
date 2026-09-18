@@ -102,11 +102,10 @@ def analyzeEnv (roots : Array Name) : CoreM (Array Name × Array (Name × Name))
       native := native.push (m, d)
   return (decls, native)
 
-/-- Import one package's roots (its own build dir prepended — the
+/-- Import one package's roots (its olean dir prepended — the
     Axioms.lean search-path lesson) and analyze. -/
 unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
-  let pkgLib : System.FilePath := s!"../{pkg.dir}/.lake/build/lib/lean"
-  Lean.searchPathRef.set (pkgLib :: base)
+  Lean.searchPathRef.set (pkg.oleanDirOf :: base)
   try
     Lean.enableInitializersExecution
     let env ← importModules (pkg.roots.map ({ module := · })) {}
@@ -118,13 +117,27 @@ unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
   catch e =>
     return { dir := pkg.dir, loadError := some (toString e) }
 
-unsafe def run : IO UInt32 := do
+/-- The package filter for `--package` (the sharded mode: one env per
+    PROCESS — the full sweep in one process accumulates every package's
+    environment and OOMs (the axiom gate's lesson); the justfile loops).
+    The stale-entry check is scoped to the selected packages. -/
+unsafe def run (pkgName : Option String) : IO UInt32 := do
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
+  let pkgs := match pkgName with
+    | some d =>
+      match gatedPackages.find? (fun p : PkgSpec => p.dir == d) with
+      | some p => #[p]
+      | none => #[]
+    | none => gatedPackages
+  if pkgs.isEmpty then
+    IO.println s!"native-policy: unknown --package '{pkgName.getD ""}' — gated:       {", ".intercalate (gatedPackages.map (·.dir)).toList}"
+    return 1
   let mut violations : Array (String × Name × Name) := #[]
-  let mut stale : Array (String × Name) := grandfatheredNative
+  let mut stale : Array (String × Name) :=
+    grandfatheredNative.filter (fun (d, _) => pkgs.any (fun p : PkgSpec => p.dir == d))
   let mut failed := false
-  for pkg in gatedPackages do
+  for pkg in pkgs do
     let r ← analyzePkg base pkg
     match r.loadError with
     | some e =>

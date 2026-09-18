@@ -90,11 +90,10 @@ def analyzeEnv (roots : Array Name) :
       axs := axs.insert a
   return (decls, findings, axs.toArray.qsort Name.quickLt)
 
-/-- Import one package's roots (its own build dir prepended so its
+/-- Import one package's roots (its olean dir prepended so its
     `Tests.Main` wins over same-named dep modules) and analyze. -/
 unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
-  let pkgLib : System.FilePath := s!"../{pkg.dir}/.lake/build/lib/lean"
-  Lean.searchPathRef.set (pkgLib :: base)
+  Lean.searchPathRef.set (pkg.oleanDirOf :: base)
   try
     Lean.enableInitializersExecution
     let env ← importModules (pkg.roots.map ({ module := · })) {}

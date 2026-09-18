@@ -1,0 +1,14 @@
+package demo:corner-empty;
+
+interface corner-empty-types {
+record empty-record {
+
+}
+}
+
+interface corner-empty-exports {
+}
+
+world corner-empty {
+  export corner-empty-exports;
+}

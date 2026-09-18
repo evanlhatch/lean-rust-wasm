@@ -56,6 +56,12 @@ import Demo
 #print axioms SchemaLang.universeCheck_sound
 #print axioms SchemaLang.universeCheck_complete
 
+-- W10.x: the two caught-emitter-bug WF rules — the post-mangle
+-- uniqueness scan's bridge iff + the per-item bridge (the
+-- emptyVariant arm rides in it). Bar: the core triple.
+#print axioms SchemaLang.mangleCollDiags_eq_nil_iff
+#print axioms SchemaLang.itemCheck_eq_nil_iff
+
 -- W7.2 ExprLang: the interface's law fields and the two readings'
 -- tie theorems on the VExpr instance.
 #print axioms SchemaLang.vexprViewU64_eval
@@ -66,10 +72,14 @@ import Demo
 
 -- W3.4/W4.3: the raw lane's ONE general-index neutrality theorem (the
 -- fixed-slice `evalU_set_neutral`/`evalBNeutral` pair, collapsed) and
--- the cascade as a `Dbsp.DeltaSystem` (disjoint-commutes + the N-update
--- order-freedom via `Dbsp.applySeq_perm`).
+-- the cascade as a `Dbsp.DeltaSystem` — now at the v2 application
+-- semantics (the v1→v2 migration): `disjoint_commutes` CITES
+-- `Update2.apply2_comm` (Update2's proved law; the `Update2Compat`
+-- pack is constructed from influence-disjointness), and the N-update
+-- order-freedom is `Dbsp.applySeq_perm` at the no-insert fragment.
 #print axioms SchemaLang.VExpr.evalRaw_set_neutral
-#print axioms SchemaLang.cascade_two_commute
+#print axioms SchemaLang.apply2_comm
+#print axioms SchemaLang.apply2_comm_perm
 #print axioms SchemaLang.cascade_disj_commutes
 #print axioms SchemaLang.cascade_applySeq_perm
 

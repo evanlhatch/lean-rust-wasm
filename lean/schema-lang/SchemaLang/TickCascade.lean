@@ -1,46 +1,42 @@
-/-
-# SchemaLang.TickCascade — the cascade's composition laws
+/- # SchemaLang.TickCascade — the cascade's composition laws (at v2)
 
-The v1 tick's cascade = folding the registered updates (in registration
-order) over the table's rows. The flatland schedule-equivalence claim
-(GAPS A2, SPEC §7.4) is "frame order may differ; final state may not" —
-THEOREMS HERE are that claim's seed, at the row level:
+The cascade = folding the registered updates (in registration order)
+over the table's rows. v1→v2 (the owner's canon row: a business rule /
+batch update IS a `schema_update` on the v2 surface — Update2.lean's
+multi-SET/INSERT/DELETE language): the fold's application semantics is
+`Update2Item.apply`. THE LAWS ARE CITED, NOT RE-PROVED:
 
-1. `ColPath.get_set_neutral` — a write to column `n₁` changes NO other
-   column's read (the write locality).
-2. `VExpr.evalV_set_neutral` / `evalRaw_set_neutral` — an expression
-   whose reads avoid the written column evaluates the same before and
-   after the write (the reads-congruence), boxed and raw. The raw one
-   is ONE general-index theorem (W3.4: the `RawTy` index unblocks
-   `induction`; the fixed-slice pair `evalU_set_neutral`/`evalBNeutral`
-   — including the proof-carrying-def workaround — is retired). The
-   hypothesis is data-derived from `UpdateItem.reads` (a fold, never
-   hand-listed), so it is CHECKABLE at registration time — the derived
-   reads earning their keep. W8.3: the family (with the reads-membership
-   simp set and `ColPath.get_set_neutral`) MOVED to `SchemaLang.Update`
-   — row-level facts belong to the row layer, and Update2 must stay
-   mathlib-free (this module drags `Dbsp.Effects`).
-3. THE CASCADE IS A DELTA SYSTEM (W4.3): `cascadeSystem` instantiates
-   `Dbsp.Effects.DeltaSystem` at state = the table's rows, locations =
-   column names, mutations = packed updates (`Σ f, UpdateItem fs f`) —
-   application IS `Change.patch`. The one contract
-   (`disjoint_commutes`) is `cascade_two_commute` reached through the
-   derived influence sets; the N-update order-freedom
-   (`cascade_applySeq_perm`) is `applySeq_perm` read off the instance.
-4. `cascade_two_commute` — two updates that don't interfere (neither
-   reads the other's write) compose in either order: the cascade's
-   order-freedom for the disjoint case ("frame order may differ; final
-   state may not"). Kept at its four-point hypothesis set — the
-   `NonInterfering` granularity, FINER than the class's symmetric
-   influence-disjointness (shared READS are safe and legal there; the
-   class is the conservative composable form).
-5. `set_same_order_disagrees` — the NEGATIVE: same-column writes are
-   order-DEPENDENT (later-wins, `set_commute_same`); an explicit
-   kernel-checked get-observable witness. The duality is pinned at BOTH
-   levels: disjoint = order-free, same-column = later-wins (the journal
-   carries S0 exactly there).
+1. `cascadeSystem` — THE cascade IS a DeltaSystem (W4.3), at the
+   NO-INSERT fragment: `Dbsp.Effects.DeltaSystem` at state = the
+   table's rows, locations = column names, mutations = no-insert v2
+   updates, application = `Update2Item.apply`. The one contract
+   (`disjoint_commutes`) is `Update2.apply2_comm` — Update2's proved
+   law; the `Update2Compat` premise pack is CONSTRUCTED here from
+   influence-disjointness (the refuse/insert-separation fields are
+   vacuous at `insert? = none`, the non-interference fields unpack the
+   derived read/write sets). The general (insert-carrying) law is a
+   PERMUTATION (`Update2.apply2_comm_perm`) — outside the class's
+   patch equality; the full-instance follow-up is noted in Update2's
+   header.
+2. `cascade_disj_commutes` — two influence-disjoint no-insert updates
+   compose in either order (plain equality — "frame order may differ;
+   final state may not").
+3. `cascade_applySeq_perm` — N-update order-freedom:
+   `Dbsp.applySeq_perm` read off the instance.
+4. `set_same_order_disagrees` — the NEGATIVE (the get-observable
+   witness): same-column writes are order-DEPENDENT (later-wins,
+   `ColPath.set_commute_same`); the journal's S0 policy exists exactly
+   for this channel.
 
-Honest scope: v1's cascade is sequential single-table; the full
+The v1→v2 impedance note (honest diff): v1's cascade ran single-set
+updates (`UpdateItem` packed as `Σ f, UpdateItem fs f`) whose legality
+rode the `UpdatePure`/`NonInterfering` instance binders; v2's rides
+the `Update2Compat` premise pack over the DERIVED reads (never
+hand-listed). The purity gate is shared — the registration's volatile
+scan stores `volatileRefs` on BOTH surfaces and emits both pure locks.
+v1's packed-Σ shape is subsumed by `Update2Item`'s clause list.
+
+Honest scope: the cascade is sequential single-table; the full
 schedule-equivalence (stage-walker ≡ queue-cascade, relational shape)
 needs these laws PLUS the row-shape certification — the growth
 path is noted in notes/flatland-alignment.md §2.
@@ -49,162 +45,105 @@ path is noted in notes/flatland-alignment.md §2.
 module
 
 public import SchemaLang.Update
+public import SchemaLang.Update2
 public import Dbsp.Effects
 
 @[expose] public section
 
 namespace SchemaLang
 
-/-! ## The cascade -/
-
-/-- DISJOINT cascade: two updates where NEITHER reads the other's
-    written column compose in either order (the order-free composition
-    law — "frame order may differ; final state may not", row level).
-    The reads-congruence (evalB/evalV neutrality) handles the guards
-    and values; `set_commute_disjoint` handles the writes. -/
-theorem cascade_two_commute
-    {fs : List Field} {f₁ f₂ : Field}
-    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂)
-    (h₁g : f₂.name ∉ u₁.guard.reads) (h₁v : f₂.name ∉ u₁.value.reads)
-    (h₂g : f₁.name ∉ u₂.guard.reads) (h₂v : f₁.name ∉ u₂.value.reads)
-    (hne : f₁.name ≠ f₂.name)
-    (rows : List (RowVals fs)) :
-    (rows.map u₂.applyRow).map u₁.applyRow
-      = (rows.map u₁.applyRow).map u₂.applyRow := by
-  induction rows with
-  | nil => rfl
-  | cons r rs ih =>
-      have hne' : f₂.name ≠ f₁.name := fun h => hne h.symm
-      have g₁ : ∀ (row : RowVals fs),
-          evalB u₁.guard (u₂.writePath.set row (evalV u₂.value r))
-            = evalB u₁.guard row :=
-        fun row => VExpr.evalRaw_set_neutral u₁.guard u₂.writePath h₁g row (evalV u₂.value r)
-      have g₂ : ∀ (row : RowVals fs),
-          evalB u₂.guard (u₁.writePath.set row (evalV u₁.value r))
-            = evalB u₂.guard row :=
-        fun row => VExpr.evalRaw_set_neutral u₂.guard u₁.writePath h₂g row (evalV u₁.value r)
-      have v₁ : evalV u₁.value (u₂.writePath.set r (evalV u₂.value r))
-          = evalV u₁.value r :=
-        VExpr.evalV_set_neutral u₁.value u₂.writePath h₁v r (evalV u₂.value r)
-      have v₂ : evalV u₂.value (u₁.writePath.set r (evalV u₁.value r))
-          = evalV u₂.value r :=
-        VExpr.evalV_set_neutral u₂.value u₁.writePath h₂v r (evalV u₁.value r)
-      show (_ :: _) = (_ :: _)
-      rw [ih]
-      congr 1
-      show u₁.applyRow (u₂.applyRow r) = u₂.applyRow (u₁.applyRow r)
-      unfold UpdateItem.applyRow validates
-      -- the guard verdicts are order-independent (the neutrality),
-      -- made explicit per branch:
-      by_cases hg₁ : (evalB u₁.guard r == 1) = true
-      · by_cases hg₂ : (evalB u₂.guard r == 1) = true
-        · -- both fire (in both orders — the guard neutrality): the
-          -- writes commute (set_commute_disjoint)
-          have c₁ : (evalB u₁.guard (u₂.writePath.set r (evalV u₂.value r)) == 1) = true := by
-            rw [g₁ r]; exact hg₁
-          have c₂ : (evalB u₂.guard (u₁.writePath.set r (evalV u₁.value r)) == 1) = true := by
-            rw [g₂ r]; exact hg₂
-          rw [if_pos hg₂, if_pos hg₁, if_pos c₁, if_pos c₂, v₁, v₂]
-          exact ColPath.set_commute_disjoint u₂.writePath u₁.writePath hne' r
-            (evalV u₂.value r) (evalV u₁.value r)
-        · -- u₂ refuses (in both orders — the guard neutrality): the
-          -- result is u₁'s write either way
-          have nc₂ : ¬ ((evalB u₂.guard (u₁.writePath.set r (evalV u₁.value r)) == 1) = true) := by
-            intro hh; rw [g₂ r] at hh; exact hg₂ hh
-          rw [if_neg hg₂, if_pos hg₁, if_neg nc₂]
-      · -- u₁ refuses in both orders: the result is u₂'s write or r
-        have nc₁ : ¬ ((evalB u₁.guard (u₂.writePath.set r (evalV u₂.value r)) == 1) = true) := by
-          intro hh; rw [g₁ r] at hh; exact hg₁ hh
-        -- the INNER ifs collapse first (the outer conditions name the
-        -- post-write rows only after the inner collapse)
-        by_cases hg₂ : (evalB u₂.guard r == 1) = true
-        · rw [if_neg hg₁, if_pos hg₂, if_neg nc₁]
-        · rw [if_neg hg₂, if_neg hg₁, if_neg hg₂]
-
-/-! ## The cascade IS a DeltaSystem (W4.3)
+/-! ## The cascade IS a DeltaSystem (W4.3, at the no-insert v2 fragment)
 
 `Dbsp.Effects.DeltaSystem` (which extends `Change S Mut`) at: state =
-the table's rows, locations = column names, mutations = packed updates.
-The static influence of a packed update is reads ++ writes — write sets
-ALONE cannot certify commutation, because `applyRow` READS the row: a
-guard or value reading the other update's written column breaks
-order-freedom (the guard-neutrality hypotheses of
-`cascade_two_commute` exist exactly there). Influence-disjointness is
-the conservative form — it also forbids SHARED reads, which are safe —
-so `cascade_two_commute` keeps its finer four-point hypothesis set (the
-`NonInterfering` granularity) and the instance's discharge EXTRACTS
-those four facts from disjointness. -/
+the table's rows, locations = column names, mutations = no-insert v2
+updates. The static influence of an update is its DERIVED reads plus
+its SET columns — write sets ALONE cannot certify commutation, because
+`Update2Item.apply` READS the row: a guard, set value, or insert
+template reading the other update's written column breaks
+order-freedom (`Update2Compat`'s non-interference fields exist exactly
+there). Influence-disjointness is the conservative form — it also
+forbids SHARED reads, which are safe.
 
-/-- The static influence of a packed update: every column whose change
-    can alter the update's effect — the derived reads plus the written
-    column (never hand-listed; `UpdateItem.reads`/`writes` are folds). -/
-def cascadeInfluence {fs : List Field} (u : Σ f, UpdateItem fs f) : List String :=
-  u.2.reads ++ u.2.writes
+The fragment restriction is LOAD-BEARING: an insert-carrying pair
+commutes only up to permutation (`Update2.apply2_comm_perm` — the
+insert blocks swap), so `disjoint_commutes`' plain equality needs
+`insert? = none` on both sides. Deletes are IN the fragment (a delete
+commutes with an influence-disjoint write — the guard neutrality
+survives, and a row set-then-deleted is absent either way;
+`Update2Compat`'s proofs cover the delete flags). -/
 
-/-- Membership out of the influence set, unpacked to the row level: a
-    column outside the influence is read by NEITHER expression and is
-    not the written column. -/
-theorem UpdateItem.not_mem_influence {fs : List Field} {f : Field}
-    {u : UpdateItem fs f} {x : String}
-    (h : x ∉ u.reads ++ u.writes) :
-    x ∉ u.guard.reads ∧ x ∉ u.value.reads ∧ x ≠ f.name := by
-  have hr : x ∉ u.reads := fun hx => h (List.mem_append_left _ hx)
-  have hw : x ∉ u.writes := fun hx => h (List.mem_append_right _ hx)
-  refine ⟨?_, ?_, ?_⟩
-  · exact fun hx => hr (List.mem_eraseDups.mpr (List.mem_append_left _ hx))
-  · exact fun hx => hr (List.mem_eraseDups.mpr (List.mem_append_right _ hx))
-  · intro heq
-    subst heq
-    simp [UpdateItem.writes] at hw
+/-- The no-insert fragment: the DeltaSystem's mutation type. The
+    subtype carries the fragment's proof (a plain `Bool` fact, not a
+    class — the fragment is a subtype, not a new surface). -/
+def NoInsert (fs : List Field) : Type := {u : Update2Item fs // u.insert? = none}
+
+/-- The static influence of a v2 update: every column whose change can
+    alter the update's effect — the derived reads (guard + set values
+    + insert template) plus the SET columns (never hand-listed;
+    `Update2Item.reads`/`setNames` are folds). Deletes carry no
+    location (they remove rows; their guard rides the reads). -/
+def cascadeInfluence {fs : List Field} (u : Update2Item fs) : List String :=
+  u.reads ++ u.setNames
 
 -- the `warn.classDefReducibility` warning is silenced to say so: the
 -- system is passed explicitly (`cascadeSystem fs`), never found by
 -- instance search.
 set_option warn.classDefReducibility false in
 /-- THE INSTANCE: the row-table cascade is a delta system. Application
-    IS patching (`UpdateItem.apply`); the ONE contract
-    (`disjoint_commutes`) delegates to `cascade_two_commute` — the
-    influence-disjointness premise unpacks to its four-point hypothesis
-    set (`not_mem_influence`), never re-proved. -/
+    IS patching (`Update2Item.apply`); the ONE contract
+    (`disjoint_commutes`) delegates to `Update2.apply2_comm` — the
+    law Update2 proved; here the influence-disjointness premise is
+    unpacked into the `Update2Compat` premise pack, never re-proved. -/
 def cascadeSystem (fs : List Field) :
-    Dbsp.DeltaSystem (List (RowVals fs)) String (Σ f, UpdateItem fs f) where
-  patch rows u := u.2.apply rows
+    Dbsp.DeltaSystem (List (RowVals fs)) String (NoInsert fs) where
+  patch rows u := u.1.apply rows
   valid _ _ := True
-  writesOf := cascadeInfluence
+  writesOf := fun u => cascadeInfluence u.1
   disjoint_commutes := by
-    intro m₁ m₂ hd rows
-    obtain ⟨f₁, u₁⟩ := m₁
-    obtain ⟨f₂, u₂⟩ := m₂
-    have hd' : Dbsp.LocDisjoint (u₁.reads ++ u₁.writes) (u₂.reads ++ u₂.writes) :=
-      hd
-    have hw₁ : f₁.name ∈ u₁.reads ++ u₁.writes :=
-      List.mem_append_right _ (by simp [UpdateItem.writes])
-    have hw₂ : f₂.name ∈ u₂.reads ++ u₂.writes :=
-      List.mem_append_right _ (by simp [UpdateItem.writes])
-    obtain ⟨h₁g, h₁v, -⟩ := UpdateItem.not_mem_influence (fun h => hd' h hw₂)
-    obtain ⟨h₂g, h₂v, hne⟩ := UpdateItem.not_mem_influence (fun h => hd' hw₁ h)
-    show (rows.map u₂.applyRow).map u₁.applyRow
-      = (rows.map u₁.applyRow).map u₂.applyRow
-    exact cascade_two_commute u₁ u₂ h₁g h₁v h₂g h₂v hne rows
+    intro u₁ u₂ hd rows
+    have h : List.Disjoint (u₁.1.reads ++ u₁.1.setNames)
+        (u₂.1.reads ++ u₂.1.setNames) := hd
+    have compat : Update2Compat u₁.1 u₂.1 rows :=
+      { ni₁₂ := fun _ hn hmem => h (List.mem_append_left _ hn)
+            (List.mem_append_right _ hmem)
+        ni₂₁ := fun _ hn hmem => Dbsp.LocDisjoint.symm h
+            (List.mem_append_left _ hn) (List.mem_append_right _ hmem)
+        setDisj := fun _ hn hn' => h (List.mem_append_right _ hn)
+            (List.mem_append_right _ hn')
+        refuse₁₂ := fun r _ => by
+          unfold Update2Item.newRow
+          rw [u₁.2]
+          split <;> rfl
+        refuse₂₁ := fun r _ => by
+          unfold Update2Item.newRow
+          rw [u₂.2]
+          split <;> rfl
+        insertSep₁₂ := fun hsome => by
+          rw [u₁.2] at hsome; simp at hsome
+        insertSep₂₁ := fun hsome => by
+          rw [u₂.2] at hsome; simp at hsome }
+    exact apply2_comm compat u₁.2 u₂.2
 
-/-- The class-vocabulary restatement: influence-disjoint packed updates
-    commute — `disjoint_commutes` read off the instance. Thin BY
-    DESIGN: the class site owns the proof. -/
-theorem cascade_disj_commutes {fs : List Field} (u₁ u₂ : Σ f, UpdateItem fs f)
+/-- The class-vocabulary restatement: influence-disjoint no-insert v2
+    updates commute — `disjoint_commutes` read off the instance. Thin
+    BY DESIGN: the class site owns the proof (it cites
+    `Update2.apply2_comm`). -/
+theorem cascade_disj_commutes {fs : List Field} (u₁ u₂ : Update2Item fs)
+    (h₁ : u₁.insert? = none) (h₂ : u₂.insert? = none)
     (hd : Dbsp.LocDisjoint (cascadeInfluence u₁) (cascadeInfluence u₂))
     (rows : List (RowVals fs)) :
-    (rows.map u₂.2.applyRow).map u₁.2.applyRow
-      = (rows.map u₁.2.applyRow).map u₂.2.applyRow :=
-  (cascadeSystem fs).disjoint_commutes u₁ u₂ hd rows
+    u₁.apply (u₂.apply rows) = u₂.apply (u₁.apply rows) :=
+  (cascadeSystem fs).disjoint_commutes ⟨u₁, h₁⟩ ⟨u₂, h₂⟩ hd rows
 
 /-- N-update order-freedom: a pairwise influence-disjoint batch of
-    packed updates computes the same final table under ANY ordering —
-    `Dbsp.applySeq_perm` read off the instance (the permutation
-    invariance of conflict-free batches, instantiated at the cascade). -/
-theorem cascade_applySeq_perm {fs : List Field} {us₁ us₂ : List (Σ f, UpdateItem fs f)}
+    no-insert v2 updates computes the same final table under ANY
+    ordering — `Dbsp.applySeq_perm` read off the instance (the
+    permutation invariance of conflict-free batches, instantiated at
+    the cascade). -/
+theorem cascade_applySeq_perm {fs : List Field} {us₁ us₂ : List (NoInsert fs)}
     (hp : us₁.Perm us₂)
     (hpair : us₁.Pairwise
-      (fun a b => Dbsp.LocDisjoint (cascadeInfluence a) (cascadeInfluence b)))
+      (fun a b => Dbsp.LocDisjoint (cascadeInfluence a.1) (cascadeInfluence b.1)))
     (rows : List (RowVals fs)) :
     Dbsp.applySeq (cascadeSystem fs) us₁ rows
       = Dbsp.applySeq (cascadeSystem fs) us₂ rows :=

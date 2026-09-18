@@ -31,6 +31,36 @@ determinism machinery anticipated.
 Execution substrate: `RowVals`/`ColPath`/`VExpr` (SchemaLang.Validate) —
 the same row model the validators execute over, so the oracle reading
 and the compiled reading share one semantics.
+
+## DEMOTED — v2 is the row (canon). NO NEW USERS.
+
+The owner's v1→v2 deprecation: v2 (`SchemaLang.Update2`) is THE row — a
+business rule / batch update is a `schema_update` on the v2 surface
+(multi-SET / INSERT / DELETE, keyed, six kernel-checked laws).
+Everything that could migrate HAS: the cascade's composition laws now
+live at the v2 application semantics (TickCascade cites
+`Update2.apply2_comm` through its `Dbsp.DeltaSystem` instance), and the
+authoring surface registers the v2 row for EVERY `schema_update`.
+This module remains ONLY for the named consumers below — do not add
+more:
+- THE EMISSION REGISTRY (`updateItemExt` → `Emit.GenCtx.updates` →
+  `Emit.Update`): the byte-tie pins `updates_generated.rs` to these
+  rows. A v1 row is the singleton-SET image of the same registration's
+  v2 row (the command builds both from one elaboration) — emission is
+  byte-identical either way; switching the emitter to
+  `update2ItemExt` is the named follow-up (needs `Emit.GenCtx` + the
+  gates' `registeredUpdates` fold moved together, then a byte-tie
+  re-verification).
+- THE ROW-LEVEL LAW LAYER (`VExpr.reads`, `ColPath.set`, the
+  duality + reads-congruence theorems): Update2 consumes these — they
+  live here until the row layer gets its own module.
+- THE TRACE ORACLE's batch type (`Trace.Scenario.ticks : List (List
+  SomeUpdate)`) and the downstream suites still constructing v1 items
+  (proofkit, feature-flags) — out of the migration wave's scope.
+- `UpdateItem.cascade2` + the class pair (`UpdatePure` /
+  `NonInterfering`): kept compiling for those same downstream suites;
+  the v2 surface's pure lock (`Update2Pure`) and compat pack
+  (`Update2Compat`) supersede them for all new code.
 -/
 
 module

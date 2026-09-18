@@ -1,0 +1,18 @@
+package demo:corner-mapset;
+
+interface corner-mapset-types {
+record mapset {
+  m-opt: list<tuple<u64, option<string>>>,
+  m-in-list: list<list<tuple<string, option<list<u32>>>>>,
+  s-plain: list<string>,
+  opt-of-map: option<list<tuple<u32, u64>>>,
+  m-in-map: list<tuple<u32, list<tuple<u64, option<bool>>>>>,
+}
+}
+
+interface corner-mapset-exports {
+}
+
+world corner-mapset {
+  export corner-mapset-exports;
+}

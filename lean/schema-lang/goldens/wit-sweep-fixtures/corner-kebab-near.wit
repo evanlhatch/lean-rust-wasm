@@ -1,0 +1,17 @@
+package demo:corner-kebab-near;
+
+interface corner-kebab-near-types {
+record foo-bar {
+  v: u8,
+}
+record foo-bar2 {
+  v: u16,
+}
+}
+
+interface corner-kebab-near-exports {
+}
+
+world corner-kebab-near {
+  export corner-kebab-near-exports;
+}

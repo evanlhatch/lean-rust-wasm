@@ -178,7 +178,12 @@ def parseTy : Nat → List Char → Except String (Ty × List Char)
           | '(' :: r =>
               let (nm, r) := r.span (· != ')')
               match r with
-              | ')' :: r => .ok (.ty (String.ofList nm), r)
+              | ')' :: r =>
+                  -- the EMPTY-REF gate: the writer never emits `ty()`
+                  -- (`namesEncodable` forbids empty names), so accepting
+                  -- one would parse a corruption hole as a ref
+                  if nm.isEmpty then .error "snapshot: empty ty ref"
+                  else .ok (.ty (String.ofList nm), r)
               | _ => .error "snapshot: expected ')' after ty ref"
           | _ => .error "snapshot: expected '(' after `ty`"
       | "tensor" =>
@@ -338,7 +343,13 @@ def parseLine (st : State) (line : String) : State := do
   | _ => throw s!"snapshot: unrecognized line `{line}`"
 
 /-- Parse snapshot text back to a universe. The empty snapshot is the
-    empty universe (a brand-new project has no baseline). -/
+    empty universe (a brand-new project has no baseline).
+
+    LF-ONLY: the writer emits `\n` line endings and NEVER `\r` (render
+    below joins on `"\n"` alone), so a `\r` is corruption: it sticks to
+    the last token of its line and fails loud (unrecognized line or
+    trailing garbage). The Rust twin parses the same law — both parsers
+    REJECT CRLF (the snapshot-codec differential's pin). -/
 def parse (text : String) : Except String (List Item) := do
   let lines := text.splitOn "\n" |>.filter (!·.isEmpty)
   let (done, cur?) ← lines.foldl parseLine (.ok ([], none))

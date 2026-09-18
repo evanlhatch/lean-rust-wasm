@@ -46,7 +46,7 @@ path = "../LintKit"
 
 [[lean_lib]]
 name = "SchemaLang"
-roots = ["SchemaLang", "GenMain", "CheckMain", "BreakingMain"]
+roots = ["SchemaLang", "GenMain", "CheckMain", "BreakingMain", "Tests.SnapshotRT"]
 
 # The demo authoring surface: native Lean structures + @[schema].
 # Separate root so `lake exe schema gen` can importModules #[`Demo].
@@ -68,4 +68,12 @@ root = "SchemaMain"
 # `enableInitializersExecution` (extension replay for importModules) runs
 # imported initializers through the interpreter — needs the core native
 # impls (IO.getRandomBytes) linked in.
+supportInterpreter = true
+
+# The snapshot-codec differential fixture writer (Tests/SnapshotRT.lean
+# holds the shared generator + dump; the Rust consumer replays the
+# fixtures through hostgen's parser — the fuzz-gap audit's gap #2).
+[[lean_exe]]
+name = "snapshot-fixtures"
+root = "SnapshotFixturesMain"
 supportInterpreter = true
