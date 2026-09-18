@@ -18,12 +18,12 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## Machines — 1355 decls checked
+## Machines — 1291 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## codegen-core — 885 decls checked
+## codegen-core — 847 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -43,22 +43,22 @@ violations: none
 axioms used: Proofkit.u64add_assoc._native.bv_decide.ax_1_5, Quot.sound, Classical.choice, propext
 violations: none
 
-## schema-lang — 9421 decls checked
+## schema-lang — 10030 decls checked
 
 axioms used: Quot.sound, Classical.choice, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalIncr_denote_tick3._native.native_decide.ax_1_1, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalCkt_denote_tick3._native.native_decide.ax_1_1, propext
 violations: none
 
-## faults — 146 decls checked
+## faults — 145 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## dbsp — 775 decls checked
+## dbsp — 773 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## std — 72 decls checked
+## std — 80 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -73,7 +73,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## wasm-backend — 2212 decls checked
+## wasm-backend — 2227 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none

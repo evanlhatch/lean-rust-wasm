@@ -46,7 +46,7 @@ fn the_hasher_matches_oracle_runner_and_coreutils() {
     // oracle-runner's twin to the same digest.
     assert_eq!(
         schema::schema_hash(EXPECTED_DEMO_SURFACE),
-        "ed2c809896afcad21aa51e494df27446a70556aa1ac0074e401bf931480901a1",
+        "22e61296bd4862900cd4f9fb6d502148d581366ce7779f661d1619e42499d0d0",
     );
 }
 

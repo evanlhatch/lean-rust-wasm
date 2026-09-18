@@ -15,23 +15,6 @@ open CodegenCore.Emit
 open TestKit
 open Plausible
 open Plausible.Gen
-open CodegenCore.Enumerable
-
-/-! ## Enumerable test enum — nullary constructors, deriving Enumerable
-
-The handler must generate the `all` def and the instance, and the
-complete proof must compile. -/
-
-inductive EnumColor where
-  | red | green | blue
-  deriving DecidableEq, Enumerable
-
-def enumerableChecks : CheckResult := do
-  _ ← assertEq "all length" EnumColor.all.length 3
-  _ ← assertEq "all contains red" (decide (EnumColor.red ∈ EnumColor.all)) true
-  _ ← assertEq "all contains green" (decide (EnumColor.green ∈ EnumColor.all)) true
-  _ ← assertEq "all contains blue" (decide (EnumColor.blue ∈ EnumColor.all)) true
-  .ok ()
 
 def mangleChecks : CheckResult := do
   _ ← assertEq "camel" (camel "max_health.current") "maxHealthCurrent"
@@ -358,6 +341,16 @@ def codedRegistryChecks : CheckResult := do
   -- codes-length law holds
   _ ← assertEq "coded codes.length = items.length"
     codeColorReg.codes.length codeColorReg.items.length
+  -- W-iso batch piece 3: the denseness upgrade — the code space is dense
+  -- (each code parses back to start + position), and positions ↔ members
+  -- is an honest Iso (`membersIso`; String carries LawfulBEq so the
+  -- instance fires). The full `Iso (Fin n) α` upgrade (`finIso`) needs
+  -- the registry to EXHAUST α — true for enum registries, not for String.
+  _ ← assertEq "codes dense" codeColorReg.denseCheck true
+  _ ← assertEq "position 0 is the first member"
+    ((codeColorReg.membersIso.to ⟨0, by decide⟩).val) "red"
+  _ ← assertEq "first member back to position 0"
+    (decide ((codeColorReg.membersIso.inv ⟨"red", by decide⟩).val = 0)) true
   .ok ()
 
 /-! ## Validation (W7.18) — error-ACCUMULATING applicative
@@ -473,6 +466,18 @@ def boolWireSpec : RoundTripSpec Bool where
   samples := [false, true, true]
   goldenDir := some "/tmp"
 
+/-- W-iso batch piece 1, consumed on the toy codec: `toImageIso` upgrades
+    the PartialIso to a TRUE Iso on its image; `inv_to` executed says
+    re-encoding the decode of a canonical byte string reproduces the
+    bytes EXACTLY (the both-ways round trip the one-ended law cannot
+    give). -/
+def boolImageChecks : CheckResult := do
+  let img := boolIso.toImageIso
+  _ ← assertEq "image decode" (img.to ⟨[1], ⟨true, rfl⟩⟩) true
+  _ ← assertEq "image re-encode round trip"
+    (decide (boolIso.encode (img.to ⟨[0], ⟨false, rfl⟩⟩) = [0])) true
+  .ok ()
+
 /-- The defused variant: identity "sabotage" — the control asserts the
     kit law itself, passes trivially, and `runIO` MUST flag it vacuous. -/
 def boolWireVacuous : RoundTripSpec Bool where
@@ -487,7 +492,7 @@ def main : IO UInt32 := do
     , ("registry", registryChecks)
     , ("emit", emitChecks)
   , ("didYouMean", didYouMeanChecks)
-  , ("enumerable", enumerableChecks)
+  , ("bool-image", boolImageChecks)
   , ("emitter-law", emitterLawChecks)
   , ("data-registry", dataRegistryChecks)
   , ("coded-registry", codedRegistryChecks)

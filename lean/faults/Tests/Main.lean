@@ -97,6 +97,16 @@ def allocationChecks : CheckResult := do
   _ ← assertEq "colliding start caught (control)"
       (decide ((bigGuestCodes ++ CodegenCore.allocateCodes "E" 110 Spec.hostFaults.items).map (·.2)).Nodup)
       false
+  -- W-iso batch piece 3, density half: the E-code allocation is DENSE —
+  -- every code parses back to exactly `start + position` (executable
+  -- check; true by construction for `allocateCodes`). The ISO half
+  -- (`CodedRegistry.membersIso`/`finIso`) does NOT fire here: α =
+  -- FailureModeItem is payload-carrying (the registry does not exhaust
+  -- it) and its separately-derived BEq does not chain to LawfulBEq —
+  -- the iso is consumed on `CodedRegistry String` in codegen-core's
+  -- coded-registry checks instead.
+  _ ← assertEq "guest E-codes dense" Spec.apiFaults.denseCheck true
+  _ ← assertEq "host E-codes dense" Spec.hostFaults.denseCheck true
   .ok ()
 
 def policyChecks : CheckResult := do
@@ -130,7 +140,9 @@ def emitChecks : CheckResult := do
   .ok ()
 
 /-- The one-writer audit: no two faults emitters claim the same output
-    path (mirrors `SchemaLang.Emit.pathsUnique`), the forge job row
+    path (asserted through codegen-core's shared `Emitter.checkNodup` —
+    the W7.3p2 dedup shape schema-lang's Tests use; the inline
+    `Faults.Emit.pathsUnique` copy was deleted), the forge job row
     covers exactly the registry's outputs (same pattern as schema-lang's
     `jobsCoverEmitters` — an emitter whose artifact forge never byte-ties
     fails here, not silently), AND every file `run` produces is a
@@ -138,7 +150,8 @@ def emitChecks : CheckResult := do
     `outputs` doesn't declare). Negative control: a rogue emitter whose
     `run` writes outside its declared `outputs` must FAIL the audit. -/
 def emitterAuditChecks : CheckResult := do
-  _ ← assertEq "emitter paths unique" Faults.Emit.pathsUnique true
+  _ ← assertEq "emitter paths unique"
+      (CodegenCore.Emit.Emitter.checkNodup Faults.Emit.emitters) true
   _ ← assertEq "jobs cover emitters" Faults.Emit.jobsCoverEmitters true
   _ ← assertEq "run ⊆ declared outputs"
       (Faults.Emit.jobs.all fun (e, spec) =>

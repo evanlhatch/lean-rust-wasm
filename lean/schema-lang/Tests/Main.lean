@@ -494,32 +494,41 @@ def derivesChecks : CheckResult := do
     still pass the shape pins). -/
 def genRustChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   -- the fragment gate: scalars/string/bytes/option/list generate;
-  -- tensor/result/future/stream skip
-  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [] 8 .u64 == none) "u64 supported"
-  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [] 8 (.option (.list .string)) == none)
+  -- tensor/result/future/stream skip (W8.13: `visiting` + `boxed` args —
+  -- the occurs check; these scalar calls never recurse)
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [] [] false 8 .u64 == none) "u64 supported"
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [] [] false 8 (.option (.list .string)) == none)
     "option<list<string>> supported"
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.tensor [2] .f32)).isSome)
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] [] false 8 (.tensor [2] .f32)).isSome)
     "tensor skipped"
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.result .u64 .string)).isSome)
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] [] false 8 (.result .u64 .string)).isSome)
     "result skipped"
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.future .u64)).isSome)
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] [] false 8 (.future .u64)).isSome)
     "future skipped"
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] 8 (.stream .u8)).isSome)
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [] [] false 8 (.stream .u8)).isSome)
     "stream skipped"
-  -- refs: resolvable records generate; variants/ghosts/cycles skip
+  -- refs: resolvable records generate; variants/ghosts skip
   let inner : Item := .record "inner" [{ name := "x", ty := .u64 }]
   let outer : Item := .record "outer" [{ name := "i", ty := .ty "inner" }]
   let uni := [inner, outer, demoRole]
-  _ ← assert (SchemaLang.Emit.GenRust.unsupported? uni 8 (.ty "inner") == none)
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? uni [] false 8 (.ty "inner") == none)
     "record ref supported"
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? uni 8 (.ty "role")).isSome)
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? uni [] false 8 (.ty "role")).isSome)
     "variant ref skipped"
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? uni 8 (.ty "ghost")).isSome)
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? uni [] false 8 (.ty "ghost")).isSome)
     "ghost ref skipped"
   let cycA : Item := .record "cyc-a" [{ name := "b", ty := .ty "cyc-b" }]
   let cycB : Item := .record "cyc-b" [{ name := "a", ty := .ty "cyc-a" }]
-  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [cycA, cycB] 8 (.ty "cyc-a")).isSome)
-    "ref cycle skipped (fuel-bounded)"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [cycA, cycB] [] false 8 (.ty "cyc-a")).isSome)
+    "INLINE ref cycle skipped (W8.13: infinite-size Rust type; the WF gate bans it)"
+  -- W8.13: a cycle BEHIND `list` (the boxed position) is supported —
+  -- the depth budget terminates the generated recursion
+  let tree : Item := .record "tree"
+    [{ name := "value", ty := .u64 }, { name := "children", ty := .list (.ty "tree") }]
+  _ ← assert (SchemaLang.Emit.GenRust.unsupported? [tree] ["tree"] true 8 (.ty "tree") == none)
+    "boxed ref cycle supported (the depth budget terminates)"
+  _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [tree] ["tree"] false 8 (.ty "tree")).isSome)
+    "the same cycle inline is skipped"
   -- the skip is LOUD: a comment names the record, the field, the reason
   let tensored : Item := .record "tensored" [{ name := "t", ty := .tensor [2] .f32 }]
   let skipOut := CodegenCore.Emit.Rust.renderModule
@@ -4640,9 +4649,9 @@ def mapSetChecks : CheckResult := do
   _ ← assert (universeCheck mapSetUniverse == [])
     "universeCheck is clean over map/set fields"
   -- the secondary emitters' deliberate arms:
-  _ ← assert (Emit.GenRust.unsupported? [] 8 scoresTy).isSome
+  _ ← assert ((Emit.GenRust.unsupported? [] [] false 8 scoresTy).isSome)
     "genRust: maps gated out of the v1 fragment (loud, named)"
-  _ ← assert (Emit.GenRust.unsupported? [] 8 tagsTy).isSome
+  _ ← assert ((Emit.GenRust.unsupported? [] [] false 8 tagsTy).isSome)
     "genRust: sets gated out of the v1 fragment (loud, named)"
   _ ← assert (litTy? scoresTy).isNone
     "delta: no self-contained map literal (the tensor rule)"
@@ -6167,6 +6176,559 @@ schema_entity_machine dupTr for Ticket := status : TicketState
   initial: new
   transition: assign (new → triaged)
   transition: assign (triaged → closed)
+/-! ## W8.13 — recursive types + monomorphized parameterized types
+
+The runbook's default: recursion is legal BEHIND `list` (the boxed
+position — `InlineAcyclic`, the universe gate + GenRust's occurs-check
+mirror); parameterized types land by MONOMORPHIZATION (`schema_mono` —
+the registry sees only concrete items; `Ty` is untouched, so the
+snapshot grammar, the emitters' Ty-matches, and the 27-artifact
+byte-tie are unchanged BY CONSTRUCTION). All fixtures here are
+SYNTHETIC — the demo spec does not change, no artifact moves.
+-/
+
+namespace W813Sweep
+
+/-! ### The recursive fixture: a tree record (synthetic universe) -/
+
+/-- The recursive record: `tree { value: u64, children: list<tree> }`.
+    The cycle passes `list` — the boxed position. -/
+def treeItem : Item :=
+  .record "tree"
+    [{ name := "value", ty := .u64 }
+    , { name := "children", ty := .list (.ty "tree") }]
+
+/-- A forest referencing the tree (the consumer record). -/
+def forestItem : Item :=
+  .record "forest" [{ name := "trees", ty := .list (.ty "tree") }]
+
+/-- The recursive synthetic universe. -/
+def recUniverse : List Item := [treeItem, forestItem]
+
+/-- The reasoning authority ADMITS the recursive universe (a stub
+    would not elaborate — the Wf bridge's non-vacuity). -/
+example : WellFormed recUniverse := universeCheck_sound rfl
+
+/-- The tree's field list. -/
+def treeFields : List Field :=
+  [{ name := "value", ty := .u64 }, { name := "children", ty := .list (.ty "tree") }]
+
+/-- The empty-children tree value (the recursion's base — a NONEMPTY
+    child list is UNREPRESENTABLE: `Value` has no `.ty` constructor,
+    the codec lane's documented exclusion). -/
+def emptyChildren : Value (.list (.ty "tree")) := .list .nil
+
+/-! ### The per-emitter table (each target's recursive rendering) -/
+
+def w813Checks : CheckResult := do
+  -- WF: the recursive universe checks CLEAN (recursion itself accepted)
+  _ ← assertEq "recursive universe clean" (universeCheck recUniverse) []
+  _ ← assert (universeWellFormed recUniverse) "recursive universe well formed"
+  -- Rust: the cycle renders through `Vec` (finite-size — honest)
+  _ ← assertEq "rust: boxed cycle renders Vec<Tree>"
+    (SchemaLang.Emit.Rust.tyRust (.list (.ty "tree"))) "Vec<Tree>"
+  let rustOut := CodegenCore.Emit.Rust.renderModule
+    (SchemaLang.Emit.Rust.schemaItems recUniverse)
+  _ ← assert (rustOut.contains "pub struct Tree") "rust: tree struct emitted"
+  _ ← assert (rustOut.contains "children : Vec<Tree>") "rust: the boxed cycle field"
+  -- (the conservative fold gives the recursive record NO `Eq` derive —
+  -- the floatRefs verdict at fuel exhaustion is float-CONTAINING; the
+  -- same conservatism unresolvable refs always had)
+  -- WIT: `list<tree>` (the heap form — the canonical ABI's shape; the
+  -- ref renders by name)
+  _ ← assertEq "wit: boxed cycle renders list<tree>"
+    (SchemaLang.Emit.Wit.tyWit (.list (.ty "tree"))) "list<tree>"
+  _ ← assert ((SchemaLang.Emit.Wit.typeDecl treeItem).pretty.contains "list<tree>")
+    "wit: tree record renders the recursive ref"
+  -- gen-rust: the occurs check ADMITS the boxed cycle (the depth
+  -- budget terminates the generated recursion — forced leaf at 0)
+  let genOut := CodegenCore.Emit.Rust.renderModule
+    (SchemaLang.Emit.GenRust.genRustItems recUniverse)
+  _ ← assert (genOut.contains "pub fn gen_tree(") "gen: recursive record gets a gen fn"
+  _ ← assert (genOut.contains "gen_tree(u, d.saturating_sub(1))?")
+    "gen: the recursive ref spends the depth budget"
+  -- Vortex: the fuel-indexed semantics EXCLUDES the recursive record
+  -- (a recursive STRUCT dtype is an infinite type — the lane's
+  -- documented exclusion; the fuel exhausts → `none` → skipped)
+  _ ← assert ((SchemaLang.Vortex.Emit.recordDTypes recUniverse 8) == [])
+    "vortex: recursive record skipped from the dtype table"
+  _ ← assert ((SchemaLang.Vortex.Emit.refSem recUniverse 8 "tree").isNone)
+    "vortex: the ref cycle exhausts the fuel"
+  -- delta: the empty-children tree HAS a self-contained literal (the
+  -- recursion's base value carries the patch-roundtrip test)
+  _ ← assert ((Item.changeTestItems treeItem).any fun it =>
+      match it with
+      | .fn _ body => body.contains "children : vec![]"
+      | _ => false)
+    "delta: the empty-children literal renders in the patch test"
+  -- snapshot: the recursive Ty round-trips the committed format (the
+  -- grammar is UNCHANGED — `ty(...)` refs were already first-class)
+  match Snapshot.parse (Snapshot.render recUniverse) with
+  | .ok its => _ ← assert (its == recUniverse) "snapshot: recursive universe round trip"
+  | .error e => _ ← assert false s!"snapshot round trip failed: {e}"
+  _ ← assert (Snapshot.namesEncodable recUniverse)
+    "snapshot: recursive names encodable"
+  -- codec + RowVals: the tree ROW exists (all-default = empty children)
+  -- and round-trips the ROW codec
+  _ ← assert ((defaultRow? treeFields).isSome)
+    "RowVals: the recursive record's default row"
+  match defaultRow? treeFields with
+  | some row =>
+      let wire := encRowVals treeFields row
+      _ ← assert (match decRowVals? treeFields wire with
+        | some (row', []) => encRowVals treeFields row' == wire | _ => false)
+        "RowVals: the empty-children tree row round-trips the wire"
+  | none => _ ← assert false "RowVals: default row missing"
+  -- codec: the children FIELD's value round-trips
+  _ ← assert (match decodeValue (.list (.ty "tree"))
+        (encodeValue (.list (.ty "tree")) emptyChildren) with
+      | some v => SchemaLang.valueEq (.list (.ty "tree")) v emptyChildren
+      | none => false)
+    "codec: the empty-children value round-trips"
+
+/-! ### The discipline's negative controls (the occurs violations) -/
+
+/-- The INLINE self-cycle: `a { me: a }` — an infinite-size Rust type. -/
+def inlineSelfCycle : List Item :=
+  [.record "a" [{ name := "me", ty := .ty "a" }]]
+
+/-- The INLINE cycle is real at the RELATION level (not just a checker
+    artifact — the relation marks it too; the non-vacuity control for
+    `InlineCycle`). -/
+theorem inlineSelfCycle_cycle : InlineCycle inlineSelfCycle "a" :=
+  ⟨List.mem_cons_self, .refl⟩
+
+-- The checker FLAGS it, exactly one diagnostic.
+#guard universeCheck inlineSelfCycle == [.inlineCycle "a"]
+
+/-- The relation-vs-checker bridge on the negative: the flagged
+    universe is NOT inline-acyclic (the relation marks what the checker
+    reports — the iff bridge's shared fuel bound). -/
+example : ¬ InlineAcyclic inlineSelfCycle :=
+  fun hacy => hacy "a"
+    (by simp [Item.typeNames, inlineSelfCycle]) inlineSelfCycle_cycle
+
+-- The mutual inline cycle: BOTH participants flagged.
+#guard universeCheck [.record "x" [{ name := "y", ty := .ty "y" }],
+      .record "y" [{ name := "x", ty := .ty "x" }]]
+  == [.inlineCycle "x", .inlineCycle "y"]
+
+-- `option` is an INLINE position — the cycle through it is banned
+-- (an `Option<Tree>` field embeds its payload: infinite size).
+#guard universeCheck [.record "b" [{ name := "child", ty := .option (.ty "b") }]]
+  == [.inlineCycle "b"]
+
+-- The boxed position SAVES the same shape: behind `list`, clean.
+#guard universeCheck [.record "b" [{ name := "child", ty := .list (.ty "b") }]] == []
+
+/-! ### Monomorphized parameterized types (W8.12's `schema_mono`)
+
+`Page<T>`-style types WITHOUT opening `Ty`: the template is a plain
+Lean parameterized structure (NEVER registered); each concrete
+instantiation registers a CONCRETE record item. -/
+
+/-- The parameterized template — NOT registered (the registry sees
+    only concrete instances). -/
+structure Pair (α : Type) (β : Type) where
+  fst : α
+  snd : β
+
+-- TWO instantiations of the same template: two concrete records.
+schema_mono PairStringU64 := Pair String UInt64
+schema_mono PairU64Bool := Pair UInt64 Bool
+
+-- the instantiation composes with ordinary reflection: the reifier's
+-- zero-const arm resolves the emitted abbrev as a `.ty` ref
+@[schema]
+structure PairHolder where
+  inner : PairStringU64
+
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  let items := SchemaLang.Meta.registeredItems env
+  let get (n : Name) : CommandElabM SchemaLang.Item :=
+    match items.find? (fun (ln, _) => ln == n) with
+    | some (_, it) => pure it
+    | none => throwError s!"{n}: not registered"
+  -- each instantiation is a CONCRETE record (the fields reified through
+  -- the same boundary fragment `@[schema]` uses)
+  let a ← get ``W813Sweep.PairStringU64
+  unless a == .record "PairStringU64"
+      [{ name := "fst", ty := .string }, { name := "snd", ty := .u64 }] do
+    throwError s!"PairStringU64: wrong registration: {repr a}"
+  let b ← get ``W813Sweep.PairU64Bool
+  unless b == .record "PairU64Bool"
+      [{ name := "fst", ty := .u64 }, { name := "snd", ty := .bool }] do
+    throwError s!"PairU64Bool: wrong registration: {repr b}"
+  -- the TEMPLATE leaked NO item (monomorphization, not generics)
+  unless !items.any (fun (ln, _) => ln == `Pair) do
+    throwError "the template `Pair` leaked into the registry"
+  -- the mono items ride the SAME gates (the universe check, with
+  -- W8.13's inline-cycle scan, is clean over them)
+  match SchemaLang.Meta.tyOfExpr? env (.const ``W813Sweep.PairStringU64 []) with
+  | some (.ty "PairStringU64") => pure ()
+  | other => throwError s!"the abbrev does not reify as a ref: {repr other}"
+  unless SchemaLang.universeCheck [a, b] == [] do
+    throwError "the mono instantiations are not well formed"
+  -- the mono items round-trip the SNAPSHOT (ordinary records — the
+  -- format and hostgen.rs are untouched: additive by construction)
+  match SchemaLang.Snapshot.parse (SchemaLang.Snapshot.render [a, b]) with
+  | .ok its => unless its == [a, b] do throwError "mono snapshot round trip drift"
+  | .error e => throwError s!"mono snapshot round trip failed: {e}"
+  -- the emitters see concrete records (the per-emitter table's mono row)
+  let rustOut := CodegenCore.Emit.Rust.renderModule
+    (SchemaLang.Emit.Rust.schemaItems [a, b])
+  unless rustOut.contains "pub struct PairStringU64" do
+    throwError "mono rust: PairStringU64 struct missing"
+  unless rustOut.contains "pub struct PairU64Bool" do
+    throwError "mono rust: PairU64Bool struct missing"
+  let witOut := (SchemaLang.Emit.Wit.typeDecl a).pretty
+  unless witOut.contains "record pair-string-u64" && witOut.contains "fst: string" do
+    throwError s!"mono wit: wrong typeDecl: {witOut}"
+
+-- negative controls: the mono lane's rejections, as ELABORATION errors
+
+/-- error: schema_mono `PairBad`: `UInt64` expects 0 type argument(s), got 1 -/
+#guard_msgs in
+schema_mono PairBad := UInt64 UInt64
+
+/-- error: schema_mono `PairBad2`: `W813Sweep.Pair` expects 2 type argument(s), got 1 -/
+#guard_msgs in
+schema_mono PairBad2 := Pair String
+
+/-- error: schema_mono `PairStringU64`: duplicate name `PairStringU64` — names must be unique -/
+#guard_msgs in
+schema_mono PairStringU64 := Pair String UInt64
+
+end W813Sweep
+
+/-! ## W8.11/W8.12 ranged refinements — `u32 0..100` as metadata over Ty
+
+Canon row: floored stock / budget / quota = a canonically-ordered value
+with monus (nonneg BY CONSTRUCTION). The order's surface: a numeric
+type + an inclusive `lo..hi`; NO new `Ty` ctor (the refinement is
+METADATA over an existing scalar — WIT/Rust/snapshot render the base
+type unchanged, byte-tie by construction). Discharge ladder (the
+order's default — NOT a dependent pair): spec construction gate
+(`Range.mk?`, BOTH directions pinned), decidableNow obligation (the
+W7.1p2 backend — `decide` discharges; the word lane restates the claim
+over BitVec for `bv_decide`, the bridge proved), and the boundary: the
+constraint lowers to the EXISTING VExpr fragment and renders through
+the SHARED Emit.Expr lowering (no new emitter machinery). Negative
+controls: out-of-range refusals at BOTH bounds, the over-wide
+u64-projection refusal, the monus floor's non-preservation (a positive
+floor is NOT closed under monus — the law's hypothesis carries real
+weight), and the misspelled-field elaboration gate.
+-/
+
+namespace RefineSweep
+
+/-- The fixture: `stock : u32 0..100` (the canon row's floored stock). -/
+def stockRange : Range := ⟨.u32, 0, 100⟩
+
+def refineChecks : CheckResult := do
+  -- the construction gate: in-range passes, endpoints INCLUDED
+  -- (inclusive bounds are the surface's contract). The pin projects
+  -- the acceptance through `inRange` (Value is a GADT — no BEq): an
+  -- accepted value is SOME value, and it is in-range; that it is the
+  -- VERY value passed in is the module's `inRange_of_mk?_some` + the
+  -- def's shape (`some v`, not a repaired one)
+  _ ← assertEq "mk?: the zero floor passes"
+    (Option.map stockRange.inRange (stockRange.mk? (Value.u32 0))) (some true)
+  _ ← assertEq "mk?: the mid value passes"
+    (Option.map stockRange.inRange (stockRange.mk? (Value.u32 50))) (some true)
+  _ ← assertEq "mk?: the ceiling passes"
+    (Option.map stockRange.inRange (stockRange.mk? (Value.u32 100))) (some true)
+  -- the construction gate: out-of-range refuses (BOTH directions —
+  -- the pinned pair; a gate that only checked one side would be a
+  -- half-open lie)
+  _ ← assert (!(stockRange.mk? (Value.u32 150)).isSome)
+    "mk?: over the ceiling refuses"
+  _ ← assert (!(stockRange.mk? (Value.u32 101)).isSome)
+    "mk?: ceiling+1 refuses"
+  -- signed base: BOTH sides of the bounds refuse
+  let win : Range := ⟨.i32, -5, 5⟩
+  _ ← assertEq "mk?: signed mid passes"
+    (Option.map win.inRange (win.mk? (Value.i32 (-3)))) (some true)
+  _ ← assert (!(win.mk? (Value.i32 (-6))).isSome) "mk?: signed below refuses"
+  _ ← assert (!(win.mk? (Value.i32 6)).isSome) "mk?: signed above refuses"
+  -- non-numeric base: no projection, the check refuses (it never
+  -- passes what it cannot read)
+  _ ← assert (!((⟨.string, 0, 3⟩ : Range).mk? (Value.string "abc")).isSome)
+    "mk?: a string base refuses"
+  -- the obligation view: decidableNow tier (the W7.1p2 backend)
+  let ok : RangeCheck := { name := "stock", r := stockRange
+                         , v := Value.u32 50 }
+  let bad : RangeCheck := { name := "stock", r := stockRange
+                          , v := Value.u32 150 }
+  _ ← assertEq "obligation: the tier" ok.obligation.tier .decidableNow
+  _ ← assertEq "discharge: in-range fires" ok.discharge (some (.decided true))
+  _ ← assertEq "discharge: out-of-range refuses (the loud gap)"
+    bad.discharge none
+  -- the word lane: the claim restated over BitVec — fires in range,
+  -- refuses out (the concrete pins of the bv_decide-backed backend)
+  _ ← assert (decide (Range.wordClaim32 100 50))
+    "word lane: 50 within 100"
+  _ ← assert (!(decide (Range.wordClaim32 100 150)))
+    "word lane: 150 NOT within 100 (the backend distinguishes)"
+  -- the validator lane: the range lowers to the EXISTING VExpr
+  -- fragment; the bounds' u64 projection is LOUD about what it cannot
+  -- state
+  _ ← assert ((⟨.u64, 0, 100⟩ : Range).vexpr?
+      (s := [{ name := "stock", ty := .u64 }]) "stock").isSome
+    "vexpr?: the u64-expressible range lowers"
+  _ ← assert ((⟨.u64, -1, 100⟩ : Range).vexpr?
+      (s := [{ name := "stock", ty := .u64 }]) "stock").isSome
+    "vexpr?: a negative floor is vacuous-on-u64, still expressible"
+  _ ← assert (!((⟨.u64, 0, -5⟩ : Range).vexpr?
+      (s := [{ name := "stock", ty := .u64 }]) "stock").isSome)
+    "vexpr?: a negative ceiling refuses LOUD (no clamped lie)"
+  _ ← assert (!((⟨.u64, 0, 2^70⟩ : Range).vexpr?
+      (s := [{ name := "stock", ty := .u64 }]) "stock").isSome)
+    "vexpr?: an over-wide ceiling refuses LOUD (no clamped lie)"
+  -- the boundary, executed: the emitted-shape check accepts in range
+  -- and refuses out (BOTH directions, endpoints pinned)
+  let ve : VExpr [{ name := "stock", ty := .u64 }] .bool :=
+    Range.vexprU64 0 100 "stock"
+  _ ← assertEq "validator: mid passes"
+    (validates ve (RowVals.cons (Value.u64 50) .nil)) true
+  _ ← assertEq "validator: the floor passes"
+    (validates ve (RowVals.cons (Value.u64 0) .nil)) true
+  _ ← assertEq "validator: the ceiling passes"
+    (validates ve (RowVals.cons (Value.u64 100) .nil)) true
+  _ ← assertEq "validator: over the ceiling refuses"
+    (validates ve (RowVals.cons (Value.u64 150) .nil)) false
+  _ ← assertEq "validator: ceiling+1 refuses"
+    (validates ve (RowVals.cons (Value.u64 101) .nil)) false
+  -- the emitter story: the constraint renders through the SHARED
+  -- Emit.Expr lowering at the vexprLang instance — the SAME text shape
+  -- the invariant lane emits, byte-pinned (no new emitter machinery;
+  -- the base type's rendering is untouched — byte-tie by construction)
+  _ ← assertEq "emitter: the range check's Rust text (byte-pin)"
+    (SchemaLang.Emit.Expr.boolRustI (vexprLang [{ name := "stock", ty := .u64 }])
+      SchemaLang.Emit.Update.refOf ve)
+    "((!((0u64 > r.stock))) && (!((r.stock > 100u64))))"
+  -- the monus tie: saturation witness + the closure law executed
+  _ ← assertEq "monus: 5 ⊖ 9 saturates to 0 (no wrap)" (Range.monusU64 5 9) 0
+  _ ← assertEq "monus: 100 ⊖ 40 = 60" (Range.monusU64 100 40) 60
+  _ ← assert ((⟨.u64, 0, 100⟩ : Range).inRange
+      (Value.u64 (Range.monusU64 100 40)))
+    "monus closure: a spend from an in-range floored stock stays in range"
+  -- NEGATIVE CONTROL: the closure law's hypothesis is load-bearing —
+  -- a POSITIVE floor is NOT preserved (monus escapes through the
+  -- floor it does not guard)
+  _ ← assert (!(decide ((⟨.u64, 50, 100⟩ : Range).inRange
+      (Value.u64 (Range.monusU64 100 90)))))
+    "negative control: monus does NOT preserve a positive floor"
+
+/-- error: failed to synthesize instance of type class
+  HasCol [{ name := "stock", ty := Ty.u64 }] "stok" Ty.u64
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command. -/
+#guard_msgs in
+example : VExpr [{ name := "stock", ty := .u64 }] .bool :=
+  Range.vexprU64 0 100 "stok"
+
+end RefineSweep
+
+
+/-! ## W8.9 salvage — pre/postconditions as obligations (SchemaLang.PrePost)
+
+OWNERSHIP: the W8.9 salvage section (the cancelled agent's module,
+finished + wired into the root). This section only; every other
+section above is owned by its own work order.
+
+The fixture: the `touch-email` contract on the two-field record —
+pre = post = `age > 0`, body = an email-only write. BOTH boundary
+directions are pinned (a pre-satisfying row is ACCEPTED, a pre-failing
+row is refused LOUDLY — the verdict names the contract), plus the
+two-obligation enumeration, the computed tiers, the discharges, and
+the negative control: a post the decidableNow backend REFUSES (`none`
+— the loud gap, never fabricated evidence).
+-/
+
+namespace PrePostSweep
+
+/-- The fixture schema (abbrev — the reducibility rule). -/
+abbrev ppFields : List Field := [⟨"email", .string⟩, ⟨"age", .u64⟩]
+
+/-- A fixture row. -/
+def ppRow (e : String) (a : UInt64) : RowVals ppFields :=
+  .cons (.string e) (.cons (.u64 a) .nil)
+
+/-- THE FIXTURE CONTRACT: pre = post = `age > 0`, uncited post (the
+    decidableNow rung computes its tier). -/
+def ppContract : FnContract ppFields :=
+  { name := "touch-email"
+  , pre := .gt (.colOf "age") (.lit 0)
+  , post := .gt (.colOf "age") (.lit 0) }
+
+/-- The body: an email-only write (the header's preservation story —
+    the body writes NONE of the post's columns). -/
+def ppBody : Update2Item ppFields :=
+  { name := "touch", record := "PpEntry", guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"email", .string⟩, path := .here
+             , value := .colOf "email" }] }
+
+/-- The contract ATTACHED to the body — the governed op. -/
+def ppOp : ContractOp ppFields := { contract := ppContract, body := ppBody }
+
+/-- The CITED variant (the proved rung's fixture): same contract, the
+    post's correctness theorem named. -/
+def ppOpCited : ContractOp ppFields :=
+  { ppOp with contract := { ppOp.contract with postProof? := some `ppPostHolds } }
+
+/-- The NEGATIVE CONTROL's contract: the pre is constant-true (admits
+    the default row), the post reads `age > 0` — FALSE on the default
+    row's result (age stays 0). The backend must refuse. -/
+def ppBadContract : FnContract ppFields :=
+  { name := "bad-post"
+  , pre := .gt (.lit 1) (.lit 0)
+  , post := .gt (.colOf "age") (.lit 0) }
+
+def ppBadOp : ContractOp ppFields :=
+  { contract := ppBadContract, body := ppBody }
+
+def prePostChecks : CheckResult := do
+  -- the caller's boundary, ACCEPT direction: a pre-satisfying row
+  -- proceeds to the body (one kept result row)
+  _ ← assertEq "pre-satisfying row ACCEPTED" (ppOp.run (ppRow "a@b" 5)).isAccepted true
+  _ ← assertEq "accepted: one result row"
+    ((ppOp.run (ppRow "a@b" 5)).rows?.getD []).length 1
+  _ ← assertEq "accepted: no refusal" (ppOp.run (ppRow "a@b" 5)).refusal? none
+  -- the caller's boundary, REFUSE direction: a pre-failing row is
+  -- refused LOUDLY — the verdict NAMES the contract
+  _ ← assertEq "pre-failing row REFUSED" (ppOp.run (ppRow "a@b" 0)).isAccepted false
+  _ ← assertEq "refusal NAMES the contract"
+    (ppOp.run (ppRow "a@b" 0)).refusal? (some "touch-email")
+  _ ← assertEq "refused: no rows"
+    ((ppOp.run (ppRow "a@b" 0)).rows?.getD []).length 0
+  -- the obligation ENUMERATION: exactly two — the pre (caller's tier)
+  -- and the post (function's tier), labels side-tagged
+  _ ← assertEq "two obligations: the pre + the post" ppOp.obligations.length 2
+  _ ← assertEq "labels side-tagged"
+    (ppOp.obligations.map (·.label)) ["touch-email-pre", "touch-email-post"]
+  _ ← assertEq "pre tier: the CALLER's boundary rung"
+    ppOp.obligations[0].tier .generatedCheck
+  _ ← assertEq "post tier: computed, uncited → decidableNow"
+    ppOp.obligations[1].tier .decidableNow
+  -- the DISCHARGES: the pre's evidence is the boundary check itself;
+  -- the uncited post fires the kernel's decide (the default row's pre
+  -- fails → vacuous → TRUE — the backend FIRES on true claims)
+  _ ← assertEq "pre discharge: the boundary check evidence"
+    (ppOp.obligations[0].discharge).isSome true
+  _ ← assertEq "uncited post: decide FIRES (vacuous default row)"
+    ppOp.obligations[1].discharge (some (.decided true))
+  -- the cited post: the tier JUMPS to the proved rung, the discharge
+  -- IS the citation
+  _ ← assertEq "cited post tier: provedAtElab"
+    ppOpCited.obligations[1].tier .provedAtElab
+  _ ← assertEq "cited post discharge: the citation"
+    ppOpCited.obligations[1].discharge (some (.citedProof `ppPostHolds))
+  -- NEGATIVE CONTROL: the false post — the backend REFUSES (`none`,
+  -- the loud gap). Non-vacuity: the SAME shape fired `.decided true`
+  -- above; only the claim's truth differs.
+  _ ← assertEq "false post: the backend REFUSES"
+    (ppBadOp.obligations[1].discharge).isSome false
+  .ok ()
+
+end PrePostSweep
+
+/-! ## WIT lossless fragment (Route A): the fragment, the law, the
+    Demo discharge, the negative controls
+
+The WIT emitter is lossy (four audited corners — see
+`SchemaLang/Emit/Wit.lean`'s section header); the lossless FRAGMENT is
+the types whose rendering determines them. The Demo universe is
+fragment-clean → the obligation fires → the law holds for the demo
+universe. The controls: a tensor-carrying universe REFUSES (the lossy
+note as data, not silence), and the collision witness — two types that
+DO collide in the WIT surface, kernel-checked `rfl` — the proof the
+check matters. -/
+
+namespace WitLosslessSweep
+
+open SchemaLang.Emit.Wit
+
+/-- The fixture universes (the item-algebra shapes, not the live
+    registry — the law is over the DATA). -/
+def tensorUniverse : List Item :=
+  [ .record "grid" [{ name := "cells", ty := .tensor [2, 3] .u8 }] ]
+
+/-- The COLLISION universe: two distinct types, ONE rendering — the
+    witness that the surface sweep matters. -/
+def collisionUniverse : List Item :=
+  [ .record "a" [{ name := "t", ty := .tensor [2, 3] .u8 }]
+  , .record "b" [{ name := "l", ty := .list .u8 }] ]
+
+/-- The fragment pins: what's in, what's out (the four audited corners
+    + the `.ty` name-condition corners). -/
+def fragmentPins : CheckResult := do
+  -- in
+  _ ← assertEq "scalar in" (Ty.witLossless Ty.u64) true
+  _ ← assertEq "option/list/string in"
+    (Ty.witLossless (.option (.list .string))) true
+  _ ← assertEq "map in" (Ty.witLossless (.map .string .u64)) true
+  _ ← assertEq "result in" (Ty.witLossless (.result .u64 .string)) true
+  _ ← assertEq "future/stream in"
+    (Ty.witLossless (.future (.stream Ty.u8))) true
+  _ ← assertEq "canonical kebab ref in" (Ty.witLossless (.ty "order-item")) true
+  -- out: the four corners
+  _ ← assertEq "tensor out (dims dropped)" (Ty.witLossless (.tensor [2, 3] Ty.u8)) false
+  _ ← assertEq "nested tensor out" (Ty.witLossless (.list (.tensor [2] Ty.u8))) false
+  _ ← assertEq "bytes out (collides list<u8>)" (Ty.witLossless Ty.bytes) false
+  _ ← assertEq "set out (collides list key)" (Ty.witLossless (.set .u8)) false
+  -- out: the .ty name-condition corners
+  _ ← assertEq "non-canonical kebab out" (Ty.witLossless (.ty "FooBar")) false
+  _ ← assertEq "scalar-atom name out" (Ty.witLossless (.ty "u8")) false
+  _ ← assertEq "angle-bracket name out" (Ty.witLossless (.ty "option<u8>")) false
+  .ok ()
+
+/-- THE COLLISION WITNESSES (kernel-checked): fragment-violating types
+    that DO collide in the WIT surface — the negative control's teeth.
+    (The `bytes` corner collides only at the BYTE level — single-node
+    vs tree, same `.pretty`; the kernel cannot reduce through `pretty`,
+    so its witness is the documented exclusion, not a theorem.) -/
+theorem wit_collision_tensor_list :
+    Emit.Wit.tyFmt (.tensor [2, 3] .u8) = Emit.Wit.tyFmt (.list .u8) := rfl
+
+theorem wit_collision_set_list :
+    Emit.Wit.tyFmt (.set .u8) = Emit.Wit.tyFmt (.list .u8) := rfl
+
+/-- The DEMO DISCHARGE: the demo universe is fragment-clean, the
+    obligation fires, and the LAW holds for it. -/
+theorem demo_witCheck : Emit.Wit.witCheck demoItems = true := by decide
+
+theorem demo_witDischarge :
+    Emit.Wit.witDischarge demoItems = some (.decided true) :=
+  Emit.Wit.witDischarge_of_check demoItems demo_witCheck
+
+theorem demo_wit_law :
+    Function.Injective
+      (fun t : {t // t ∈ Emit.Wit.universeTys demoItems} =>
+        Emit.Wit.tyFmt t.val) :=
+  Emit.Wit.witLaw demoItems demo_witCheck
+
+/-- The refused universes: the lossy note as DATA (`none`, the loud
+    gap), not silence. -/
+def refusalPins : CheckResult := do
+  _ ← assertEq "tensor universe refused"
+    (Emit.Wit.witCheck tensorUniverse) false
+  _ ← assertEq "tensor universe discharge = none (the loud gap)"
+    (Emit.Wit.witDischarge tensorUniverse) none
+  _ ← assertEq "collision universe refused"
+    (Emit.Wit.witCheck collisionUniverse) false
+  _ ← assertEq "collision surface sweep fires"
+    (Emit.Wit.surfaceOk? [.tensor [2, 3] .u8, .list .u8]) false
+  let watchSig : FuncSig :=
+    { name := "watch", params := [], ret := .list .u8, sem := { delivery := .stream } }
+  _ ← assertEq "stream-delivery list-ret func refused"
+    (Emit.Wit.funcRetOk watchSig) false
+  .ok ()
+
+end WitLosslessSweep
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let ctx ← loadDemoCtx
@@ -6231,7 +6793,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("wireCodec", wireCodecChecks)
      , ("rowGen", rowGenChecks)
      , ("docs", docsChecks)
-    , ("moduleDocs", moduleDocsChecks)
+     , ("moduleDocs", moduleDocsChecks)
      , ("diagGolden", diagGoldenChecks)
      , ("witness", WitnessSweep.witnessChecks)
      , ("witnessCheck", WitnessCheckSweep.witnessCheckChecks)
@@ -6243,10 +6805,15 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("tableInv", TableInvSweep.tableInvChecks)
      , ("update2", Update2Sweep.update2Checks)
      , ("scheduling", SchedSweep.schedChecks)
+     , ("refine", RefineSweep.refineChecks)
      , ("effects", EffectSweep.effectChecks)
      , ("breakingSweep", BreakingMetaSweep.breakingSweepChecks)
      , ("breakingSweepControl", BreakingMetaSweep.controlChecks)
      , ("entityMachine", EntityMachineSweep.entityMachineChecks)
+     , ("w813", W813Sweep.w813Checks)
+     , ("prePost", PrePostSweep.prePostChecks)
+     , ("witLossless", WitLosslessSweep.fragmentPins)
+     , ("witLosslessRefusals", WitLosslessSweep.refusalPins)
      ])
   if code != 0 then return code
   -- the property sweep WITH its mandatory negative control
@@ -6268,7 +6835,6 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- W9.1: the witness RoundTripSpec — the PropSpec bridge (sweep +
   -- mandatory byte-sabotage control) + the golden byte-tie
   WitnessSweep.witnessSpec.runIO (update := update)
-
 /-! ## Debug commands (the author's REPL) — #guard_msgs smokes
 
 The `#assertType` pattern's info-pins: each command's logged output is
@@ -6279,7 +6845,7 @@ GRACEFULNESS: if `#world gatway` ever threw, the build fails here.
 No registry side effects: the pins are deterministic replays.
 -/
 
-/-- info: registered schema items (15):
+/-- info: registered schema items (18):
   User : record user (4 fields)
   OrderItem : record order-item (3 fields)
   Order : record order (3 fields)
@@ -6294,7 +6860,10 @@ No registry side effects: the pins are deterministic replays.
   updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once — The volatile probe: a clock-reading fn (the volatilities probe
   updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once — The pure probe: same shape, default determinism — registers clean
   Upd2Entry : record upd2-entry (3 fields) — The fixture record: registered, with a DECLARED key (the v2 gates'
-  Ticket : record ticket (2 fields) -/
+  Ticket : record ticket (2 fields)
+  W813Sweep.PairStringU64 : record pair-string-u64 (2 fields)
+  W813Sweep.PairU64Bool : record pair-u64-bool (2 fields)
+  W813Sweep.PairHolder : record w813-sweep-pair-holder (1 fields) -/
 #guard_msgs in
 #schema
 
@@ -6336,6 +6905,17 @@ record upd2-entry {
 record ticket {
   id: u64,
   status: u64,
+}
+record pair-string-u64 {
+  fst: string,
+  snd: u64,
+}
+record pair-u64-bool {
+  fst: u64,
+  snd: bool,
+}
+record w813-sweep-pair-holder {
+  inner: pair-string-u64,
 }
 }
 
@@ -6394,6 +6974,17 @@ record upd2-entry {
 record ticket {
   id: u64,
   status: u64,
+}
+record pair-string-u64 {
+  fst: string,
+  snd: u64,
+}
+record pair-u64-bool {
+  fst: u64,
+  snd: bool,
+}
+record w813-sweep-pair-holder {
+  inner: pair-string-u64,
 }
 }
 
@@ -6657,3 +7248,37 @@ schema_table_invariant "bad-field" for AcctFixture := unique zz
 /-- error: schema_table_invariant `bad-sum`: field `nick` has type `SchemaLang.Ty.string` — the conservation sum reads a u64 column (v1) -/
 #guard_msgs in
 schema_table_invariant "bad-sum" for AcctFixture := sum nick = 3
+
+/-! ## dbsp-machine fusion batch — bridge 2 pin (journal = D ∘ run /
+replay = I ∘ journal — SchemaLang.EventSourced's fusion section)
+
+The theorem pins (the machine run's final state IS the journal replay;
+the journal differentiates the state stream) plus the fusion EXECUTED
+on the abstract generics, with the sabotaged-journal negative control. -/
+
+#check @SchemaLang.EventSourced.replay_of_run
+#check @SchemaLang.EventSourced.journal_differentiates
+#check @SchemaLang.EventSourced.runStates
+
+-- POSITIVE: the esMachine run's final state equals the journal replay
+#guard (match (SchemaLang.EventSourced.esMachine (fun (n : UInt64) => n)).toMachine.run [7]
+      [.insert 5, .update 9] with
+  | some (_, fin) =>
+      SchemaLang.EventSourced.replay (fun (n : UInt64) => n)
+        [.insert 5, .update 9] [7] == fin
+  | none => false)
+
+-- NEGATIVE CONTROL: drop the update from the journal — the replay no
+-- longer reaches the run's final state (replay is faithful to the log)
+#guard (match (SchemaLang.EventSourced.esMachine (fun (n : UInt64) => n)).toMachine.run [7]
+      [.insert 5, .update 9] with
+  | some (_, fin) =>
+      SchemaLang.EventSourced.replay (fun (n : UInt64) => n)
+        [.insert 5] [7] != fin
+  | none => false)
+
+-- the state stream: time 0 is the base table; each entry advances one tick
+#guard SchemaLang.EventSourced.runStates (fun (n : UInt64) => n) [7]
+    [.insert 5] 0 == [7]
+#guard SchemaLang.EventSourced.runStates (fun (n : UInt64) => n) [7]
+    [.insert 5] 1 == [7, 5]

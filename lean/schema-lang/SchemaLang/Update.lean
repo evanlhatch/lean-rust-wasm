@@ -489,8 +489,8 @@ def SomeUpdate.applyRow (u : SomeUpdate) {fs : List Field}
 /-- The tick's phases: settle (external deltas + lifecycle) → cascade
     (the updates over changed rows, to fixpoint) → resolve (the declared
     deterministic function) → commit (the journal's two artifacts). v1:
-    acyclic single-pass cascade (no SCC loops — the Dag is empty by
-    construction, single-table updates) — the STAGE DISCIPLINE is what
+    acyclic single-pass cascade (no SCC loops — the dependency graph is
+    empty by construction, single-table updates) — the STAGE DISCIPLINE is what
     the machine pins. `stale` is the state no transition produces (the
     invariant excludes it — the non-vacuity witness, OrderMachine's
     pattern). -/

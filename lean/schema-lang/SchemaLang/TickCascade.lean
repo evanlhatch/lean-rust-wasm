@@ -41,8 +41,8 @@ THEOREMS HERE are that claim's seed, at the row level:
    carries S0 exactly there).
 
 Honest scope: v1's cascade is sequential single-table; the full
-schedule-equivalence (stage-walker ≡ queue-cascade, Refine's relational
-shape) needs these laws PLUS the row-shape certification — the growth
+schedule-equivalence (stage-walker ≡ queue-cascade, relational shape)
+needs these laws PLUS the row-shape certification — the growth
 path is noted in notes/flatland-alignment.md §2.
 -/
 
@@ -157,9 +157,9 @@ theorem UpdateItem.not_mem_influence {fs : List Field} {f : Field}
     subst heq
     simp [UpdateItem.writes] at hw
 
--- the `warn.classDefReducibility` warning is silenced to say so (the
--- pointDeltaSystem precedent): the system is passed explicitly
--- (`cascadeSystem fs`), never found by instance search.
+-- the `warn.classDefReducibility` warning is silenced to say so: the
+-- system is passed explicitly (`cascadeSystem fs`), never found by
+-- instance search.
 set_option warn.classDefReducibility false in
 /-- THE INSTANCE: the row-table cascade is a delta system. Application
     IS patching (`UpdateItem.apply`); the ONE contract

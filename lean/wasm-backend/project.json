@@ -1,4 +1,4 @@
 {
   "spec-modules": ["DemoFn"],
-  "impl-modules": ["DemoFn", "GuestlangStd"]
+  "impl-modules": ["DemoFn", "GuestlangStd", "SchemaLang.WitnessCheck"]
 }

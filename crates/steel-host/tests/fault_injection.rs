@@ -21,12 +21,14 @@
 //!   - `tests/fixtures/wit_fixture_*.wit` — parsed by wit-parser at
 //!     test time (`wit_fixture_sweep.rs`).
 //!   - `tests/fixtures/wit_manifest.json` + `goldens/universe.snapshot`
-//!     — consumed ONLY by tests (the sweep / round-trip gates), never
-//!     by the runtime. The manifest gets one truncation case (the
-//!     corruption class must be detectable by its serde consumer);
-//!     the snapshot's only consumer is a test-side line parser, so a
-//!     corrupt snapshot fails that gate's own assertions — no runtime
-//!     failure mode exists to pin.
+//!     — consumed ONLY by tests (the sweep / round-trip gates) and by
+//!     `src/hostgen.rs` (W8.11: the host parses the snapshot and
+//!     validates its generated surface + types against the committed
+//!     expectation — `tests/hostgen_byte_tie.rs` pins the failure
+//!     modes: parse errors and contract skew are structured, never a
+//!     panic). The manifest gets one truncation case (the corruption
+//!     class must be detectable by its serde consumer); the snapshot's
+//!     corruption classes are pinned by hostgen's parse gate.
 //!   - the schema-skew check (`schema.rs`) — `schema_skew.rs` covers
 //!     the perturbed SURFACE; here: a TRUNCATED guest fails at load,
 //!     BEFORE the skew check can even read a surface (fail-fast order).

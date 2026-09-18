@@ -241,7 +241,7 @@ lean-lint: lean-build
 	run dbsp Dbsp Tests.Main
 	run std GuestlangStd
 	run ledger Ledger LedgerFn LedgerES
-	run feature-flags FeatureFlags FeatureFlagsFn
+	run feature-flags FeatureFlags FeatureFlagsFn Templates
 	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
 	run edgepython EdgePython Tests.Main
 
@@ -882,6 +882,10 @@ mutation-proof:
 #
 # Budgets as of 2026-09-17:
 #   SIZE: lean/wasm-backend/target/demo.component.wasm = 52524 bytes -> budget 80000 (1.5x rounded up)
+#   2026-09-18 loosened to 175000: the guest gained the witness-verification
+#   lane (W9.6: the checker + decode lane + streq/bounded-Nat lowerings are
+#   COMPILED INTO the guest now) — 115246 bytes actual. Ratchet rule stands:
+#   tighten on sight; further loosening needs a commit-message justification.
 #   PERF: double(21) median @ 20 runs = 0.044s -> budget 0.135s (3x rounded up)
 #
 budget-check:
@@ -892,7 +896,7 @@ budget-check:
 	[ -x "$WTS" ] || { echo "FAIL: wasmtime not found in PATH or nix store"; exit 1; }
 	COMP=lean/wasm-backend/target/demo.component.wasm
 	[ -f "$COMP" ] || { echo "FAIL: $COMP missing - run 'just wasm-compile'"; exit 1; }
-	SIZE_BUDGET=80000
+	SIZE_BUDGET=175000
 	PERF_BUDGET_SEC=0.135
 	fail=0
 	# SIZE check

@@ -178,6 +178,70 @@ theorem run_preserves (init : m.State) (hinit : m.Inv init)
       · rw [hqeq]; exact hs'
       · exact htr q hqtr
 
+/-! ## The transition table (the general form of the machine! `states:`
+    entourage) -/
+
+/-- The transition table computed from a step function: label-major rows
+    over `ls`, inner states in enumeration order, enabled transitions
+    only (the machine! `states:` clause's exact fold). -/
+def tableOf {S L : Type} (step : S → L → Option S)
+    (ls : List L) (ss : List S) : List (L × S × S) :=
+  ls.flatMap fun l => ss.filterMap fun s => (step s l).map fun s' => (l, s, s')
+
+/-- THE TABLE-FUNCTION LAW (the W-iso batch piece 2: finite functions
+    over an enumerated label/state space ≅ their tables — the load-bearing
+    direction): the computed table's lookup IS the step function, over the
+    enumerated states. The machine! `states:` entourage's per-machine tie
+    theorem is this lemma applied at the machine's `step?`; the
+    label-coverage check stays per-machine (`labels_complete`'s decide —
+    the compile IS the check). Stated over `DecidableEq` + decide-
+    predicates (NOT `==`/`LawfulBEq`): a derived-BEq instance and
+    `instBEqOfDecidableEq` are different operators, and Lean's
+    `instLawfulBEq` only chains to the latter. -/
+theorem tableLookup?_eq_step? {S L : Type} [DecidableEq S] [DecidableEq L]
+    (step : S → L → Option S) (ls : List L) (ss : List S)
+    (hls : ∀ l, l ∈ ls)
+    (e : L) (s : S) (hsm : s ∈ ss) :
+    Option.map (fun r : L × S × S => r.2.2)
+        (List.find? (fun r => decide (r.1 = e) && decide (r.2.1 = s))
+          (Machines.Machine.tableOf step ls ss))
+      = step s e := by
+  -- every matching row IS the (e, s, step s e) row: a row is (l₀, s₀, s')
+  -- with step s₀ l₀ = some s', and the predicate pins l₀ = e, s₀ = s.
+  have hrow : ∀ r ∈ Machines.Machine.tableOf step ls ss,
+      (decide (r.1 = e) && decide (r.2.1 = s)) = true →
+      r.1 = e ∧ r.2.1 = s ∧ step s e = some r.2.2 := by
+    intro r hr hp
+    obtain ⟨l₀, hl₀, hx⟩ := List.mem_flatMap.1 hr
+    obtain ⟨s₀, hs₀, hxeq⟩ := List.mem_filterMap.1 hx
+    cases hs : step s₀ l₀ with
+    | none => rw [hs, Option.map_none] at hxeq; simp at hxeq
+    | some s' =>
+      rw [hs, Option.map_some] at hxeq
+      have hrr : (l₀, s₀, s') = r := Option.some.inj hxeq
+      have hp' : (decide ((l₀, s₀, s').1 = e) && decide ((l₀, s₀, s').2.1 = s)) = true := by
+        rw [hrr]; exact hp
+      obtain ⟨h₁ : l₀ = e, h₂ : s₀ = s⟩ := by
+        simp only [decide_eq_true_eq, Bool.and_eq_true] at hp'
+        exact hp'
+      exact ⟨by rw [← hrr]; exact h₁, by rw [← hrr]; exact h₂,
+        by rw [← h₁, ← h₂, hs, ← hrr]⟩
+  rcases hf : (Machines.Machine.tableOf step ls ss).find?
+      (fun r => decide (r.1 = e) && decide (r.2.1 = s)) with - | c
+  · rw [hf, Option.map_none]
+    rcases hstep : step s e with - | s'
+    · rfl
+    · exfalso
+      exact List.find?_eq_none.mp hf (e, s, s')
+        (List.mem_flatMap.2 ⟨e, hls e, List.mem_filterMap.2 ⟨s, hsm,
+          by rw [hstep, Option.map_some]⟩⟩)
+        (by simp)
+  · rw [hf, Option.map_some]
+    have hpred := List.find?_some hf
+    have hcmem := List.mem_of_find?_eq_some hf
+    obtain ⟨hc₁, hc₂, hc₃⟩ := hrow c hcmem hpred
+    rw [hc₃]
+
 end Machine
 
 end Machines

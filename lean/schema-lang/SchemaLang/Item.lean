@@ -189,6 +189,27 @@ def Ty.tyRefs : Ty → List String
   | .ty n => [n]
   | _ => []
 
+/-- The INLINE (non-boxed) ref edges of a type (W8.13's discipline):
+    names referenced NOT behind `list`. `list` is THE boxed position —
+    Rust `Vec<T>` holds a pointer, so a ref cycle passing `list` is a
+    finite-size type (WIT `list<T>` likewise; the canonical ABI handles
+    the heap form); `option`/`result`/direct fields/tensor/map VALUES
+    embed their payload inline, so a cycle through them is an
+    infinite-size Rust type. The map/set KEY is a `KeyTy` scalar: no
+    refs. The fuel-indexed SEMANTICS never needed acyclicity (`refSem`
+    precedent) — the inline gate guards the TARGET RENDERINGS only. -/
+def Ty.inlineRefs : Ty → List String
+  | .option a => a.inlineRefs
+  | .result ok err => ok.inlineRefs ++ err.inlineRefs
+  | .list _ => []                -- the boxed position: recursion allowed
+  | .map _ v => v.inlineRefs
+  | .set _ => []
+  | .future a => a.inlineRefs
+  | .stream a => a.inlineRefs
+  | .tensor _ a => a.inlineRefs
+  | .ty n => [n]
+  | _ => []
+
 /-! ## Well-formedness — resolution over the universe, with designed errors
 
 The universe check returns STRUCTURED diagnostics (TOOLKIT §11.1: errors
@@ -225,6 +246,10 @@ inductive SchemaDiag where
   | foreignTargetKeyless (record field target : String)
   | foreignTypeMismatch (record field target got want : String)
   | dupKeyDecl (record : String)
+  -- the W8.13 recursive-type lane: an INLINE ref cycle (every cycle
+  -- must pass `list` — the boxed position; option/result/direct
+  -- fields/tensor/map VALUES embed their payload inline)
+  | inlineCycle (name : String)
 deriving Repr, BEq, Inhabited
 
 /-! ## Reserved words — the identifier gate (elab-time, via the
@@ -342,6 +367,12 @@ def render : SchemaDiag → String
         ++ "the foreign key field's type must BE the target's key type"
   | .dupKeyDecl record =>
       s!"duplicate key declaration for `{record}` — one declaration per record"
+  | .inlineCycle n =>
+      s!"`{n}`: inline type cycle — a recursive reference must sit behind "
+        ++ "`list` (the boxed position: Rust `Vec` is a pointer container, so "
+        ++ "the cycle is a finite-size type); `option`/`result`/direct "
+        ++ "fields/tensor/map values embed their payload inline — such a "
+        ++ "cycle is an infinite-size Rust type (W8.13)"
 
 end SchemaDiag
 
@@ -401,13 +432,48 @@ def Item.check (known : List String) : Item → List SchemaDiag
       (s.params.flatMap fun (_, t) => t.check known) ++ s.ret.check known
   | .resource _ => []
 
+/-- The inline-ref adjacency of a universe: the type item named `n`'s
+    non-boxed ref targets (`[]` when `n` is not a type item — funcs and
+    resources are not cycle vertices: their refs terminate). -/
+def inlineSucc (items : List Item) (n : String) : List String :=
+  match items.find? (fun it => it.name == n) with
+  | some (.record _ fields) => fields.flatMap fun f => f.ty.inlineRefs
+  | some (.variant _ cases) =>
+      (cases.filterMap (·.2)).flatMap fun t => t.inlineRefs
+  | _ => []
+
+/-- Is `root` reachable from `m` in ≤ `fuel` inline-ref steps? The
+    `inlineCycleDiags` worker: fuel `0` admits only the zero-step path
+    (`m = root`); step `k + 1` admits the refl path plus one edge and
+    ≤ `k` more steps. The Wf relation `InlinePathB` mirrors this
+    shape exactly, so the bridge is a direct induction. -/
+def inlineReaches? (items : List Item) (root : String) :
+    Nat → String → Bool
+  | 0, m => m == root
+  | k + 1, m =>
+      m == root || (inlineSucc items m).any (inlineReaches? items root k)
+
+/-- The W8.13 cycle scan: one diagnostic per type item reachable from
+    itself through INLINE refs (direct self-embedding, mutual inline
+    cycles — including the one-edge self-loop). Recursion behind `list`
+    never fires: `Ty.inlineRefs` prunes the boxed position. Fuel
+    `items.length + 1` — the Wf relation `InlineCycle` quantifies at
+    the SAME bound, so the bridge needs no pumping argument (a cycle
+    whose simple witness exceeds the vertex count repeats a vertex,
+    hence contains a shorter cycle; the bound-uniform statement is the
+    proved form, the unbounded reading is the informal bridge). -/
+def inlineCycleDiags (items : List Item) : List SchemaDiag :=
+  (Item.typeNames items).filterMap fun n =>
+    if (inlineSucc items n).any (inlineReaches? items n (items.length + 1))
+    then some (SchemaDiag.inlineCycle n) else none
+
 /-- The universe check: ALL diagnostics. Empty list = well formed. -/
 def universeCheck (items : List Item) : List SchemaDiag :=
   let known := Item.typeNames items
   let ns := items.map Item.name
   let dupNames := ns.filter (fun n => ns.countP (· == n) > 1)
   let dupDiags := dupNames.eraseDups.map SchemaDiag.dupName
-  items.flatMap (Item.check known) ++ dupDiags
+  items.flatMap (Item.check known) ++ dupDiags ++ inlineCycleDiags items
 
 /-! ## The Bool projection (derived from the diagnostic authority) -/
 

@@ -1,0 +1,28 @@
+record User
+field id u64
+field name string
+field email string
+field tags list(string)
+record OrderItem
+field id u64
+field qty u64
+field price f64
+record Order
+field id u64
+field items list(ty(OrderItem))
+field total f64
+variant Role
+case admin
+case editor
+case viewer
+variant OrderError
+case emptyCart
+case invalidItem u64
+case insufficientFunds f64
+func getUser
+param id u64
+ret option(ty(User))
+func watchOrders
+param into ty(OrderError)
+ret future(list(ty(User)))
+resource Db

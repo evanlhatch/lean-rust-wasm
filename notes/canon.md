@@ -38,7 +38,7 @@ Z-sets).
 | tick | = | Mealy machine (cascade = combinational settle) | machine theory (Part 2) |
 | order-freedom | = | confluence | `batch_order_irrelevant` (direct ZSet-fold proof, Dbsp/Replicas.lean); confluence-via-cslib (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
 | refinement / conformance | = | simulation (trace inclusion) | the oracle conformance machinery (`CompareMode`/`Verdict`, wasm-backend/Oracle.lean); simulation-via-cslib `IsSimulation`/`sim_trace` (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
-| observational equivalence | = | bisimulation | cslib `IsBisimulation` |
+| observational equivalence | = | bisimulation | cslib `IsBisimulation` (not wired — dropped 2026-09-16; re-add when a consumer order exists); `Machines.Fusion.bisim_iff_resp_streams` (the stream-equality statement — deterministic finite case) is the current carrier |
 | conservation law | = | linear equality over stocks | `linarith` discharge |
 | floored stock / budget / quota | = | a canonically-ordered value with monus (nonneg BY CONSTRUCTION) | the monus lemma set |
 | tech tree / schedule / dependency graph | = | DAG = partial order (dangling edges unrepresentable: `Dag n` is Fin-indexed) | acyclicity by `decide`; reachability = a fixpoint |
@@ -52,14 +52,14 @@ Z-sets).
 | Shape | IS | Laws / artifacts you inherit |
 |---|---|---|
 | guarded state machine | = | `Machines.Machine` — two projections, agreement by construction (`tr_iff_step?`) |
-| a machine's legal sequences | = | a regular language (entity machine = DFA; legality check = membership) | cslib automata/MyhillNerode when needed |
+| a machine's legal sequences | = | a regular language (entity machine = DFA; legality check = membership) | cslib automata/MyhillNerode (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
 | entity lifecycle | = | a machine ON a record: enum state column + transitions; transitions are deltas on the state column (W8.4) | legality relation, typestate Rust, journal antijoin check, replay/rewind — all derived |
 | protocol / choreography | = | a session (Machines.Session): payload-typed, dual-checked | duality, mid-protocol deadlock-freedom, termination |
 | the guest↔host effect loop | = | a session protocol (commands out, events in — W8.6) | the session row |
 | a wizard / multi-step flow | = | a SEQUENCE (indexed monad / session), NOT a machine — machines are SETS of transitions; protocols are orders | the session row |
 | saga / workflow with compensation | = | a machine whose transitions carry inverses; compensation = rewind | `ChangeInversion`, `rewind_suffix` |
 | retry / circuit breaker | = | a small machine + a fault policy row (the faults registry) | the machine row |
-| convergence / termination | = | a decreasing variant (Machines.Convergent) OR fuel (when the cap IS the semantics) | `terminates`, `run_length_bound`; cslib `SN`/`Terminating` |
+| convergence / termination | = | a decreasing variant (Machines.Convergent) OR fuel (when the cap IS the semantics) | `terminates`, `run_length_bound`; cslib `SN`/`Terminating` (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
 | the build pipeline itself | = | a machine (Pipeline.lean — already canonized) | its own row |
 
 ## Part 3 — the business-software rows (what the toolkit must make cheap)
@@ -116,7 +116,7 @@ Z-sets).
 | Dijkstra monads | the guest lane wants fuel/capability contracts riding in action types |
 | Measured monoids / finger trees | hot time-travel slicing — lands in RUST, not the model |
 | Coinductive types | never — streams are `Nat → a`; `partial_fixpoint` covers recursion |
-| HML / modal logic (cslib) | protocol properties need logical characterization beyond trace equivalence |
+| HML / modal logic (cslib) | protocol properties need logical characterization beyond trace equivalence (not wired — dropped 2026-09-16; re-add when a consumer order exists) |
 | SMT subprocess | never trusted; `bv_decide` LRAT certificates are the lane (SymCC's checked-witness shape adopted, its trust rejected) |
 | Specimen (derived generators for relations) | the first relational spec needing generation (`ValidTrace`), or their Basalt port landing |
 

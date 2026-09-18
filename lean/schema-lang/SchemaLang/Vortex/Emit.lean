@@ -15,7 +15,11 @@ Lowering (target-neutral universe → Vortex, via `Vortex.Lower`):
 - variants → `DType::Union(UnionVariants::new(vec![...]))`; payload-free
   cases lower to `DType::Null` (v1: the union carries a slot per case)
 - named refs (`.ty n`) resolve through a fuel-based semantics over the
-  universe — acyclic v1 (self-reference needs depth fuel, the Row lesson)
+  universe — W8.13: recursive types are legal (the inline-cycle gate
+  `InlineAcyclic` keeps every cycle behind `list`); a ref CYCLE still
+  exhausts the fuel here → `none` → the recursive record is SKIPPED
+  from the dtype table (a recursive STRUCT dtype is an infinite type —
+  the Vortex lane's documented exclusion, pinned in Tests)
 - `future`/`stream` in field position fail the lowering; the record is
   skipped (the emitter may assume `wellFormed`-checked input — the
   flatland audit doctrine — so this is a defensive skip, not a path)
@@ -131,8 +135,9 @@ def lowerVariantCases (sem : VortexSem) (cases : List SchemaLang.VariantCase) :
 
 /-- Named-type semantics over a universe: a record resolves to its
     struct dtype, a variant to its union dtype. Fuel bounds the named
-    reference depth (acyclic v1); exhausted fuel = unresolvable =
-    `none`. -/
+    reference depth; W8.13: a ref CYCLE exhausts the fuel =
+    unresolvable = `none` (the recursive record is skipped from the
+    dtype table — the Vortex lane's documented exclusion). -/
 def refSem (items : List SchemaLang.Item) : Nat → VortexSem
   | 0 => fun _ => none
   | fuel + 1 =>

@@ -67,31 +67,48 @@ def refFuel : Nat := 8
 
 /-- The fragment gate: `some reason` = this `Ty` is OUTSIDE the emitted
     fragment; `none` = generatable. Refs resolve against the item
-    universe, fuel-bounded (the `floatRefs` discipline): a ref to a
-    SKIPPED record is itself unsupported — the referencing record's fn
-    would call a fn that was never emitted. EXHAUSTIVE over the closed
-    `Ty` (a new ctor fails HERE, at compile time). -/
-def unsupported? (items : List Item) : Nat → Ty → Option String
-  | _, .bool | _, .u8 | _, .u16 | _, .u32 | _, .u64
-  | _, .i8 | _, .i16 | _, .i32 | _, .i64
-  | _, .f32 | _, .f64 | _, .string | _, .bytes => none
-  | fuel, .option a => unsupported? items fuel a
-  | fuel, .list a => unsupported? items fuel a
-  | 0, .ty n => some s!"ref '{n}': support-check fuel exhausted (ref cycle?)"
-  | fuel + 1, .ty n =>
-      match items.find? (·.name == n) with
-      | some (.record _ fields) =>
-          (fields.findSome? fun f =>
-            (unsupported? items fuel f.ty).map
-              fun r => s!"ref '{n}' skipped: field '{f.name}': {r}")
-      | some _ => some s!"ref '{n}': variant/resource refs have no generator yet"
-      | none => some s!"ref '{n}': unresolvable"
-  | _, .result .. => some "result: not in the v1 fragment"
-  | _, .map .. => some "map: no Rust-side generator yet (W8.1 — the Lean lane's genVal has one)"
-  | _, .set .. => some "set: no Rust-side generator yet (W8.1 — the Lean lane's genVal has one)"
-  | _, .future _ => some "future: no value generator (Gen.lean mirrors this)"
-  | _, .stream _ => some "stream: no value generator"
-  | _, .tensor .. => some "tensor: shape-filled generation not emitted yet"
+    universe with the W8.13 OCCURS CHECK: `visiting` carries the record
+    names on the current support path — a ref BACK to one of them is
+    the recursive ref, SUPPORTED (the depth budget terminates the
+    generated recursion) but only from the BOXED position (`boxed` —
+    `list` is the boxed ctor: Rust `Vec` holds a pointer; an inline
+    cycle — direct field/option/result — is an infinite-size Rust type
+    and skipped loud; the WF gate `InlineAcyclic` bans it universe-
+    wide, this mirror keeps the lane safe on unchecked input too).
+    A ref to a SKIPPED record is itself unsupported — the referencing
+    record's fn would call a fn that was never emitted. EXHAUSTIVE over
+    the closed `Ty` (a new ctor fails HERE, at compile time). -/
+def unsupported? (items : List Item) : List String → Bool → Nat → Ty → Option String
+  | _, _, _, .bool | _, _, _, .u8 | _, _, _, .u16 | _, _, _, .u32 | _, _, _, .u64
+  | _, _, _, .i8 | _, _, _, .i16 | _, _, _, .i32 | _, _, _, .i64
+  | _, _, _, .f32 | _, _, _, .f64 | _, _, _, .string | _, _, _, .bytes => none
+  | v, _, fuel, .option a => unsupported? items v false fuel a
+  | v, _, fuel, .list a => unsupported? items v true fuel a
+  | v, boxed, 0, .ty n =>
+      if v.contains n then
+        if boxed then none
+        else some (s!"ref '{n}': inline ref cycle — a recursive reference "
+          ++ "must sit behind `list` (W8.13)")
+      else some s!"ref '{n}': support-check fuel exhausted (deep ref chain?)"
+  | v, boxed, fuel + 1, .ty n =>
+      if v.contains n then
+        if boxed then none
+        else some (s!"ref '{n}': inline ref cycle — a recursive reference "
+          ++ "must sit behind `list` (W8.13)")
+      else
+        match items.find? (·.name == n) with
+        | some (.record _ fields) =>
+            (fields.findSome? fun f =>
+              (unsupported? items (n :: v) boxed fuel f.ty).map
+                fun r => s!"ref '{n}' skipped: field '{f.name}': {r}")
+        | some _ => some s!"ref '{n}': variant/resource refs have no generator yet"
+        | none => some s!"ref '{n}': unresolvable"
+  | _, _, _, .result .. => some "result: not in the v1 fragment"
+  | _, _, _, .map .. => some "map: no Rust-side generator yet (W8.1 — the Lean lane's genVal has one)"
+  | _, _, _, .set .. => some "set: no Rust-side generator yet (W8.1 — the Lean lane's genVal has one)"
+  | _, _, _, .future _ => some "future: no value generator (Gen.lean mirrors this)"
+  | _, _, _, .stream _ => some "stream: no value generator"
+  | _, _, _, .tensor .. => some "tensor: shape-filled generation not emitted yet"
 
 /-- The Rust expression producing ONE value of type `t` (an expression
     OF the field's type — it may use `?`, valid in every context the
@@ -125,7 +142,7 @@ def genExpr (depth : String) : Ty → String
 def recordGenItem (items : List Item) (n : String) (fields : List Field) :
     CodegenCore.Emit.Rust.Item :=
   let blocked := fields.filterMap fun f =>
-    (unsupported? items refFuel f.ty).map fun r => s!"'{f.name}': {r}"
+    (unsupported? items [n] false refFuel f.ty).map fun r => s!"'{f.name}': {r}"
   match blocked with
   | b :: bs =>
       .comment s!"gen_{snake n} SKIPPED — {String.intercalate "; " (b :: bs)}"

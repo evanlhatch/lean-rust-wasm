@@ -340,6 +340,17 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
             ),
         }
     }
+    // The WITNESS-BYTES convention (verify-witness, W9.6): the row arg
+    // = the committed witness bytes, comma-joined decimal u8s — rebuilt
+    // as the canonical list<u8> Val tree (the lift copies the bytes
+    // into guest memory; the bytesParam adapter re-chains them).
+    fn witness_bytes(s: &str) -> Val {
+        Val::List(
+            s.split(',')
+                .map(|b| Val::U8(b.parse::<u8>().expect("witness byte")))
+                .collect(),
+        )
+    }
     for row in &rows {
         let f = row["fn"].as_str().expect("fn");
         let strs: Vec<&str> = row["args"]
@@ -352,6 +363,8 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
             vec![user_record(&strs)]
         } else if f == "order-error-valid" {
             vec![order_error_variant(&strs)]
+        } else if f == "verify-witness" {
+            vec![witness_bytes(strs[0])]
         } else {
             strs.iter()
                 .enumerate()

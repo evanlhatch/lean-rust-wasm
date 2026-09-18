@@ -82,16 +82,27 @@ def loadProjectManifest (path : System.FilePath) : IO ProjectManifest := do
 
 /-- The manifest's fold: the compile roots = the guest-marked decls
     (the `CodegenCore.GuestGate` registry, replayed from the loaded
-    oleans), minus the std INTRINSICS (`strlen`/`strcat` —
-    `GuestlangStd.Intrinsic.ofName?` maps their names to the closed
-    universe's ctors; the backend emits the ctors' `runtimeName`
-    primitives, the bodies are never compiled). The manifest's modules
-    bound the loaded world; the marks pick the decls; this fold is the
-    rest. Dedup: a def marked both `@[guest]` and `@[guest_std]` joins
-    once. -/
+    oleans), minus the std INTRINSICS (`strlen`/`strcat`/`streq` —
+    `GuestlangStd.Intrinsic.ofName?` maps their names, plus the string
+    `==` spellings (`String.decEq` — the W9.6 gap-3 lowering), to the
+    closed universe's ctors; the backend emits the ctors'
+    `runtimeName` primitives, the bodies are never compiled). The
+    manifest's modules bound the loaded world; the marks pick the
+    decls; this fold is the rest. Dedup: a def marked both `@[guest]`
+    and `@[guest_std]` joins once. -/
 def targetDeclsOf (env : Environment) : Array Name :=
   (CodegenCore.GuestGate.guestMarkedDecls env).eraseDups.toArray.filter
     fun n => (GuestlangStd.Intrinsic.ofName? n).isNone
+
+/-- The compile-set ROOT name of a pipeline-created worker/shim decl:
+    `<root>._redArg` (the erasure worker), `<root>_boxed` (the pap
+    shim), `<root>_closed` (the closure constant) — the ROOT is what
+    joins the compile set; the pipeline creates the workers for it. -/
+private def rootNameOf (n : Lean.Name) : Lean.Name :=
+  match n with
+  | .str p s =>
+      if s == "_redArg" || s == "_boxed" || s == "_closed" then p else n
+  | n => n
 
 /-- The LCNF x-ray (the W9.6 guest-compat audit's tool): render one
     `LetValue` as its construct name — the diagnostic names the EXACT
@@ -133,12 +144,22 @@ private partial def reportUnsupportedLCNF (decls2Names : NameSet) (d : Lean.Comp
           | .reset .. => true
           | .reuse .. => true
           | .isShared .. => true
-          | .lit (.nat _) => true
-          | .fap fn _ =>
-              -- unknown callees: not a binop, not an intrinsic, and not
-              -- a decl the backend emits (an undefined wasm call)
+          -- the bounded-Nat surface (WasmBackend.lean's header note) is
+          -- LOWERED now: Nat.lit (cap-pinned) + the Nat countdown
+          -- binops + the checker-scoped spec-BEq are supported — not
+          -- diagnostics. An UNSUPPORTED Nat construct (ctor-case
+          -- dispatch, succ/mul/…) arrives as an unknown-callee fap or
+          -- an emitter throw below.
+          | .fap fn args =>
+              -- unknown callees: not a binop, not an intrinsic, not a
+              -- spec-BEq product (inline-lowered, checker-scoped), not
+              -- an inline-Nat fap (extern primitives — inline-lowered,
+              -- no callee decl), and not a decl the backend emits (an
+              -- undefined wasm call)
               (WasmBackend.binop? fn).isNone
                 && (GuestlangStd.Intrinsic.ofName? fn).isNone
+                && !WasmBackend.isSpecBEqName fn
+                && !WasmBackend.inlineNatFap? fn args.size
                 && !decls2Names.contains fn
           | _ => false
         let _ : Unit ←
@@ -169,21 +190,122 @@ private partial def reportUnsupportedLCNF (decls2Names : NameSet) (d : Lean.Comp
     let _ ← walk "" c
     pure ()
 
+/-- The undefined-callee CLOSURE COMPLETION (the audit's gap-4 fix,
+    general form): scan the local decls' final LCNF for fap callees the
+    emitter cannot resolve (not a binop, not an intrinsic, not a
+    spec-BEq product, not itself local) and — when the callee EXISTS in
+    the env as compilable code — add it to the compile set and re-run
+    the pipeline. This is how the checker's core-List helpers join
+    (`List.get?Internal._redArg` etc. are created ONLY when their ROOT
+    is a target; the checker's LCNF calls them, so the roots must
+    compile). Fixpoint-bounded (8 rounds); a callee that stays
+    undefined is the diagnostic's job (below), never a silent call. -/
+private partial def fapCalleesOf : Lean.Compiler.LCNF.Code .impure → NameSet
+  | .let decl k =>
+      let here : NameSet :=
+        match decl.value with
+        | .fap fn args =>
+            -- the inline-Nat surface: no callee exists — never chased
+            if WasmBackend.inlineNatFap? fn args.size then {} else ({} : NameSet).insert fn
+        -- the PAP callee too (the W9.6 decode lane): a first-class fn
+        -- value (`decList? decWStep?`) lowers to `pap <root>_boxed` —
+        -- the emitter's trampoline CALLS that name, so the `_boxed`
+        -- shim must exist: chase the name, and the root-name map below
+        -- strips the shim suffix to the ROOT whose compilation creates
+        -- the shim as a local decl
+        | .pap fn args =>
+            if WasmBackend.inlineNatFap? fn args.size then {} else ({} : NameSet).insert fn
+        | _ => {}
+      (fapCalleesOf k).union here
+  | .jp fd k => (fapCalleesOf fd.value).union (fapCalleesOf k)
+  | .fun fd k _ => (fapCalleesOf fd.value).union (fapCalleesOf k)
+  | .cases c =>
+      c.alts.foldl (fun acc a => acc.union
+        (match a with
+          | .ctorAlt _ code => fapCalleesOf code
+          | .default code => fapCalleesOf code
+          | .alt _ _ _ h => absurd h (by simp))) {}
+  | .sset _ _ _ _ _ k => fapCalleesOf k
+  | .inc _ _ _ _ k => fapCalleesOf k
+  | .dec _ _ _ _ _ k => fapCalleesOf k
+  | .del _ k => fapCalleesOf k
+  | .unreach _ | .return _ | .jmp ..
+  | .oset .. | .uset .. | .setTag .. => {}
+
+/-- The undefined callees across the local decls (the emitter's
+    resolution surface: binop / intrinsic / spec-BEq / local = defined). -/
+private def collectUndefinedCallees (decls : List (Lean.Compiler.LCNF.Decl .impure)) : NameSet :=
+  let defined : NameSet :=
+    decls.foldl (fun s d => s.insert d.name) {}
+  decls.foldl (fun acc d =>
+    match d.value with
+    | .code c =>
+        let callees := fapCalleesOf c
+        callees.toList.foldl (fun acc' n =>
+          if (WasmBackend.binop? n).isNone
+              && (GuestlangStd.Intrinsic.ofName? n).isNone
+              && !WasmBackend.isSpecBEqName n
+              && !defined.contains n then
+            acc'.insert n
+          else acc') acc
+    | .extern .. => acc) {}
+
+/-! ## The LCNF re-run + emission -/
+
 /-- Run the LCNF pipeline + emit the module, in CoreM. Returns the
     runtime-spliced WAT body WITHOUT the GENERATED header — the header
     is the driver's prepend (`watEmitter` + `runEmitters`, W7.12); this
     function's result joins the `WasmGenSpec` as spec data. -/
 def emitModuleWasm (targetDecls : Array Name) : CoreM String := do
-  Lean.Compiler.LCNF.main targetDecls {}
-  -- Closure constants + lambdas: `_closed`/`_lam` decls (holding the
-  -- paps) are generated IN-PROCESS by the re-run — never in the imported
-  -- env. Include every impure decl UNDER a target's namespace.
-  let mut names := targetDecls
+  -- THE CLOSURE COMPLETION FIXPOINT (see collectUndefinedCallees): each
+  -- round runs the pipeline, scans the local decls for undefined fap
+  -- callees, and re-runs with them added (their roots exist in the env;
+  -- the workers the pipeline creates for them are the point). Bounded
+  -- at 8 rounds — the checker's closure needs 1; the bound is the
+  -- loud-failure guard (a 9th round would mean a cycle the emitter
+  -- cannot close, and the diagnostic names the stragglers).
+  let env ← getEnv
+  let mut targets := targetDecls
+  for _round in [0:8] do
+    Lean.Compiler.LCNF.main targets {}
+    let all ← Lean.Compiler.LCNF.getLocalImpureDecls
+    let mut localDecls : List (Lean.Compiler.LCNF.Decl .impure) := []
+    for n in all do
+      if let some d ← Lean.Compiler.LCNF.getLocalImpureDecl? n then
+        localDecls := d :: localDecls
+    let missing := collectUndefinedCallees localDecls
+    if missing.isEmpty then
+      break
+    let addable := missing.toArray.filter fun n =>
+      -- the ERASURE WORKER naming: `<root>._redArg` — the worker is
+      -- created only when its ROOT compiles, so the ROOT is what joins
+      -- the compile set (the worker itself is never an env constant)
+      -- — and the SHIM naming `<root>_boxed` (the pap callee: same
+      -- rule; also `_closed`). The root itself must be a def in the env.
+      match env.find? (rootNameOf n) with
+      | some (.defnInfo _) => true
+      | _ => false
+    if addable.isEmpty then
+      -- none of the missing callees is compilable — the diagnostic
+      -- below names them (undefined wasm calls), the emitter throws
+      break
+    let roots := addable.map rootNameOf
+    targets := (targets ++ roots).toList.eraseDups.toArray
+  Lean.Compiler.LCNF.main targets {}
+  -- The re-run's LOCAL impure decls (never in the imported env):
+  -- `_closed`/`_lam` closure constants, `_boxed` shims, `_redArg`
+  -- workers, and the SPECIALIZATION PRODUCTS the spec pass names by
+  -- their SOURCE type (`Option.instBEq.beq._at_.<target>.spec_0` — the
+  -- W9.6 audit's gap 4). Include EVERY one: the local decl set IS the
+  -- targets' closure (reachability, computed by the re-run itself) —
+  -- the old under-a-target-namespace filter was the bug (a
+  -- specialization product's name carries its source TYPE, so no
+  -- namespace test can catch it; it emitted as an undefined wasm
+  -- call). The intrinsics' names are still lowered as primitives, not
+  -- calls — `ofName?` mapping inside the fap emitter.
+  let mut names := targets
   let all ← Lean.Compiler.LCNF.getLocalImpureDecls
-  let internal := all.filter fun n =>
-    let s := n.toString
-    s.contains "." && targetDecls.any fun t => s.startsWith (t.toString ++ ".")
-  names := names ++ internal
+  names := (names ++ all).toList.eraseDups.toArray
   let mut decls2 : List (Lean.Compiler.LCNF.Decl .impure) := []
   for n in names do
     if let some d ← Lean.Compiler.LCNF.getLocalImpureDecl? n then
@@ -198,7 +320,30 @@ def emitModuleWasm (targetDecls : Array Name) : CoreM String := do
     IO.eprintln s!"--- {d.name}\n{fmt}"
   let wireNameOf (n : Name) : String :=
     CodegenCore.Emit.kebab n.getString!
-  let exportTargets := targetDecls.toList.map fun n => (wireNameOf n, n)
+  -- the EXPORT surface = the GUEST MARKS only (the original
+  -- targetDecls) — the closure fixpoint's added roots (the core-List
+  -- workers, the extern Nat primitives) are COMPILED but never
+  -- exported: an extern target's adapter calls a no-result stub (the
+  -- Nat.decEq_abi validate failure), and the extra exports would
+  -- grow the component surface past the wit's item count (17 — the
+  -- W9.6 witness export's).
+  -- W9.6: the WIT-registered fn OWNS its wire name. A marked
+  -- non-registered decl kebabing to the same name loses its core
+  -- export — the case: the W9.5 seam `WitnessCheck.verifyWitness`
+  -- (its params are not Ty-representable — the audit: unexportable at
+  -- ANY fixing) vs the demo's export wrapper `DemoFn.verifyWitness`
+  -- (the registered @[schema_fn]) — both kebab to `verify-witness`,
+  -- and the duplicate core export failed the module encode.
+  let exportTargets :=
+    let registeredBodies : List Name :=
+      (SchemaLang.Meta.registeredItems env).filterMap fun (_, it) =>
+        match it with | .func sig => some sig.body | _ => none
+    let isRegistered (n : Name) : Bool := registeredBodies.contains n
+    let claimedWires : List String :=
+      (targetDecls.toList.filter isRegistered).map wireNameOf
+    let keepTarget (n : Name) : Bool :=
+      if claimedWires.contains (wireNameOf n) then isRegistered n else true
+    (targetDecls.toList.filter keepTarget).map fun n => (wireNameOf n, n)
   -- which targets return a STRING (the canonical ABI's post-return
   -- (ptr,len) convention): from the ORIGINAL def type — the LCNF type is
   -- erased to `obj` for every object result, Shape and String alike

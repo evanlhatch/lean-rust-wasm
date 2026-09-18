@@ -23,6 +23,7 @@ public import SchemaLang.Layout
 public import SchemaLang.Gen
 public import SchemaLang.Field
 public import SchemaLang.Validate
+public import SchemaLang.Refine
 public import SchemaLang.ExprLang
 public import SchemaLang.Subschema
 public import SchemaLang.Vortex.DType
@@ -41,6 +42,7 @@ public import SchemaLang.Invariant
 public import SchemaLang.Emit.Expr
 public import SchemaLang.Emit.Invariant
 public import SchemaLang.Obligation
+public import SchemaLang.PrePost
 public import SchemaLang.Update
 public import SchemaLang.TickCascade
 public import SchemaLang.Emit.Update
@@ -52,6 +54,7 @@ public import SchemaLang.Meta.Keys
 public import SchemaLang.TableInvariant
 public import SchemaLang.Meta.TableInvariant
 public import SchemaLang.Meta.EventSourced
+public import SchemaLang.Meta.Mono
 public import SchemaLang.Bridge
 public import SchemaLang.Session
 public import SchemaLang.Commands

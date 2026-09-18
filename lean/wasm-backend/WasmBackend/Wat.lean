@@ -47,7 +47,7 @@ inductive MemOp where
 /-- The plain (stack-machine) operations the backend emits — binops,
     comparisons, conversions. -/
 inductive Op where
-  | i64add | i64sub | i64mul | i64ltu | i64eq
+  | i64add | i64sub | i64mul | i64ltu | i64leu | i64eq
   | i32add | i32sub | i32mul | i32and | i32xor | i32shru | i64shru
   | i32eqz | i32eq | i32ltu | i32gtu
   | i32wrapi64 | i64extendi32u
@@ -103,7 +103,7 @@ def memOpW : MemOp → String
 
 def opW : Op → String
   | .i64add => "i64.add" | .i64sub => "i64.sub" | .i64mul => "i64.mul"
-  | .i64ltu => "i64.lt_u" | .i64eq => "i64.eq"
+  | .i64ltu => "i64.lt_u" | .i64leu => "i64.le_u" | .i64eq => "i64.eq"
   | .i32add => "i32.add" | .i32sub => "i32.sub" | .i32mul => "i32.mul"
   | .i32and => "i32.and" | .i32xor => "i32.xor"
   | .i32shru => "i32.shr_u" | .i64shru => "i64.shr_u"

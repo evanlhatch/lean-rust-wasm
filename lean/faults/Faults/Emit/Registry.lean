@@ -10,7 +10,8 @@ prepend headers themselves (the `CodegenCore.Emit.Core` contract).
 faults has TWO spec sources (guest `Spec.apiFaults`, host
 `Spec.hostFaults`), so unlike schema-lang (one spec, many emitters) the
 registry pairs each emitter with the spec it consumes (`jobs`). The
-audit surface — declared `outputs`, `pathsUnique`, header-via-driver,
+audit surface — declared `outputs`, `Emitter.checkNodup` (the shared
+one-writer audit from codegen-core), header-via-driver,
 pure `run` — is identical.
 -/
 import CodegenCore
@@ -55,8 +56,11 @@ def hostEmitter : Emitter FaultsSpec where
 /-- The emitters (order = write order). -/
 def emitters : List (Emitter FaultsSpec) := [guestEmitter, hostEmitter]
 
-/-- Audit: no two emitters claim the same output path. -/
-def pathsUnique : Bool := (emitters.flatMap (·.outputs)).Nodup
+/- Audit: no two emitters claim the same output path — consumed from
+   codegen-core (`Emitter.checkNodup emitters`; identical semantics —
+   the inline `(flatMap outputs).Nodup` re-implementation this comment
+   replaced was byte-for-byte the same expression, W7.3p2 dedup).
+   The ASSERTION lives in Tests ("emitter paths unique"). -/
 
 /-! ## The forge-driver manifest row
 

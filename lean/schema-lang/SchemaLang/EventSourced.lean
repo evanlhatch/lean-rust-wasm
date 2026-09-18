@@ -41,7 +41,17 @@ Contents:
    `encJournal`/`decJournal?` over `Codec.encList`/`decList?`.
 7. `unbox*` — the one-level `Value` projections for the flat-scalar
    fragment (the generated key codec's decode half).
-8. THE WITNESS-GATED MIGRATION CHECKPOINT (W9.5 —
+8. **THE EVENT-SOURCING FUSION** (the dbsp-machine bridge — the canon
+   rows say machine/event-sourcing/dbsp are ONE phenomenon): journal =
+   D ∘ run, replay = I ∘ journal. `runStates` is the run's state stream
+   (each state = the replay of the journal's first t entries — the
+   partial integrals, snapshot = partial I); `journal_differentiates`
+   is the D side (each entry's apply advances one tick — the witnessed
+   finite difference, `Dbsp.D`'s keyed-table reading); `replay_of_run`
+   is the I side (the run's final state IS the journal replay).
+   `Dbsp.derivative_integral` is the abstract law: at the group
+   instantiation (apply = +) the round trip is literally `I (D s) = s`.
+9. THE WITNESS-GATED MIGRATION CHECKPOINT (W9.5 —
    notes/design-guest-verified.md §4 steps 3–5):
    `replayMigrated?` replays an upcast segment ONLY under a witness
    that ACCEPTS through the `WitnessCheck.verifyWitness` seam over the
@@ -66,6 +76,7 @@ module
 public import SchemaLang.CodecValue
 public import SchemaLang.WitnessCheck
 public import Dbsp.ChangeSpec
+public import Dbsp.Stream
 public import Machines.Rewind
 
 @[expose] public section
@@ -383,6 +394,10 @@ theorem witnessOf_valid (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : Lis
     by construction), so `runLogged` over this machine never rejects.
     The rewind family (`rewind_runLogged`, `rewind_suffix` — rewind-K =
     undo-K) applies to every specialization. -/
+-- `@[reducible]` (the Sim.lean `addMachine` precedent):
+-- `(esMachine key).State` must unfold to `List ρ` in run statements
+-- (the fusion theorems below state the run at the LIST types).
+@[reducible]
 def esMachine (key : ρ → κ) [BEq κ] : Machines.RewindableMachine where
   State := List ρ
   Label := Delta ρ κ
@@ -400,6 +415,90 @@ def esMachine (key : ρ → κ) [BEq κ] : Machines.RewindableMachine where
   deltaOf_valid := by
     intro d s _
     exact witnessOf_valid key d s
+
+/-! ## THE EVENT-SOURCING FUSION (the dbsp-machine bridge — the headline)
+
+The canon rows — delta = event = journal entry, I = fold = replay =
+materialization, `Dbsp.derivative_integral` = the journal/checkpoint
+license — are ONE theorem cluster:
+
+- `runStates` — the state stream of a journal run: state at time t =
+  the replay of the journal's first t entries (the states ARE the
+  partial integrals; snapshot = partial I).
+- `journal_differentiates` — **journal = D ∘ run**: each entry's apply
+  advances the state exactly one tick. The keyed-table reading of
+  `Dbsp.D`: the difference between consecutive states is the witnessed
+  delta (`apply_eq_patchW` — the finite-difference data `Dbsp.D`
+  computes for the group case).
+- `replay_of_run` — **replay = I ∘ journal**: the machine run's final
+  state IS the journal replay from the base table.
+  `Dbsp.derivative_integral` (`I ∘ D = id`) is the abstract law this
+  specializes: at the group instantiation (the additive machine, apply
+  = +, `Dbsp.Replicas.applyDeltas_sum`) the round trip is literally
+  `I (D s) = s`; the keyed-table replay is the nonlinear-fold reading
+  of the same row (nonlinear: keyed upsert is not additive — the
+  zero-initial convention rides in `Dbsp.D` itself, `(D s) 0 = s 0`,
+  the first journal entry CARRIES the initial value).
+-/
+
+/-- The state stream a journal run generates: state at time t = the
+replay of the journal's first t entries over the base table — the
+states ARE the partial integrals (the canon: snapshot = partial I). -/
+def runStates (key : ρ → κ) [BEq κ] (s0 : List ρ)
+    (log : List (Delta ρ κ)) : Dbsp.Stream (List ρ) :=
+  fun t => replay key (log.take t) s0
+
+theorem runStates_zero (key : ρ → κ) [BEq κ] (s0 : List ρ)
+    (log : List (Delta ρ κ)) : runStates key s0 log 0 = s0 := rfl
+
+private theorem take_succ_getElem (log : List (Delta ρ κ)) (t : Nat)
+    (h : t < log.length) :
+    log.take (t + 1) = log.take t ++ [log[t]] := by
+  induction log generalizing t with
+  | nil => cases h
+  | cons d rest ih =>
+    cases t with
+    | zero => rfl
+    | succ t =>
+      have h' : t < rest.length := by
+        have hlen : (d :: rest).length = rest.length + 1 := rfl
+        omega
+      show d :: rest.take (t + 1) = d :: (rest.take t ++ [rest[t]])
+      rw [ih t h']
+
+/-- **JOURNAL = D ∘ RUN**: the journal differentiates the state stream —
+each entry's apply advances exactly one tick. -/
+theorem journal_differentiates (key : ρ → κ) [BEq κ] (s0 : List ρ)
+    (log : List (Delta ρ κ)) (t : Nat) (h : t < log.length) :
+    runStates key s0 log (t + 1) = apply key (log[t]) (runStates key s0 log t) := by
+  show replay key (log.take (t + 1)) s0
+    = apply key (log[t]) (replay key (log.take t) s0)
+  rw [take_succ_getElem log t h, replay_snoc]
+
+/-- **REPLAY = I ∘ JOURNAL** — THE FUSION: the esMachine run's final
+state IS the journal replay from the base table. Consumed:
+`Machine.run_cons_some` + `step?_eq_some` (the run IS the fold) and
+`replay`'s fold equation; the abstract law is `Dbsp.derivative_integral`. -/
+theorem replay_of_run (key : ρ → κ) [BEq κ] (s0 : List ρ)
+    (log : List (Delta ρ κ))
+    (tr : Machines.Machine.Trace (esMachine key).toMachine) (fin : List ρ)
+    (h : (esMachine key).toMachine.run s0 log = some (tr, fin)) :
+    replay key log s0 = fin := by
+  induction log generalizing s0 tr fin with
+  | nil =>
+      rw [Machines.Machine.run_nil] at h
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj h)
+      rfl
+  | cons d rest ih =>
+      obtain ⟨s', tr', fin', hstep, hrest, htr, hfin⟩ :=
+        Machines.Machine.run_cons_some (esMachine key).toMachine h
+      subst htr hfin
+      obtain ⟨hg, hact⟩ :=
+        Machines.Machine.step?_eq_some (esMachine key).toMachine hstep
+      have hact' : apply key d s0 = s' := hact
+      subst hact'
+      have hrep : replay key (d :: rest) s0 = replay key rest (apply key d s0) := rfl
+      rw [hrep, ih (apply key d s0) tr' fin hrest]
 
 /-! ## The journal codec (generics) -/
 

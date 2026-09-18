@@ -128,6 +128,10 @@ const COMPONENT_ONLY: &[&str] = &[
     // re-boxed by the variantParam adapter
     "user-complete",
     "order-error-valid",
+    // the W9.6 witness export: bytes in (the canonical list<u8> pair —
+    // the flat (ptr, len) the lift copies into guest memory), verdict
+    // out; the bytesParam adapter builds the guest cons chain
+    "verify-witness",
 ];
 
 fn manifest() -> Vec<(String, Vec<String>, String)> {

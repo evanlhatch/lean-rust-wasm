@@ -43,7 +43,7 @@ use crate::valves::HostFault;
 /// pin: Lean's committed rendering in lean/wasm-backend/COVERAGE.md ==
 /// this constant == the surface derived from the built
 /// demo.component.wasm).
-pub const EXPECTED_DEMO_SURFACE: &str = "double/1,is-big/1,adder/2,double-area/1,run-paps/1,total/3,pick/3,str-len-demo/1,greet/1,get-user/1,watch-counts/1,watch-users/1,user-valid/4,order-error-valid/2,user-complete/4";
+pub const EXPECTED_DEMO_SURFACE: &str = "double/1,is-big/1,adder/2,double-area/1,run-paps/1,total/3,pick/3,str-len-demo/1,greet/1,get-user/1,watch-counts/1,watch-users/1,user-valid/4,order-error-valid/2,user-complete/4,verify-witness/1";
 
 /// sha256 of the surface string, lowercase hex (64 chars).
 /// Twin: oracle-runner's `schema_hash` — see the module header.
@@ -67,8 +67,10 @@ fn flat_arity(ty: &Type) -> usize {
 /// Parse a canonical surface string (`fn/arity`, comma-joined) into
 /// ordered pairs. Malformed entries are dropped — the surface strings
 /// are machine-generated; a hand-edited expectation degrades to a
-/// shorter contract, never a panic.
-fn parse_surface(surface: &str) -> Vec<(String, usize)> {
+/// shorter contract, never a panic. `pub(crate)`: hostgen's contract
+/// check parses the SAME expectation string with it (one parser per
+/// format).
+pub(crate) fn parse_surface(surface: &str) -> Vec<(String, usize)> {
     surface
         .split(',')
         .filter_map(|entry| {

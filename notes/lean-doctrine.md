@@ -169,7 +169,14 @@ philosophy this template embodies, stated once.)
    hand-written↔generated seams).
 3. **Hand-written code** — only behind generated seams.
 
-Pressure rules: wanting a mid-logic runtime check = promote the invariant
+Pressure rules (2026-09-18 extension — the correspondence preference):
+whenever two presentations of the same data exist, prefer them in this
+order: (a) a TRUE `Iso` (equal by construction — transport makes every
+law free; the quotient-iso pattern turns normalizers into types:
+`X/~ ≅ CanonicalX`); (b) a `PartialIso` into the canonical/checked
+image (codecs, checkers: "checked" IS "in the image"); (c) a Decidable
+check with a bridge; (d) a gate. A re-derived law where an iso exists
+is a finding. wanting a mid-logic runtime check = promote the invariant
 into the spec. Hand-written code fighting a type = the spec's domain model
 is wrong; fix the spec, not the code.
 
@@ -252,7 +259,7 @@ notes/runbook-2026-09-15.md. Enforcement levels as above.
 
 | Rule | Level | Notes |
 |---|---|---|
-| Every agreement theorem is an instance of `Iso`/`PartialIso`/`Denotes+ReprOp` (the kit) | convention → structural | The kit lives in a CORE-ONLY home (not Machines.Foundations — it needs zero mathlib). ~145 hand-rolled agreements predate this; new ones MUST be instances. |
+| Every agreement theorem is an instance of `Iso`/`PartialIso` (the kit) | convention → structural | The kit lives in a CORE-ONLY home (not Machines.Foundations — it needs zero mathlib). ~145 hand-rolled agreements predate this; new ones MUST be instances. The Iso/PartialIso ladder IS the correspondence vocabulary — `Denotes`/`ReprOp` were deleted as consumerless (2026-09-18): a one-way representation claim today is a comment or a `CheckedProp`; re-add the class only when a second consumer exists. |
 | One copy per concept: did-you-mean, Async markers, EqAns/HasCol, cert-citation, edit distance | lint (cross-package DupDefBodies extension) | The known copies are enumerated in the review; new copies fail review. |
 | Generated artifact = one writer + one SOURCE | gate (byte-tie) | The oracleSrc/Oracle.lean two-source drift is the canonical violation (W0.1). |
 | Simp sets are invoked or stripped — tagged-but-unused is theater | lint (≥2 set members listed by hand ⇒ use the set) | `zset` is the found instance. `unusedSimpArgs` ON for library targets. |

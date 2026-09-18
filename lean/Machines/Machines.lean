@@ -6,7 +6,6 @@ public import Machines.Foundations
 public import Machines.Core
 public import Machines.Session
 public import Machines.Convergent
-public import Machines.Refine
 public import Machines.LinearMachine
 public import Machines.Rewind
 public import Machines.Compose
@@ -15,3 +14,4 @@ public import Machines.Dsl
 public import Machines.Testing
 public import Machines.Sync
 public import Machines.Sim
+public import Machines.Fusion

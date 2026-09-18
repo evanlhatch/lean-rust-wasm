@@ -232,3 +232,33 @@ import Demo
 #print axioms SchemaLang.EntityMachine.hookStates_reachable
 #print axioms SchemaLang.EntityMachine.EntityObligation.discharge_sound
 #print axioms SchemaLang.EntityMachine.EntityObligation.discharge_of_claim
+
+-- W8.11/W8.12: ranged refinements — the construction gate's iff (both
+-- directions), the decidableNow discharge's soundness + completeness
+-- (decide-backed, no new trust base), the word lane's bridge (the
+-- bv_decide pins are the kernel-checked LRAT certificates), the
+-- validator-lane agreement pin, the monus closure. Bar: the core triple.
+#print axioms SchemaLang.Range.mk?_some_of_inRange
+#print axioms SchemaLang.Range.inRange_of_mk?_some
+#print axioms SchemaLang.Range.mk?_none_of_not_inRange
+#print axioms SchemaLang.RangeCheck.discharge_sound
+#print axioms SchemaLang.RangeCheck.discharge_of_claim
+#print axioms SchemaLang.Range.wordClaim32_iff
+#print axioms SchemaLang.Range.wordClaim32_accept
+#print axioms SchemaLang.Range.wordClaim32_refuse
+#print axioms SchemaLang.Range.bounds_inRange_u64
+#print axioms SchemaLang.Range.validates_vexpr_u64
+#print axioms SchemaLang.Range.monusU64_le
+#print axioms SchemaLang.Range.inRange_monus
+
+-- W8.9: the pre/post lane — the boundary's exactness (the check refuses
+-- IFF the pre fails), the refusal's loudness (it names the contract),
+-- the decidableNow backend's soundness + completeness (decide-backed,
+-- no new trust base), the pre's always-firing discharge, the cited
+-- post's evidence. Bar: the core triple.
+#print axioms SchemaLang.ContractOp.refuses_iff_pre_fails
+#print axioms SchemaLang.ContractOp.refusal_names_contract
+#print axioms SchemaLang.PrePostObligation.discharge_decidableNow_sound
+#print axioms SchemaLang.PrePostObligation.discharge_decidableNow_of_claim
+#print axioms SchemaLang.PrePostObligation.discharge_pre_isSome
+#print axioms SchemaLang.PrePostObligation.discharge_post_proved

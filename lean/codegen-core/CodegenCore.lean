@@ -8,7 +8,6 @@ public import CodegenCore.DidYouMean
 public import CodegenCore.Emit.Core
 public import CodegenCore.Emit.Certified
 public import CodegenCore.Emit.Rust
-public import CodegenCore.Enumerable
 public import CodegenCore.AttrKit
 public import CodegenCore.GuestGate
 public import CodegenCore.Kit

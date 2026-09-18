@@ -158,7 +158,7 @@ feature AND ≥1 manifest row. -/
 #guard arityOf "user-valid" == some 4
 #guard arityOf "watch-users" == some 1
 #guard arityOf "doble" == none
-#guard schemaSigs.length == 15
+#guard schemaSigs.length == 16  -- W9.6: + verify-witness (the witness export)
 #guard schemaSigs.eraseDups.length == schemaSigs.length
 
 -- VERDICT truth arms: pass → no divergence; fail → the class names
@@ -197,7 +197,7 @@ feature AND ≥1 manifest row. -/
 
 -- The schema surface is canonical: fn/arity, comma-joined, WIT order.
 #guard schemaSurface.takeWhile (· != ',') == "double/1"
-#guard (schemaSurface.splitOn ",").length == 15
+#guard (schemaSurface.splitOn ",").length == 16  -- W9.6: + verify-witness
 
 -- THE COVERAGE DISCIPLINE (verified-ledger: every feature row has a
 -- test): every export has ≥1 feature AND ≥1 manifest row; every row's

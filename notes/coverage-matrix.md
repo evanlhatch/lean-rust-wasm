@@ -65,3 +65,4 @@ for those rows is the `featureTyTags` projection of the oracle's own
 - `user-valid`
 - `order-error-valid`
 - `user-complete`
+- `verify-witness`

@@ -4,15 +4,8 @@
 The package rule (from Flatland): what is not yet proved gets an executable
 check. Here:
 
-1. **Dag differential**: `reachesFuel`-based `checkAcyclic` vs a reference
-   boolean transitive closure — exhaustive over all DAGs on 3 nodes
-   (8 dep-lists per node ⇒ 8³ = 512 DAGs). This is the completeness evidence
-   for `reachesFuel` until the proof lands (Foundations.lean documents the
-   gap); two independent implementations must agree.
-2. **Machine.run**: a counter machine — the invariant survives a trace;
+1. **Machine.run**: a counter machine — the invariant survives a trace;
    a disabled event rejects the run.
-3. **ReprOp** smoke: the SmallVec-buffer ↔ zset-map abstraction, with the
-   square PROVED (the kit dogfooding itself).
 
 Run: `lake build MachinesTests && .lake/build/bin/MachinesTests`
 -/
@@ -22,54 +15,7 @@ import TestKit
 open Machines
 open TestKit
 
--- ── 1. Dag differential ─────────────────────────────────────────────────
-
-/-- Reference reachability: boolean transitive closure by n relaxations —
-    independent of `reachesFuel`. -/
-def refReaches {n : Nat} (d : Dag n) (a b : Fin n) : Bool := Id.run do
-  let nodes := List.finRange n
-  let mut reach : Array (Array Bool) :=
-    nodes.toArray.map fun v =>
-      nodes.toArray.map fun w => decide (w ∈ d.deps v)
-  for _ in [0 : n] do
-    reach := reach.map fun row =>
-      row.zipIdx.map fun (rij, j) =>
-        rij || (List.finRange n).any (fun k => row[k.val]! && reach[k.val]![j]!)
-  return reach[a]![b]!
-
-/-- The DAG on 3 nodes whose dep-lists are the three mask bits. -/
-def dagOfMasks (m0 m1 m2 : Nat) : Dag 3 :=
-  ⟨fun v =>
-    let mask := if v.val = 0 then m0 else if v.val = 1 then m1 else m2
-    (List.finRange 3).filter (fun w => (mask >>> w.val) &&& 1 == 1)⟩
-
-/-- All 512 DAGs on 3 nodes. -/
-def allDags3 : List (Dag 3) :=
-  (List.range 512).map fun i => dagOfMasks ((i / 64) % 8) ((i / 8) % 8) (i % 8)
-
-/-- `checkAcyclic` must agree with "no self-reach in the reference closure"
-    on every small DAG. -/
-def dagDifferential : CheckResult := Id.run do
-  for d in allDags3 do
-    let checked := d.checkAcyclic
-    let reference := !((List.finRange 3).any (fun v => refReaches d v v))
-    if checked != reference then
-      return .error s!"disagreement: checkAcyclic={checked} ref={reference}"
-  return .ok ()
-
-/-- topoSort? on a known DAG puts deps first. -/
-def topoSmoke : CheckResult := Id.run do
-  -- 0 ← 1 ← 2 (each depends on the previous)
-  let d : Dag 3 := ⟨fun v =>
-    if h : v.val = 0 then [] else [⟨v.val - 1, by have hv := v.isLt; omega⟩]⟩
-  match d.topoSort? with
-  | none => return .error "topoSort? rejected a DAG"
-  | some l =>
-    match l.map (·.val) with
-    | [0, 1, 2] => return .ok ()
-    | _ => return .error s!"unexpected order: {l.map (·.val)}"
-
--- ── 2. The counter machine ──────────────────────────────────────────────
+-- ── 1. The counter machine ──────────────────────────────────────────────
 
 -- count up to `max`; the invariant is `s ≤ max` — the parameterized
 -- machine! form (the DSL covers this case; safety auto-discharges via
@@ -92,51 +38,6 @@ def machineTrace : CheckResult := Id.run do
   match m.run 2 [.increment] with
   | some _ => return .error "run accepted a disabled event"
   | none => return .ok ()
-
--- ── 3. ReprOp: buffer ↔ zset-map ───────────────────────────────────────
-
-/-- The hot delta buffer (unordered, may contain canceling entries) denotes
-    a weight map. NOTE: the zset semantics SUMS all entries for a key —
-    a shadowing lookup would be a different (wrong) semantics, and the
-    square would not commute. Two buffers denote the same zset — no inverse;
-    the law lives on the operation. -/
-instance bufDenotes : Denotes (List (Nat × Int)) (Nat → Int) where
-  abs buf := fun k => ((buf.filter (fun e => e.1 == k)).map (·.2)).sum
-
-theorem filter_sum_push (buf : List (Nat × Int)) (k : Nat) (w : Int) (k' : Nat) :
-    (((k, w) :: buf).filter (fun e => e.1 == k') |>.map Prod.snd).sum
-      = ((buf.filter (fun e => e.1 == k') |>.map Prod.snd)).sum + (if k' == k then w else 0) := by
-  rw [List.filter_cons]
-  by_cases h : (k == k') = true
-  · rw [if_pos h]
-    rw [List.map_cons, List.sum_cons]
-    have hk : k' = k := (beq_iff_eq.mp h).symm
-    subst hk
-    rw [if_pos (beq_self_eq_true k')]
-    omega
-  · have h2 : ¬ ((k' == k) = true) := fun hc => h (by
-      rw [beq_iff_eq] at hc ⊢
-      exact hc.symm)
-    rw [if_neg h, if_neg h2]
-    simp
-
-/-- push onto the buffer ≡ add the weight. The square, proved. -/
-def bufferPush (k : Nat) (w : Int) : ReprOp (List (Nat × Int)) (Nat → Int) where
-  opR := fun buf => (k, w) :: buf
-  opA := fun f k' => f k' + (if k' == k then w else 0)
-  respects := by
-    intro buf
-    funext k'
-    exact filter_sum_push buf k w k'
-
-def reprOpSmoke : CheckResult :=
-  let buf : List (Nat × Int) := [(1, 10), (2, 20), (1, -4)]
-  let pushed := (bufferPush 3 7).opR buf
-  let f := Denotes.abs buf
-  let g := Denotes.abs pushed
-  -- keys 1/2 unchanged; key 3 gains 7; and the SUM semantics shows through:
-  -- key 1 has entries 10 and -4, so f 1 = 6
-  assert (f 1 == 6 && g 1 == f 1 && g 2 == f 2 && g 3 == f 3 + 7) "square failed on samples"
 
 -- ── Dsl: machine! generates Label + spec + machine; default safety tactic ──
 
@@ -898,12 +799,89 @@ example : Latched 0 := by machine_safety
 
 end SolverTest
 
+-- ── 7. Fusion bridges (Machines.Fusion): the dbsp-machine cluster ──
+
+namespace FusionTest
+
+open Machines
+open Machines.Fusion
+
+-- The D/I iso: both directions ARE the landed laws (nothing re-proved —
+-- the pin makes the iso's fields name the theorems).
+#check @Machines.Fusion.dI
+
+example {a : Type} [AddCommGroup a] (s : Dbsp.Stream a) :
+    (Machines.Fusion.dI a).to ((Machines.Fusion.dI a).inv s) = s :=
+  Dbsp.derivative_integral s
+
+example {a : Type} [AddCommGroup a] (s : Dbsp.Stream a) :
+    (Machines.Fusion.dI a).inv ((Machines.Fusion.dI a).to s) = s :=
+  Dbsp.integral_derivative s
+
+/-- The iso EXECUTES: D then I on a concrete Int stream recovers it —
+the journal/replay round trip, numerically. -/
+def fusionIso : CheckResult :=
+  let s : Dbsp.Stream Int := fun t => (t * t : Int)
+  let iso := Machines.Fusion.dI Int
+  let ts := [0, 1, 2, 5, 9]
+  assert (ts.all (fun t => iso.to (iso.inv s) t == s t && iso.inv (iso.to s) t == s t))
+    "I∘D / D∘I diverged on the sample"
+
+-- The convergence bridge: the settle machine's cascade terminates AT
+-- the dbsp fixpoint (the trivially-stabilizing rule R := id pins it).
+#check @Machines.Fusion.settle_reaches_seminaive
+#check @Machines.Fusion.settle_run_bounded
+
+example :
+    ∃ tr, (Machines.Fusion.settleMachine (fun (_ : Int) (s : Int) => s) 7).run ((0 : Int), 3)
+      (List.replicate 3 ()) = some (tr, (Dbsp.seminaive (fun (_ : Int) (s : Int) => s) 7, 0)) :=
+  Machines.Fusion.settle_reaches_seminaive (fun (_ : Int) (s : Int) => s) 7 3 rfl
+
+-- The bisimulation bridge fixture: a machine with a genuine bisimilar
+-- pair of DISTINCT states — 0 and 5 both reset to 0 on the next tick
+-- and agree forever after.
+machine! resetToZero where
+  State: Int
+  Inv: fun _ => True
+  event: reset guard: (fun s => decide (s != 0)) action: (fun _ _ => 0)
+
+-- tick-agreement over the (single-ctor) label enumeration, DECIDED —
+-- the finite-machine decidability note, executed:
+example : (0 : Int) ≠ 5 ∧
+    resetToZero.tick resetToZero.Label.reset 0
+      = resetToZero.tick resetToZero.Label.reset 5 :=
+  ⟨by decide, rfl⟩
+
+-- NEGATIVE CONTROL: the door machine's closed/unlocked vs closed/locked
+-- states are distinguished by open_ (tick-agreement FAILS) — the bridge
+-- is not vacuously true.
+example : DslTest.door.tick DslTest.door.Label.open_ ⟨false, false⟩
+    ≠ DslTest.door.tick DslTest.door.Label.open_ ⟨false, true⟩ := by
+  decide
+
+-- The stream consequence, decided: the response streams of the bisimilar
+-- pair are EQUAL at every sampled time under the all-reset input.
+def fusionBisim : CheckResult :=
+  let ins : Dbsp.Stream resetToZero.Label := fun _ => resetToZero.Label.reset
+  let ts := [0, 1, 2, 5, 11]
+  let same := ts.all (fun t =>
+    respStream resetToZero 0 ins t == respStream resetToZero 5 ins t)
+  -- the DOOR pair's streams really diverge (the negative control, streams)
+  let dins : Dbsp.Stream DslTest.door.Label := fun _ => DslTest.door.Label.open_
+  let doorDiverges :=
+    respStream DslTest.door ⟨false, false⟩ dins 0
+      != respStream DslTest.door ⟨false, true⟩ dins 0
+  assert (same && doorDiverges) "bisim response-stream check failed"
+
+def fusionChecks : List (String × CheckResult) :=
+  [("fusion-d/i-iso", fusionIso)
+  , ("fusion-bisim-streams", fusionBisim)]
+
+end FusionTest
+
 def main : IO UInt32 := do
   let code ← TestKit.mainOfChecks "Machines" ([
-    ("dag-differential", dagDifferential),
-    ("topo-smoke", topoSmoke),
     ("machine-trace", machineTrace),
-    ("repr-op-smoke", reprOpSmoke),
     ("dsl-door", DslTest.dslSmoke),
     ("dsl-conj", DslTest.dslConj),
     ("dsl-conformance", DslTest.doorConformance),
@@ -919,7 +897,7 @@ def main : IO UInt32 := do
     ("linear-machine", LinearTest.linearSmoke)
     , ("session", SessTest.sessionChecks)
     , ("session-typed", TypedSessTest.typedChecks)
-    ] ++ SimTest.simChecks)
+    ] ++ SimTest.simChecks ++ FusionTest.fusionChecks)
   if code != 0 then return code
   TestKit.runDets [LinearTest.doublerAgreement]
 

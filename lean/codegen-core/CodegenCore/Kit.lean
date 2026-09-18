@@ -2,7 +2,7 @@
 # CodegenCore.Kit — the correspondence kit
 
 The agreement-theorem vocabulary (lean-cohesion-plan §0): laws attach to
-SHAPES, not instances. Moved from Machines.Foundations (the Dag STAYS there).
+SHAPES, not instances. Moved from Machines.Foundations.
 -/
 module
 
@@ -26,38 +26,65 @@ structure PartialIso (A B : Type) where
   encode : B → A
   decode_encode : ∀ b, decode (encode b) = some b
 
-/-- Abstraction: the representation determines its semantics (`outParam`).
-    No inverse exists; the law lives on operations (`ReprOp`). -/
-class Denotes (R : Type) (A : outParam Type) where
-  abs : R → A
+/-! ## The Iso graduations (review-2026-09-16: Iso is the load-bearing
+    correspondence type) — each constructor below landed WITH its
+    consumer; do not grow this section without one. -/
 
-/-- A representation-respecting operation: the commuting square
-    `abs(opR r) = opA (abs r)`. One per operation that moves through
-    the representation; each is a theorem shape for primitives and a
-    generated differential test for composed paths. -/
-structure ReprOp (R A : Type) [Denotes R A] where
-  opR : R → R
-  opA : A → A
-  respects : ∀ r, Denotes.abs (opR r) = opA (Denotes.abs r)
+/-- The image decoder: total on the image — a member's witness makes
+    `decode` fire, and the one-ended law pins WHICH witness. -/
+def PartialIso.decodeImage (p : PartialIso A B)
+    (x : {a : A // ∃ b, p.encode b = a}) : B :=
+  Option.get (p.decode x.1) (by
+    obtain ⟨b, hb⟩ := x.2
+    rw [← hb, p.decode_encode]
+    rfl)
 
-namespace ReprOp
+/-- Every `PartialIso` restricts to a TRUE `Iso` on its image: the
+    subtype of encodings that are `encode` of something. `to` =
+    `decodeImage`; `inv` re-encodes. The image round trips BOTH ways:
+    `to_inv` transports `decode_encode`, and `inv_to` upgrades it —
+    re-encoding the decode of a canonical encoding reproduces the bytes
+    exactly (the direction the one-ended law alone cannot give). First
+    consumer: `SchemaLang.Witness` (W9.1's `witnessIso`). -/
+def PartialIso.toImageIso (p : PartialIso A B) :
+    Iso {a : A // ∃ b, p.encode b = a} B where
+  to := p.decodeImage
+  inv b := ⟨p.encode b, b, rfl⟩
+  to_inv b := by
+    show p.decodeImage (⟨p.encode b, b, rfl⟩ : {a : A // ∃ c, p.encode c = a}) = b
+    simp only [decodeImage, p.decode_encode]
+    rfl
+  inv_to x := by
+    obtain ⟨b, hb⟩ := x.2
+    have hd : p.decode x.1 = some b := by rw [← hb]; exact p.decode_encode b
+    have hto : p.decodeImage x = b :=
+      Option.get_of_eq_some (by rw [hd]; exact Option.isSome_some) hd
+    refine Subtype.ext ?_
+    show p.encode (p.decodeImage x) = x.1
+    rw [hto, hb]
 
-variable [Denotes R A]
+/-- The canonical round trip at the value level: re-encoding the decode
+    of an image member reproduces its bytes exactly. -/
+theorem PartialIso.encode_decodeImage (p : PartialIso A B)
+    (x : {a : A // ∃ b, p.encode b = a}) : p.encode (p.decodeImage x) = x.1 := by
+  obtain ⟨b, hb⟩ := x.2
+  have hd : p.decode x.1 = some b := by rw [← hb]; exact p.decode_encode b
+  have hto : p.decodeImage x = b :=
+    Option.get_of_eq_some (by rw [hd]; exact Option.isSome_some) hd
+  rw [hto, hb]
 
-/-- Vertical composition of squares: if both commute, the composite commutes. -/
-def comp (o₁ o₂ : ReprOp R A) : ReprOp R A where
-  opR := o₁.opR ∘ o₂.opR
-  opA := o₁.opA ∘ o₂.opA
-  respects := fun r => by
-    show Denotes.abs (o₁.opR (o₂.opR r)) = o₁.opA (o₂.opA (Denotes.abs r))
-    rw [o₁.respects, o₂.respects]
-
-/-- The identity square. -/
-def id : ReprOp R A where
-  opR := _root_.id; opA := _root_.id
-  respects := fun _ => rfl
-
-end ReprOp
+/-- A nodup name list IS an indexed space: position `i` ↦ the name at
+    `i`, name ↦ its unique position. (`Fin n`/name-subtype reading of
+    the field-name lists the RowVals lane projects by — schema-lang's
+    `RowVals.project?` cites this as what a name-keyed walk DOES.) -/
+def nodupNamesIso {names : List String} (hnd : names.Nodup) :
+    Iso (Fin names.length) {n : String // n ∈ names} where
+  to i := ⟨names[i.1]'i.2, List.getElem_mem i.2⟩
+  inv n := ⟨names.idxOf n.1, List.idxOf_lt_length_of_mem n.2⟩
+  to_inv n := Subtype.ext (List.getElem_idxOf (List.idxOf_lt_length_of_mem n.2))
+  inv_to i := Fin.ext (by
+    have hj := List.getElem_idxOf (List.idxOf_lt_length_of_mem (List.getElem_mem i.2))
+    exact (List.getElem_inj hnd).mp hj)
 
 /-- The completeness half of a `CheckedProp`, as DATA. `missing` is the
     loud, greppable declaration "this gate is one-directional — the checker

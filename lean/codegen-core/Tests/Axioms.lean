@@ -14,3 +14,9 @@ import CodegenCore
 #print axioms CodegenCore.Validation.foldlM_errs
 #print axioms CodegenCore.Validation.foldlM_errs_length
 #print axioms CodegenCore.Validation.traverse_ok
+-- W-iso batch: the Iso graduations ride the same gate
+#print axioms CodegenCore.PartialIso.toImageIso
+#print axioms CodegenCore.nodupNamesIso
+#print axioms CodegenCore.CodedRegistry.idxOf_getElem_inj
+#print axioms CodegenCore.CodedRegistry.membersIso
+#print axioms CodegenCore.CodedRegistry.finIso

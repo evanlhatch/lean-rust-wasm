@@ -123,7 +123,15 @@ theorem Item.keyOfWith_eq_keyOf_of_decl_head {decls : List KeyDecl} {kd : KeyDec
     simp [hb]
   rw [hfind2, List.head?_cons]
 
-/-! ## The row projection + the table checks (what keys MEAN) -/
+/-! ## The row projection + the table checks (what keys MEAN)
+
+The name↔index correspondence these walks live on is the W-iso batch's
+`CodegenCore.nodupNamesIso` (piece 4): for a NODUP name list, `Fin n` is
+Iso the name subtype — position i ↦ name i, name ↦ its unique position.
+`RowVals.project?`'s first-match walk computes the `to_inv` direction at
+the value level; the per-shape lemmas below (and the `FieldVal`
+specialized family) keep their byte-tied statements — this comment is
+the citation that the iso STATES what they DO. -/
 
 /-- A projected field value: the type index + the payload — the
     DATA-level twin of the typed `ColPath.get` (registry rows are

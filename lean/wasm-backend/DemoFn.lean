@@ -1,6 +1,7 @@
 import WasmBackend.Check
 import LintKit.PackageNamespace
 import SchemaLang.Meta.Reflect
+import SchemaLang.WitnessCheck
 
 /- DemoFn — the functions the WASM backend compiles (compiler-line demo
    stage). `@[guest]` checks each def at ELABORATION: banned runtimes
@@ -85,3 +86,24 @@ def useCurried (a : UInt64) : UInt64 := apply2All [curried a] 3 4
 
 @[guest, schema_fn]
 def total (a b c : UInt64) : UInt64 := sumList [a, b, c] 0
+
+/-- THE W9.6 WITNESS EXPORT (notes/design-guest-verified.md §4 step 3,
+    the audit's bytes-in/verdict-out wrapper): the committed witness
+    wire format IN (`decWitness?` — the guest-marked decode lane over
+    the Codec), the W9.2 checker's verdict OUT. The version pin (`1`)
+    is the demo's envelope version — a mismatching envelope decodes
+    `none` → refused, loud. The CERTIFICATION CONTEXT is the v1 demo's:
+    the empty field list + the empty row + the empty log — so the
+    checkable claims are the literal fragment (`eqU` of literals, a
+    `valid` over an all-literal expr); the record-anchored lanes
+    (`col`/`strlenCol`/`chain`) resolve `none` → refused. The fuel is
+    the ARTIFACT's own (`w.fuel` — §7.3: host and guest agree by
+    construction). The duel rows (Oracle.lean's witness fixtures):
+    valid → 1, tampered → 0 — and the tampered row is refused BY THE
+    GUEST (the oracle-manifest replay pins it). -/
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def verifyWitness (bs : List UInt8) : Bool :=
+  match SchemaLang.Witness.decWitness? 1 bs with
+  | none => false
+  | some w =>
+      SchemaLang.WitnessCheck.checkWitness w.fuel w.claim w.proof [] .nil []

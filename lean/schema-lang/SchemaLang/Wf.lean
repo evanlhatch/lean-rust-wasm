@@ -107,13 +107,119 @@ inductive ItemWf (known : List String) : Item → Prop where
       ItemWf known (.func s)
   | resource {n : String} : ItemWf known (.resource n)
 
+/-! ## W8.13 — the recursive-type discipline (relation side)
+
+The executable authority is `inlineSucc` / `inlineReaches?` /
+`inlineCycleDiags` (Item.lean); here: the reasoning authority. The
+relations are FUEL-INDEXED at the same bound the checker uses
+(`items.length + 1`) — the bridge is then a direct structural
+induction, no pumping argument. (A cycle longer than the vertex count
+repeats a vertex and contains a shorter cycle; the unbounded reading
+follows informally — the proved form is the bound-uniform one.) -/
+
+/-- A path of ≤ `k` inline-ref steps from `n` to `p`. The reflexive-
+transitive closure of `inlineSucc`, fuel-indexed to mirror
+`inlineReaches?`'s recursion shape exactly. -/
+inductive InlinePathB (items : List Item) : Nat → String → String → Prop where
+  | refl {k : Nat} {n : String} : InlinePathB items k n n
+  | step {k : Nat} {n m p : String}
+      (h : m ∈ inlineSucc items n) (hp : InlinePathB items k m p) :
+      InlinePathB items (k + 1) n p
+
+/-- An INLINE ref-cycle on `n`: an edge out of `n` whose head paths back
+to `n` within `items.length + 1` steps. Zero-length paths are
+excluded (the edge is real), so a bare record with no refs is never
+cyclic. -/
+inductive InlineCycle (items : List Item) : String → Prop where
+  | mk {n m : String}
+      (he : m ∈ inlineSucc items n)
+      (hp : InlinePathB items (items.length + 1) m n) : InlineCycle items n
+
+/-- THE RECURSIVE-TYPE DISCIPLINE (W8.13): no type item sits on an
+inline ref-cycle — every cycle passes `list` (the boxed position), so
+every rendered type is finite-size (Rust `Vec` indirection; WIT
+`list<T>`; the canonical ABI's heap form). Recursion ITSELF is legal —
+the fuel-indexed semantics (`refSem` precedent) never needed
+acyclicity; this gates the TARGET RENDERINGS only. -/
+def InlineAcyclic (items : List Item) : Prop :=
+  ∀ n, n ∈ Item.typeNames items → ¬ InlineCycle items n
+
+/-- A type item reaches ITSELF by the zero-step path at any fuel (the
+    refl arm's executable form — the induction's refl case reduces to
+    this). -/
+theorem inlineReaches?_self (items : List Item) (n : String) (k : Nat) :
+    inlineReaches? items n k n = true := by
+  cases k with
+  | zero => exact beq_self_eq_true n
+  | succ k =>
+      rw [inlineReaches?]
+      exact Bool.or_eq_true_iff.mpr (Or.inl (beq_self_eq_true n))
+
+/-- The checker finds what the relation admits: a bounded path means
+`inlineReaches?` fires (induction on the fuel index — the relation's
+shape mirrors the checker's recursion exactly). -/
+theorem inlineReaches?_pathB (items : List Item) (p : String) :
+    ∀ {k : Nat} {m : String}, InlinePathB items k m p →
+      inlineReaches? items p k m = true := by
+  intro k m h
+  induction h with
+  | refl => exact inlineReaches?_self _ _ _
+  | step hm _ ih =>
+      rw [inlineReaches?]
+      exact Bool.or_eq_true_iff.mpr (Or.inr (List.any_eq_true.mpr ⟨_, hm, ih⟩))
+
+/-- The checker finds ONLY what the relation admits (soundness):
+induction on the fuel, generalizing the start vertex. -/
+theorem inlineReaches?_sound (items : List Item) (root : String) :
+    ∀ (k : Nat) (m : String), inlineReaches? items root k m = true →
+      InlinePathB items k m root := by
+  intro k
+  induction k with
+  | zero =>
+      intro m h
+      rw [inlineReaches?] at h
+      have hme : m = root := beq_iff_eq.mp h
+      subst hme
+      exact .refl
+  | succ k ih =>
+      intro m h
+      rw [inlineReaches?] at h
+      rcases Bool.or_eq_true _ _ ▸ h with hmr | hany
+      · have hme : m = root := beq_iff_eq.mp hmr
+        subst hme
+        exact .refl
+      · have ⟨q, hq, hqr⟩ := List.any_eq_true.mp hany
+        exact .step hq (ih q hqr)
+
+/-- The cycle scan is EMPTY iff the universe is inline-acyclic (both
+directions: the scan reports exactly the relation's cycles, at the
+same fuel bound). -/
+theorem inlineCycleDiags_eq_nil_iff {items : List Item} :
+    inlineCycleDiags items = [] ↔ InlineAcyclic items := by
+  constructor
+  · intro hnil n hn hcyc
+    cases hcyc with
+    | mk he hp =>
+        have hmem := List.filterMap_eq_nil_iff.mp hnil n hn
+        rw [if_pos (List.any_eq_true.mpr ⟨_, he,
+          inlineReaches?_pathB items n hp⟩)] at hmem
+        cases hmem
+  · intro hacy
+    rw [inlineCycleDiags, List.filterMap_eq_nil_iff]
+    intro n hn
+    refine if_neg fun hany => ?_
+    have ⟨q, hq, hqr⟩ := List.any_eq_true.mp hany
+    exact hacy n hn ⟨hq, inlineReaches?_sound items n (items.length + 1) q hqr⟩
+
 /-- THE REASONING AUTHORITY: every item checks against the universe's
-    type names, and item names are unique (the `universeCheck` mirror,
-    finding class by finding class). -/
+    type names, item names are unique, and no type item sits on an
+    inline ref-cycle (W8.13's recursive-type discipline —
+    `InlineAcyclic`). -/
 inductive WellFormed : List Item → Prop where
   | mk {items : List Item} :
       (∀ it, it ∈ items → ItemWf (Item.typeNames items) it) →
       (items.map Item.name).Nodup →
+      InlineAcyclic items →
       WellFormed items
 
 /-! ## The bridge, piece by piece -/
@@ -466,15 +572,18 @@ theorem universeCheck_eq_nil_iff {items : List Item} :
       items.flatMap (Item.check (Item.typeNames items))
         ++ ((items.map Item.name).filter
               fun n => (items.map Item.name).countP (· == n) > 1).eraseDups.map
-            SchemaDiag.dupName := rfl
-  rw [hUC, List.append_eq_nil_iff, List.flatMap_eq_nil_iff, dupDiags_eq_nil_iff]
+            SchemaDiag.dupName
+        ++ inlineCycleDiags items := rfl
+  rw [hUC, List.append_eq_nil_iff, List.append_eq_nil_iff,
+      List.flatMap_eq_nil_iff, dupDiags_eq_nil_iff, inlineCycleDiags_eq_nil_iff]
   constructor
   · intro h
-    exact .mk (fun it hit => itemCheck_eq_nil_iff.mp (h.1 it hit)) h.2
+    exact .mk (fun it hit => itemCheck_eq_nil_iff.mp (h.1.1 it hit)) h.1.2 h.2
   · intro h
     cases h with
-    | mk hitems hnodup =>
-        exact ⟨fun it hit => itemCheck_eq_nil_iff.mpr (hitems it hit), hnodup⟩
+    | mk hitems hnodup hacy =>
+        exact ⟨⟨fun it hit => itemCheck_eq_nil_iff.mpr (hitems it hit), hnodup⟩,
+          hacy⟩
 
 /-- The bridge, sound direction: a clean checker run transports INTO
     the relation (the driver's discharge route). -/
@@ -508,7 +617,7 @@ theorem WellFormed.noAsync_of_record_field {items : List Item}
     (hit : Item.record n fields ∈ items) {f : Field} (hf : f ∈ fields) :
     NoAsyncTy f.ty := by
   cases hwf with
-  | mk hitems _ =>
+  | mk hitems _ _ =>
       cases hitems _ hit with
       | record hna _ _ => exact hna f hf
 

@@ -156,60 +156,6 @@ theorem applySeq_perm {ms₁ ms₂ : List Mut} (hp : ms₁.Perm ms₂)
       rw [ih₁ hpair s]
       exact ih₂ (h₁.pairwise hpair (fun hd => hd.symm)) s
 
-/-! ### Demo instance: point deltas on finsupport maps
-
-Adaptation of flatland's `changeAtomSystem` to a generic storage model:
-state is a `Nat →₀ Int` value map, a delta is itself a finitely supported
-map applied by addition, and its write set is its support. Disjoint
-supports commute pointwise on `Int`. -/
-
--- the `warn.classDefReducibility` warning is silenced to say so.
-set_option warn.classDefReducibility false in
-/-- Point-update deltas on `Nat →₀ Int`. The ONE `disjoint_commutes`
-    proof reduces to case-splitting on support membership and `ring`.
-    Semireducible on purpose: the system is passed explicitly
-    (`self := …`), never found by instance search. -/
-noncomputable def pointDeltaSystem : DeltaSystem (Nat →₀ Int) Nat (Nat →₀ Int) where
-  patch s d := s + d
-  valid _ _ := True
-  writesOf d := d.support.toList
-  disjoint_commutes d₁ d₂ hd s := by
-    ext n
-    show (s + d₂ + d₁) n = (s + d₁ + d₂) n
-    simp only [Finsupp.add_apply]
-    by_cases h₁ : n ∈ d₁.support <;> by_cases h₂ : n ∈ d₂.support
-    · exact (hd (Finset.mem_toList.mpr h₁) (Finset.mem_toList.mpr h₂)).elim
-    · rw [Finsupp.notMem_support_iff.mp h₂]; ring
-    · rw [Finsupp.notMem_support_iff.mp h₁]; ring
-    · rw [Finsupp.notMem_support_iff.mp h₁, Finsupp.notMem_support_iff.mp h₂]
-
-/-- Compile-time witness (exercised on every build): two point deltas
-    with disjoint singleton supports commute — `applySeq_perm`
-    instantiated with `Perm.swap`, the pairwise proof discharged against
-    the concrete supports. -/
-example :
-    applySeq pointDeltaSystem
-        [Finsupp.single 1 (7 : Int), Finsupp.single 0 (9 : Int)] 0 =
-      applySeq pointDeltaSystem
-        [Finsupp.single 0 (9 : Int), Finsupp.single 1 (7 : Int)] 0 := by
-  refine applySeq_perm (List.Perm.swap (Finsupp.single 0 (9 : Int))
-    (Finsupp.single 1 (7 : Int)) []) ?_ 0
-  refine List.pairwise_cons.mpr ⟨?_, ?_⟩
-  · intro y hy
-    obtain rfl := List.mem_singleton.mp hy
-    intro x hx₁ hx₂
-    rw [show DeltaSystem.writesOf (S := Nat →₀ Int) (Loc := Nat) (Mut := Nat →₀ Int)
-          (self := pointDeltaSystem) (Finsupp.single 1 (7 : Int))
-        = (Finsupp.single 1 (7 : Int)).support.toList from rfl,
-        Finset.mem_toList, Finsupp.mem_support_single] at hx₁
-    rw [show DeltaSystem.writesOf (S := Nat →₀ Int) (Loc := Nat) (Mut := Nat →₀ Int)
-          (self := pointDeltaSystem) (Finsupp.single 0 (9 : Int))
-        = (Finsupp.single 0 (9 : Int)).support.toList from rfl,
-        Finset.mem_toList, Finsupp.mem_support_single] at hx₂
-    exact absurd (hx₁.1.symm.trans hx₂.1) (by decide)
-  · exact List.pairwise_cons.mpr
-      ⟨fun y hy => (List.not_mem_nil hy).elim, List.Pairwise.nil⟩
-
 end Dbsp
 
 end -- @[expose] public section

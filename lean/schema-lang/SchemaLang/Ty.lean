@@ -26,7 +26,10 @@ Type-driven surfaces, per the four-addresses axis (TOOLKIT Part 1):
 
 Deliberately omitted (containment, lean-v3 Part 10): nullability (WIT
 `option<T>` IS the nullability; targets that use flags derive it),
-generics (WIT has none — monomorphization is the emitters' job),
+generics (WIT has none — monomorphization is the job: W8.12's
+`schema_mono` instantiates at concrete types, the registry sees only
+concrete items; recursive types are W8.13 — cycles behind `list`, the
+`InlineAcyclic` gate, no new ctor here),
 refinement predicates (the schema-indexed package owns `{x // P x}`;
 v1 payloads are plain types).
 -/
@@ -306,7 +309,11 @@ type-level one. -/
 
 /-- Open-world semantics for named type references: a function from
     schema type names to Lean types. Provided per schema; v1 universes
-    are acyclic (self-reference needs depth fuel). -/
+    are acyclic (self-reference needs depth fuel) — W8.13: recursion is
+    legal at the ITEM level (cycles behind `list`, the `InlineAcyclic`
+    gate); the TYPE-LEVEL reification stays acyclic (a recursive Lean
+    type cannot be generated from a `String → Type` semantics — the
+    fuel/`μ` lane is the follow-up when a consumer needs it). -/
 abbrev TySem : Type 1 := String → Type
 
 /-- Reify a schema type as a Lean type. Unresolved references become

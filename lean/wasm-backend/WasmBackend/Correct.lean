@@ -148,16 +148,34 @@ def lowerI : Wat.Instr → Option (List Sem.Instr)
     (the branch slice) recurses into the two NESTED bodies — the
     emitter's `goAlts` shape (the join type annotation is dropped; the
     Sem model's frames carry no result type). -/
-def lower : List Wat.Instr → Option (List Sem.Instr)
+def lowerGo : List Wat.Instr → Option (List Sem.Instr)
   | [] => some []
   | .if_ _ t e :: rest =>
-      match lower t, lower e with
-      | some t', some e' => ((Sem.Instr.if_ t' e') :: ·) <$> lower rest
+      match lowerGo t, lowerGo e with
+      | some t', some e' => ((Sem.Instr.if_ t' e') :: ·) <$> lowerGo rest
       | _, _ => none
   | i :: rest =>
       match lowerI i with
       | none => none
-      | some is' => (is' ++ ·) <$> lower rest
+      | some is' => (is' ++ ·) <$> lowerGo rest
+
+/-- The lowering with the FALLTHROUGH SEAL stripped: a TRAILING
+    top-level `unreachable` (emitCode's `.cases` seal) drops. The seal
+    is validator-only — statically required (block-internal
+    unreachability does not leak out of an `end`), dynamically dead
+    (an LCNF case is terminal in its spine: every arm diverges, and
+    this lane's dropped-`.ret` convention models that divergence). The
+    if_-BODY filler's `unreach` (`goAlts`'s exhausted-chain else —
+    INSIDE an `if_`, never top-level-trailing) is untouched: the
+    templates model it (`specCasesFrom`'s `[]` case). -/
+def lower : List Wat.Instr → Option (List Sem.Instr) :=
+  fun is =>
+    match lowerGo is with
+    | none => none
+    | some sem =>
+        match sem.getLast? with
+        | some .unreach => some sem.dropLast
+        | _ => some sem
 
 /-! ## The typed emission templates (the `emitLet`/`emitReturn` shapes)
 

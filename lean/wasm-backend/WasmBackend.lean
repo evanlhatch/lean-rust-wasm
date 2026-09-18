@@ -62,11 +62,16 @@ open Lean Compiler.LCNF
 /-! ## Scalar ABI -/
 
 /-- Wasm scalar type for an LCNF type expression. `none` = object →
-i32 pointer. -/
+i32 pointer. (Nat is an OBJECT too — see the bounded-Nat note at the
+`emitLet` arms.) -/
 def wasmTyOf? : Expr → Option String
   | .const c _ =>
     if c == `UInt64 then some "i64"
     else if c == `UInt32 || c == `UInt8 || c == `Bool then some "i32"
+    -- Char: the single-u32-field structure erases to its scalar in the
+    -- LCNF (the decChar? x-ray: `Char.ofNat n` then a direct `box`) —
+    -- the guest model is the raw i32 codepoint.
+    else if c == `Char then some "i32"
     else none
   | _ => none
 
@@ -93,6 +98,9 @@ structure S where
   the CALLEE's wasm result: object-returning calls with args = i32,
   scalar = i64 — the type default alone miscasts the local). -/
   sigs : Std.HashMap Name (Array String × String) := {}
+  /-- the join points IN SCOPE, by their fvar: (label, (param local, ty)…)
+      — the `.jmp` sites' store/branch targets. -/
+  jps : Std.HashMap FVarId (String × Array (String × String)) := {}
   deriving Inhabited
 
 abbrev M := StateT S (Except String)
@@ -140,6 +148,56 @@ def binop? : Name → Option Wat.Op
   | ``UInt64.decLt => some .i64ltu
   | ``UInt64.decEq => some .i64eq
   | _ => none
+
+/-- The LCNF specialization-product naming (the audit's gap 4): the
+    spec pass names a specialized instance-method call by its SOURCE —
+    `<method>._at_.<caller>.spec_<n>`. The `Option.instBEq.beq` spec
+    never joins impureExt (it is a base-phase decl only, not in
+    `env.constants`), so its call sites are inline-lowered. -/
+def isSpecBEqName (n : Name) : Bool :=
+  n.toString.startsWith "Option.instBEq.beq._at_."
+
+/-- The bounded-Nat fap surface the emitter INLINE-lowers at the
+    `emitLet .fap` arms: no callee decl exists (extern primitives),
+    nothing to compile or call — the operand-arity-checked arms
+    (Nat.decEq/beq/sub/add, the UInt64↔Nat seam). The callee COLLECTOR
+    and the UNSUPPORTED-LCNF diagnostic must agree with this surface:
+    chasing these names adds extern stubs + broken adapters (the
+    Nat.decEq_abi validate failure); flagging them re-bans the
+    sanctioned surface. -/
+def inlineNatFap? (fn : Name) (arity : Nat) : Bool :=
+  ((fn == ``UInt64.toNat || fn == ``Nat.toUInt64 || fn == ``UInt8.toNat
+        || fn == ``UInt64.ofNat || fn == ``Char.ofNat) && arity == 1)
+    || ((fn == ``Nat.decEq || fn == ``Nat.beq
+        || fn == ``Nat.sub || fn == ``Nat.add || fn == ``Nat.mul
+        || fn == ``Nat.decLt || fn == ``Nat.decLe) && arity == 2)
+    || ((fn == ``UInt8.decEq
+        || fn == ``UInt32.decEq
+       ) && arity == 2)
+/-- The spec-BEq call's args are fvars (LCNF is ANF). -/
+def specBEqArg : Arg .impure → M FVarId
+  | .fvar f => pure f
+  | _ => throw "WasmBackend: spec-BEq non-fvar arg"
+
+/-- Does this code jump to the given jp? (A loop-shaped jp — the body
+    jumping back to ITSELF — is unreachable in the block lowering:
+    the body sits outside the label's scope. Conservative reject.) -/
+private partial def jumpsTo (target : FVarId) : Code .impure → Bool
+  | .let _ k => jumpsTo target k
+  | .jp fd k => jumpsTo target fd.value || jumpsTo target k
+  | .fun fd k _ => jumpsTo target fd.value || jumpsTo target k
+  | .cases c => c.alts.any fun a =>
+      match a with
+      | .ctorAlt _ code => jumpsTo target code
+      | .default code => jumpsTo target code
+      | .alt _ _ _ h => absurd h (by simp)
+  | .jmp j _ => j == target
+  | .sset _ _ _ _ _ k => jumpsTo target k
+  | .inc _ _ _ _ k => jumpsTo target k
+  | .dec _ _ _ _ _ k => jumpsTo target k
+  | .del _ k => jumpsTo target k
+  | .return _ | .unreach _ => false
+  | .oset .. | .uset .. | .setTag .. => false
 
 /-! ## guestlang-std string intrinsics
 
@@ -208,21 +266,79 @@ partial def emitCode (code : Code .impure) : M Unit := do
           -- Lean decl; its mapped call has its own convention) — std ops
           -- fall through to the normal let path
           if rv == decl.fvarId && (binop? fn).isNone
-              && (GuestlangStd.Intrinsic.ofName? fn).isNone then
+              && (GuestlangStd.Intrinsic.ofName? fn).isNone
+              && !isSpecBEqName fn && !inlineNatFap? fn args.size then
             for a in args do emitArg a
             emitI (.returncall fn.toString)
           else
             emitLet decl; emitCode k
       | _, _ => emitLet decl; emitCode k
   | .return fvarId => emitReturn fvarId
-  | .cases c => emitCases c
+  | .cases c =>
+      emitCases c
+      -- THE FALLTHROUGH SEAL: an LCNF case is TERMINAL in its spine
+      -- (every arm's code is terminal — return/jmp/unreach or another
+      -- case), so control can never fall past the emitted if-chain.
+      -- But the VALIDATOR keeps the enclosing frame reachable at the
+      -- case's end, and a fallthrough to the function's end with an
+      -- empty stack fails the result-type check (the checkWitness
+      -- probe: the old `getD "i64"` phantom result accidentally
+      -- satisfied it; the void-if fix below exposed the hole). The
+      -- unreachable is semantically dead.
+      emitI .unreach
   | .inc fvarId _ _ _ k =>
       emitI (.localget (← load fvarId)); emitI (.call "rc_inc"); emitCode k
   | .dec fvarId _ _ _ _ k =>
       emitI (.localget (← load fvarId)); emitI (.call "rc_dec"); emitCode k
   | .del _ k => emitCode k
-  | .jp _ k => emitCode k
-  | .jmp .. => unsupported "Code.jmp"
+  | .jp fd k =>
+      -- JOIN POINT WITH ARGS (the audit's follow-up 1): WAT has no
+      -- goto, so the jp lowers to the block-and-fallthrough shape:
+      --   block $skip
+      --     block $jpL           ;; the gotos' label
+      --       <k; a goto = arg stores + br $jpL>
+      --       br $skip           ;; the fallthrough never reaches the body
+      --     end
+      --     <the jp body>         ;; a br $jpL lands HERE
+      --   end
+      -- The arg(s) ride LOCALS (blocks pass no values); the body must
+      -- not jump BACK (a loop-shaped jp throws — none in the checker's
+      -- closure). The jp's params bind to fresh locals, registered in
+      -- `jps` so the `.jmp` sites find them by the jp's OWN fvar.
+      let jpL := s!"jp{S.n (← get)}"
+      let skipL := s!"sk{S.n (← get)}"
+      let mut paramLocals : Array (String × String) := #[]
+      for p in fd.params do
+        let l ← bindLocal p.fvarId (paramWasmTy p)
+        paramLocals := paramLocals.push (l, paramWasmTy p)
+      -- loop-shaped jp = the body jumps to ITSELF: unreachable in this
+      -- lowering (the body sits outside the label's scope) — reject
+      if jumpsTo fd.fvarId fd.value then
+        unsupported "loop-shaped jp (the body jumps back)"
+      modify fun s => { s with jps := s.jps.insert fd.fvarId (jpL, paramLocals) }
+      let kI ← emitScoped k
+      let bodyI ← emitScoped fd.value
+      emitI (.block skipL ([.block jpL (kI ++ [.br skipL])] ++ bodyI))
+      -- SEAL: every k-path branches (a goto, or the dead `br $skip`),
+      -- and the jp body's paths are terminal (LCNF jp bodies end in
+      -- return/jmp) — so control never REACHES past the $skip block's
+      -- end. But the validator keeps the enclosing frame REACHABLE
+      -- there (block-internal unreachability does not leak out), and a
+      -- fallthrough to the function's end with an empty stack fails
+      -- `(result i32)` validation (the checkWitness probe). The
+      -- unreachable is semantically dead and closes the frame.
+      emitI .unreach
+  | .jmp fvarId args =>
+      -- the goto: store the args into the jp's param locals, branch
+      match (← get).jps[fvarId]? with
+      | none => unsupported s!"jmp to unregistered jp {fvarId.name}"
+      | some (jpL, paramLocals) => do
+        if args.size != paramLocals.size then
+          unsupported s!"jp arity drift: {args.size} args vs {paramLocals.size} params"
+        for h : i in [0:args.size] do
+          emitArg args[i]!
+          emitI (.localset paramLocals[i]!.1)
+        emitI (.br jpL)
   | .unreach _ => emitI .unreach
   | .sset _f i offset y ty k =>
       -- field store: sset var[slot, off] := y → mem[var + 8 + slot*8 + off]
@@ -264,29 +380,34 @@ partial def emitCases (c : Cases .impure) : M Unit := do
     || c.typeName == `UInt32 || c.typeName == `UInt64
   if scalar then
     let v ← load c.discr
-    emitIs (← goAlts v c.alts.toList)
+    emitIs (← goAlts v ((c.alts.toList.filterMap resultTyOfAlt).head?) c.alts.toList)
   else do
     emitI (.localget (← load c.discr))
     emitI (.mem .i32load8u 4 none)
     let tag ← bindFresh "i32"
     emitI (.localset tag)
-    emitIs (← goAlts tag c.alts.toList)
+    emitIs (← goAlts tag ((c.alts.toList.filterMap resultTyOfAlt).head?) c.alts.toList)
 
-partial def goAlts (scrut : String) : List (Alt .impure) → M (List Wat.Instr)
-  | [] => pure [.unreach]
-  | alt :: rest => do
+-- ONE result type for the WHOLE alt chain (threaded through the
+-- nested else-arms): a per-suffix read (the old `((alt :: rest)…)
+-- head?`) lets the chain's LAST alt (no resolving arm — a jp-fed arm
+-- ends in `.jmp`) pick a VOID if while an EARLIER alt's `if (result
+-- i32)` owns the else slot — an unreachable-but-REACHABLE empty stack
+-- at the enclosing `end` (validator: unreachability does not leak out
+-- of a block end — the checkWitness 3-way WProp chain, offset 0x17b3).
+-- The uniform type is safe because every RESOLVING arm is terminal
+-- (its emitted code ends in `return`/`return_call` — the value is a
+-- type marker only), the else path is the sole consumer, and the
+-- `.cases` FALLTHROUGH SEAL discards any leftover at the chain's end.
+partial def goAlts (scrut : String) : Option String → List (Alt .impure) → M (List Wat.Instr)
+  | _, [] => pure [.unreach]
+  | resTy, alt :: rest => do
       match alt with
       | .ctorAlt info code =>
-          -- the if's result = the BRANCH JOIN's type: the first alt in
-          -- the CHAIN whose code RESOLVES (a bare `return` arm resolves
-          -- to none — the join defers to a later alt's shape; the old
-          -- first-alt-only read emitted i64 for a mixed join and
-          -- mis-typed the nested-case else — userComplete's gate)
-          let resTy := ((alt :: rest).filterMap resultTyOfAlt).head?.getD "i64"
           let thenI ← emitScoped code
-          let elseI ← goAlts scrut rest
+          let elseI ← goAlts scrut resTy rest
           pure ([.localget scrut, .i32const info.cidx, .op .i32eq]
-            ++ [.if_ (some resTy) thenI elseI])
+            ++ [.if_ resTy thenI elseI])
       | .default code => emitScoped code
       | .alt _ _ _ h => absurd h (by simp)
 
@@ -299,7 +420,32 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
   | .lit (.uint8 v) | .lit (.uint32 v) =>
       let l ← bindLocal decl.fvarId "i32"
       emitI (.i32const v.toNat); emitI (.localset l)
-  | .lit (.nat _) => unsupported "Nat literal (GMP — banned in the guest)"
+  | .lit (.nat v) =>
+      -- THE BOUNDED-NAT LOWERING (W9.6; the audit's gap 1, resolved by
+      -- the owner decision). THE MODEL: a guest Nat is a BOXED machine
+      -- int — {rc, tag, i64 payload @8} — because the pipeline RCs
+      -- Nats as objects AND its compatible-types pass hands
+      -- single-Nat-field structures (WStep) where Nats are expected:
+      -- ONE boxed layout is the only sound representation. The owner's
+      -- bounded decision pins the PAYLOAD: machine u64, never GMP; a
+      -- literal at/above the cap pin is a DESIGN ERROR, thrown here
+      -- (fuel is sized `consumed × 4` — design §7.3). The lowered
+      -- surface is the audit's list — Nat.lit, Nat.decEq/Nat.beq,
+      -- Nat.sub (the countdown), Nat.add (the length-walk counter's
+      -- sanctioned increment) — the fap arms below; ctor-case dispatch
+      -- on a Nat scrutinee would read the tag byte: NOT lowered
+      -- (nothing in the sanctioned closure matches on Nat — the
+      -- compatible-types pass eliminates those matches), a Nat cases
+      -- reaching the emitter throws loudly (the generic tag-dispatch
+      -- path would read the box's tag 0 and treat the payload as a
+      -- POINTER — silently wrong — so the guard is the diagnostic +
+      -- this arm's refusal to special-case Nat ctors).
+      if v >= 4611686018427387904 then
+        unsupported s!"bounded-Nat: literal {v} at/above the pinned cap 2^62 (fuel is a bounded countdown — the `consumed × 4` sizing makes this a design error)"
+      let l ← bindLocal decl.fvarId "i32"
+      emitI (.i32const 16); emitI (.call "alloc"); emitI (.localset l)
+      emitI (.localget (← load decl.fvarId)); emitI (.i32const 0); emitI (.mem .i32store8 4 none)
+      emitI (.localget (← load decl.fvarId)); emitI (.i64const v); emitI (.mem .i64store 8 none)
   | .lit (.str v) =>
       -- guestlang-std string literal: variable-size object {rc, tag=250,
       -- len@8, bytes@16} — the UTF-8 bytes stored inline (i32.store8 per
@@ -338,7 +484,156 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.callindirect s!"sig_{args.size}box")
         emitI (.localset l)
   | .fap fn args =>
-      match binop? fn, GuestlangStd.Intrinsic.ofName? fn with
+      -- the bounded-Nat boundary conversion: fuel crosses the export
+      -- seam as u64 and checks as Nat — the conversion BOXES the
+      -- machine int (the model note at the lit arm). The unboxing
+      -- direction (Nat → scalar) is NOT sanctioned: nothing in the
+      -- checker's closure reads a Nat back as a raw scalar, and a
+      -- silent unbox would hide the layout decision.
+      if (fn == ``UInt64.toNat || fn == ``Nat.toUInt64) && args.size == 1 then
+        let l ← bindLocal decl.fvarId "i32"
+        emitI (.i32const 16); emitI (.call "alloc"); emitI (.localset l)
+        emitI (.localget (← load decl.fvarId)); emitI (.i32const 0); emitI (.mem .i32store8 4 none)
+        emitArg args[0]!
+        emitI (.mem .i64store 8 none)
+      else if fn == ``Nat.decEq || fn == ``Nat.beq then
+        -- boxed-payload compare → the raw i32 Bool
+        if args.size != 2 then unsupported s!"{fn} arity {args.size}"
+        let a ← specBEqArg args[0]!
+        let b ← specBEqArg args[1]!
+        let l ← bindLocal decl.fvarId "i32"
+        emitI (.localget (← load a)); emitI (.mem .i64load 8 none)
+        emitI (.localget (← load b)); emitI (.mem .i64load 8 none)
+        emitI (.op .i64eq)
+        emitI (.localset l)
+      else if fn == ``Nat.sub || fn == ``Nat.add || fn == ``Nat.mul then
+        -- boxed-payload arith → a FRESH box (Nats are immutable in the
+        -- pipeline's RC discipline). The sub direction = the fuel
+        -- countdown; the add = the length-walk counter's increment; the
+        -- mul = the varint reassembly's `128 * p.1` (the decode lane's
+        -- ONLY mul — the digit base × the recursive value). All bounded:
+        -- the counters walk in-memory lists, the fuel is `consumed × 4`,
+        -- and a decoded Nat is at most its own byte length × 7 bits —
+        -- overflow is a design error (the lit arm's cap pin documents
+        -- the bound; no wrap check on the ops).
+        if args.size != 2 then unsupported s!"{fn} arity {args.size}"
+        let a ← specBEqArg args[0]!
+        let b ← specBEqArg args[1]!
+        let l ← bindLocal decl.fvarId "i32"
+        let r ← bindFresh "i64"
+        emitI (.localget (← load a)); emitI (.mem .i64load 8 none)
+        emitI (.localget (← load b)); emitI (.mem .i64load 8 none)
+        emitI (.op (if fn == ``Nat.sub then .i64sub
+          else if fn == ``Nat.mul then .i64mul else .i64add))
+        emitI (.localset r)
+        emitI (.i32const 16); emitI (.call "alloc"); emitI (.localset l)
+        emitI (.localget (← load decl.fvarId)); emitI (.i32const 0); emitI (.mem .i32store8 4 none)
+        emitI (.localget (← load decl.fvarId)); emitI (.localget r); emitI (.mem .i64store 8 none)
+      else if fn == ``Nat.decLt || fn == ``Nat.decLe then
+        -- the decode lane's domain tests: the varint digit's `b.toNat <
+        -- 128` (decLt) and decBytes?'s length gate `n ≤ rest.length`
+        -- (decLe) — the same bounded-Nat positions as the countdown
+        -- (the encoded length IS the bound). Boxed-payload compare,
+        -- UNSIGNED (a Nat's machine payload is its magnitude; the
+        -- bounded cap keeps signed/unsigned equal) → the RAW i32 Bool
+        -- (the decEq convention — the LCNF consumes it in a Bool cases,
+        -- and emitCases branches SCALAR Bool scrutinees on the value).
+        if args.size != 2 then unsupported s!"{fn} arity {args.size}"
+        let a ← specBEqArg args[0]!
+        let b ← specBEqArg args[1]!
+        let l ← bindLocal decl.fvarId "i32"
+        emitI (.localget (← load a)); emitI (.mem .i64load 8 none)
+        emitI (.localget (← load b)); emitI (.mem .i64load 8 none)
+        emitI (.op (if fn == ``Nat.decLt then .i64ltu else .i64leu))
+        emitI (.localset l)
+      else if (fn == ``UInt8.toNat) && args.size == 1 then
+        -- the decode lane's digit read: `b.toNat` — the raw u8 scalar
+        -- (the cons head's unbox) → a BOXED Nat (payload = the
+        -- zero-extended value). The bounded model: a digit is < 256.
+        let l ← bindLocal decl.fvarId "i32"
+        emitI (.i32const 16); emitI (.call "alloc"); emitI (.localset l)
+        emitI (.localget (← load decl.fvarId)); emitI (.i32const 0); emitI (.mem .i32store8 4 none)
+        emitI (.localget (← load decl.fvarId))
+        emitArg args[0]!
+        emitI (.op .i64extendi32u)
+        emitI (.mem .i64store 8 none)
+      else if (fn == ``UInt64.ofNat) && args.size == 1 then
+        -- the decode lane's u64 atom: `UInt64.ofNat n` — the boxed Nat
+        -- payload → the raw u64 (IDENTITY at the machine model: the box
+        -- payload IS the u64; the owner's bounded decision covers the
+        -- decode direction — a decoded value above the u64 range is the
+        -- wrap, the encoder's range is always in-domain). The old
+        -- "unboxing NOT sanctioned" note is superseded by the owner
+        -- decision extending the bounded-Nat model to the decode lane.
+        if args.size != 1 then unsupported s!"{fn} arity {args.size}"
+        let l ← bindLocal decl.fvarId "i64"
+        emitArg args[0]!
+        emitI (.mem .i64load 8 none)
+        emitI (.localset l)
+      else if (fn == ``Char.ofNat) && args.size == 1 then
+        -- the decode lane's char atom: `Char.ofNat n` — the boxed Nat
+        -- payload → the raw u32 codepoint (WRAP: Char's scalar is u32;
+        -- the codec's encoder range is the char set — the guest's
+        -- $string_oflist UTF-8-encodes it).
+        let l ← bindLocal decl.fvarId "i32"
+        emitArg args[0]!
+        emitI (.mem .i64load 8 none)
+        emitI (.op .i32wrapi64)
+        emitI (.localset l)
+      else if (fn == ``UInt8.decEq || fn == ``UInt32.decEq
+         ) && args.size == 2 then
+        -- the SCALAR equality family (the decode lane's byte-pattern
+        -- matches: `decOpt?`'s `0 :: rest` / `1 :: rest` compile to
+        -- `UInt8.decEq` faps — the core decl is `@[extern]`, so the
+        -- closure fixpoint compiles it as an unreachable stub: the
+        -- inline lowering is the only body it gets). RAW scalar args
+        -- (the unbox happens at the pattern's head read), the raw i32
+        -- Bool result — the binop convention. A u64 beq rides i64eq;
+        -- the i32 family rides i32eq.
+        let a ← specBEqArg args[0]!
+        let b ← specBEqArg args[1]!
+        let l ← bindLocal decl.fvarId "i32"
+        emitI (.localget (← load a))
+        emitI (.localget (← load b))
+        emitI (.op .i32eq)
+        emitI (.localset l)
+      else if isSpecBEqName fn then
+        -- the SPECIALIZATION PRODUCT of `Option.instBEq.beq` (the audit's
+        -- gap 4: the spec pass names it by its SOURCE TYPE and it never
+        -- joins impureExt — the call is inline-lowered here instead).
+        -- Scope: the CHECKER's spec decls ONLY (`.spec_` under the
+        -- WitnessCheck `_at_` — anything else throws loudly). The
+        -- payload is the checker's `Option UInt64` (boxed u64): tag
+        -- compare, both-none = true, both-some = unbox + i64.eq. A
+        -- different payload type would silently mis-compare — the
+        -- name-scope + the checker's duel rows are the guards.
+        if !(fn.toString.startsWith "Option.instBEq.beq._at_.SchemaLang.WitnessCheck.") then
+          unsupported s!"specialization product outside the checker's scope: {fn}"
+        if args.size != 2 then
+          unsupported s!"spec-BEq arity {args.size}"
+        let l ← bindLocal decl.fvarId "i32"
+        let a ← specBEqArg args[0]!
+        let b ← specBEqArg args[1]!
+        let ta ← bindFresh "i32"
+        emitI (.localget (← load a)); emitI (.mem .i32load8u 4 none); emitI (.localset ta)
+        let tb ← bindFresh "i32"
+        emitI (.localget (← load b)); emitI (.mem .i32load8u 4 none); emitI (.localset tb)
+        -- same tag? both none (0) → 1; both some → deref each option's
+        -- box ptr (@8 = the INNER UInt64 BOX — the checker's spec
+        -- products compare `Option UInt64`, and the ctor's field holds
+        -- the boxed scalar) then payload i64.eq. (The @8 direct load
+        -- compared the POINTERS-as-i64 — latent until a runtime value
+        -- flowed: the constant sites folded at compile.)
+        emitI (.localget ta); emitI (.localget tb); emitI (.op .i32eq)
+        emitI (.if_ (some "i32")
+          [ .localget ta, .op .i32eqz
+          , .if_ (some "i32") [ .i32const 1 ]
+              [ .localget (← load a), .mem .i32load 8 none, .mem .i64load 8 none
+              , .localget (← load b), .mem .i32load 8 none, .mem .i64load 8 none
+              , .op .i64eq ] ]
+          [ .i32const 0 ])
+        emitI (.localset l)
+      else match binop? fn, GuestlangStd.Intrinsic.ofName? fn with
       | some op, _ =>
           let l ← bindLocal decl.fvarId (ty.getD "i64")
           for a in args do emitArg a
@@ -548,6 +843,9 @@ def adapterShape? : String → Option String
   | "user-valid" => some "userParam"
   | "user-complete" => some "userParam"
   | "order-error-valid" => some "variantParam"
+  -- the W9.6 witness export: bytes in (the canonical list<u8> = the
+  -- (ptr, len) pair), verdict out (the raw i32 Bool)
+  | "verify-witness" => some "bytesParam"
   | _ => none
 
 /-- The TYPED WAT for walking a guest List cons chain into a canonical
@@ -987,6 +1285,44 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
                  , ("cur", "i32"), ("n", "i32"), ("arr", "i32"), ("w", "i32")]
                  ++ extraLocals
       body }
+  else if shape == "bytesParam" then
+    -- The BYTES-PARAM adapter (verify-witness, the W9.6 decode lane):
+    -- the canonical ABI flattens a `list<u8>` param to the (ptr, len)
+    -- i32 pair of a byte array the lift copied into guest memory; the
+    -- adapter reconstructs the guest List UInt8 cons chain: elements =
+    -- BOXED u8s (alloc 16, payload i32 @8 — the scalar-element box
+    -- model the streamU64 walk reads through), cells = {tag=1@4, head@8,
+    -- tail@16}, built BACKWARD (the consChain discipline); the EMPTY
+    -- list = the allocated {rc, tag=0} block (never the null pointer —
+    -- the compiled readers dereference the nil tail). The verdict = the
+    -- impl's raw i32 Bool, returned directly. The impl decs the chain
+    -- (rc=1 from alloc — the record-param adapter's borrowed discipline).
+    let body : List Wat.Instr :=
+      [ .i32const 8, .call "alloc", .localset "acc"
+      , .localget "acc", .i32const 0, .mem .i32store8 4 none
+      , .localget "len", .localset "i"
+      , .block "bts-done" [.loop "bts-loop"
+            [ .localget "i", .op .i32eqz, .brif "bts-done"
+            , .localget "i", .i32const 1, .op .i32sub, .localset "i"
+            -- the element's u8 box
+            , .i32const 16, .call "alloc", .localset "bx"
+            , .localget "bx", .i32const 0, .mem .i32store8 4 none
+            , .localget "bx", .localget "ptr", .localget "i", .op .i32add
+            , .mem .i32load8u 0 none, .mem .i32store 8 none
+            -- the cons cell
+            , .i32const 24, .call "alloc", .localset "c"
+            , .localget "c", .i32const 1, .mem .i32store8 4 none
+            , .localget "c", .localget "bx", .mem .i32store 8 none
+            , .localget "c", .localget "acc", .mem .i32store 16 none
+            , .localget "c", .localset "acc"
+            , .br "bts-loop" ] ]
+      , .localget "acc", .call d.name.toString ]
+    { name := s!"{d.name.toString}_abi"
+      params := [ { name := some "ptr", ty := "i32" }
+                , { name := some "len", ty := "i32" } ]
+      result := some "i32"
+      locals := [("acc", "i32"), ("i", "i32"), ("bx", "i32"), ("c", "i32")]
+      body }
   else
     -- the GENERAL prologue: pass through / re-box the flat params, call
     -- the impl, return its result (the object case unboxes the flat i64
@@ -1064,16 +1400,46 @@ def emitModule (decls : List (Decl .impure))
       for i in [0:nFresh] do
         body := body ++ [ .localget s!"x{i}" ]
       body := body ++ [ .call fn.toString ]
-    else
-      -- raw scalar target: unbox captured + fresh args, call, box result
-      for _i in [0:nA] do
-        body := body ++ [ .localget "c", .mem .i32load off none, .mem .i64load 8 none ]
+    else if resTy == "i64" then
+      -- raw SCALAR target: unbox captured + fresh args, call, box result.
+      -- The convention split is the CALLEE's OWN signature (the sigs
+      -- table): a raw i64 param is the scalar convention (unbox), an
+      -- i32 param is the OBJECT convention (forward — the W9.6 decode
+      -- lane's first-class fns: `decList? decWStep?` passes the
+      -- list-taking decoder as a closure value; the old blanket
+      -- unbox-everything unboxed the cons HEAD SLOT as the argument —
+      -- and the result-box path declared no $r/$p locals for an i32
+      -- result: the parse failure). A raw i32 param is ambiguous
+      -- (Bool scalar OR object) — no Bool-param target joins a
+      -- trampoline in the sanctioned closure; a drift here throws at
+      -- validate, never silently misreads (the raw branch is
+      -- resTy-gated now, so an object-result target can't reach it).
+      for i in [0:nA] do
+        let tyI := (paramTys.getD i "i32")
+        if tyI == "i64" then
+          body := body ++ [ .localget "c", .mem .i32load off none, .mem .i64load 8 none ]
+        else
+          body := body ++ [ .localget "c", .mem .i32load off none ]
         off := off + 8
       for i in [0:nFresh] do
-        body := body ++ [ .localget s!"x{i}", .mem .i64load 8 none ]
+        let tyI := (paramTys.getD (nA + i) "i32")
+        if tyI == "i64" then
+          body := body ++ [ .localget s!"x{i}", .mem .i64load 8 none ]
+        else
+          body := body ++ [ .localget s!"x{i}" ]
       body := body ++ [ .call fn.toString, .localset "r", .i32const 16
         , .call "alloc", .localtee "p", .localget "r", .mem .i64store 8 none
         , .localget "p" ]
+    else
+      -- raw OBJECT target (an i32 result): forward every arg as-is —
+      -- the boxed branch's shape at an unsuffixed name (the decode
+      -- lane's first-class decoders: object in, Option object out)
+      for _ in [0:nA] do
+        body := body ++ [ .localget "c", .mem .i32load off none ]
+        off := off + 8
+      for i in [0:nFresh] do
+        body := body ++ [ .localget s!"x{i}" ]
+      body := body ++ [ .call fn.toString ]
     let params : List Wat.Param :=
       { name := some "c", ty := "i32" } ::
         (List.range nFresh).map fun i => { name := some s!"x{i}", ty := "i32" }

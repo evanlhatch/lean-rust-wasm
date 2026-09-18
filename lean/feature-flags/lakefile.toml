@@ -29,7 +29,9 @@ path = "../Machines"
 # enableInitializersExecution replays the @[schema] registrations).
 [[lean_lib]]
 name = "FeatureFlags"
-roots = ["FeatureFlags", "Machine"]
+# Templates: the W8.10 template/slot machinery (feature-flags-local —
+# the runbook order does not move schema machinery out of SchemaLang).
+roots = ["FeatureFlags", "Machine", "Templates"]
 
 # The impl module: the guest bodies of the spec's functions.
 [[lean_lib]]

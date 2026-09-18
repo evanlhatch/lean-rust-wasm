@@ -1,0 +1,341 @@
+/-
+# Templates — templates/slots (W8.10, the feature-flags lesson)
+
+Ownership: feature-flags owns this file. The runbook's W8.10 order
+("Templates/slots (the feature-flags lesson)") does not relocate schema
+declaration machinery out of `SchemaLang.Meta`, so per the order's scope
+rule the template commands live LOCAL to the dogfood package, riding
+SchemaLang's PUBLIC registration surface — `schemaItemExt` through
+`SchemaLang.Meta.registerSchemaItem`, the same write path `@[schema]`
+uses. No schema-lang library file is touched; the emitters' `List Item`
+fold is untouched (no new item kinds); byte-tie holds by construction.
+
+The canon row (canon.md): a reusable schema fragment = a template with
+slots (substitution), NOT a type-level generic. The order's default:
+cedar's EntityUIDOrSlot pattern — the template declares a parameterized
+shape ONCE, and `schema_from_template` instantiates it N times with
+CONCRETE slot fillings; each instance is a REAL registered item (the
+registry sees it), gets the derived field-list abbrev (the
+`derive_schema_fields` item-1 surface, `abbrev` per the reducibility
+rule), and composes with every existing downstream lane
+(`schema_invariant`, `schema_update`, `schema_keys`,
+`derive_schema_fields`) because the instance IS a registered record.
+
+The lesson it generalizes (`FeatureFlags.lean`): Flag and AuditEntry
+hand-declare the same keyed-record shape (an id/UInt64 + String
+columns). Deliberate exclusions (v1):
+
+- Template field types are a declared slot reference (a bare ident), or
+  a `Ty` term (`.u64`, `.list .string`, `.ty "flag"` — the term is
+  elaborated against `SchemaLang.Ty` at template-declaration time). No
+  slot propagation INTO a composite's argument position (`(.list
+  <slot>)` would need substitution inside `Ty`'s arguments — widening
+  this is a `TFieldTy` change, not a consumer change).
+- No Lean `structure` is generated — the instance is a REGISTRY item
+  plus the derived fields abbrev. A mirror structure would be a second
+  hand-written surface (the exact disease this removes).
+- Migration of the existing Flag/AuditEntry declarations is a FOLLOW-UP:
+  instantiating them through a template re-registers with fresh
+  provenance (a generated instance has no declaring constant → no doc
+  string → the WIT/provenance comments change) — emitted bytes would
+  move, and the order says: do NOT migrate in that case. The fixtures
+  live in `Tests.Main` (never imported by the `schema gen` driver), so
+  this module registers no items of its own.
+-/
+
+import SchemaLang.Ty
+import SchemaLang.Item
+import CodegenCore.DidYouMean
+import SchemaLang.Meta.Reflect
+import SchemaLang.Meta.Derive
+
+namespace Templates
+
+open Lean Elab Command Term Meta
+
+/-! ## The template model (data) -/
+
+/-- What a slot filling may BE. `any` = any boundary `Ty`; `scalar` =
+    the KeyTy scalar sub-universe only (the key-capable types — a slot
+    meant to hold a declared primary key's type). -/
+inductive SlotContract where
+  | any
+  | scalar
+deriving Repr, BEq, Inhabited
+
+/-- A template field's type: a slot reference (filled at instantiation)
+    or a concrete boundary `Ty` (fixed for every instance). -/
+inductive TFieldTy where
+  | slot (name : String)
+  | ty (t : SchemaLang.Ty)
+deriving Repr, BEq, Inhabited
+
+/-- The template: a named record shape with slots. -/
+structure SchemaTemplate where
+  name : String
+  slots : List (String × SlotContract)
+  fields : List (String × TFieldTy)
+deriving Repr, BEq, Inhabited
+
+/-- The scalar spellings usable as concrete field types (the
+    `derive_schema_fields` `tyTerm` row, ident form). Composite types
+    ride the term form (`.list .string`, `.ty "flag"`). -/
+def tyOfSpelling? : String → Option SchemaLang.Ty
+  | "bool" => some .bool
+  | "u8" => some .u8
+  | "u16" => some .u16
+  | "u32" => some .u32
+  | "u64" => some .u64
+  | "i8" => some .i8
+  | "i16" => some .i16
+  | "i32" => some .i32
+  | "i64" => some .i64
+  | "f32" => some .f32
+  | "f64" => some .f64
+  | "string" => some .string
+  | "bytes" => some .bytes
+  | _ => none
+
+/-- The slot-filling substitution + contract gate, PURE (the
+    `checkStruct` pattern: the command resolves names, this judges).
+    Error strings carry the did-you-mean / valid-space enumeration —
+    the closed-world error doctrine (`SchemaDiag`'s reading; the
+    template diagnostics live here as strings because `SchemaDiag` is
+    schema-lang's CLOSED inductive and this file adds no schema-lang
+    surface). -/
+def substFields (ctx : String) (tmpl : SchemaTemplate)
+    (fillings : List (String × SchemaLang.Ty)) :
+    Sum String (List SchemaLang.Field) :=
+  let want := tmpl.slots.map (·.1)
+  let got := fillings.map (·.1)
+  let missing := want.filter (fun w => !got.contains w)
+  let unknown := got.filter (fun g => !want.contains g)
+  if !missing.isEmpty then
+    Sum.inl s!"{ctx}: no filling for slot(s) {String.intercalate ", " missing} \
+      — the template declares: {String.intercalate ", " want}"
+  else if !unknown.isEmpty then
+    let cands := CodegenCore.didYouMean unknown.head! want
+    let hint := if cands.isEmpty then "" else s!" — did you mean: {String.intercalate ", " cands}?"
+    Sum.inl (s!"{ctx}: no slot `{unknown.head!}` — the template declares: "
+      ++ String.intercalate ", " want ++ hint)
+  else if got.length != want.length then
+    Sum.inl s!"{ctx}: duplicate filling — exactly one `:=` per slot \
+      ({want.length} slot(s), {got.length} filling(s))"
+  else
+    -- the CONTRACT gate: a `scalar` slot refuses a non-KeyTy filling
+    -- (the negative control's target — the key-capable discipline)
+    let contractErrs : List String := tmpl.slots.filterMap (fun (n, c) =>
+        match c with
+        | .any => none
+        | .scalar =>
+            match fillings.lookup n with
+            | none => none -- unreachable: the coverage gate above
+            | some t =>
+                match SchemaLang.Ty.toKeyTy? t with
+                | some _ => none
+                | none =>
+                    some (s!"slot `{n}` is declared `scalar` — the filling "
+                      ++ s!"`{repr t}` does not inject from the KeyTy scalar "
+                      ++ "sub-universe (bool, u8–u64, i8–i64, string)"))
+    match contractErrs with
+    | e :: _ => Sum.inl s!"{ctx}: {e}"
+    | [] =>
+        let step (acc : Sum String (List SchemaLang.Field))
+            (pair : String × TFieldTy) :=
+          match acc with
+          | .inl e => .inl e
+          | .inr fs =>
+              match pair.2 with
+              | .ty t => .inr (fs ++ [{ name := pair.1, ty := t }])
+              | .slot s =>
+                  match fillings.lookup s with
+                  | some t => .inr (fs ++ [{ name := pair.1, ty := t }])
+                  | none =>
+                      -- unreachable: the coverage gate above
+                      .inl s!"{ctx}: internal: slot `{s}` unfilled at substitution"
+        tmpl.fields.foldl step (.inr [])
+
+/-! ## The template registry (the `mkRegistryExt` semantics: append on
+    add, concatenate on import, replayed from oleans) -/
+
+initialize templateExt :
+    SimplePersistentEnvExtension (Name × SchemaTemplate) (List (Name × SchemaTemplate)) ←
+  CodegenCore.mkRegistryExt `ffTemplateExt
+
+/-- The declared templates from an environment. -/
+def registeredTemplates (env : Environment) : List (Name × SchemaTemplate) :=
+  templateExt.getState env
+
+/-! ## The commands -/
+
+-- The line keywords are COLON-SUFFIXED (`slot:`/`field:`/`fill:` — the
+-- `machine!` discipline): the field line's TYPE is a TERM, and Lean
+-- terms run across newlines — only a keyword token (which a term cannot
+-- contain) ends the previous line's term. The suffixed tokens reserve
+-- nothing bare (`slot` stays an identifier).
+
+set_option linter.guestlang.packageNamespace false in -- because declare_syntax_cat parks the category in Lean's namespace by design
+declare_syntax_cat templateLine
+
+-- Syntax-category bodies are identical by construction (a category
+-- carries no payload) — the `updateClause` opt-out precedent.
+attribute [nolint linter.guestlang.dupDefBodies "syntax-category bodies are identical by construction (a category carries no payload)"]
+  Lean.Parser.Category.templateLine
+
+syntax (name := templateSlotLine) "slot:" ident ident : templateLine
+syntax (name := templateFieldLine) "field:" ident term : templateLine
+
+/- `schema_template <name> where <templateLine>*` — declare the
+    parameterized shape ONCE. Slot lines: `slot: <name> <any|scalar>`.
+    Field lines: `field: <name> <type>` where `<type>` is a bare ident
+    naming a declared slot, or a `Ty` term (`.u64`, `.list .string`,
+    `.ty "flag"`) elaborated HERE against `SchemaLang.Ty`. -/
+syntax (name := schemaTemplate) "schema_template " ident " where "
+  templateLine* : command
+
+@[command_elab Templates.schemaTemplate]
+unsafe def elabSchemaTemplate : CommandElab := fun stx => do
+  let tmplId := stx[1]!.getId
+  let ctx := s!"schema_template {tmplId}"
+  let env ← getEnv
+  if (registeredTemplates env).any (fun (ln, _) => ln == tmplId) then
+    let cands := CodegenCore.didYouMean tmplId.toString
+      ((registeredTemplates env).map (fun (ln, _) => ln.toString))
+    throwError s!"{ctx}: duplicate template name" ++ (if cands.isEmpty then ""
+      else s!" — did you mean: {String.intercalate ", " cands}?")
+  let mut slots : List (String × SlotContract) := []
+  let mut fields : List (String × TFieldTy) := []
+  for c in stx[3]!.getArgs do
+    if c.getKind == `Templates.templateFieldLine then
+      -- a FIELD line: `field: <name> <slot|Ty term>`
+      let fname := c[1]!.getId.toString
+      if fields.any (fun (n, _) => n == fname) then
+        throwError s!"{ctx}: duplicate field `{fname}`"
+      match SchemaLang.checkSchemaIdent s!"field of `{fname}`" fname with
+      | ds@(_ :: _) =>
+          throwError s!"{ctx}: " ++ String.intercalate "; " (ds.map SchemaLang.SchemaDiag.render)
+      | [] => pure ()
+      let tySpec := c[2]!
+      let fty : TFieldTy ←
+        if tySpec.isIdent then
+          let s := tySpec.getId.toString
+          match slots.lookup s with
+          | some _ => pure (.slot s)
+          | none =>
+              match tyOfSpelling? s with
+              | some t => pure (.ty t)
+              | none =>
+                  let known := slots.map (·.1)
+                  let cands := CodegenCore.didYouMean s known
+                  throwError s!"{ctx}: field `{fname}`: `{s}` is not a declared slot "
+                    ++ s!"(declared: {String.intercalate ", " known}) or a scalar spelling "
+                    ++ "(bool, u8–u64, i8–i64, f32, f64, string, bytes) — composite types "
+                    ++ "ride the Ty-term form (`.u64`, `.list .string`, `.ty \"flag\"`)"
+                    ++ (if cands.isEmpty then "" else s!" — did you mean: {String.intercalate ", " cands}?")
+        else do
+          -- the Ty-term form: elaborate against `SchemaLang.Ty`, hold
+          -- the VALUE (the `fieldsToExpr`/`evalExpr` discipline)
+          liftTermElabM do
+            let expected : Expr := Lean.mkConst ``SchemaLang.Ty
+            let e ← elabTerm tySpec (some expected)
+            Term.synthesizeSyntheticMVarsNoPostponing
+            let e ← instantiateMVars e
+            if e.hasExprMVar then
+              throwError s!"{ctx}: field `{fname}`: unresolved metavariables in the type term"
+            let tVal : SchemaLang.Ty ← Meta.evalExpr SchemaLang.Ty expected e
+            pure (.ty tVal)
+      fields := fields ++ [(fname, fty)]
+    else
+      -- a SLOT line: `slot: <name> <any|scalar>`
+      let sname := c[1]!.getId.toString
+      if slots.any (fun (n, _) => n == sname) then
+        throwError s!"{ctx}: duplicate slot `{sname}`"
+      let contractR : Sum String SlotContract :=
+        match c[2]!.getId.toString with
+        | "any" => .inr .any
+        | "scalar" => .inr .scalar
+        | other =>
+            .inl s!"{ctx}: unknown contract `{other}` for slot `{sname}` — valid: any, scalar"
+      let contract : SlotContract ←
+        match contractR with
+        | .inl msg => throwError msg
+        | .inr c => pure c
+      slots := slots ++ [(sname, contract)]
+  if fields.isEmpty then
+    throwError s!"{ctx}: a template declares at least one field"
+  modifyEnv fun env => templateExt.addEntry env
+    (tmplId, { name := tmplId.toString, slots, fields })
+
+/- `schema_from_template <template> as <name> where <filling>*` —
+    instantiate: fill every slot with a CONCRETE `Ty` term, register
+    the resulting record as a REAL schema item (the registry's fresh
+    name = the `as` ident), and emit the derived field-list abbrev
+    (`<name>Fields`, the `derive_schema_fields` item-1 surface). The
+    instance composes with every downstream lane (`schema_invariant`,
+    `schema_update`, `schema_keys`, …) because it IS a registered
+    record. Namespacing: the schema name is the `as` ident's full Lean
+    name (root-level in the fixtures — the `namedByModule` root
+    partition routes it with the declaring module); the Lean-side
+    surface is the fresh `<name>Fields` abbrev. -/
+syntax (name := fromTemplate) "schema_from_template " ident " as " ident
+  " where " ("fill:" ident " := " term)* : command
+
+@[command_elab Templates.fromTemplate]
+unsafe def elabFromTemplate : CommandElab := fun stx => do
+  let tmplId := stx[1]!.getId
+  let instId := stx[3]!.getId
+  let ctx := s!"schema_from_template {instId}"
+  let env ← getEnv
+  let tmpl ← match (registeredTemplates env).find? (fun (ln, _) => ln == tmplId) with
+    | some (_, t) => pure t
+    | none =>
+        let cands := CodegenCore.didYouMean tmplId.toString
+          ((registeredTemplates env).map (fun (ln, _) => ln.toString))
+        throwError s!"{ctx}: no template `{tmplId}`" ++ (if cands.isEmpty then ""
+          else s!" — did you mean: {String.intercalate ", " cands}?")
+  -- the FRESH-NAME gate: the instance's schema name must not collide
+  -- with any registered item (did-you-mean over the registered space)
+  let schemaName := SchemaLang.Meta.schemaNameOf instId
+  if (SchemaLang.Meta.registeredNames env).contains schemaName then
+    let cands := CodegenCore.didYouMean schemaName (SchemaLang.Meta.registeredNames env)
+    throwError s!"{ctx}: `{schemaName}` is already a registered schema item — "
+      ++ "instance names must be fresh"
+      ++ (if cands.isEmpty then "" else s!" — did you mean: {String.intercalate ", " cands}?")
+  -- the fillings: each `:=` term elaborated against `SchemaLang.Ty`
+  -- and held as a VALUE (the template command's discipline)
+  let mut fillings : List (String × SchemaLang.Ty) := []
+  for f in stx[5]!.getArgs do
+    let slotName := f[1]!.getId.toString
+    let tVal : SchemaLang.Ty ← liftTermElabM do
+      let expected : Expr := Lean.mkConst ``SchemaLang.Ty
+      let e ← elabTerm f[3]! (some expected)
+      Term.synthesizeSyntheticMVarsNoPostponing
+      let e ← instantiateMVars e
+      if e.hasExprMVar then
+        throwError s!"{ctx}: unresolved metavariables in the filling for `{slotName}`"
+      Meta.evalExpr SchemaLang.Ty expected e
+    fillings := fillings ++ [(slotName, tVal)]
+  -- substitution + the contract gate (the PURE authority)
+  match substFields ctx tmpl fillings with
+  | .inl err => throwError err
+  | .inr fields => do
+      -- the identifier gate (the record name is an EMITTED spelling
+      -- too — the `checkStruct` per-field gate, applied to the name)
+      match SchemaLang.checkSchemaIdent s!"record `{schemaName}`" schemaName with
+      | ds@(_ :: _) =>
+          throwError s!"{ctx}: " ++ String.intercalate "; " (ds.map SchemaLang.SchemaDiag.render)
+      | [] => pure ()
+      -- the REAL item: the same write path `@[schema]` uses
+      liftCoreM <| SchemaLang.Meta.registerSchemaItem instId
+        (SchemaLang.Item.record schemaName fields)
+      -- the derived surface: the field-list abbrev (the `abbrev` rule —
+      -- instance search sees through: `HasCol` works on it directly).
+      -- The Lean-side name is the FLATTENED `<inst>Fields` (the
+      -- `flagLifecycleStates` machine! precedent — the instance's
+      -- surface reads flat, not nested). Root-level instances in the
+      -- fixtures; a namespaced instance flattens its dots (v1).
+      let fieldTerms ← fields.mapM SchemaLang.Meta.fieldTerm
+      elabCommand (← `(abbrev $(mkIdent (Lean.Name.mkSimple (instId.toString ++ "Fields"))) :
+        List SchemaLang.Field := [$fieldTerms.toArray,*]))
+
+end Templates

@@ -31,11 +31,16 @@ generates (W2.3 — the four in-tree hand-written copies this replaces):
   COMPUTED from the machine (`step?` over labels × states, label-major —
   the hand-written row order), so it cannot drift from the guards,
 - `<m>TableStep? : <m>.Label → State → Option State` — the table as a
-  lookup (the emitter-facing structural reading),
+  lookup (the emitter-facing structural reading); lookup keys compare by
+  DECIDABLE equality (`decide (r.1 = e) && …`), not `==` — see the
+  general table law's note (`Machines.Machine.tableLookup?_eq_step?`);
+  the VALUES agree, so emitted artifacts are unchanged,
 - `<m>TableStep?_eq_step?` — the agreement theorem: over enumerated
-  states the table lookup IS `step?` (proved by `fin_cases` + `decide`;
-  an enumeration that misses a guard-satisfying state fails THIS proof
-  at build time — the check is the compile),
+  states the table lookup IS `step?` (derived from the GENERAL
+  table-function law `Machines.Machine.tableLookup?_eq_step?` — the
+  W-iso batch piece 2; the per-machine residue is `labels_complete`'s
+  `decide`, so an enumeration that misses a label ctor fails the BUILD —
+  the check is the compile),
 - `instance : DecidablePred <m>.Inv` — via `inferInstanceAs` (the
   invariant must be instance-synthesizable: equalities, comparisons,
   Boolean coercions, ∧/→ over decidables — NOT a `match` on the state,
@@ -247,6 +252,10 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   -- list. (The NAME is needed unconditionally: the `states:` table below
   -- is computed from it, and `states:` + payload is rejected above.)
   let labelsId := mkIdentFrom stx (name.getId ++ `labels)
+  -- the completeness-proof IDENT (hoisted: the `states:` tie proof below
+  -- references it; the theorem itself is only emitted for payload-free
+  -- machines, which the `states:` clause already requires)
+  let completeId := mkIdentFrom stx (name.getId ++ `labels_complete)
   if !hasPayload then
     let labelTerms : Array Term ← evs.mapM fun ev => do
       let evName : TSyntax `ident := ⟨ev[1]!⟩
@@ -256,7 +265,6 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
     -- the completeness proof: every constructor is in `labels`. The
     -- conformance battery consumes this as a PROOF PARAMETER (not a
     -- convention) — the enumeration's totality is now checked, not assumed.
-    let completeId := mkIdentFrom stx (name.getId ++ `labels_complete)
     elabCommand (← `(command|
       theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
         intro l; cases l <;> decide))
@@ -293,20 +301,34 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
           $labelsId))
     elabCommand (← `(command|
       /-- The machine as a table lookup (the emitter-facing structural
-          reading; the tie theorem pins it to `step?`). -/
+          reading; the tie theorem pins it to `step?`). The lookup keys
+          compare by DECIDABLE equality (`decide (r.1 = e) && …`), not
+          `==` — a separately-derived BEq instance and
+          `instBEqOfDecidableEq` are different operators, and the general
+          table law (`Machines.Machine.tableLookup?_eq_step?`) is stated
+          over the decidable one; the VALUES agree (both decide equality
+          correctly), so the emitted artifacts are unchanged. -/
       def $tstepId:ident $[$binders]* : $labelId → $sty → _root_.Option $sty :=
         fun e s => _root_.Option.map (fun r => r.2.2)
-          (_root_.List.find? (fun r => r.1 == e && r.2.1 == s)
+          (_root_.List.find? (fun r => decide (r.1 = e) && decide (r.2.1 = s))
             ($transId $binderNames*))))
     elabCommand (← `(command|
       /-- The generated table IS the machine, over the enumerated state
-          space. -/
+          space. (Proof: the GENERAL table-function law
+          `Machines.Machine.tableLookup?_eq_step?` applied at the
+          machine's `step?` — W-iso batch piece 2. The per-machine
+          residue is the LABEL-coverage check: `labels_complete`'s
+          `decide` fails the build if the label enumeration misses a
+          constructor — the compile IS the check.) -/
       theorem $tieId:ident $[$binders]* (e : $labelId) (s : $sty)
           (hs : s ∈ ($statesId $binderNames*)) :
           ($tstepId:ident $binderNames*) e s =
             _root_.Machines.Machine.step? ($name $binderNames*) s e := by
         simp only [$statesId:ident] at hs
-        fin_cases hs <;> cases e <;> decide))
+        exact _root_.Machines.Machine.tableLookup?_eq_step?
+          (_root_.Machines.Machine.step? ($name $binderNames*))
+          ($labelsId $binderNames*) ($statesId $binderNames*)
+          ($completeId $binderNames*) e s hs))
     elabCommand (← `(command|
       /-- The invariant is decidable (machine!-generated; the `states:`
           clause opts the machine into the finite-space entourage). -/

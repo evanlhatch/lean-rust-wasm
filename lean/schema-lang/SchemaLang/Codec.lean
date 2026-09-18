@@ -36,6 +36,7 @@ top (tag mismatch, length-prefix overrun, trailing-garbage check).
 module
 
 public import SchemaLang.Ty
+public import CodegenCore.GuestGate
 
 @[expose] public section
 
@@ -116,6 +117,23 @@ def decVarNat : List UInt8 → Nat × List UInt8
         let p := decVarNat rest
         (b.toNat - 128 + 128 * p.1, p.2)
 
+ -- THE GUEST MARK (W9.6's decode lane — the bounded-Nat decision
+ -- extends to the varint reassembly): the decode surface is
+ -- `Nat.decLt` (the digit-domain test) + `Nat.sub`/`Nat.add`/`Nat.mul`
+ -- (the reassembly `b.toNat - 128 + 128 * p.1`) — ALL bounded by
+ -- construction: a digit is < 128, the reassembly's value is the
+ -- encoded Nat (the encoded length IS the bound), and the backend's
+ -- pinned 2^62 cap + `encVarNat`'s own wire make overflow a design
+ -- error, exactly as for the fuel countdown. `decVarNat` is
+ -- wf-recursive (`termination_by`): the kernel never unfolds it (the
+ -- known trap) — the round-trip laws cite `decVarNat.eq_def`-based
+ -- rewrites, and the GUEST compiles the wf fixpoint through the
+ -- closure machinery (verified: the wasm-gen lane + the duel rows).
+ -- Every other decoder below inherits this mark's rationale through
+ -- composition — the marks are per-decl for the manifest fold's
+ -- granularity, the bounded-Nat note lives HERE.
+attribute [guest_std] decVarNat
+
 @[simp] theorem UInt8.ofNat_toNat_of_lt (n : Nat) (h : n < 256) :
     (UInt8.ofNat n).toNat = n := by
   rw [UInt8.toNat_ofNat']
@@ -159,6 +177,7 @@ theorem decVarNat_encVarNat (n : Nat) : decVarNat (encVarNat n) = (n, []) := by
 
 /-- Nat element over the varint, wrapped into the `Option` element-
     decoder shape the generic combinators consume. -/
+@[guest_std]
 def decNat? (bs : List UInt8) : Option (Nat × List UInt8) := some (decVarNat bs)
 
 @[simp] theorem decNat_encVarNat_append (n : Nat) (rest : List UInt8) :
@@ -187,6 +206,7 @@ def encOpt (enc : α → List UInt8) : Option α → List UInt8
   | none => [0]
   | some a => 1 :: enc a
 
+@[guest_std]
 def decOpt? (dec : List UInt8 → Option (α × List UInt8)) :
     List UInt8 → Option (Option α × List UInt8)
   | 0 :: rest => some (none, rest)
@@ -226,6 +246,7 @@ def encList (enc : α → List UInt8) (as : List α) : List UInt8 :=
   encVarNat as.length ++ (as.map enc).flatten
 
 /-- Decode `m` self-delimiting elements. -/
+@[guest_std]
 def decManyBind? (dec : List UInt8 → Option (α × List UInt8)) :
     (m : Nat) → List UInt8 → Option (List α × List UInt8)
   | 0, bs => some ([], bs)
@@ -237,6 +258,7 @@ def decManyBind? (dec : List UInt8 → Option (α × List UInt8)) :
           | none => none
           | some (as, rest') => some (a :: as, rest')
 
+@[guest_std]
 def decList? (dec : List UInt8 → Option (α × List UInt8)) (bs : List UInt8) :
     Option (List α × List UInt8) :=
   decManyBind? dec (decVarNat bs).1 (decVarNat bs).2
@@ -268,6 +290,7 @@ theorem decList_encList_append (enc : α → List UInt8)
 /-- Enum tag as a varint; the closed `ofTag?` rejects out-of-range tags. -/
 def encEnum (t : Nat) : List UInt8 := encVarNat t
 
+@[guest_std]
 def decEnum? (ofTag? : Nat → Option α) (bs : List UInt8) : Option (α × List UInt8) :=
   match decVarNat bs with
   | (n, rest) =>
@@ -284,18 +307,47 @@ theorem decEnum_encEnum_append (tag : α → Nat) (ofTag? : Nat → Option α)
 def encBytes (bs : List UInt8) : List UInt8 :=
   encVarNat bs.length ++ bs
 
+/-- THE GUEST-COMPILABLE TAKE (the W9.6 decode lane's one Codec body
+    change, beyond the marks — flagged): core's `List.take` specializes
+    to `takeTR.go`, whose accumulator is an ARRAY (`Array.mkEmpty` — an
+    `@[extern]` decl the backend compiles as an unreachable stub: the
+    guest has no Array lane). `takeB` is the structural cons-walk —
+    order-preserving, no accumulator — over the same semantics: the
+    caller's `n ≤ length` gate makes the short-list case dead.
+    (`List.drop` stays core: its impl is a plain Nat/List walk.) -/
+def takeB : (n : Nat) → List UInt8 → List UInt8
+  | 0, _ => []
+  | _ + 1, [] => []
+  | n + 1, b :: bs => b :: takeB n bs
+
+theorem takeB_append (bs rest : List UInt8) :
+    takeB bs.length (bs ++ rest) = bs := by
+  induction bs generalizing rest with
+  | nil => simp [takeB]
+  | cons b bs ih => simp [List.length_cons, List.cons_append, takeB, ih]
+
+theorem drop_length_append (bs rest : List UInt8) :
+    List.drop bs.length (bs ++ rest) = rest := by
+  rw [List.drop_append, Nat.sub_self]
+  simp [List.drop_eq_nil_of_le (Nat.le_refl bs)]
+
 /-- Decode one length-prefixed byte field: the next `n` bytes (n read
     from the varint) plus the trailing remainder. Truncation REJECTS:
     fewer than `n` bytes available is `none`. -/
+@[guest_std]
 def decBytes? (bs : List UInt8) : Option (List UInt8 × List UInt8) :=
   let (n, rest) := decVarNat bs
-  if _ : n ≤ rest.length then some (rest.take n, rest.drop n) else none
+  if _ : n ≤ rest.length then some (takeB n rest, rest.drop n) else none
 
 @[simp] theorem decBytes_encBytes_append (bs rest : List UInt8) :
     decBytes? (encBytes bs ++ rest) = some (bs, rest) := by
   unfold decBytes? encBytes
   rw [List.append_assoc, decVarNat_append bs.length (bs ++ rest)]
-  simp +arith +decide
+  have hle : bs.length ≤ (bs ++ rest).length := by
+    simp [List.length_append]
+  -- the match/dif reduce with the length gate decided; the take/drop
+  -- laws deliver the fields
+  simp only [hle, takeB_append, drop_length_append, dite_true]
 
 /-- The plain round trip (no trailing bytes). -/
 theorem decBytes_encBytes (bs : List UInt8) :
@@ -316,6 +368,9 @@ def encU64 (v : UInt64) : List UInt8 := encVarNat v.toNat
 
 /-- Decode a UInt64 varint (accepts any varint, wrapping — the
     encoder's range is always in-domain). -/
+-- `UInt64.ofNat` in the guest int model: the boxed-Nat payload →
+-- the raw u64 (wrapping) — the backend's conversion lowering, total.
+@[guest_std]
 def decU64? (bs : List UInt8) : Option (UInt64 × List UInt8) :=
   (decNat? bs).map fun (n, r) => (UInt64.ofNat n, r)
 
@@ -328,6 +383,7 @@ def encChar (c : Char) : List UInt8 := encVarNat c.toNat
 
 /-- Decode a char varint (`Char.ofNat` is total; the law needs only
     the encoder's range). -/
+@[guest_std]
 def decChar? (bs : List UInt8) : Option (Char × List UInt8) :=
   (decNat? bs).map fun (n, r) => (Char.ofNat n, r)
 
@@ -339,6 +395,12 @@ def decChar? (bs : List UInt8) : Option (Char × List UInt8) :=
 def encString (s : String) : List UInt8 := encList encChar s.toList
 
 /-- Decode a char-list string. -/
+-- `String.ofList` in the guest: the RUNTIME primitive `$string_oflist`
+-- (the StrOps recipe: `GuestlangStd.Intrinsic.strof` maps the name; the
+-- guest's string object is built from the char codes' UTF-8 bytes —
+-- the ASCII stance of `$string_len` mirrors here as ASCII-only
+-- round-trips).
+@[guest_std]
 def decString? (bs : List UInt8) : Option (String × List UInt8) :=
   (decList? decChar? bs).map fun (cs, r) => (String.ofList cs, r)
 
@@ -399,6 +461,7 @@ def encEnvelope (version fingerprint : Nat) (payload : List UInt8) : List UInt8 
 
 /-- Decode an envelope, rejecting a wrong version and any trailing
     garbage after the payload. -/
+@[guest_std]
 def decEnvelope? (expectedVersion : Nat) (bs : List UInt8) : Option Envelope :=
   let (version, r1) := decVarNat bs
   if _ : version = expectedVersion then

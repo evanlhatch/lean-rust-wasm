@@ -20,6 +20,7 @@ module
 
 public import CodegenCore.DataRegistry
 public import CodegenCore.Registry
+public import CodegenCore.Kit
 
 @[expose] public section
 
@@ -55,6 +56,68 @@ theorem codes_length (reg : CodedRegistry α) :
 theorem codes_nodup (reg : CodedRegistry α) :
     (reg.codes.map (·.2)).Nodup :=
   reg.codesNodup
+
+/-! ## The denseness upgrade (W-iso batch: positions ARE the items)
+
+`allocateCodes` is position-derived — code `i` IS `s!"{codePrefix}{start + i}"`,
+so the code space is DENSE (exactly `start … start + n - 1`, no gaps, no
+hand-set codes) by construction. `denseCheck` is the executable check
+that survives any hand-set-code regression (a concrete registry decides
+it; first consumer: faults' `allocationChecks`). Under denseness the
+code space indexes the items: the correspondence below upgrades to
+`Iso (Fin n) α` exactly when the registry EXHAUSTS `α` (the enum case —
+`finIso`); for a non-exhaustive α the honest form is the member subtype
+(`membersIso`). -/
+
+/-- Position injectivity: the position of `items[i]` IS `i` — the
+    name-map is nodup (`reg.nodup`), so two positions naming the same
+    item are one position. -/
+theorem idxOf_getElem_inj [BEq α] [LawfulBEq α] (reg : CodedRegistry α)
+    (i : Fin reg.items.length) : reg.items.idxOf reg.items[i.1] = i.1 := by
+  have hmem : reg.items[i.1] ∈ reg.items := List.getElem_mem i.2
+  have hj := List.getElem_idxOf (List.idxOf_lt_length_of_mem hmem)
+  have hlen₁ : reg.items.idxOf reg.items[i.1]
+      < (reg.items.map reg.nameOf).length := by
+    rw [List.length_map]
+    exact List.idxOf_lt_length_of_mem hmem
+  have hlen₂ : i.1 < (reg.items.map reg.nameOf).length := by
+    rw [List.length_map]
+    exact i.2
+  have hmap? : (reg.items.map reg.nameOf)[reg.items.idxOf reg.items[i.1]]?
+      = (reg.items.map reg.nameOf)[i.1]? := by
+    rw [List.getElem?_map, List.getElem?_map,
+      List.getElem?_eq_getElem (List.idxOf_lt_length_of_mem hmem),
+      List.getElem?_eq_getElem i.2, hj]
+  exact (List.getElem?_inj hlen₁ reg.nodup).mp hmap?
+
+/-- The executable denseness check: every allocated code, stripped of
+    the prefix, parses to exactly `start + position`. -/
+def denseCheck (reg : CodedRegistry α) : Bool :=
+  reg.codes.zipIdx.all fun c =>
+    (c.1.2.drop reg.codePrefix.length).toNat? == some (reg.start + c.2)
+
+/-- Positions ↔ members: name uniqueness makes the position map
+    injective, membership total. The `[BEq α]` is for `idxOf` (the
+    inverse's lookup). -/
+def membersIso [BEq α] [LawfulBEq α] (reg : CodedRegistry α) :
+    Iso (Fin reg.items.length) {a // a ∈ reg.items} where
+  to i := ⟨reg.items[i.1]'i.2, List.getElem_mem i.2⟩
+  inv a := ⟨reg.items.idxOf a.1, List.idxOf_lt_length_of_mem a.2⟩
+  to_inv a := Subtype.ext (List.getElem_idxOf (List.idxOf_lt_length_of_mem a.2))
+  inv_to i := Fin.ext (idxOf_getElem_inj reg i)
+
+/-- The dense/exhaustive upgrade: when EVERY `a : α` is registered (the
+    enum case), the position correspondence is total on α — an honest
+    `Iso (Fin n) α` (the `List.Nodup.getEquivOfForallMemList` shape).
+    Fires only when `α` is exhausted by the registry; for a non-enum α
+    (e.g. faults' payload-carrying `FailureModeItem`) the honest form is
+    `membersIso`. -/
+def finIso [BEq α] [LawfulBEq α] (reg : CodedRegistry α)
+    (hex : ∀ a : α, a ∈ reg.items) : Iso (Fin reg.items.length) α where
+  to i := reg.items[i.1]'i.2
+  inv a := ⟨reg.items.idxOf a, List.idxOf_lt_length_of_mem (hex a)⟩
+  to_inv a := List.getElem_idxOf (List.idxOf_lt_length_of_mem (hex a))
+  inv_to i := Fin.ext (idxOf_getElem_inj reg i)
 
 end CodedRegistry
 

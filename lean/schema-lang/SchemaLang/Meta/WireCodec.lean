@@ -12,8 +12,8 @@ assembly (`<S>.roundTripSpec`).
 because it must CREATE the inductive from a constructor list. Here the
 structure already exists — the declaration-site hook that runs over an
 existing declaration is `deriving`, and the work order names it
-(`deriving WireCodec`). The registration discipline follows
-`CodegenCore.Enumerable`'s handler (the in-tree deriving precedent):
+(`deriving WireCodec`). The registration discipline is the in-tree
+deriving precedent:
 gate → generate → `initialize registerDerivingHandler`.
 
 ## What the handler generates (for `structure S … deriving WireCodec`)

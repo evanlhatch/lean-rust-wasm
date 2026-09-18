@@ -27,6 +27,17 @@ error IDENTITY as a ctor). Verified: oracle manifest sha256
 b1e13749f5e25f27317f0c7b6ada65b2d6567638efd6aa59f9c6ed5e553c5d18
 before AND after.
 
+W9.6 (the decode lane) — the row universe GREW legitimately (the
+byte-tie's documented delta): the five witness fixtures appended to
+the grid batch (valid → accepted; tampered claim / tampered proof /
+exhausted fuel / sabotaged bytes → refused BY THE GUEST), the
+`verify-witness` sig + features rows, and the interpreted `resultOf`
+arm (the same `decWitness?` + `checkWitness` the guest compiles — the
+duel pins the two backends agree). The existing rows' bytes are
+unchanged (append-only, the header's rule); the manifest hash above
+covers the pre-W9.6 universe and is superseded by the regenerated
+target/diff.json (`just wasm-diff-check` = the tie).
+
 W6.3 (phase 2) landed, bytes unchanged: the VERDICT layer —
 `DivergenceClass`/`Divergence`/`Verdict` + `CompareMode.verdict` (the
 first-divergence triple: both outcomes + the category as a CTOR +
@@ -53,6 +64,20 @@ custom sections, and an embedded string is a claim that can drift
 from the real exports). The canonical string below is the contract;
 the hash stays consumer-side (sha256 of the string).
 
+W9.6 unblocking (item 2) — `streq` intrinsic, ROWS UNCHANGED: the
+backend gained the `String.decEq` lowering (`$string_eq` — one
+`GuestlangStd.Intrinsic` ctor + the runtime.wat primitive + the oracle
+body in StrOps.lean). The row universe here is UNCHANGED: an oracle
+row replays a WORLD EXPORT (GenMain's closed-world guard: every oracle
+fn is a world export), and no demo export carries a string `==` — the
+fns exercising `$string_eq` (the guest checker) compile only when the
+W9.6 boxed-Nat decision lands and the checker decls rejoin the compile
+set. The `$string_eq` duel rows ride W9.6-proper's witness fixtures
+(gap 5's bytes-in wrapper export). Adding rows TODAY would also flip
+the host's pinned `EXPECTED_DEMO_SURFACE` (steel-host schema.rs) and
+the committed coverage matrix — the honest surface change is
+W9.6-proper's, not this one.
+
 Ownership: this module owns the row universe + row resolution; the
 script owns only the emission loop. Deliberately excluded: the component
 replay itself (steel-host, Rust-side), and `just wasm-compile`'s
@@ -62,6 +87,8 @@ wasm-toolchain half (the integrating engineer runs it).
 import Lean
 import DemoFn
 import GuestlangStd
+import SchemaLang.Witness
+import SchemaLang.WitnessCheck
 import Plausible
 import TestKit
 import LintKit.PackageNamespace
@@ -140,6 +167,20 @@ def gridBatch : ProbeBatch where
   ++ [("user-complete", ["0", "zero", "0@g.dev", "a"])]
   ++ [("user-complete", ["1", "ab", "1@g.dev", "a"])]
   ++ (u64s.map fun a => ("user-complete", [toString a, "first", "1@g.dev", "a,b"]))
+  -- THE W9.6 WITNESS FIXTURES (the decode lane + checker duel): the
+  -- rows' arg = the committed witness BYTES (comma-joined decimal u8s —
+  -- the byte-row convention; the encoding is `Witness.encWitness 1 0`,
+  -- computed by the Lean eval and PINNED here — the fixtures are
+  -- constants, the oracle's authority is the resultOf eval below).
+  -- valid → accepted; tampered CLAIM (43≠42), tampered PROOF (byEval
+  -- 43), exhausted FUEL (0 < fuelNeed), and SABOTAGED BYTES (the label
+  -- length 18→19 truncates the label — decode `none`) → all refused
+  -- (the design §4 negative control: refused BY THE GUEST).
+  ++ [("verify-witness", ["1,0,18,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,42,1"])]
+  ++ [("verify-witness", ["1,0,18,9,100,101,109,111,47,101,113,52,50,1,0,42,0,43,0,42,1"])]
+  ++ [("verify-witness", ["1,0,18,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,43,1"])]
+  ++ [("verify-witness", ["1,0,18,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,42,0"])]
+  ++ [("verify-witness", ["1,0,19,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,42,1"])]
 
 /-- The manifest rows: (fn, args) pairs the differential gate replays
     (the grid batch's probes — the byte-tie surface, unchanged). -/
@@ -430,6 +471,18 @@ def resultOf (fn : String) (args : List String) : String :=
   -- the richer record validator: the same flat-record args as user-valid
   | "user-complete", [id, name, email, tags] =>
     if (GuestImpl.userComplete { id := id.toNat!.toUInt64, name := name, email := email, tags := tags.splitOn "," }) then "1" else "0"
+  -- THE W9.6 SEAM'S ORACLE (the interpreted Lean authority): decode the
+  -- witness bytes (the same `decWitness?` the guest compiles), check at
+  -- the artifact's own fuel over the v1 demo's empty certification
+  -- context (DemoFn.verifyWitness's exact shape). The byte-row
+  -- convention: comma-joined decimal u8s (see the fixture rows above).
+  | "verify-witness", [bytes] =>
+      let bs := (bytes.splitOn ",").map (fun s => UInt8.ofNat s.toNat!)
+      match SchemaLang.Witness.decWitness? 1 bs with
+      | none => "0"
+      | some w =>
+          if SchemaLang.WitnessCheck.checkWitness w.fuel w.claim w.proof [] .nil []
+            then "1" else "0"
   | "watch-users", [_a] =>
     -- the ser_val's forms: the list = the comma-NO-space joins; the
     -- record = "{ k=v, ... }" with the comma-space joins
@@ -458,7 +511,8 @@ def schemaSigs : List (String × Nat) :=
   [ ("double", 1), ("is-big", 1), ("adder", 2), ("double-area", 1)
   , ("run-paps", 1), ("total", 3), ("pick", 3), ("str-len-demo", 1)
   , ("greet", 1), ("get-user", 1), ("watch-counts", 1), ("watch-users", 1)
-  , ("user-valid", 4), ("order-error-valid", 2), ("user-complete", 4) ]
+  , ("user-valid", 4), ("order-error-valid", 2), ("user-complete", 4)
+  , ("verify-witness", 1) ]
 
 /-- The manifest's fn surface with arities (must agree with `resultOf`'s
     patterns — the DiffSpec's arity corruption pins this). The lookup
@@ -687,13 +741,14 @@ def featuresOf : String → List String
   | "user-valid" => ["record-arg", "validator", "negative-gate:id-zero"]
   | "user-complete" => ["record-arg", "validator", "strlen-gate", "tags-count-gate"]
   | "order-error-valid" => ["variant-arg", "validator", "negative-empty-cart", "f64-payload-arm"]
+  | "verify-witness" => ["witness-decode", "guest-checker", "negative-tampered", "fuel-refusal"]
   | _ => []
 
 /-- The batch table for COVERAGE.md: name, probe count, the feature the
     batch adds BEYOND the grid. -/
 def batchTable : List (String × Nat × String) :=
   [ ("grid", gridBatch.probes.length,
-     "the fixed u64s grid × all 15 exports + the pinned validator negatives")
+     "the fixed u64s grid × all 16 exports + the pinned validator negatives + the W9.6 witness fixtures")
   , ("fuzz", (fuzzBatch 200 0x5EED).probes.length,
      "LCG-driven off-grid scalars — the engines must agree on inputs the grid never visits (wrap boundary)")
   , ("boundary", boundaryBatch.probes.length,
@@ -737,6 +792,8 @@ def coverageMd : String :=
   , "- `user-valid` id=0 — the validator MUST refuse (Lean says false, the wasm must agree)"
   , "- `order-error-valid` empty-cart / invalid-item(0) — the documented variant negatives"
   , "- `user-complete` strlen(3/4) + tags-count gates — the boundary flips"
+  , "- the witness fixtures' negatives (W9.6): tampered claim, tampered proof,"
+  , "  exhausted fuel, sabotaged bytes — the guest checker refuses ALL"
   , "- the DiffSpec corruption rows (unknown fn, arity drift) — Lean-side rejection is observed"
   , "- steel-host's flipped-instruction sabotage — the gate demonstrably catches a wrong engine"
   , ""

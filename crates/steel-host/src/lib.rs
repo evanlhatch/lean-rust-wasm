@@ -14,7 +14,11 @@
 //! refuse at startup when the guest component's export surface diverges
 //! from the host's committed expectation (the canonical `fn/arity`
 //! string = Lean's `Oracle.schemaSurface`; the guest's surface is read
-//! from its component TYPE, pre-instantiation).
+//! from its component TYPE, pre-instantiation). W8.11 moves the other
+//! half of the byte-tie into the host too:
+//! [`hostgen::validate_committed`] generates the schema surface from
+//! the COMMITTED universe snapshot and checks it against that same
+//! expectation — a drifted or corrupt snapshot fails fast, host-side.
 
 // error! emits Error::provide — nightly-only (same gate as the root crate).
 #![feature(error_generic_member_access)]
@@ -24,6 +28,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 pub mod bindings;
 pub mod engine;
+pub mod hostgen;
 pub mod runtime;
 pub mod schema;
 pub mod valves;

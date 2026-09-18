@@ -53,11 +53,17 @@ decode is `none`, never a trap (the `Sem.exec` discipline). The laws
 are proved at depth (`decWF_encW_append`, `depth ≤ fuel`) and at the
 entry point.
 
+W9.6 decode lane: the DECODE half of the codec joins the guest
+(the design §4 step 3 flow: the guest decodes the witness bytes
+before checking). The decode fns + the tag `ofNat?` dispatchers are
+`@[guest_std]` — the bounded-Nat rationale lives in Codec.lean's
+`decVarNat` mark (the varint reassembly is the only Nat arithmetic in
+the lane; the depth-cap fuel is match-only). The ENCODE half stays
+host-side: the host emits the witness, the guest only reads it.
+
 Deliberate exclusions: the checker + soundness (`WHolds`,
-`checkWitness`, the CheckedProp — W9.2); witness GENERATION (W9.4);
-the guest compile (W9.6). No `@[guest]` marks here — this module is
-the host side; the guest-facing decode/check lane lands with its
-consumer orders.
+`checkWitness`, the CheckedProp — W9.2); witness GENERATION (W9.4)
+— the encoders stay unmarked.
 -/
 
 module
@@ -147,6 +153,10 @@ deriving Repr, BEq, DecidableEq
 def WU64Tag.toNat : WU64Tag → Nat
   | .lit => 0 | .col => 1 | .strlenCol => 2
 
+-- NOT marked: the decode lane's INTERNAL tag dispatcher — the wasm-gen
+-- closure fixpoint compiles it (the List-helper precedent) WITHOUT
+-- exporting; a mark here made it a core EXPORT target, and four
+-- same-named `of-nat?` exports failed the module encode.
 def WU64Tag.ofNat? : Nat → Option WU64Tag
   | 0 => some .lit | 1 => some .col | 2 => some .strlenCol | _ => none
 
@@ -161,6 +171,10 @@ deriving Repr, BEq, DecidableEq
 def WBoolExprTag.toNat : WBoolExprTag → Nat
   | .gt => 0 | .eq => 1 | .and => 2 | .not => 3
 
+-- NOT marked: the decode lane's INTERNAL tag dispatcher — the wasm-gen
+-- closure fixpoint compiles it (the List-helper precedent) WITHOUT
+-- exporting; a mark here made it a core EXPORT target, and four
+-- same-named `of-nat?` exports failed the module encode.
 def WBoolExprTag.ofNat? : Nat → Option WBoolExprTag
   | 0 => some .gt | 1 => some .eq | 2 => some .and | 3 => some .not | _ => none
 
@@ -176,6 +190,10 @@ deriving Repr, BEq, DecidableEq
 def WPropTag.toNat : WPropTag → Nat
   | .valid => 0 | .eqU => 1 | .chain => 2
 
+-- NOT marked: the decode lane's INTERNAL tag dispatcher — the wasm-gen
+-- closure fixpoint compiles it (the List-helper precedent) WITHOUT
+-- exporting; a mark here made it a core EXPORT target, and four
+-- same-named `of-nat?` exports failed the module encode.
 def WPropTag.ofNat? : Nat → Option WPropTag
   | 0 => some .valid | 1 => some .eqU | 2 => some .chain | _ => none
 
@@ -190,6 +208,10 @@ deriving Repr, BEq, DecidableEq
 def WProofTag.toNat : WProofTag → Nat
   | .byEval => 0 | .byValidEval => 1 | .steps => 2
 
+-- NOT marked: the decode lane's INTERNAL tag dispatcher — the wasm-gen
+-- closure fixpoint compiles it (the List-helper precedent) WITHOUT
+-- exporting; a mark here made it a core EXPORT target, and four
+-- same-named `of-nat?` exports failed the module encode.
 def WProofTag.ofNat? : Nat → Option WProofTag
   | 0 => some .byEval | 1 => some .byValidEval | 2 => some .steps | _ => none
 
@@ -211,6 +233,7 @@ def encWBoolExpr : WBoolExpr → List UInt8
 
 def encWStep (s : WStep) : List UInt8 := Codec.encVarNat s.offset
 
+@[guest_std]
 def decWStep? (bs : List UInt8) : Option (WStep × List UInt8) :=
   (Codec.decNat? bs).map fun (n, r) => (⟨n⟩, r)
 
@@ -254,6 +277,7 @@ theorem encWProof_steps (ps : List WProof) :
 
 /-- Decode a `WU64`: tag dispatch (`Codec.decEnum?`), payload per ctor;
     unknown tags and truncation reject. -/
+@[guest_std]
 def decWU64? (bs : List UInt8) : Option (WU64 × List UInt8) :=
   match Codec.decEnum? WU64Tag.ofNat? bs with
   | some (.lit, rest) => (Codec.decU64? rest).map fun (v, r) => (.lit v, r)
@@ -295,6 +319,7 @@ def WBoolExpr.depth : WBoolExpr → Nat
 
 /-- The depth-capped `WBoolExpr` decoder. Fuel 0 is `none` — loud,
     never a trap. Entry point: `decWBoolExpr?`. -/
+@[guest_std]
 def decWBoolExprF? : (fuel : Nat) → List UInt8 → Option (WBoolExpr × List UInt8)
   | 0, _ => none
   | fuel + 1, bs =>
@@ -314,6 +339,10 @@ def decWBoolExprF? : (fuel : Nat) → List UInt8 → Option (WBoolExpr × List U
 
 /-- The entry-point decoder: fuel = bytes + 1 suffices (one byte per
     node minimum — `depth_le_length_encWBoolExpr`). -/
+-- `bs.length + 1`: the entry fuel — `List.length`'s Nat result + the
+-- sanctioned `Nat.add` (the length-walk counter's increment, the
+-- backend's inlineNatFap surface).
+@[guest_std]
 def decWBoolExpr? (bs : List UInt8) : Option (WBoolExpr × List UInt8) :=
   decWBoolExprF? (bs.length + 1) bs
 
@@ -433,6 +462,7 @@ theorem WProof.depth_le_foldl (ps : List WProof) (acc : Nat) :
       | tail _ hq' => exact ih _ q hq'
 
 /-- The depth-capped `WProof` decoder. Entry point: `decWProof?`. -/
+@[guest_std]
 def decWProofF? : (fuel : Nat) → List UInt8 → Option (WProof × List UInt8)
   | 0, _ => none
   | fuel + 1, bs =>
@@ -444,6 +474,7 @@ def decWProofF? : (fuel : Nat) → List UInt8 → Option (WProof × List UInt8)
       | _ => none
 
 /-- The entry-point decoder (fuel = bytes + 1; see the header note). -/
+@[guest_std]
 def decWProof? (bs : List UInt8) : Option (WProof × List UInt8) :=
   decWProofF? (bs.length + 1) bs
 
@@ -531,6 +562,7 @@ theorem decWProof_encWProof_append (p : WProof) (rest : List UInt8) :
 
 /-- Decode a `WProp`: tag dispatch, then the children (the `WBoolExpr`
     halves ride their entry-point decoder). -/
+@[guest_std]
 def decWProp? (bs : List UInt8) : Option (WProp × List UInt8) :=
   match Codec.decEnum? WPropTag.ofNat? bs with
   | some (.valid, rest) => (decWBoolExpr? rest).map fun (e, r) => (.valid e, r)
@@ -576,6 +608,7 @@ def encWitness (version fingerprint : Nat) (w : Witness) : List UInt8 :=
 
 /-- Decode the envelope payload: label, claim, proof, fuel — trailing
     bytes reject (the envelope already bounds the payload). -/
+@[guest_std]
 def decWitnessPayload? (bs : List UInt8) : Option Witness := do
   let (label, r1) ← Codec.decString? bs
   let (claim, r2) ← decWProp? r1
@@ -586,6 +619,7 @@ def decWitnessPayload? (bs : List UInt8) : Option Witness := do
   | _ :: _ => none
 
 /-- The whole-form decode: version-checked envelope, then the payload. -/
+@[guest_std]
 def decWitness? (expectedVersion : Nat) (bs : List UInt8) : Option Witness := do
   let env ← Codec.decEnvelope? expectedVersion bs
   decWitnessPayload? env.payload
@@ -608,6 +642,24 @@ def witnessIso (version fingerprint : Nat) :
   decode := decWitness? version
   encode := encWitness version fingerprint
   decode_encode := decWitness?_encWitness version fingerprint
+
+/-- The image Iso (W-iso batch piece 1, consumed on the REAL codec):
+    `witnessIso`'s canonical image is a TRUE `Kit.Iso` — `to` decodes
+    (total on the image), `inv` re-encodes; both round trips hold. -/
+def witnessImageIso (version fingerprint : Nat) :
+    CodegenCore.Iso
+      { bytes : List UInt8 // ∃ w, (witnessIso version fingerprint).encode w = bytes }
+      Witness :=
+  (witnessIso version fingerprint).toImageIso
+
+/-- The canonical-image round trip: re-encoding the decode of a
+    canonical byte string reproduces the bytes EXACTLY (the both-ways
+    direction the one-ended `decode_encode` law alone cannot give). -/
+theorem witnessImageIso_to_inv (version fingerprint : Nat)
+    (b : { bytes : List UInt8 // ∃ w, (witnessIso version fingerprint).encode w = bytes }) :
+    (witnessIso version fingerprint).encode
+      ((witnessImageIso version fingerprint).to b) = b.1 :=
+  (witnessIso version fingerprint).encode_decodeImage b
 
 /-! ## Field resolution (design §2.1): names checked against the record -/
 

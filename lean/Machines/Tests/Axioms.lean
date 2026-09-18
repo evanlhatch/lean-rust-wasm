@@ -1,8 +1,10 @@
 /- Axioms gate (drift CI 7.3.3). -/
 import Machines
 #print axioms Machines.Machine.run_preserves
+-- W-iso batch piece 2: the general table-function law (the states:
+-- entourage's tie theorem derives from it)
+#print axioms Machines.Machine.tableLookup?_eq_step?
 #print axioms Machines.RewindableMachine.rewind_suffix
-#print axioms Machines.Machine.Refines.run_sim
 #print axioms Machines.Machine.compose_commute
 #print axioms Machines.Convergent.run_length_le
 #print axioms Machines.Convergent.run_length_bound

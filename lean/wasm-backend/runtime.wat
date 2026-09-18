@@ -222,3 +222,288 @@
   local.get $nb
   memory.copy
   local.get $p)
+
+;; String equality: pointer-equal fast path, length check, then a
+;; byte-wise walk over the inline bytes (@16..). Result = the raw i32
+;; scalar Bool convention (1/0). Byte-wise == the oracle's `a == b` on
+;; ASCII (the StrOps v1 byte/char stance).
+(func $string_eq (param $a i32) (param $b i32) (result i32)
+  (local $na i32) (local $nb i32) (local $i i32)
+  ;; the same object: equal
+  local.get $a
+  local.get $b
+  i32.eq
+  if
+    i32.const 1
+    return
+  end
+  local.get $a
+  i32.load offset=8
+  local.set $na
+  local.get $b
+  i32.load offset=8
+  local.set $nb
+  ;; length mismatch: not equal
+  local.get $na
+  local.get $nb
+  i32.ne
+  if
+    i32.const 0
+    return
+  end
+  ;; byte-wise compare
+  i32.const 0
+  local.set $i
+  (loop $cmp
+    ;; walked all na bytes: equal
+    local.get $i
+    local.get $na
+    i32.eq
+    if
+      i32.const 1
+      return
+    end
+    local.get $a
+    local.get $i
+    i32.add
+    i32.load8_u offset=16
+    local.get $b
+    local.get $i
+    i32.add
+    i32.load8_u offset=16
+    i32.eq
+    if
+      local.get $i
+      i32.const 1
+      i32.add
+      local.set $i
+      br $cmp
+    end
+    ;; byte differs: not equal
+    i32.const 0
+    return
+  )
+  ;; the loop never falls through (every path returns); unreachable
+  ;; but stack-valid
+  i32.const 0
+)
+
+;; String construction from a char list (the `String.ofList` lowering —
+;; the W9.6 decode lane's string atom, Codec.decString?). The list: the
+;; guest cons chain {tag=0 nil / 1 cons @4, head @8, tail @16}; each
+;; head = a BOXED char (the Char structure erases to its u32 scalar —
+;; payload @8). Two passes: count the UTF-8 byte length, then alloc the
+;; string object {rc, tag=250 @4, len u32 @8, bytes @16} and encode.
+;; UTF-8: 1/2/3/4 bytes by codepoint range (the oracle's String.ofList
+;; encodes the same way; the byte/char ASCII stance of $string_len
+;; does not apply here — the LENGTH is byte-exact for all of Unicode).
+(func $string_oflist (param $lst i32) (result i32)
+  (local $cur i32) (local $cp i32) (local $n i32) (local $p i32)
+  (local $w i32) (local $tag i32)
+  ;; ── pass 1: count encoded bytes ──
+  local.get $lst
+  local.set $cur
+  (block $count-done
+    (loop $count
+      local.get $cur
+      i32.load8_u offset=4
+      i32.eqz
+      br_if $count-done
+      ;; cp = head box's u32 payload
+      local.get $cur
+      i32.load offset=8
+      i32.load offset=8
+      local.set $cp
+      ;; +1 for cp < 0x80; +2 for < 0x800; +3 for < 0x10000; else +4
+      local.get $cp
+      i32.const 0x80
+      i32.lt_u
+      if (result i32)
+        i32.const 1
+      else
+        local.get $cp
+        i32.const 0x800
+        i32.lt_u
+        if (result i32)
+          i32.const 2
+        else
+          local.get $cp
+          i32.const 0x10000
+          i32.lt_u
+          if (result i32)
+            i32.const 3
+          else
+            i32.const 4
+          end
+        end
+      end
+      local.set $tag
+      local.get $n
+      local.get $tag
+      i32.add
+      local.set $n
+      local.get $cur
+      i32.load offset=16
+      local.set $cur
+      br $count
+    )
+  )
+  ;; ── alloc the string ──
+  i32.const 16
+  local.get $n
+  i32.add
+  call $alloc
+  local.set $p
+  local.get $p
+  i32.const 250
+  i32.store8 offset=4
+  local.get $p
+  local.get $n
+  i32.store offset=8
+  local.get $p
+  i32.const 16
+  i32.add
+  local.set $w
+  ;; ── pass 2: encode ──
+  local.get $lst
+  local.set $cur
+  (block $fill-done
+    (loop $fill
+      local.get $cur
+      i32.load8_u offset=4
+      i32.eqz
+      br_if $fill-done
+      local.get $cur
+      i32.load offset=8
+      i32.load offset=8
+      local.set $cp
+      ;; 1 byte: 0xxxxxxx
+      local.get $cp
+      i32.const 0x80
+      i32.lt_u
+      if
+        local.get $w
+        local.get $cp
+        i32.store8
+        local.get $w
+        i32.const 1
+        i32.add
+        local.set $w
+      else
+        ;; 2 bytes: 110xxxxx 10xxxxxx
+        local.get $cp
+        i32.const 0x800
+        i32.lt_u
+        if
+          local.get $w
+          local.get $cp
+          i32.const 6
+          i32.shr_u
+          i32.const 0xC0
+          i32.or
+          i32.store8
+          local.get $w
+          i32.const 1
+          i32.add
+          local.get $cp
+          i32.const 0x3F
+          i32.and
+          i32.const 0x80
+          i32.or
+          i32.store8
+          local.get $w
+          i32.const 2
+          i32.add
+          local.set $w
+        else
+          ;; 3 bytes: 1110xxxx 10xxxxxx 10xxxxxx
+          local.get $cp
+          i32.const 0x10000
+          i32.lt_u
+          if
+            local.get $w
+            local.get $cp
+            i32.const 12
+            i32.shr_u
+            i32.const 0xE0
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 1
+            i32.add
+            local.get $cp
+            i32.const 6
+            i32.shr_u
+            i32.const 0x3F
+            i32.and
+            i32.const 0x80
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 1
+            i32.add
+            local.get $cp
+            i32.const 0x3F
+            i32.and
+            i32.const 0x80
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 3
+            i32.add
+            local.set $w
+          else
+            ;; 4 bytes: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+            local.get $w
+            local.get $cp
+            i32.const 18
+            i32.shr_u
+            i32.const 0xF0
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 1
+            i32.add
+            local.get $cp
+            i32.const 12
+            i32.shr_u
+            i32.const 0x3F
+            i32.and
+            i32.const 0x80
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 1
+            i32.add
+            local.get $cp
+            i32.const 6
+            i32.shr_u
+            i32.const 0x3F
+            i32.and
+            i32.const 0x80
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 1
+            i32.add
+            local.get $cp
+            i32.const 0x3F
+            i32.and
+            i32.const 0x80
+            i32.or
+            i32.store8
+            local.get $w
+            i32.const 4
+            i32.add
+            local.set $w
+          end
+        end
+      end
+      local.get $cur
+      i32.load offset=16
+      local.set $cur
+      br $fill
+    )
+  )
+  local.get $p
+)
