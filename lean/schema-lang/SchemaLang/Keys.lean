@@ -286,8 +286,7 @@ def KeyDecl.check (items : List Item) (decls : List KeyDecl) (kd : KeyDecl) :
     dup scan (one declaration per record). Empty list = well formed. -/
 def keyDeclsCheck (items : List Item) (decls : List KeyDecl) : List SchemaDiag :=
   let ns := decls.map (·.record)
-  let dupDiags :=
-    (ns.filter (fun n => ns.countP (· == n) > 1)).eraseDups.map SchemaDiag.dupKeyDecl
+  let dupDiags := (dupNames ns).map SchemaDiag.dupKeyDecl
   decls.flatMap (KeyDecl.check items decls) ++ dupDiags
 
 /-- The Bool projection (derived from the diagnostic authority — one
@@ -522,29 +521,19 @@ theorem keyDeclCheck_eq_nil_iff {items : List Item} {decls : List KeyDecl}
           exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
             fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
 
-/-- The dup-diagnostic arm in Prop form (the `Wf.dupDiags_eq_nil_iff`
-    shape at the `dupKeyDecl` ctor). -/
+/-- The dup-diagnostic arm in Prop form (the shared
+    `dupNamesDiags_eq_nil_iff` reduction at the `dupKeyDecl` ctor —
+    Item.lean owns the one proof). -/
 theorem keyDupDiags_eq_nil_iff {ns : List String} :
-    ((ns.filter fun n => ns.countP (· == n) > 1).eraseDups.map
-        SchemaDiag.dupKeyDecl = []) ↔ ns.Nodup := by
-  rw [List.map_eq_nil_iff, eraseDups_eq_nil_iff, List.filter_eq_nil_iff]
-  constructor
-  · intro h
-    refine nodup_iff_countP_le_one.mpr fun n hn => Nat.not_lt.mp fun hgt => h n hn ?_
-    exact decide_eq_true hgt
-  · intro hnd n hn hp
-    have hgt : ns.countP (· == n) > 1 := of_decide_eq_true hp
-    have hle := nodup_iff_countP_le_one.mp hnd n hn
-    omega
+    ((dupNames ns).map SchemaDiag.dupKeyDecl = []) ↔ ns.Nodup :=
+  dupNamesDiags_eq_nil_iff SchemaDiag.dupKeyDecl
 
 /-- Master bridge: the executable authority and the relation agree. -/
 theorem keyDeclsCheck_eq_nil_iff {items : List Item} {decls : List KeyDecl} :
     keyDeclsCheck items decls = [] ↔ KeysWellFormed items decls := by
   have hUC : keyDeclsCheck items decls =
       decls.flatMap (KeyDecl.check items decls)
-        ++ ((decls.map (·.record)).filter
-              fun n => (decls.map (·.record)).countP (· == n) > 1).eraseDups.map
-            SchemaDiag.dupKeyDecl := rfl
+        ++ (dupNames (decls.map (·.record))).map SchemaDiag.dupKeyDecl := rfl
   rw [hUC, List.append_eq_nil_iff, List.flatMap_eq_nil_iff,
     keyDupDiags_eq_nil_iff]
   constructor

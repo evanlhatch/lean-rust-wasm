@@ -32,6 +32,11 @@ EMITTED spellings (kebab for WIT, snake for Rust).
 
 ## The diagnostic authority (supersedes the Bool) 
 
+The dup-scan idiom, shared by the item / key / table-invariant
+    lanes: the duplicated names of `ns`, ONE each, plus the lemmas the
+    Prop-side bridges reduce through (`dupNames_eq_nil_iff`,
+    `dupNamesDiags_eq_nil_iff` — one proof, every dup lane). 
+
 ## The Bool projection (derived from the diagnostic authority) 
 
 ## SchemaLang.Diff

@@ -2,6 +2,8 @@
    DiffSpec, GateKit) + the shared deterministic LCG. -/
 module
 
+public import Lean
+public import Plausible
 public import TestKit.Harness
 public import TestKit.Golden
 public import TestKit.PropSpec
@@ -17,6 +19,13 @@ namespace TestKit
     Before this module, each consumer hand-copied the constants
     (6364136223846793005 / 1442695040888963407); now TestKit owns the single copy. -/
 def lcg : UInt64 → UInt64 := fun s => s * 6364136223846793005 + 1442695040888963407
+
+/-- Run a Plausible generator deterministically, purely (fixed seed AND
+    size — no IO, no global stdGenRef): the seeded sweeps' shared
+    runner. -/
+def runGenPure {α : Type} (g : Plausible.Gen α) (seed : Nat) (size : Nat) :
+    Except Plausible.GenError α :=
+  (ReaderT.run (StateT.run g (ULift.up (mkStdGen seed))) ⟨size⟩).map (·.1)
 
 end TestKit
 

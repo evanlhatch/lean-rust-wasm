@@ -238,9 +238,8 @@ def TableInvItem.diags (items : List Item) (ti : TableInvItem) : List String :=
     `registerSchemaKeys` pattern). -/
 def tableInvCheck (items : List Item) (tis : List TableInvItem) : List String :=
   let ns := tis.map (·.name)
-  let dupDiags :=
-    (ns.filter (fun n => ns.countP (· == n) > 1)).eraseDups.map
-      fun n => s!"duplicate table-invariant name `{n}`"
+  let dupDiags := (dupNames ns).map
+    fun n => s!"duplicate table-invariant name `{n}`"
   tis.flatMap (TableInvItem.diags items) ++ dupDiags
 
 /-- The Bool projection (derived from the diagnostic authority — one

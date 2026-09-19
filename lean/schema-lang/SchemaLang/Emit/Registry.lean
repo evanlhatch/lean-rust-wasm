@@ -72,11 +72,13 @@ were registered here but never byte-tied there):
     the JSON are REPO-ROOT-relative — forge joins from the root. -/
 def jobJson (package exe : String) (args : List String) (outputs : List String) : String :=
   let argsField := match args with
-    | [] => ""
-    | _ => ", \"args\": [" ++ String.intercalate ", " (args.map CodegenCore.Emit.jsonStr) ++ "]"
-  "  { \"package\": " ++ CodegenCore.Emit.jsonStr package ++ ", \"exe\": " ++ CodegenCore.Emit.jsonStr exe
-    ++ argsField
-    ++ ", \"outputs\": [" ++ String.intercalate ", " ((outputs.map CodegenCore.Emit.rootRel).map CodegenCore.Emit.jsonStr) ++ "] }"
+    | [] => []
+    | _ => [("args", CodegenCore.Emit.Json.arr (args.map CodegenCore.Emit.jsonStr))]
+  "  " ++ CodegenCore.Emit.Json.objPad
+    ([ ("package", CodegenCore.Emit.jsonStr package)
+     , ("exe", CodegenCore.Emit.jsonStr exe) ]
+     ++ argsField
+     ++ [ ("outputs", CodegenCore.Emit.Json.arr ((outputs.map CodegenCore.Emit.rootRel).map CodegenCore.Emit.jsonStr)) ])
 
 /-- The Rust constructor name for a pipeline event label (the enum the
     emitted `step` matches on). -/

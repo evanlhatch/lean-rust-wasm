@@ -525,80 +525,12 @@ theorem itemCheck_eq_nil_iff {known : List String} {it : Item} :
   | resource n =>
       exact ⟨fun _ => .resource, fun _ => rfl⟩
 
-/-- `eraseDups` of a cons is a cons (its equation), so nil inputs are
-    the only nil outputs. -/
-theorem eraseDups_eq_nil_iff {l : List String} : l.eraseDups = [] ↔ l = [] := by
-  cases l with
-  | nil => simp
-  | cons x xs => rw [List.eraseDups_cons]; simp
-
-/-- Nodup via the per-name multiplicity the checker's dup scan counts. -/
-theorem nodup_iff_countP_le_one {ns : List String} :
-    ns.Nodup ↔ ∀ n, n ∈ ns → ns.countP (· == n) ≤ 1 := by
-  constructor
-  · intro hnd
-    induction ns with
-    | nil => intro n hn; cases hn
-    | cons x xs ih =>
-        rw [List.nodup_cons] at hnd
-        intro n hn
-        rw [List.countP_cons]
-        rcases List.mem_cons.mp hn with rfl | hnxs
-        · -- the head case (`x` substituted by `n`)
-          have hz : xs.countP (· == n) = 0 := by
-            rw [List.countP_eq_zero]
-            intro b hb hbn
-            exact hnd.1 (beq_iff_eq.mp hbn ▸ hb)
-          rw [hz, if_pos (beq_self_eq_true n)]
-          omega
-        · have hxn : ¬ ((x == n) = true) := by
-            intro hxx
-            exact hnd.1 (beq_iff_eq.mp hxx ▸ hnxs)
-          rw [if_neg hxn, Nat.add_zero]
-          exact ih hnd.2 n hnxs
-  · intro h
-    induction ns with
-    | nil => exact List.nodup_nil
-    | cons x xs ih =>
-        rw [List.nodup_cons]
-        refine ⟨?_, ih ?_⟩
-        · intro hx
-          have hle := h x List.mem_cons_self
-          rw [List.countP_cons, if_pos (beq_self_eq_true x)] at hle
-          have hz : xs.countP (· == x) = 0 := by omega
-          rw [List.countP_eq_zero] at hz
-          exact hz x hx (beq_self_eq_true x)
-        · intro n hn
-          have hle := h n (List.mem_cons_of_mem x hn)
-          rw [List.countP_cons] at hle
-          by_cases hxn : (x == n) = true
-          · have heq := beq_iff_eq.mp hxn
-            subst heq
-            rw [if_pos (beq_self_eq_true x)] at hle
-            omega
-          · rw [if_neg hxn, Nat.add_zero] at hle
-            exact hle
-
-/-- The dup-diagnostic arm, GENERALIZED over the diag constructor (the
-    pre-mangle dup scan and the post-mangle collision scan share the
-    filter/eraseDups shape — one proof, two instances). -/
-theorem dupFilterDiags_eq_nil_iff {ns : List String} (f : String → SchemaDiag) :
-    ((ns.filter fun n => ns.countP (· == n) > 1).eraseDups.map f) = [] ↔ ns.Nodup := by
-  rw [List.map_eq_nil_iff, eraseDups_eq_nil_iff, List.filter_eq_nil_iff]
-  constructor
-  · intro h
-    refine nodup_iff_countP_le_one.mpr fun n hn => Nat.not_lt.mp fun hgt => h n hn ?_
-    exact decide_eq_true hgt
-  · intro hnd n hn hp
-    have hgt : ns.countP (· == n) > 1 := of_decide_eq_true hp
-    have hle := nodup_iff_countP_le_one.mp hnd n hn
-    omega
-
-/-- The dup-diagnostic arm in Prop form. -/
+/-- The dup-diagnostic arm, GENERALIZED over the diag constructor is
+    `dupNamesDiags_eq_nil_iff` (Item.lean — the dup-scan idiom lives
+    there once); the item lane's instance: -/
 theorem dupDiags_eq_nil_iff {ns : List String} :
-    ((ns.filter fun n => ns.countP (· == n) > 1).eraseDups.map
-        SchemaDiag.dupName = []) ↔ ns.Nodup :=
-  dupFilterDiags_eq_nil_iff SchemaDiag.dupName
+    ((dupNames ns).map SchemaDiag.dupName = []) ↔ ns.Nodup :=
+  dupNamesDiags_eq_nil_iff SchemaDiag.dupName
 
 /-- The post-mangle collision scan's arm (W10.x): the scan is EMPTY iff
     the MANGLED name list has no duplicates — the same reduction as the
@@ -606,7 +538,7 @@ theorem dupDiags_eq_nil_iff {ns : List String} :
     rule; the mangler is a pure function). -/
 theorem mangleCollDiags_eq_nil_iff {ns : List String} :
     mangleCollDiags ns = [] ↔ (ns.map CodegenCore.Emit.kebab).Nodup :=
-  dupFilterDiags_eq_nil_iff (fun m => SchemaDiag.mangledCollision m
+  dupNamesDiags_eq_nil_iff (fun m => SchemaDiag.mangledCollision m
     (ns.filter fun n => CodegenCore.Emit.kebab n == m))
 
 /-! ## The bridge -/
@@ -616,9 +548,7 @@ theorem universeCheck_eq_nil_iff {items : List Item} :
     universeCheck items = [] ↔ WellFormed items := by
   have hUC : universeCheck items =
       items.flatMap (Item.check (Item.typeNames items))
-        ++ ((items.map Item.name).filter
-              fun n => (items.map Item.name).countP (· == n) > 1).eraseDups.map
-            SchemaDiag.dupName
+        ++ (dupNames (items.map Item.name)).map SchemaDiag.dupName
         ++ mangleCollDiags (items.map Item.name)
         ++ inlineCycleDiags items := rfl
   rw [hUC, List.append_eq_nil_iff, List.append_eq_nil_iff, List.append_eq_nil_iff,

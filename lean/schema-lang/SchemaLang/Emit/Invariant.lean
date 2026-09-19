@@ -41,6 +41,7 @@ public import SchemaLang.Invariant
 public import SchemaLang.ExprLang
 public import SchemaLang.Emit.Expr
 public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Emit.Rust
 public import SchemaLang.Meta.Reflect
 
 @[expose] public section
@@ -66,31 +67,9 @@ def defaultVerdict (it : InvariantItem) : Option Bool := do
   -- bytes are unchanged
   pure (validatesI (vexprLang it.inv.fields) it.inv.expr row)
 
-/-! ## The Rust literal defaults (the test row's construction) -/
-
-def rustDefault? : Ty → Option String
-  | .bool => some "false"
-  | .u8 => some "0u8" | .u16 => some "0u16"
-  | .u32 => some "0u32" | .u64 => some "0u64"
-  | .i8 => some "0i8" | .i16 => some "0i16"
-  | .i32 => some "0i32" | .i64 => some "0i64"
-  | .f32 => some "0.0f32" | .f64 => some "0.0f64"
-  | .string => some "String::new()"
-  | .bytes => some "Vec::new()"
-  | .option _ => some "None"
-  | .list _ => some "Vec::new()"
-  -- the flat default: `Vec::new()` (empty = the zero-count flat form —
-  -- the wire's dims list carries the shape, an empty Vec is the
-  -- only self-contained literal consistent with any dims... the
-  -- HONEST default: `none` — an empty Vec's shape is 0, not dims —
-  -- a tensor field gets no emitted test literal (the .ty rule)).
-  | .tensor _ _ => none
-  -- map/set: `BTreeMap::new()`/`BTreeSet::new()` are self-contained
-  -- but need the `std::collections` import in the emitted test module
-  -- — not pinned today (no consumer), so the HONEST default: `none`
-  -- (the tensor rule). v2 with the imports work.
-  | .map _ _ | .set _ => none
-  | .result _ _ | .future _ | .stream _ | .ty _ => none
+/-! ## The Rust literal defaults (the test row's construction) —
+    the shared fold's DEFAULT arm (`Emit.Rust.rustLiteral? false`;
+    the fresh-test-value arm is the delta lane's). -/
 
 /-! ## The module assembly -/
 
@@ -127,29 +106,27 @@ def validateFn (invs : List InvariantItem) (rec : String) :
 def testFn (it : InvariantItem) : Option (List CodegenCore.Emit.Rust.Item) := do
   let verdict ← defaultVerdict it
   let fields ← it.inv.fields.mapM fun f =>
-    (rustDefault? f.ty).map fun d => s!"{rustIdent f.name}: {d}"
+    (SchemaLang.Emit.Rust.rustLiteral? false f.ty).map fun d =>
+      s!"{rustIdent f.name}: {d}"
   let fieldsTxt := String.intercalate ", " fields
   let body := s!"let v = {pascal it.schemaRef} \{ {fieldsTxt} }; "
     ++ s!"assert_eq!({checkFnName it}(&v), {verdict});"
   some [ .raw "#[test]"
        , .fn s!"fn {checkFnName it}_default_row()" body ]
 
-/-- The full module items (deterministic: registry order throughout). -/
+/-- The full module items (deterministic: registry order throughout);
+    the shared `Emit.Rust.recordGroupedModule` skeleton at the
+    invariant lane's four folds. -/
 def moduleItems (invs : List InvariantItem) : List CodegenCore.Emit.Rust.Item :=
   let records := (invs.map (·.schemaRef)).eraseDups
-  [.comment "GENERATED from the schema_invariant registry (SchemaLang.Meta.invariantItemExt) —"
-  , .comment "do not edit — regenerate (just gen). One check fn per invariant (the evalB"
-  , .comment "discipline: raw u64 ops over the struct's fields; strlen = .len() on strings)."
-  , .raw "" ]
-  ++ records.map (fun rec => .use_ s!"crate::schema_generated::{pascal rec}")
-  ++ [.raw "" ]
-  ++ invs.flatMap checkFn
-  ++ [.raw "" ]
-  ++ records.map (fun rec => validateFn (invs.filter (·.schemaRef == rec)) rec)
-  ++ [.raw "" ]
-  ++ [ .raw "#[cfg(test)]"
-     , .mod_ "invariant_tests"
-         ([.raw "use super::*;"] ++ (invs.filterMap testFn).flatten) ]
+  Emit.Rust.recordGroupedModule
+    [ "GENERATED from the schema_invariant registry (SchemaLang.Meta.invariantItemExt) —"
+    , "do not edit — regenerate (just gen). One check fn per invariant (the evalB"
+    , "discipline: raw u64 ops over the struct's fields; strlen = .len() on strings)." ]
+    records
+    (invs.flatMap checkFn)
+    (records.map (fun rec => validateFn (invs.filter (·.schemaRef == rec)) rec))
+    (some ("invariant_tests", (invs.filterMap testFn).flatten))
 
 /-- The emitter's pure fold (the compile logic, fully testable). -/
 def invariantFiles (invs : List InvariantItem) : List CodegenCore.Emit.GeneratedFile :=

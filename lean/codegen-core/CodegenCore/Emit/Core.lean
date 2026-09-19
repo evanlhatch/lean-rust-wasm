@@ -276,6 +276,42 @@ def runEmitters {Spec : Type} (tool : String) (jobs : List (Emitter Spec × Spec
 def jsonStr (s : String) : String :=
   "\"" ++ (s.replace "\\" "\\\\").replace "\"" "\\\"" ++ "\""
 
+/-! ## Minimal JSON builders (the manifest emitters)
+
+The JSON manifests (schema-lang's WIT-fixture/sweep manifests, the
+forge-jobs manifest) assemble objects and arrays by hand over
+`jsonStr` — readable at the leaf, noise at the seams. These builders
+keep the seams (the `", "` field/element separator, the `": "` after
+keys, the two brace styles) in ONE place.
+
+DELIBERATE SHAPE: values are pre-rendered JSON TEXTS, not a `Json`
+AST — no parser, no bignum, and NO escaping decisions beyond
+`jsonStr`'s (which escapes quotes/backslashes only; names and paths
+are the whole payload today). wasm-backend's Lean.Json oracle keeps
+its own escaper — the two DISAGREE on control characters, so the
+unification stops here (the byte-tie law: no output byte changes).
+
+`objPad` exists because the top-level manifest ROWS pad their braces
+(`{ "package": … }` — byte-tied) while every nested object is tight.
+-/
+
+/-- A JSON object, tight braces: `{"k": v, "k2": v2}`. Keys render
+    through `jsonStr` (they are fixed identifiers — no escapes fire);
+    values are pre-rendered JSON texts. -/
+def Json.obj (fields : List (String × String)) : String :=
+  "{" ++ String.intercalate ", " (fields.map fun (k, v) => jsonStr k ++ ": " ++ v) ++ "}"
+
+/-- A JSON object with PADDED braces: `{ "k": v, … }` — the manifest
+    ROW style (every top-level entry in the byte-tied manifests).
+    Same fields/separators as `Json.obj`. -/
+def Json.objPad (fields : List (String × String)) : String :=
+  "{ " ++ String.intercalate ", " (fields.map fun (k, v) => jsonStr k ++ ": " ++ v) ++ " }"
+
+/-- A JSON array over pre-rendered element texts: `[e1, e2]` (the empty
+    array renders `[]`). -/
+def Json.arr (elems : List String) : String :=
+  "[" ++ String.intercalate ", " elems ++ "]"
+
 /-- Rust keywords get a raw-identifier escape; the only mangling surprise
     that is allowed to exist. -/
 def rustIdent (s : String) : String :=

@@ -11,10 +11,18 @@ source state returning the target DIRECTLY.
 
 Ownership: this module is the ONLY writer of
 `../../src/order_typestate_generated.rs` (and its golden under
-`goldens/typestate/`). It is NOT yet registered in
-`SchemaLang.Emit.Registry.emitters` — the registry wiring is the
-registry owner's line (`SchemaLang.Emit.Typestate.typestateEmitter`
-dropped into `coreEmitters`).
+`goldens/typestate/`); `typestateEmitter` is registered in
+`SchemaLang.Emit.Registry.emitters`.
+
+The fold is NOT hand-rolled: it is the generic
+`SchemaLang.EntityMachine.hookItems` typestate projection instantiated
+at `orderMachine` (this module supplies the naming maps + the filtered
+table; the preset supplies struct/method/impl item shapes, the pinning
+comments, the state fold). The per-order theorems
+`typestate_edges_legal`/`typestate_states_reachable` are the
+instantiation's evidence — the same statements the generic
+`hookEdges_legal`/`hookStates_reachable` lemmas govern (layering audit
+#3: the duplicate hand-rolled fold deleted).
 
 Driving decisions (deliberate exclusions):
 - The `reset` edge is NOT emitted. A typestate value is CONSUMED, never
@@ -36,6 +44,7 @@ Driving decisions (deliberate exclusions):
 module
 
 public import CodegenCore
+public import SchemaLang.EntityMachine
 public import SchemaLang.Item
 public import SchemaLang.Emit.GenCtx
 public import SchemaLang.OrderMachine
@@ -51,7 +60,8 @@ open CodegenCore.Emit.Rust (renderModule)
 -- (the schema descriptor), so the AST is spelled out (Machine.lean pins
 -- it via expected types; explicit beats implicit here).
 
-/-! ## The pinned fold (the data is the machine's, by theorem) -/
+/-! ## The pinned fold (the data is the machine's, by theorem) —
+    the GENERIC hook's instantiation -/
 
 /-- The Rust struct name for a state's typestate. -/
 def stateStruct : OrderStatus → String
@@ -70,13 +80,13 @@ def eventMethod : orderMachine.Label → String
     No hand copy: the emitter's rows cannot drift from the machine's
     (a `reset` row is filtered, never re-typed). -/
 def typestateEdges : List (orderMachine.Label × OrderStatus × OrderStatus) :=
-  orderMachineTrans.filter (fun (e, _, _) => !(e == .reset))
+  EntityMachine.hookEdges orderMachineTrans (some .reset)
 
 /-- The emitted states: `cart` (the initial state) plus every folded row
     target, table order, deduped. `stray` is a target of NO row, so it
     cannot appear — see `typestate_states_reachable`. -/
 def typestateStates : List OrderStatus :=
-  (.cart :: (typestateEdges.map fun (_, _, t) => t)).eraseDups
+  EntityMachine.hookStates .cart typestateEdges
 
 /-- LEGALITY PIN: every folded row is a `some` step of the PROVED table
     (`orderMachineTableStep?`, pinned to the machine by
@@ -96,37 +106,16 @@ theorem typestate_states_reachable :
       (fun s => (s == .cart) || orderMachineTrans.any (fun (_, _, t) => t == s))
       = true := rfl
 
-/-! ## The Rust AST -/
+/-! ## The hook instance + the Rust AST -/
 
-/-- One typestate struct: `pub struct Cart(pub u64);` — the payload is
-    the row identity (v1: the u64 order id). -/
-def structItem (s : OrderStatus) : CodegenCore.Emit.Rust.Item :=
-  .newtype (stateStruct s) "u64" ["Clone", "Copy", "Debug", "PartialEq", "Eq"]
-
-/-- The methods on one source state: one per folded row FROM it, in
-    table order — `pub fn place(self) -> Placed { Placed(self.0) }`.
-    Direct return: the row is legal by construction
-    (`typestate_edges_legal`). -/
-def methodItems (ms : List (orderMachine.Label × OrderStatus)) :
-    List CodegenCore.Emit.Rust.Item :=
-  ms.flatMap fun (e, t) =>
-    [ .raw s!"    pub fn {eventMethod e}(self) -> {stateStruct t} \{"
-    , .raw s!"        {stateStruct t}(self.0)"
-    , .raw "    }" ]
-
-/-- The inherent impl for one source state — omitted ENTIRELY for the
-    terminal states (`delivered`/`cancelled`): the proved table has no
-    non-reset rows from them (`terminal_only_reset`), so the typestate
-    gives them no methods — an illegal transition from a terminal state
-    is unrepresentable, not `None`. -/
-def implItems (s : OrderStatus) : List CodegenCore.Emit.Rust.Item :=
-  let ms := typestateEdges.filter fun (_, f, _) => f == s
-  match ms with
-  | [] => []
-  | _ =>
-    [ .raw s!"impl {stateStruct s} \{" ]
-    ++ methodItems (ms.map fun (e, _, t) => (e, t))
-    ++ [ .raw "}" ]
+/-- The GENERIC hook instance: the hand-written naming maps (the Rust
+    struct/method names, per state/label) + the folded table ride
+    `EntityMachine.TypestateHook` — the item shapes, the comment block
+    and the state fold are the preset's (`hookItems`), not re-rolled
+    here (the layering audit's unification). -/
+def orderHook : EntityMachine.TypestateHook orderMachine :=
+  EntityMachine.TypestateHook.mk (some .reset) typestateEdges
+    stateStruct eventMethod
 
 /-- The `#[cfg(test)]` module: the happy-path chain CONSTRUCTS each
     reachable state and consumes it into `Delivered` — compile-time
@@ -145,27 +134,15 @@ def testModule : CodegenCore.Emit.Rust.Item :=
     , .fn "fn cancel_after_place_is_legal()"
         "assert_eq!(Placed(7u64).cancel().0, 7u64);" ]
 
-/-- The full module's items: the pinning comments, one struct per
-    reachable state, one impl per state WITH outgoing rows, the test
-    module. Deterministic (table-order folds only — byte-tie ready). -/
+/-- The full module's items: the GENERIC hook's items (the pinning
+    comments, one struct per reachable state, one impl per state WITH
+    outgoing rows) + the test module. Deterministic (table-order folds
+    only — byte-tie ready). The comment block is the preset's text —
+    a DELIBERATE byte re-pin vs the deleted hand-rolled fold's
+    comments (content identical, prose generalized). -/
 def typestateItems : List CodegenCore.Emit.Rust.Item :=
-  [ .comment "GENERATED from SchemaLang.OrderMachine — the lifecycle's TYPESTATE"
-  , .comment "projection. Each struct = one REACHABLE state (payload = the row id,"
-  , .comment "v1: u64); each method = one non-`reset` row of `orderMachineTrans` — the SAME"
-  , .comment "table the theorem `orderMachineTableStep?_eq_step?` pins to the machine (the"
-  , .comment "emitter folds the table, never a hand copy; Lean pins:"
-  , .comment "`typestate_edges_legal`, `typestate_states_reachable`)."
-  , .comment ""
-  , .comment "Deliberate exclusions:"
-  , .comment "- the `reset` edge is NOT emitted: a typestate value is consumed,"
-  , .comment "  never rewrapped — recovery = a fresh Cart(id)."
-  , .comment "- `stray` gets no struct: no orderMachineTrans row targets it (Inv non-vacuity)."
-  , .comment "- `delivered`/`cancelled` get no methods (`terminal_only_reset`): the"
-  , .comment "  illegal transition is unrepresentable, not None — no Option, no panic."
-  , .comment "Do not edit — regenerate."
-  , .raw "" ]
-  ++ typestateStates.map structItem
-  ++ ((typestateStates.flatMap fun s => .raw "" :: implItems s).drop 1)
+  EntityMachine.hookItems orderHook .cart
+    "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
   ++ [ testModule ]
 
 def typestateRust : String := renderModule typestateItems

@@ -13,7 +13,7 @@ is LintKit.AxiomAllowlist's, consumed via LintKit.runLintersOnDecls.
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## TestKit — 173 decls checked
+## TestKit — 174 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -23,7 +23,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## codegen-core — 847 decls checked
+## codegen-core — 851 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -43,7 +43,7 @@ violations: none
 axioms used: Proofkit.u64add_assoc._native.bv_decide.ax_1_5, Quot.sound, Classical.choice, propext
 violations: none
 
-## schema-lang — 10222 decls checked
+## schema-lang — 10237 decls checked
 
 axioms used: Quot.sound, Classical.choice, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalIncr_denote_tick3._native.native_decide.ax_1_1, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalCkt_denote_tick3._native.native_decide.ax_1_1, propext
 violations: none
@@ -73,7 +73,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## wasm-backend — 2249 decls checked
+## wasm-backend — 2248 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none

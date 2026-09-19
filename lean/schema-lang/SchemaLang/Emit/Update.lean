@@ -64,6 +64,7 @@ public import SchemaLang.Update
 public import SchemaLang.ExprLang
 public import SchemaLang.Emit.Expr
 public import SchemaLang.Emit.GenCtx
+public import SchemaLang.Emit.Rust
 public import SchemaLang.Meta.Reflect
 
 @[expose] public section
@@ -141,24 +142,25 @@ def tickFn (ups : List DemoUpdate) (rec : String) : CodegenCore.Emit.Rust.Item :
   .fn s!"fn {tickFnName rec}(rows: &mut Vec<{pascal rec}>)"
     (String.intercalate " " (calls.map (fun u => s!"{applyFnName u}(rows);")))
 
-/-- The full module items (deterministic: registration order throughout). -/
+/-- The full module items (deterministic: registration order throughout);
+    the shared `Emit.Rust.recordGroupedModule` skeleton at the update
+    lane's four folds (no trailing test module — `none`). -/
 def moduleItems (ups : List DemoUpdate) : List CodegenCore.Emit.Rust.Item :=
   let records := (ups.map (·.recName)).eraseDups
-  [.comment "GENERATED from the schema_update registry (SchemaLang.Meta.updateItemExt) —"
-  , .comment "do not edit — regenerate (just gen). One apply fn per update (guard via"
-  , .comment "the evalB discipline), one tick fn per record (registration order). The"
-  , .comment "spec of record is UpdateItem.applyRow: guard AND value read the ORIGINAL"
-  , .comment "row; a refused row passes through untouched; the tick re-runs updates in"
-  , .comment "registration order (v1 cascade: single-pass, single-table)."
-  , .raw "" ]
-  ++ records.map (fun rec => .use_ s!"crate::schema_generated::{pascal rec}")
-  ++ [.raw "" ]
-  ++ ups.flatMap applyFn
-  ++ [.raw "" ]
-  ++ records.filterMap (fun rec =>
-        if ups.any (fun u => u.recName == rec && lowerable u) then
-          some (tickFn ups rec)
-        else none)
+  Emit.Rust.recordGroupedModule
+    [ "GENERATED from the schema_update registry (SchemaLang.Meta.updateItemExt) —"
+    , "do not edit — regenerate (just gen). One apply fn per update (guard via"
+    , "the evalB discipline), one tick fn per record (registration order). The"
+    , "spec of record is UpdateItem.applyRow: guard AND value read the ORIGINAL"
+    , "row; a refused row passes through untouched; the tick re-runs updates in"
+    , "registration order (v1 cascade: single-pass, single-table)." ]
+    records
+    (ups.flatMap applyFn)
+    (records.filterMap (fun rec =>
+      if ups.any (fun u => u.recName == rec && lowerable u) then
+        some (tickFn ups rec)
+      else none))
+    none
 
 /-- The emitter's pure fold (the compile logic, fully testable). -/
 def updateFiles (ups : List DemoUpdate) : List CodegenCore.Emit.GeneratedFile :=

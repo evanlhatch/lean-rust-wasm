@@ -159,10 +159,6 @@ def shrinkUniverse (u : Universe) : List Universe :=
 instance : Shrinkable Universe where
   shrink := shrinkUniverse
 
-/-- Run a generator deterministically, purely (fixed seed and size). -/
-def runGenPure (g : Gen α) (seed : Nat) (size : Nat) : Except Plausible.GenError α :=
-  (ReaderT.run (StateT.run g (ULift.up (mkStdGen seed))) ⟨size⟩).map (·.1)
-
 /-! ## The PropSpec: parse ∘ render = id (sweep + mandatory control) -/
 
 /-- The property predicate: render then parse recovers the universe. -/

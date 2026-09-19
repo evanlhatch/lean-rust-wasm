@@ -159,8 +159,7 @@ def recordGenItem (items : List Item) (n : String) (fields : List Field) :
     fresh short lowercase strings. The fallback keeps `u.choose` total
     on an empty universe. -/
 def stringPool (items : List Item) : List String :=
-  let names := items.filterMap fun it =>
-    match it with | .record n _ => some n | _ => none
+  let names := (Item.partition items).records.map (·.1)
   if names.isEmpty then ["alpha", "beta"] else names
 
 /-- The fixed prelude: the import, the pool, and the three composite
@@ -241,10 +240,8 @@ def preludeItems (items : List Item) : List CodegenCore.Emit.Rust.Item :=
     one item per RECORD (variants/funcs/resources contribute nothing —
     the variant arm lands with weighted case-choice). -/
 def genRustItems (items : List Item) : List CodegenCore.Emit.Rust.Item :=
-  preludeItems items ++ items.filterMap fun it =>
-    match it with
-    | .record n fields => some (recordGenItem items n fields)
-    | _ => none
+  preludeItems items
+    ++ (Item.partition items).records.map fun (n, fields) => recordGenItem items n fields
 
 end SchemaLang.Emit.GenRust
 

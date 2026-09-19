@@ -121,34 +121,14 @@ def Item.changeRustItems (items : List Item) : Item → List CodegenCore.Emit.Ru
 
 /-! ## Test emission (Stage E: certified delta impls) -/
 
-/-- A literal Rust expression for a fresh value of a `Ty` in test
-    position; `none` when no self-contained literal exists (a nested
-    record payload — such records get no round-trip test). -/
-def litTy? : Ty → Option String
-  | .bool => some "true"
-  | .u8 | .u16 | .u32 | .u64 | .i8 | .i16 | .i32 | .i64 => some "1"
-  | .f32 | .f64 => some "1.0"
-  | .string => some "\"a\".into()"
-  | .bytes => some "vec![]"
-  | .option _ => some "None"
-  | .result ok _ => ("Ok(" ++ · ++ ")") <$> litTy? ok
-  | .list _ => some "vec![]"
-  -- no self-contained tensor literal (the nested-record rule: the
-  -- shape needs per-element literals + a shape-checked constructor)
-  | .tensor _ _ => none
-  -- map/set: `BTreeMap::new()`/`BTreeSet::new()` need the
-  -- `std::collections` import in the emitted test module — not pinned
-  -- (no consumer), so `none` (the tensor rule)
-  | .map _ _ | .set _ => none
-  | .future a | .stream a => litTy? a
-  | .ty _ => none
-
 /-- A record → the items of ONE patch-roundtrip test (the executable
     sibling of the ChangeSpec patch law: `Update`'s patch replaces the
     base, `Remove`'s keeps it — `valid` always). The value is built
-    from per-field literals; UFCS (`dbsp::Change::patch`) keeps the
-    body free of trait imports. Empty when the record has no key or a
-    field has no self-contained literal.
+    from per-field FRESH literals (`Emit.Rust.rustLiteral? true` —
+    the shared literal fold's fresh arm); UFCS
+    (`dbsp::Change::patch`) keeps the body free of trait imports.
+    Empty when the record has no key or a field has no self-contained
+    literal.
 
     The attribute lines are the `raw` escape hatch — the Item grammar
     has no attribute node, and `#[test]`/`#[cfg(test)]` are the only
@@ -156,7 +136,8 @@ def litTy? : Ty → Option String
 def Item.changeTestItems : Item → List CodegenCore.Emit.Rust.Item
   | .record n fields =>
       let lits? := fields.mapM fun f =>
-        (litTy? f.ty).map fun lit => s!"{rustIdent f.name} : {lit}"
+        (SchemaLang.Emit.Rust.rustLiteral? true f.ty).map fun lit =>
+          s!"{rustIdent f.name} : {lit}"
       match Item.keyOf (.record n fields), lits? with
       | some _, some lits =>
           let change := Item.changeTypeName (.record n fields)
@@ -199,10 +180,8 @@ def deltaEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   outputs := ["../../src/delta_generated.rs"]
   run ctx :=
     let recordUses :=
-      ctx.items.filterMap fun it =>
-        match it with
-        | .record n _ => some (CodegenCore.Emit.Rust.Item.use_ s!"crate::schema_generated::{CodegenCore.Emit.pascal n}")
-        | _ => none
+      (Item.partition ctx.items).records.map fun (n, _) =>
+        CodegenCore.Emit.Rust.Item.use_ s!"crate::schema_generated::{CodegenCore.Emit.pascal n}"
     [{ path := "../../src/delta_generated.rs"
        contents :=
          CodegenCore.Emit.Rust.renderModule

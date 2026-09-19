@@ -25,7 +25,10 @@ public import SchemaLang.Emit.Wit
 
 namespace SchemaLang.Emit.WitFixture
 
-open CodegenCore.Emit (jsonStr)
+open CodegenCore.Emit
+-- (full-namespace open: module-mode alternative opens of the `Json`
+-- SUB-namespace — `open CodegenCore.Emit (Json)` — fail resolution;
+-- the whole-namespace open is the form that works)
 
 /-! ## The fixture universes (deterministic — no RNG, full coverage) -/
 
@@ -78,11 +81,15 @@ def fixtures : List (String × List Item) :=
 def typeJson (it : Item) : Option String :=
   match it with
   | .record n fields =>
-      some ("{\"name\": " ++ jsonStr n ++ ", \"kind\": \"record\", \"fields\": ["
-        ++ String.intercalate ", " (fields.map (fun f => jsonStr f.name)) ++ "]}")
+      some (Json.obj
+        [ ("name", jsonStr n)
+        , ("kind", jsonStr "record")
+        , ("fields", Json.arr (fields.map fun f => jsonStr f.name)) ])
   | .variant n cases =>
-      some ("{\"name\": " ++ jsonStr n ++ ", \"kind\": \"variant\", \"cases\": ["
-        ++ String.intercalate ", " (cases.map (fun c => jsonStr c.1)) ++ "]}")
+      some (Json.obj
+        [ ("name", jsonStr n)
+        , ("kind", jsonStr "variant")
+        , ("cases", Json.arr (cases.map fun c => jsonStr c.1)) ])
   | _ => none
 
 /-- One func entry → JSON (name + param names). `none` for non-funcs
@@ -90,16 +97,18 @@ def typeJson (it : Item) : Option String :=
 def funcJson (it : Item) : Option String :=
   match it with
   | .func sig =>
-      some ("{\"name\": " ++ jsonStr sig.name ++ ", \"params\": ["
-        ++ String.intercalate ", " (sig.params.map (fun p => jsonStr p.1)) ++ "]}")
+      some (Json.obj
+        [ ("name", jsonStr sig.name)
+        , ("params", Json.arr (sig.params.map fun p => jsonStr p.1)) ])
   | _ => none
 
 /-- One fixture → the manifest object text. -/
 def fixtureJson (name : String) (items : List Item) : String :=
-  "  { \"fixture\": " ++ jsonStr name ++ ", \"package\": "
-    ++ jsonStr ("demo:fixture-" ++ name)
-    ++ ", \"types\": [" ++ String.intercalate ", " (items.filterMap typeJson) ++ "]"
-    ++ ", \"funcs\": [" ++ String.intercalate ", " (items.filterMap funcJson) ++ "] }"
+  "  " ++ Json.objPad
+    [ ("fixture", jsonStr name)
+    , ("package", jsonStr ("demo:fixture-" ++ name))
+    , ("types", Json.arr (items.filterMap typeJson))
+    , ("funcs", Json.arr (items.filterMap funcJson)) ]
 
 /-- The full manifest document (no header — the driver prepends). -/
 def manifestJson : String :=

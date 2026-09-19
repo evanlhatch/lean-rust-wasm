@@ -485,6 +485,15 @@ def inlineCycleDiags (items : List Item) : List SchemaDiag :=
     if (inlineSucc items n).any (inlineReaches? items n (items.length + 1))
     then some (SchemaDiag.inlineCycle n) else none
 
+/-! The dup-scan idiom, shared by the item / key / table-invariant
+    lanes: the duplicated names of `ns`, ONE each, plus the lemmas the
+    Prop-side bridges reduce through (`dupNames_eq_nil_iff`,
+    `dupNamesDiags_eq_nil_iff` — one proof, every dup lane). -/
+
+/-- The duplicated names of `ns`, once each. -/
+def dupNames (ns : List String) : List String :=
+  (ns.filter fun n => ns.countP (· == n) > 1).eraseDups
+
 /-- The post-mangle collision scan (the caught kebab-collision bug,
     moved into the WF gate): item names whose kebab MANGLED forms collide
     (`kebab` is not injective: "FooBar"/"foo-bar"/"foo_bar" → "foo-bar")
@@ -496,18 +505,87 @@ def inlineCycleDiags (items : List Item) : List SchemaDiag :=
     names are not gated here — the audit's bug is item-level; extend
     when an audit demands it. -/
 def mangleCollDiags (ns : List String) : List SchemaDiag :=
-  ((ns.map CodegenCore.Emit.kebab).filter
-      fun m => (ns.map CodegenCore.Emit.kebab).countP (· == m) > 1).eraseDups.map
+  (dupNames (ns.map CodegenCore.Emit.kebab)).map
     fun m => SchemaDiag.mangledCollision m
       (ns.filter fun n => CodegenCore.Emit.kebab n == m)
+
+theorem eraseDups_eq_nil_iff {l : List String} : l.eraseDups = [] ↔ l = [] := by
+  cases l with
+  | nil => simp
+  | cons x xs => rw [List.eraseDups_cons]; simp
+
+/-- Nodup via the per-name multiplicity the dup scan counts. -/
+theorem nodup_iff_countP_le_one {ns : List String} :
+    ns.Nodup ↔ ∀ n, n ∈ ns → ns.countP (· == n) ≤ 1 := by
+  constructor
+  · intro hnd
+    induction ns with
+    | nil => intro n hn; cases hn
+    | cons x xs ih =>
+        rw [List.nodup_cons] at hnd
+        intro n hn
+        rw [List.countP_cons]
+        rcases List.mem_cons.mp hn with rfl | hnxs
+        · -- the head case (`x` substituted by `n`)
+          have hz : xs.countP (· == n) = 0 := by
+            rw [List.countP_eq_zero]
+            intro b hb hbn
+            exact hnd.1 (beq_iff_eq.mp hbn ▸ hb)
+          rw [hz, if_pos (beq_self_eq_true n)]
+          omega
+        · have hxn : ¬ ((x == n) = true) := by
+            intro hxx
+            exact hnd.1 (beq_iff_eq.mp hxx ▸ hnxs)
+          rw [if_neg hxn, Nat.add_zero]
+          exact ih hnd.2 n hnxs
+  · intro h
+    induction ns with
+    | nil => exact List.nodup_nil
+    | cons x xs ih =>
+        rw [List.nodup_cons]
+        refine ⟨?_, ih ?_⟩
+        · intro hx
+          have hle := h x List.mem_cons_self
+          rw [List.countP_cons, if_pos (beq_self_eq_true x)] at hle
+          have hz : xs.countP (· == x) = 0 := by omega
+          rw [List.countP_eq_zero] at hz
+          exact hz x hx (beq_self_eq_true x)
+        · intro n hn
+          have hle := h n (List.mem_cons_of_mem x hn)
+          rw [List.countP_cons] at hle
+          by_cases hxn : (x == n) = true
+          · have heq := beq_iff_eq.mp hxn
+            subst heq
+            rw [if_pos (beq_self_eq_true x)] at hle
+            omega
+          · rw [if_neg hxn, Nat.add_zero] at hle
+            exact hle
+
+/-- The dup scan is EMPTY iff the names are Nodup. -/
+theorem dupNames_eq_nil_iff {ns : List String} :
+    dupNames ns = [] ↔ ns.Nodup := by
+  show List.eraseDups _ = [] ↔ _
+  rw [eraseDups_eq_nil_iff, List.filter_eq_nil_iff]
+  constructor
+  · intro h
+    refine nodup_iff_countP_le_one.mpr fun n hn => Nat.not_lt.mp fun hgt => h n hn ?_
+    exact decide_eq_true hgt
+  · intro hnd n hn hp
+    have hgt : ns.countP (· == n) > 1 := of_decide_eq_true hp
+    have hle := nodup_iff_countP_le_one.mp hnd n hn
+    omega
+
+/-- The diag arm: mapping ANY constructor over the dup scan is empty
+    iff the names are Nodup (the item/key bridges' shared reduction). -/
+theorem dupNamesDiags_eq_nil_iff {ns : List String} (f : String → SchemaDiag) :
+    (dupNames ns).map f = [] ↔ ns.Nodup := by
+  rw [List.map_eq_nil_iff, dupNames_eq_nil_iff]
 
 /-- The universe check: ALL diagnostics. Empty list = well formed. -/
 def universeCheck (items : List Item) : List SchemaDiag :=
   let known := Item.typeNames items
   let ns := items.map Item.name
-  let dupNames := ns.filter (fun n => ns.countP (· == n) > 1)
-  let dupDiags := dupNames.eraseDups.map SchemaDiag.dupName
-  items.flatMap (Item.check known) ++ dupDiags
+  items.flatMap (Item.check known) ++ (dupNames ns).map SchemaDiag.dupName
     ++ mangleCollDiags ns ++ inlineCycleDiags items
 
 /-! ## The Bool projection (derived from the diagnostic authority) -/

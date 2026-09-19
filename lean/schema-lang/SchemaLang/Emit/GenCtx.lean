@@ -133,3 +133,50 @@ def GenCtx.rootItems (ctx : GenCtx) (root : Name) : List Item :=
   | none => []
 
 end SchemaLang.Emit
+
+/-! ## The one-pass kind partition
+
+The emitters repeatedly re-walk the item universe with a
+`filterMap`-by-kind (records here, funcs there, resources somewhere
+else) — one fold per lane, ~10 walks over the same list across the
+Emit modules. `Item.partition` walks ONCE and hands out the four kind
+lanes; each lane keeps registration order, so any single-lane
+conversion is emission-order-neutral (a site that needs the
+INTERLEAVED kind order — e.g. Rust `schemaItems`' record/variant
+interleave, `Wit.worldOf`'s type list — stays on `filterMap`:
+`records ++ variants` would reorder a mixed universe, and the byte-tie
+law forbids even a caught reordering).
+
+(NOT in Item.lean — that module is another lane's file right now; the
+home is the emit tree's shared dependency root, which every converting
+site already imports. OUTSIDE the `SchemaLang.Emit` namespace: a nested
+`def Item.partition` inside it would land as
+`SchemaLang.Emit.Item.partition` — an impostor the inner sites would
+silently resolve to while `SchemaLang.Item.partition` stayed missing.) -/
+
+namespace SchemaLang.Item
+
+/-- The four kind lanes of an item universe. -/
+structure Partition where
+  /-- The `.record` items, registration order. -/
+  records : List (String × List Field)
+  /-- The `.variant` items, registration order. -/
+  variants : List (String × List VariantCase)
+  /-- The `.func` signatures, registration order. -/
+  funcs : List FuncSig
+  /-- The `.resource` names, registration order. -/
+  resources : List String
+
+/-- One pass over the universe, four lanes out (a `foldr`, so each lane
+    is registration-ordered; never a `termination_by` def — the
+    kernel-opaque trap). -/
+def partition (items : List Item) : Partition :=
+  items.foldr (fun it acc =>
+    match it with
+    | .record n f => { acc with records := (n, f) :: acc.records }
+    | .variant n c => { acc with variants := (n, c) :: acc.variants }
+    | .func s => { acc with funcs := s :: acc.funcs }
+    | .resource n => { acc with resources := n :: acc.resources })
+    { records := [], variants := [], funcs := [], resources := [] }
+
+end SchemaLang.Item

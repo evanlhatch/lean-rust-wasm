@@ -118,6 +118,58 @@ def tyRust : Ty → String
   | .future a | .stream a => tyRust a
   | .ty n => pascal n
 
+/-- The self-contained Rust literal per `Ty`, parameterized over the
+    ONE axis the two consumers differ on: a FRESH value (the delta
+    lane's patch-roundtrip test value — `fresh = true`) vs the ZERO
+    default (the invariant lane's default test row — `fresh = false`).
+    `none` = no self-contained literal (the nested-record rule: a
+    tensor's shape needs a shape-checked constructor; map/set need the
+    `std::collections` import in the emitted test module — not
+    pinned, so `none`, the tensor rule). -/
+def rustLiteral? (fresh : Bool) : Ty → Option String
+  | .bool => some (if fresh then "true" else "false")
+  | .u8 => some (if fresh then "1" else "0u8")
+  | .u16 => some (if fresh then "1" else "0u16")
+  | .u32 => some (if fresh then "1" else "0u32")
+  | .u64 => some (if fresh then "1" else "0u64")
+  | .i8 => some (if fresh then "1" else "0i8")
+  | .i16 => some (if fresh then "1" else "0i16")
+  | .i32 => some (if fresh then "1" else "0i32")
+  | .i64 => some (if fresh then "1" else "0i64")
+  | .f32 => some (if fresh then "1.0" else "0.0f32")
+  | .f64 => some (if fresh then "1.0" else "0.0f64")
+  | .string => some (if fresh then "\"a\".into()" else "String::new()")
+  | .bytes => some (if fresh then "vec![]" else "Vec::new()")
+  | .option _ => some "None"
+  | .result ok _ =>
+      if fresh then ("Ok(" ++ · ++ ")") <$> rustLiteral? fresh ok else none
+  | .list _ => some (if fresh then "vec![]" else "Vec::new()")
+  | .tensor _ _ => none
+  | .map _ _ | .set _ => none
+  | .future a | .stream a => if fresh then rustLiteral? fresh a else none
+  | .ty _ => none
+
+/-- The registry lanes' module-assembly skeleton (the invariant and
+    update emitters' shared shape): header comment lines + a blank, one
+    `use crate::schema_generated::<Pascal rec>` per record + a blank,
+    the flat per-item fns + a blank, the per-record fns, and the
+    optional trailing `#[cfg(test)]` module (`use super::*;` supplied
+    here). Deterministic: registry order throughout. -/
+def recordGroupedModule (header : List String) (records : List String)
+    (itemFns perRecordFns : List CodegenCore.Emit.Rust.Item)
+    (testMod : Option (String × List CodegenCore.Emit.Rust.Item)) :
+    List CodegenCore.Emit.Rust.Item :=
+  header.map .comment ++ [.raw ""]
+    ++ records.map (fun rec => .use_ s!"crate::schema_generated::{pascal rec}")
+    ++ [.raw ""]
+    ++ itemFns
+    ++ [.raw ""]
+    ++ perRecordFns
+    ++ match testMod with
+       | none => []
+       | some (name, items) =>
+           [.raw "#[cfg(test)]", .mod_ name ([.raw "use super::*;"] ++ items)]
+
 /-- A record → `struct` item. -/
 def recordItem (derives : List String) : Item → CodegenCore.Emit.Rust.Item
   | .record n fields =>

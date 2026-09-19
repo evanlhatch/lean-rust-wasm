@@ -45,7 +45,9 @@ public import SchemaLang.Emit.Wit
 
 namespace SchemaLang.Emit.WitSweep
 
-open CodegenCore.Emit (jsonStr kebab)
+open CodegenCore.Emit
+-- (full-namespace open — see WitFixture's note: module-mode alternative
+-- opens of the `Json` sub-namespace fail resolution)
 
 /-! ## The seeded RNG — `TestKit.lcg`'s recurrence, INLINED
 
@@ -291,50 +293,62 @@ list, bytes → list<u8> — because the Lean `Ty` is deliberately lossy
 at the WIT boundary (the four lossy corners, `Emit.Wit`'s header). -/
 
 def keyShape : KeyTy → String
-  | .bool => "{\"kind\": \"bool\"}" | .u8 => "{\"kind\": \"u8\"}"
-  | .u16 => "{\"kind\": \"u16\"}" | .u32 => "{\"kind\": \"u32\"}"
-  | .u64 => "{\"kind\": \"u64\"}" | .i8 => "{\"kind\": \"s8\"}"
-  | .i16 => "{\"kind\": \"s16\"}" | .i32 => "{\"kind\": \"s32\"}"
-  | .i64 => "{\"kind\": \"s64\"}" | .string => "{\"kind\": \"string\"}"
+  | .bool => Json.obj [("kind", jsonStr "bool")]
+  | .u8 => Json.obj [("kind", jsonStr "u8")]
+  | .u16 => Json.obj [("kind", jsonStr "u16")]
+  | .u32 => Json.obj [("kind", jsonStr "u32")]
+  | .u64 => Json.obj [("kind", jsonStr "u64")]
+  | .i8 => Json.obj [("kind", jsonStr "s8")]
+  | .i16 => Json.obj [("kind", jsonStr "s16")]
+  | .i32 => Json.obj [("kind", jsonStr "s32")]
+  | .i64 => Json.obj [("kind", jsonStr "s64")]
+  | .string => Json.obj [("kind", jsonStr "string")]
 
 def shapeJson : Ty → String
-  | .bool => "{\"kind\": \"bool\"}" | .u8 => "{\"kind\": \"u8\"}"
-  | .u16 => "{\"kind\": \"u16\"}" | .u32 => "{\"kind\": \"u32\"}"
-  | .u64 => "{\"kind\": \"u64\"}"
-  | .i8 => "{\"kind\": \"s8\"}" | .i16 => "{\"kind\": \"s16\"}"
-  | .i32 => "{\"kind\": \"s32\"}" | .i64 => "{\"kind\": \"s64\"}"
-  | .f32 => "{\"kind\": \"f32\"}" | .f64 => "{\"kind\": \"f64\"}"
-  | .string => "{\"kind\": \"string\"}"
-  | .bytes => "{\"kind\": \"list\", \"elem\": {\"kind\": \"u8\"}}"
-  | .option a => "{\"kind\": \"option\", \"elem\": " ++ shapeJson a ++ "}"
+  | .bool => Json.obj [("kind", jsonStr "bool")]
+  | .u8 => Json.obj [("kind", jsonStr "u8")]
+  | .u16 => Json.obj [("kind", jsonStr "u16")]
+  | .u32 => Json.obj [("kind", jsonStr "u32")]
+  | .u64 => Json.obj [("kind", jsonStr "u64")]
+  | .i8 => Json.obj [("kind", jsonStr "s8")]
+  | .i16 => Json.obj [("kind", jsonStr "s16")]
+  | .i32 => Json.obj [("kind", jsonStr "s32")]
+  | .i64 => Json.obj [("kind", jsonStr "s64")]
+  | .f32 => Json.obj [("kind", jsonStr "f32")]
+  | .f64 => Json.obj [("kind", jsonStr "f64")]
+  | .string => Json.obj [("kind", jsonStr "string")]
+  | .bytes => Json.obj [("kind", jsonStr "list"), ("elem", Json.obj [("kind", jsonStr "u8")])]
+  | .option a => Json.obj [("kind", jsonStr "option"), ("elem", shapeJson a)]
   | .result ok err =>
-      "{\"kind\": \"result\", \"ok\": " ++ shapeJson ok
-        ++ ", \"err\": " ++ shapeJson err ++ "}"
-  | .list a => "{\"kind\": \"list\", \"elem\": " ++ shapeJson a ++ "}"
+      Json.obj [("kind", jsonStr "result"), ("ok", shapeJson ok), ("err", shapeJson err)]
+  | .list a => Json.obj [("kind", jsonStr "list"), ("elem", shapeJson a)]
   | .map k v =>
       -- the association-list lowering: list<tuple<K, V>>
-      "{\"kind\": \"list\", \"elem\": {\"kind\": \"tuple\", \"elems\": ["
-        ++ keyShape k ++ ", " ++ shapeJson v ++ "]}}"
-  | .set k => "{\"kind\": \"list\", \"elem\": " ++ keyShape k ++ "}"
-  | .future a => "{\"kind\": \"future\", \"elem\": " ++ shapeJson a ++ "}"
-  | .stream a => "{\"kind\": \"stream\", \"elem\": " ++ shapeJson a ++ "}"
+      Json.obj [("kind", jsonStr "list"), ("elem",
+        Json.obj [("kind", jsonStr "tuple"),
+                  ("elems", Json.arr [keyShape k, shapeJson v])])]
+  | .set k => Json.obj [("kind", jsonStr "list"), ("elem", keyShape k)]
+  | .future a => Json.obj [("kind", jsonStr "future"), ("elem", shapeJson a)]
+  | .stream a => Json.obj [("kind", jsonStr "stream"), ("elem", shapeJson a)]
   -- the tensor lowering: dims dropped, the flat list form
-  | .tensor _ a => "{\"kind\": \"list\", \"elem\": " ++ shapeJson a ++ "}"
-  | .ty n => "{\"kind\": \"ref\", \"name\": " ++ jsonStr (kebab n) ++ "}"
+  | .tensor _ a => Json.obj [("kind", jsonStr "list"), ("elem", shapeJson a)]
+  | .ty n => Json.obj [("kind", jsonStr "ref"), ("name", jsonStr (kebab n))]
 
 /-- One type item → the manifest's expected-shape entry. -/
 def typeEntryJson : Item → Option String
   | .record n fields =>
-      some ("{\"name\": " ++ jsonStr (kebab n) ++ ", \"kind\": \"record\", \"fields\": ["
-        ++ String.intercalate ", " (fields.map fun f =>
-              "{\"name\": " ++ jsonStr (kebab f.name)
-                ++ ", \"shape\": " ++ shapeJson f.ty ++ "}") ++ "]}")
+      some (Json.obj
+        [ ("name", jsonStr (kebab n))
+        , ("kind", jsonStr "record")
+        , ("fields", Json.arr (fields.map fun f =>
+            Json.obj [("name", jsonStr (kebab f.name)), ("shape", shapeJson f.ty)])) ])
   | .variant n cases =>
-      some ("{\"name\": " ++ jsonStr (kebab n) ++ ", \"kind\": \"variant\", \"cases\": ["
-        ++ String.intercalate ", " (cases.map fun (c, p) =>
-              "{\"name\": " ++ jsonStr (kebab c) ++ ", \"payload\": "
-                ++ (match p with | some t => shapeJson t | none => "null") ++ "}")
-        ++ "]}")
+      some (Json.obj
+        [ ("name", jsonStr (kebab n))
+        , ("kind", jsonStr "variant")
+        , ("cases", Json.arr (cases.map fun (c, p) =>
+            Json.obj [("name", jsonStr (kebab c)),
+                      ("payload", match p with | some t => shapeJson t | none => "null")])) ])
   | _ => none
 
 /-- One func item → the manifest's expected-signature entry. A `.future`
@@ -344,20 +358,21 @@ def typeEntryJson : Item → Option String
 def funcEntryJson : Item → Option String
   | .func s =>
       let ret := match s.ret with | .future a => a | t => t
-      some ("{\"name\": " ++ jsonStr (kebab s.name) ++ ", \"async\": "
-        ++ (match s.ret with | .future _ => "true" | _ => "false")
-        ++ ", \"params\": [" ++ String.intercalate ", " (s.params.map fun (p, t) =>
-              "{\"name\": " ++ jsonStr (kebab p)
-                ++ ", \"shape\": " ++ shapeJson t ++ "}") ++ "]"
-        ++ ", \"result\": " ++ shapeJson ret ++ "}")
+      some (Json.obj
+        [ ("name", jsonStr (kebab s.name))
+        , ("async", match s.ret with | .future _ => "true" | _ => "false")
+        , ("params", Json.arr (s.params.map fun (p, t) =>
+            Json.obj [("name", jsonStr (kebab p)), ("shape", shapeJson t)]))
+        , ("result", shapeJson ret) ])
   | _ => none
 
 /-- One universe → the manifest's entry text. -/
 def sweepEntryJson (name : String) (items : List Item) : String :=
-  "  { \"fixture\": " ++ jsonStr name ++ ", \"package\": "
-    ++ jsonStr ("demo:" ++ name)
-    ++ ", \"types\": [" ++ String.intercalate ", " (items.filterMap typeEntryJson) ++ "]"
-    ++ ", \"funcs\": [" ++ String.intercalate ", " (items.filterMap funcEntryJson) ++ "] }"
+  "  " ++ Json.objPad
+    [ ("fixture", jsonStr name)
+    , ("package", jsonStr ("demo:" ++ name))
+    , ("types", Json.arr (items.filterMap typeEntryJson))
+    , ("funcs", Json.arr (items.filterMap funcEntryJson)) ]
 
 /-- The full manifest document (no header — the driver prepends). -/
 def sweepManifestJson : String :=

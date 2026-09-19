@@ -391,10 +391,29 @@ flattens them (strings/objects), and the KEPT list is the honest
 surface of what the component actually exports.
 -/
 
-/-- One folded world export: (wire name, rendered params, WIT return
-    type, async?). Reducible — the emitters + the guard destructure it
-    directly. -/
-abbrev WorldExport := String × List String × String × Bool
+/-- One folded world export: (wire name, the registered FuncSig — the
+    STRUCTURED signature, carried end to end). The consumers render at
+    their own boundaries (the WIT world intercalates `name: type`, the
+    observability manifest emits `(name, type)` field pairs) — no
+    render-then-reparse seam, no partial functions at one. Reducible —
+    the emitters + the guard destructure it directly. -/
+abbrev WorldExport := String × SchemaLang.FuncSig
+
+/-- The canonical-ABI return rendering of a sig (ONE writer, shared by
+    the WIT world + the observability manifest): async-ness = the
+    `Async.Future` marker (the registered ret = `.future`);
+    `delivery = stream` surfaces the impl's list element as the
+    stream's item type (`stream<u64>`, `stream<user>`). -/
+def worldRetOf (sig : SchemaLang.FuncSig) : Bool × String :=
+  match sig.ret with
+  | .future a =>
+      let r := match a with
+        | .list e => if sig.sem.delivery == (.stream : SchemaLang.Delivery)
+          then s!"stream<{SchemaLang.Emit.Wit.tyWit e}>"
+          else SchemaLang.Emit.Wit.tyWit a
+        | a => SchemaLang.Emit.Wit.tyWit a
+      (true, r)
+  | ret => (false, SchemaLang.Emit.Wit.tyWit ret)
 
 /-- The COMPILED world's exports, FOLDED from the schema registry (the
     6.5.1 `body` seam): a fn is exported iff it is BOTH compiled
@@ -412,20 +431,7 @@ def worldExportsOf (env : Environment) (targetDecls : Array Name) : List WorldEx
       match it with
       | .func sig => sig.body == n
       | _ => false with
-    | some (_, .func sig) =>
-        let nm := CodegenCore.Emit.kebab n.getString!
-        let params := sig.params.map fun (p, t) =>
-          CodegenCore.Emit.kebab p ++ ": " ++ SchemaLang.Emit.Wit.tyWit t
-        let (isAsync, ret) := match sig.ret with
-          | .future a =>
-              let r := match a with
-                | .list e => if sig.sem.delivery == (.stream : SchemaLang.Delivery)
-                  then s!"stream<{SchemaLang.Emit.Wit.tyWit e}>"
-                  else SchemaLang.Emit.Wit.tyWit a
-                | a => SchemaLang.Emit.Wit.tyWit a
-              (true, r)
-          | ret => (false, SchemaLang.Emit.Wit.tyWit ret)
-        some (nm, params, ret, isAsync)
+    | some (_, .func sig) => some (CodegenCore.Emit.kebab n.getString!, sig)
     | _ => none
 
 /-- The oracle's fn names — DERIVED from `Oracle.rowUniverse` (the
@@ -439,21 +445,66 @@ def oracleFns : List String := (rowUniverse.map (·.1)).eraseDups
 -- everything the differential manifest exercises).
 
 
+/-- One type item as WIT text, in the world's local shape (the
+    interface's 2-space members, 4-space fields, trailing comma). The
+    NAME/TYPE mapping is the SHARED one (`Emit.kebab` +
+    `Emit.Wit.tyWit` — the same atoms `Emit.Wit.typeDecl` renders);
+    only the layout differs (a world's types sit inline, not in their
+    own interface — `worldOf`'s shape, not this fold's). -/
+def typeItemWit : SchemaLang.Item → String
+  | .record n fields =>
+      s!"  record {CodegenCore.Emit.kebab n} \{\n"
+        ++ String.intercalate "\n"
+          (fields.map fun f =>
+            s!"    {CodegenCore.Emit.kebab f.name}: {SchemaLang.Emit.Wit.tyWit f.ty},")
+        ++ "\n  }\n"
+  | .variant n cases =>
+      s!"  variant {CodegenCore.Emit.kebab n} \{\n"
+        ++ String.intercalate "\n"
+          (cases.map fun (c, payload) =>
+            match payload with
+            | some t => s!"    {CodegenCore.Emit.kebab c}({SchemaLang.Emit.Wit.tyWit t}),"
+            | none => s!"    {CodegenCore.Emit.kebab c},")
+        ++ "\n  }\n"
+  | _ => ""
+
+/-- The demo-types interface: the registry's record/variant items the
+    exports' signatures reference (first-occurrence order, the
+    `worldOf` refs rule), FOLDED — not hand-mirrored. The registry is
+    the authority; a Demo type rename surfaces as a byte-tie drift or
+    a missing-use error, never a silently stale copy. -/
+def demoTypesIfaceOf (items : List (Name × SchemaLang.Item))
+    (worldExports : List WorldExport) : String :=
+  let refs :=
+    ((worldExports.map (·.2)).flatMap fun s => s.params.map (·.2) ++ [s.ret])
+      |>.flatMap SchemaLang.Ty.tyRefs
+      |>.eraseDups
+  let typeItems := items.filterMap fun (_, it) =>
+    match it with
+    | .record _ _ | .variant _ _ =>
+        if refs.contains it.name then some it else none
+    | _ => none
+  let useLine := "  use demo-types.{"
+    ++ String.intercalate ", " (refs.map CodegenCore.Emit.kebab) ++ "};\n"
+  String.join (typeItems.map typeItemWit) ++ "}\n\nworld demo {\n" ++ useLine
+
 /-- The world document (doubleSlash comments; the driver prepends the
-    header). The FUNC LINES = the folded exports (the registry is the
-    authority); the demo-types interface stays the hand mirror of the
-    schema's User/OrderError (the drift surface = the differential
-    duel, which decodes through the HOST's generated types). -/
-def worldWitOf (worldExports : List WorldExport) : String :=
+    header). EVERYTHING is folded from the registry: the FUNC LINES =
+    the structured exports (the FuncSig renders at this boundary);
+    the demo-types interface = `demoTypesIfaceOf`'s fold over the
+    schema's actual User/OrderError items through the shared
+    kebab/tyWit mapping (no hand mirror to trust). -/
+def worldWitOf (items : List (Name × SchemaLang.Item))
+    (worldExports : List WorldExport) : String :=
   "package guestlang:demo;\n\n"
     ++ "interface demo-types {\n"
-    ++ "  record user {\n    id: u64,\n    name: string,\n    email: string,\n    tags: list<string>,\n  }\n"
-    ++ "  variant order-error {\n    empty-cart,\n    invalid-item(u64),\n    insufficient-funds(f64),\n  }\n"
-    ++ "}\n\nworld demo {\n"
-    ++ "  use demo-types.{user, order-error};\n"
+    ++ demoTypesIfaceOf items worldExports
     ++ String.intercalate "\n"
-      (worldExports.map fun (name, params, ret, isAsync) =>
+      (worldExports.map fun (name, sig) =>
+        let (isAsync, ret) := worldRetOf sig
         let kw := if isAsync then "async " else ""
+        let params := sig.params.map fun (p, t) =>
+          CodegenCore.Emit.kebab p ++ ": " ++ SchemaLang.Emit.Wit.tyWit t
         s!"    export {name}: {kw}func({String.intercalate ", " params}) -> {ret};")
     ++ "\n}\n"
 
@@ -497,10 +548,12 @@ surface + the wasm-tools validate) instead of `forge gen --check`.
 /-- The wasm-gen spec: exactly what the three emitters need, assembled
     by the driver. `watBody` = the compiled module's WAT,
     runtime-spliced, headerless; `worldExports` = the registry fold
-    (`worldExportsOf`). -/
+    (`worldExportsOf`); `items` = the registry itself (the
+    demo-types interface's fold input). -/
 structure WasmGenSpec where
   watBody : String
   worldExports : List WorldExport
+  items : List (Name × SchemaLang.Item)
 
 /-- The observability manifest body (headerless — the driver prepends):
     the spans = spec data, emitted from the SAME fold as the world (one
@@ -508,10 +561,11 @@ structure WasmGenSpec where
     — an unregistered fn = no span (the coverage = the registry by
     construction). -/
 def observabilityRsOf (worldExports : List WorldExport) : String :=
-  let spanRows := worldExports.map fun (name, params, ret, isAsync) =>
-    let fields := params.map fun p =>
-      let sp := p.splitOn ": "
-      "(\"" ++ sp.head! ++ "\", \"" ++ sp.getLast! ++ "\")"
+  let spanRows := worldExports.map fun (name, sig) =>
+    let fields := sig.params.map fun (p, t) =>
+      "(\"" ++ CodegenCore.Emit.kebab p ++ "\", \""
+        ++ SchemaLang.Emit.Wit.tyWit t ++ "\")"
+    let (isAsync, ret) := worldRetOf sig
     let del := if isAsync && ret.startsWith "stream<" then "stream" else "once"
     "    SpanSpec { name: \"" ++ name ++ "\", delivery: \"" ++ del
       ++ "\", fields: &[" ++ String.intercalate ", " fields ++ "] }"
@@ -546,7 +600,7 @@ def worldWitEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
   style := .doubleSlash
   specSource := "the schema registry (the @[schema_fn] items — the fold)"
   outputs := ["./demo-world.wit"]
-  run spec := [{ path := "./demo-world.wit", contents := worldWitOf spec.worldExports }]
+  run spec := [{ path := "./demo-world.wit", contents := worldWitOf spec.items spec.worldExports }]
 
 /-- THE OBSERVABILITY MANIFEST (the fast-observe seam): the spans =
     spec data, emitted from the SAME fold as the world (one writer). -/
@@ -597,11 +651,11 @@ unsafe def main : IO Unit := do
   -- — checked BEFORE any artifact write (the emitters run after).
   let worldExports := worldExportsOf env targetDecls
   for f in oracleFns do
-    unless worldExports.any fun (w, _, _, _) => w == f do
+    unless worldExports.any fun (w, _) => w == f do
       -- the closed-world suggestion (CodegenCore.didYouMean — the
       -- every-error-path engine, reachable core-only from HERE): the
       -- misspell candidate lists the world's ACTUAL exports.
-      let cands := CodegenCore.didYouMean f (worldExports.map fun (w, _, _, _) => w)
+      let cands := CodegenCore.didYouMean f (worldExports.map fun (w, _) => w)
       let hint := if cands.isEmpty then ""
         else s!" — did you mean: {String.intercalate ", " cands}?"
       throw (IO.userError s!"oracle fn `{f}` is not a world export{hint}")
@@ -609,8 +663,9 @@ unsafe def main : IO Unit := do
   -- (`runEmitters`: header prepend + createParentDirs + write — the
   -- shared driver tail). The generation metadata (the clock + git) is
   -- the driver's IO; the emitters stay pure.
-  let spec : WasmGenSpec := { watBody, worldExports }
-  let witBody := worldWitOf worldExports
+  let spec : WasmGenSpec :=
+    { watBody, worldExports, items := SchemaLang.Meta.registeredItems env }
+  let witBody := worldWitOf (SchemaLang.Meta.registeredItems env) worldExports
   CodegenCore.Emit.runEmitters "wasm-backend" (wasmEmitters.map (·, spec))
     fun e _ =>
       -- the wat header's metadata is content-free (0 items, hash 0 —

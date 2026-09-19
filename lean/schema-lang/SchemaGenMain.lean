@@ -17,6 +17,10 @@ partition routes each universe to its artifact.
 -/
 import Lean
 import SchemaLang.Emit.Registry
+import SchemaLang.GenCtxIO
+-- Demo stays a DIRECT import (not just the replay's runtime target): it
+-- keeps the exe's build closure carrying the Demo lib, which
+-- `importModulesReplayed #[`Demo]` loads from oleans at run time.
 import Demo
 
 open Lean SchemaLang.Meta
@@ -25,33 +29,13 @@ open SchemaLang.Emit (emitters)
 open CodegenCore.Emit (header runEmitters)
 
 unsafe def runGen (_args : List String) : IO UInt32 := do
-  -- Replay BOTH spec modules' registrations (loadExts; `lake exe`
-  -- supplies LEAN_PATH for the package's own deps — the flags package
-  -- joins via the extra search path, its oleans built by `just
-  -- lean-build` BEFORE the gen driver runs, the gates' order). TWO
-  -- environments, not one: both spec modules define the root-level
-  -- `Async.Future`/`Async.Stream` boundary markers (the reifier matches
-  -- them BY NAME — one copy in SchemaLang.Meta is the tracked fix, and
-  -- Demo.lean is not this driver's to edit), so a joint import fails on
-  -- the duplicate constant. Each env replays its own registry; the
-  -- merger is the registry concatenation (demo first — the extension's
-  -- append order), the partition still DERIVED (`rootPartitionOf` per
-  -- env: the declaring module per item — never a hand list).
-  let paths : List System.FilePath :=
-    [("../feature-flags/.lake/build/lib" : System.FilePath),
-     ("../feature-flags/.lake/build/lib/lean" : System.FilePath)]
-  let demoEnv ← CodegenCore.importModulesReplayed #[`Demo]
-  let flagsEnv ← CodegenCore.importModulesReplayed #[`FeatureFlags] paths
-  let named := SchemaLang.Emit.namedByModule demoEnv (registeredItems demoEnv)
-    ++ SchemaLang.Emit.namedByModule flagsEnv (registeredItems flagsEnv)
-  let ctx : SchemaLang.Emit.GenCtx :=
-    { items := named.map (·.2)
-    , roots := SchemaLang.Emit.groupByRoot named
-      -- the invariant/update lanes stay demo-only (the flags package
-      -- registers none yet); the concat keeps the merger total when
-      -- the flags lane lands its rows
-    , invariants := registeredInvariants demoEnv ++ registeredInvariants flagsEnv
-    , updates := registeredUpdates demoEnv ++ registeredUpdates flagsEnv }
+  -- The registry replay (TWO environments, not one: both spec modules
+  -- define the root-level `Async.Future`/`Async.Stream` boundary markers
+  -- — a joint import fails on the duplicate constant; the merger is the
+  -- registry concatenation, demo first) is SchemaLang.GenCtxIO's ONE
+  -- copy — this driver consumed the GenCtx (the byte-duplicate that
+  -- lived here and in Gates.Common was deduped there).
+  let ctx ← SchemaLang.Emit.loadGenCtx
   -- The generation metadata: ONE assembly (the clock + git), shared by
   -- every artifact this run writes. The emitters stay pure.
   let gm ← CodegenCore.Emit.genMeta ctx.items.length 0

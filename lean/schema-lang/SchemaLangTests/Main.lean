@@ -1239,7 +1239,7 @@ def itemTys : Item → List Ty
     property predicate on hand-built cases. -/
 def propCoverageChecks : CheckResult := do
   let tails := (List.range 20).filterMap fun s =>
-    match SnapshotRT.runGenPure (Arbitrary.arbitrary (α := UniverseTail)) (20261104 + s) 8 with
+    match TestKit.runGenPure (Arbitrary.arbitrary (α := UniverseTail)) (20261104 + s) 8 with
     | .ok t => some t.items
     | .error _ => none
   _ ← assertEq "generator produced samples" tails.isEmpty false
@@ -1654,7 +1654,7 @@ derive_row_gen for User
 -- decRowVals_encRowVals_append law, executed on a GENERATED row — the
 -- generator feeds the proved law; pinned seed, deterministic).
 def rowGenChecks : CheckResult := do
-  match SnapshotRT.runGenPure (userRowGen 3) 20261105 5 with
+  match TestKit.runGenPure (userRowGen 3) 20261105 5 with
   | .ok row =>
       -- decode (encode row) = some (r, []) with r re-encoding to the
       -- same bytes (the valueEq discipline at row level — RowVals has
@@ -2081,8 +2081,8 @@ Phase 2 ported Emit.Update's guard/value lowering onto
 `Emit.Expr.u64RustI`/`boolRustI` at the `vexprLang` instance (phase 1
 was the invariant lane; the COMPAT spellings are gone) and ported
 Emit.Invariant's `defaultVerdict` to `validatesI`. The golden
-byte-ties (`invariantGoldenChecks`/`updateGoldenChecks`) pin the whole
-artifacts; these pins are the PER-EXPRESSION half: the exact Rust
+byte-tie (`goldenChecks`, which folds the registry emitters) pins the
+whole artifacts; these pins are the PER-EXPRESSION half: the exact Rust
 text the fold produces for a guard exercising every bool ctor over
 every u64 leaf shape, and the ported `valueRust` arms (the interface
 u64 arm, the justified GADT-direct string arm, the honest skip). -/
@@ -2436,18 +2436,6 @@ def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
       GateKit.auditFindings SchemaLang.Emit.emitterAuditRules f.contents |>.isEmpty)
     "invariant emitter self-audit (banned constructs)"
   .ok ()
-
-/-- The golden byte-tie for the invariant lane (the same contract as
-    `goldenChecks` — which covers this emitter automatically once it
-    joins the registry; this pin stands independent of the wiring). -/
-unsafe def invariantGoldenChecks (update : Bool) : IO (String × CheckResult) := do
-  let ctx ← loadDemoCtx
-  let files := SchemaLang.Emit.Invariant.invariantEmitter.run ctx
-  let out := files.head?.map (·.contents) |>.getD ""
-  let golden : System.FilePath := "goldens/invariants/invariants_generated.rs"
-  CodegenCore.Emit.createParentDirs golden
-  let r ← TestKit.Golden.checkAgainstGolden "invariant" out golden update
-  pure ("invariantGolden", r)
 
 /-! ## Proved-tier citation resolution (the cert pattern, MADE REAL)
 
@@ -3038,19 +3026,6 @@ def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
       GateKit.auditFindings SchemaLang.Emit.emitterAuditRules f.contents |>.isEmpty)
     "update emitter self-audit (banned constructs)"
   .ok ()
-
-/-- The golden byte-tie for the update lane (the same contract as
-    `invariantGoldenChecks` — the Registry wiring will fold this
-    emitter into `goldenChecks` automatically; this pin stands
-    independent of the wiring). -/
-unsafe def updateGoldenChecks (update : Bool) : IO (String × CheckResult) := do
-  let ctx ← loadDemoCtx
-  let files := SchemaLang.Emit.Update.updateEmitter.run ctx
-  let out := files.head?.map (·.contents) |>.getD ""
-  let golden : System.FilePath := "goldens/update/updates_generated.rs"
-  CodegenCore.Emit.createParentDirs golden
-  let r ← TestKit.Golden.checkAgainstGolden "update" out golden update
-  pure ("updateGolden", r)
 
 /-! ## Trace (SPEC-core §11): the scenario/trace spec item -/
 
@@ -4708,11 +4683,11 @@ def mapSetChecks : CheckResult := do
     "genRust: maps gated out of the v1 fragment (loud, named)"
   _ ← assert ((Emit.GenRust.unsupported? [] [] false 8 tagsTy).isSome)
     "genRust: sets gated out of the v1 fragment (loud, named)"
-  _ ← assert (litTy? scoresTy).isNone
+  _ ← assert ((Emit.Rust.rustLiteral? true scoresTy).isNone)
     "delta: no self-contained map literal (the tensor rule)"
   _ ← assert (SchemaLang.defaultValue? scoresTy).isSome
     "invariant: the empty map is a Lean-side default"
-  _ ← assert (Emit.Invariant.rustDefault? scoresTy).isNone
+  _ ← assert ((Emit.Rust.rustLiteral? false scoresTy).isNone)
     "invariant: no Rust map literal (the import is not pinned)"
   .ok ()
 
@@ -6834,8 +6809,6 @@ unsafe def main (args : List String) : IO UInt32 := do
   let ctx ← loadDemoCtx
   let goldens ← goldenChecks update
   let reflect ← reflectChecks
-  let invGolden ← invariantGoldenChecks update
-  let updGolden ← updateGoldenChecks update
   let vortexWf ← vortexWellFormedChecks
   let snapGate ← snapshotGateChecks
   let funcSemReflect ← funcSemReflectChecks
@@ -6856,9 +6829,7 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("snapshotRT", SnapshotRTPins.pins)
      , ("snapshotRTCoverage", SnapshotRT.coverageChecks)
      ] ++ goldens ++
-     [ invGolden
-     , updGolden
-     , ("lower", lowerChecks)
+     [ ("lower", lowerChecks)
      , ("derives", derivesChecks)
      , ("genRust", genRustChecks ctx)
      , reflect

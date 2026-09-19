@@ -328,11 +328,6 @@ def sweepBatch (n : Nat) (seed : UInt64) : ProbeBatch :=
 
 open Plausible
 
-/-- Deterministic pure `Gen` run (fixed seed + size — no IO; the
-    schema-lang Tests' `runGenPure` pattern). -/
-def runGenPure (g : Gen α) (seed : Nat) (size : Nat) : Except Plausible.GenError α :=
-  (ReaderT.run (StateT.run g (ULift.up (mkStdGen seed))) ⟨size⟩).map (·.1)
-
 /-- The id SENTINEL generator: option-of-option — the outer none is
     get-user's absent record (the `none` arm), the inner none is the
     id-0 sentinel the validators refuse. The flat surface renders both

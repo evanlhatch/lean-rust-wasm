@@ -16,7 +16,6 @@ pub fn check_name_min_length(v: &User) -> bool {
 pub fn validate_user(v: &User) -> bool {
   ((v.id > 0u64)) && (((v.name).len() as u64 > 3u64))
 }
-
 #[cfg(test)]
 pub mod invariant_tests {
   use super::*;
