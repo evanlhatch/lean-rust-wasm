@@ -25,7 +25,7 @@ import SchemaLang.Trace
 import SchemaLang.Emit.WitSweep
 import Machines
 import TestKit
-import Tests.SnapshotRT
+import SchemaLangTests.SnapshotRT
 
 -- the Tests' own `schema_update` probe (updPureCall) emits its instance
 -- into SchemaLang by the framework's construction — same as Demo
@@ -403,7 +403,7 @@ def envelopeChecks : CheckResult := do
 
 open Lean in
 /-- The Demo environment, loaded at runtime via the CodegenCore driver
-    preamble (GenMain's pattern). `importModules` resolves oleans at
+    preamble (SchemaGenMain's pattern). `importModules` resolves oleans at
     RUNTIME — the package build dirs are passed explicitly (a direct
     binary run lacks LEAN_PATH; the tests run from the package root). -/
 unsafe def loadDemoEnv : IO Environment :=
@@ -417,7 +417,7 @@ unsafe def loadDemoItems : IO (List SchemaLang.Item) := do
 
 open SchemaLang.Meta SchemaLang.Emit in
 /-- The FULL demo GenCtx — all three registry lanes (items +
-    invariants + updates), replayed from Demo's oleans (GenMain's
+    invariants + updates), replayed from Demo's oleans (SchemaGenMain's
     pattern, v2 contract). -/
 unsafe def loadDemoCtx : IO SchemaLang.Emit.GenCtx := do
   let env ← loadDemoEnv

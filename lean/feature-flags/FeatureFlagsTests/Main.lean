@@ -13,7 +13,7 @@ import FeatureFlags
 import FeatureFlagsFn
 import SchemaLang.Meta.Keys
 import Templates
-import Tests.Stress
+import FeatureFlagsTests.Stress
 
 
 

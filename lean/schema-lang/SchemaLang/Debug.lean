@@ -19,7 +19,7 @@ file's registry, with the imports' rows replayed) and log.
   degrades gracefully to a world spelled with that name (worlds are not
   registry rows, so there is nothing to fail against).
 - `#spans` — the observability preview: one `SpanSpec` row per func
-  item, mirroring the wasm-backend driver's fold (`GenMain.lean`'s
+  item, mirroring the wasm-backend driver's fold (`SchemaGenMain.lean`'s
   observability manifest: name, delivery — `stream` iff the async
   future-return carries `delivery = stream` — and the (param, wit-ty)
   field list). The rows are the emitted Rust's `SPANS` table.
@@ -27,8 +27,8 @@ file's registry, with the imports' rows replayed) and log.
 Ownership: this module owns the debug-command lane ONLY. Read-only
 dependencies: `SchemaLang.Meta.Reflect` (the registry),
 `SchemaLang.Emit.Wit` (`tyWit`/`worldOf`), `CodegenCore.Emit` (`kebab`).
-The span-row rendering deliberately DUPLICATES the GenMain fold's shape
-instead of importing it — GenMain is a driver exe, not a library.
+The span-row rendering deliberately DUPLICATES the SchemaGenMain fold's shape
+instead of importing it — SchemaGenMain is a driver exe, not a library.
 -/
 
 module
@@ -61,7 +61,7 @@ def itemLine (leanName : Name) : Item → String
       s!"{leanName} : func {kebab s.name}({params}) -> {tyWit s.ret}"
         ++ s!" delivery={s.sem.delivery.toToken}"
 
-/-- One func sig → its `SpanSpec` row text — the GenMain observability
+/-- One func sig → its `SpanSpec` row text — the SchemaGenMain observability
     fold, verbatim shape: delivery `stream` iff the return is an async
     `future` carrying `delivery = stream` (the WASI 0.3 stream lift),
     else `once`; fields = the params' (kebab name, wit type) pairs. -/

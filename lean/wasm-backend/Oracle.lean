@@ -117,7 +117,7 @@ W9.6 unblocking (item 2) — `streq` intrinsic, ROWS UNCHANGED: the
 backend gained the `String.decEq` lowering (`$string_eq` — one
 `GuestlangStd.Intrinsic` ctor + the runtime.wat primitive + the oracle
 body in StrOps.lean). The row universe here is UNCHANGED: an oracle
-row replays a WORLD EXPORT (GenMain's closed-world guard: every oracle
+row replays a WORLD EXPORT (WasmGenMain's closed-world guard: every oracle
 fn is a world export), and no demo export carries a string `==` — the
 fns exercising `$string_eq` (the guest checker) compile only when the
 W9.6 boxed-Nat decision lands and the checker decls rejoin the compile

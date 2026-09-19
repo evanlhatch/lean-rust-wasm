@@ -1,6 +1,6 @@
 /- Faults — the failure-mode registry + fast-observe emission.
 
-   GenMain (the artifact writer) is a separate exe root: it imports the
+   FaultsGenMain (the artifact writer) is a separate exe root: it imports the
    lib, never the reverse (one-writer discipline).
 
    The demo specs (`Faults.Spec.Demo`/`Host`) and the spec-paired emitter

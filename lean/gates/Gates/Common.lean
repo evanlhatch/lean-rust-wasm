@@ -28,9 +28,11 @@ namespace Gates
 /-- The full registry state (demo + flags worlds), replayed from oleans.
     The emitters stay pure; this is the one IO preamble. -/
 unsafe def loadGenCtx : IO SchemaLang.Emit.GenCtx := do
-  let paths : List System.FilePath :=
-    [("../feature-flags/.lake/build/lib" : System.FilePath),
-     ("../feature-flags/.lake/build/lib/lean" : System.FilePath)]
+  -- SINGLE-LAKE: the exe runs from the repo ROOT; the absorbed packages'
+  -- oleans sit in the root build dir — already on the search path, no
+  -- extra entries (the old ../feature-flags/.lake paths died with the
+  -- packages' own .lake dirs).
+  let paths : List System.FilePath := []
   let demoEnv ← CodegenCore.importModulesReplayed #[`Demo]
   let flagsEnv ← CodegenCore.importModulesReplayed #[`FeatureFlags] paths
   let named := SchemaLang.Emit.namedByModule demoEnv (registeredItems demoEnv)

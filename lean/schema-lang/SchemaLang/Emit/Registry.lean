@@ -10,7 +10,7 @@ style, DECLARED output paths (the one-writer audit surface), and a
 pure `run` from the ctx to files.
 
 Adding a language = one module defining an `Emitter` + one line in
-`emitters`. No driver changes, no GenMain changes (the driver iterates
+`emitters`. No driver changes, no SchemaGenMain changes (the driver iterates
 the registry). Outputs must be unique across the registry — the audit
 test fails the build on a collision, and `forge gen --check` byte-ties
 every declared path.

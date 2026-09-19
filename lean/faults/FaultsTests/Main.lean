@@ -214,12 +214,22 @@ def diagCodeChecks : CheckResult := do
   let ds := broken.diagnose Spec.knownTypes
   _ ← assertEq "diagnose nonempty" ds.isEmpty false
   _ ← assertEq "diagnose did-you-mean" (ds.any fun d => d.contains "did you mean") true
-  -- the derived kinds: exactly the constructor list, in order
+  -- the derived kinds: exactly the constructor list, in order. The pin
+  -- lists ALL of SchemaDiag's ctors — the W8.2 key lane, W8.13 inlineCycle
+  -- and the emitter-bug lane were added AFTER this pin was written (the
+  -- stale 10-ctor pin sat unnoticed: no gate ran this exe — lean-test is
+  -- lean-build only); updated to the current derived order, still the
+  -- append-only regression control on ctor order.
   _ ← assertEq "schema-diag kinds (ctor order pinned)"
     Faults.Emit.schemaDiagKinds
     [ "unknownRef", "dupName", "asyncField", "nonBoundaryType"
     , "notAStructure", "noCtor", "binderMismatch", "multiPayload"
-    , "reservedWord", "volatileInPureContext" ]
+    , "reservedWord", "volatileInPureContext"
+    , "keyRecordMissing", "keyRecordNotRecord", "keyFieldsMismatch"
+    , "keyFieldMissing", "keyNotScalar", "foreignFieldMissing"
+    , "foreignTargetMissing", "foreignTargetNotRecord"
+    , "foreignTargetKeyless", "foreignTypeMismatch", "dupKeyDecl"
+    , "inlineCycle", "mangledCollision", "emptyVariant" ]
   -- the schema-diag block: allocated AFTER the fault registries (4 + 4)
   _ ← assertEq "schema-diag codes start E108"
     ((Faults.Emit.schemaDiagCodes.map (·.2)).head?.getD "") "E108"

@@ -8,7 +8,7 @@ from the kernel's CollectAxioms; the allowlist (propext, Classical.choice,
 Quot.sound, disclosed _native.native_decide./_native.bv_decide. trust bases)
 is LintKit.AxiomAllowlist's, consumed via LintKit.runLintersOnDecls.
 
-## LintKit — 294 decls checked
+## LintKit — 306 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -63,7 +63,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## ledger — 150 decls checked
+## ledger — 241 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none

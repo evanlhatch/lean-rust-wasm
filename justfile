@@ -56,14 +56,14 @@ mutants name:
 # Fast type-check only, no emission (buf lint analog): universeCheck
 # over the demo registry; any diagnostic fails the gate.
 check-schema:
-	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema check
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe schema check
 
 # Schema-compat diff vs the committed baseline (buf breaking analog):
 # goldens/universe.snapshot vs the current demo registry; breaking
 # changes (removed/reshaped items) fail the gate. Re-baseline with
-# `cd lean/schema-lang && lake exe schema breaking --update`.
+# `cd lean/schema-lang && lake --dir ../.. exe schema breaking --update`.
 breaking:
-	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe schema breaking
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe schema breaking
 
 # The snapshot-codec differential's fixtures (the fuzz-gap audit's gap
 # #2): the Lean authority's seeded (snapshot-text, expected-item-dump)
@@ -73,7 +73,12 @@ breaking:
 # reviewable diff; the writer refuses a universe that fails the
 # Lean-authority round trip).
 snapshot-fixtures:
-	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe snapshot-fixtures
+	cd lean/schema-lang && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe snapshot-fixtures
+
+# ABSORBED-DIR INVOCATIONS (single-lake): lake does not walk up over a
+# deleted lakefile, so a recipe that cds into an absorbed package dir adds
+# `--dir ../..` (workspace = the root) and keeps the cwd for the exe's
+# cwd-relative writes (the §7 gen-exe rule).
 
 # Watchers — watchexec wraps the SAME commands, no redefinition.
 # --restart: kill in-flight gen on new save (codegen is idempotent).
@@ -159,48 +164,27 @@ check-wasm:
 # ── Lean workspace (packages in dependency order) ────────────────────
 # elan shims broken — invoke toolchain bin directly.
 lean_tc := home_dir() / ".elan" / "toolchains" / "leanprover--lean4---v4.33.0" / "bin"
-# std sits after schema-lang/codegen-core (its requires) and BEFORE
-# wasm-backend (the backend requires GuestlangStd — it re-runs std's
-# LCNF at compile time, importing the oleans).
-# LintKit is first: core-only, no deps; the `guestlang-lint` exe it builds
-# is the `lean-lint` gate's driver.
-# MONOLITH PILOT (notes/single-lake-migration.md): edgepython is absorbed
-# into the root lakefile (its lakefile.toml is dead) — dropped here; the
-# root package builds in lean-build and lints in lean-lint below.
-lean_pkgs := "LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags gates"
+# SINGLE-LAKE (notes/single-lake-migration.md): every lean/ package is
+# absorbed into the root lakefile — the root lakefile IS the inventory;
+# lean_pkgs and lean-pkg-inventory RETIRED (nothing left to inventory).
+# (lean-build lives below with the test-exe loop — one definition only.)
 
-# Inventory gate: every lean/*/lakefile.toml package must appear in
-# lean_pkgs — a missing entry silently skips build/test/axiom gates
-# (std rode unlisted until 2026-11; never again).
-lean-pkg-inventory:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	fail=0
-	for d in lean/*/; do
-	  p="${d%/}"; p="${p#lean/}"
-	  if [ -f "$d/lakefile.toml" ]; then
-	    hit=0
-	    for k in {{lean_pkgs}}; do
-	      if [ "$k" = "$p" ]; then hit=1; fi
-	    done
-	    if [ "$hit" = 0 ]; then
-	      echo "FAIL: lean/$p has a lakefile.toml but is absent from lean_pkgs"
-	      fail=1
-	    fi
-	  fi
-	done
-	[ "$fail" = 0 ] || exit 1
-	echo "lean-pkg-inventory: every package listed"
-
-# Import-reachability gate: every Tests/*.lean must be reachable from
-# the package's test driver (Tests/Main.lean). Tests/Axioms.lean is a
-# standalone entry point (run directly) and is excluded from the check.
+# Import-reachability gate: every test module must be reachable from its
+# driver (the `Main.lean` beside it). `Axioms.lean` is a standalone entry
+# point (run directly) and is excluded from the check. SINGLE-LAKE MIGRATION
+# (§5 of notes/single-lake-migration.md): test roots are renamed per package
+# (`<Pkg>Tests/` — the Tests.* names collide in one package), so the expected
+# import line is `import <DirName>.<Mod>` with the DIRECTORY's name — `Tests`
+# for a not-yet-absorbed package, `<Pkg>Tests` after its absorption.
 lean-proof-roots:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	fail=0
-	for d in lean/*/Tests/; do
-	  pkg="${d%/Tests/}"; pkg="${pkg#lean/}"
+	shopt -s nullglob
+	for d in lean/*/Tests/ lean/*/*Tests/; do
+	  [ -d "$d" ] || continue
+	  root="$(basename "${d%/}")"
+	  pkg="$(basename "$(dirname "${d%/}")")"
 	  main="$d/Main.lean"
 	  [ -f "$main" ] || continue
 	  for tf in "$d"*.lean; do
@@ -208,8 +192,8 @@ lean-proof-roots:
 	    [ "$base" = "Main.lean" ] && continue
 	    [ "$base" = "Axioms.lean" ] && continue
 	    mod="${base%.lean}"
-	    if ! grep -q "import Tests\.$mod\b" "$main" 2>/dev/null; then
-	      echo "FAIL: lean/$pkg/Tests/$base not imported in Tests/Main.lean"
+	    if ! grep -q "import $root\\.$mod\b" "$main" 2>/dev/null; then
+	      echo "FAIL: lean/$pkg/$root/$base not imported in $root/Main.lean"
 	      fail=1
 	    fi
 	  done
@@ -220,49 +204,100 @@ lean-proof-roots:
 lean-build:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	# The monolith root first (pilot: edgepython's libs/exes live here —
-	# notes/single-lake-migration.md).
 	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build)
-	for p in {{lean_pkgs}}; do
-	  (cd lean/$p && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build)
-	done
 
+# Per-package test-exe loop (the single-lake shape: `lake test` runs ONE
+# driver — the root's; every other test exe is its own target). Each exe
+# runs from its package dir (the §7 cwd rule — the goldens/ and target/
+# readers) with the root workspace via --dir.
 lean-test: lean-build
+	#!/usr/bin/env bash
+	set -euo pipefail
+	declare -A exes=(
+	  [edgepython]=EdgePythonTests [ledger]=LedgerTests
+	  [feature-flags]=FeatureFlagsTests [proofkit]=ProofkitTests
+	  [qlang]=QLangTests [substrait]=SubstraitTests [faults]=FaultsTests
+	  [std]=GuestlangStdTests [schema-lang]=SchemaLangTests
+	  [wasm-backend]=WasmBackendTests
+	)
+	for p in "${!exes[@]}"; do
+	  echo "── lean-test: $p/${exes[$p]}"
+	  (cd lean/$p && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe "${exes[$p]}") || exit 1
+	done
+	# TestKit/Machines: absorbed too — their test exes are root targets now.
+	for px in TestKit:TestKitTests Machines:MachinesTests; do
+	  d="${px%%:*}"; x="${px##*:}"
+	  echo "── lean-test: $d/$x"
+	  (cd lean/$d && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe "$x") || exit 1
+	done
+	echo "lean-test: all test exes green"
 
 # Custom env/text linters (LintKit — notes/lean-refactor-guide.md Phase 6).
 # The `guestlang-lint` driver runs over each package's own oleans via
 # `lake env` (downstream libraries never import the linter machinery; the
 # only LintKit imports in the tree are the recorded nolint/opt-out sites).
 # Default-on linters: axiomAllowlist, dupDefBodies, packageNamespace,
-# noLinterDisable, testImportDiscipline. recursiveSimpEqns is registered
-# but default-OFF (2026-11 census: 83 hits, dominated by doctrine-§8
-# raw-equation parsers — see its option comment); census run:
-#   cd lean/<pkg> && lake env <LK> --enable=linter.guestlang.recursiveSimpEqns <roots>
+# noLinterDisable, testImportDiscipline, importBan. recursiveSimpEqns is
+# registered but default-OFF (2026-11 census: 83 hits, dominated by
+# doctrine-§8 raw-equation parsers — see its option comment); census run:
+#   lake env <LK> --enable=linter.guestlang.recursiveSimpEqns <roots>
+# SINGLE-LAKE: every package lints from the ROOT package's env — one run,
+# the module roots the old per-package `run <pkg>` lines covered, with
+# --src-root mounts so the TEXT lints resolve `lean/<dir>/` sources.
 lean-lint: lean-build
 	#!/usr/bin/env bash
 	set -euo pipefail
-	LK="{{justfile_directory()}}/lean/LintKit/.lake/build/bin/guestlang-lint"
-	# wasm-backend's Tests exe is not in its defaultTargets (guide 2.4)
-	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build WasmBackendTests)
-	run() { (cd "lean/$1" && shift && PATH="{{lean_tc}}:$PATH" && {{lean_tc}}/lake env "$LK" "$@"); }
-	run LintKit LintKit
-	run TestKit TestKit Tests.Main
-	run Machines Machines Tests.Main
-	run codegen-core CodegenCore Tests.Main
-	run substrait Substrait Tests.Main
-	run qlang QLang Tests.Main
-	run proofkit Proofkit Tests.Main
-	run schema-lang SchemaLang Demo Tests.Main
-	run faults Faults Faults.Spec.Demo Faults.Spec.Host Tests.Main
-	run dbsp Dbsp Tests.Main
-	run std GuestlangStd
-	run ledger Ledger LedgerFn LedgerES
-	run feature-flags FeatureFlags FeatureFlagsFn Templates
-	run wasm-backend WasmBackend DemoFn Oracle Tests.Main
-	# edgepython is the monolith pilot: its sources lint from the ROOT
-	# package's env (roots EdgePython + Tests.Main — same module set the
-	# old `run edgepython` line covered).
-	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" EdgePython Tests.Main)
+	LK=".lake/build/bin/guestlang-lint"
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" \
+	  LintKit \
+	  --src-root=LintKit=lean/LintKit)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" TestKit TestKitTests.Main \
+	  --src-root=TestKit=lean/TestKit \
+	  --src-root=TestKitTests=lean/TestKit)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" Machines MachinesTests.Main \
+	  --src-root=Machines=lean/Machines \
+	  --src-root=MachinesTests=lean/Machines)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" CodegenCore CodegenCoreTests.Main \
+	  --src-root=CodegenCore=lean/codegen-core \
+	  --src-root=CodegenCoreTests=lean/codegen-core)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" Substrait SubstraitTests.Main \
+	  --src-root=Substrait=lean/substrait \
+	  --src-root=SubstraitTests=lean/substrait)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" QLang QLangTests.Main \
+	  --src-root=QLang=lean/qlang \
+	  --src-root=QLangTests=lean/qlang)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" Proofkit ProofkitTests.Main \
+	  --src-root=Proofkit=lean/proofkit \
+	  --src-root=ProofkitTests=lean/proofkit)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" SchemaLang Demo SchemaLangTests.Main \
+	  --src-root=SchemaLang=lean/schema-lang \
+	  --src-root=Demo=lean/schema-lang \
+	  --src-root=SchemaLangTests=lean/schema-lang)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" Faults Faults.Spec.Demo Faults.Spec.Host FaultsTests.Main \
+	  --src-root=Faults=lean/faults \
+	  --src-root=FaultsTests=lean/faults)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" Dbsp DbspTests.Main \
+	  --src-root=Dbsp=lean/dbsp \
+	  --src-root=DbspTests=lean/dbsp)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" GuestlangStd \
+	  --src-root=GuestlangStd=lean/std)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" Ledger LedgerFn LedgerES \
+	  --src-root=Ledger=lean/ledger \
+	  --src-root=LedgerFn=lean/ledger \
+	  --src-root=LedgerES=lean/ledger)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" FeatureFlags FeatureFlagsFn Templates \
+	  --src-root=FeatureFlags=lean/feature-flags \
+	  --src-root=Machine=lean/feature-flags \
+	  --src-root=Templates=lean/feature-flags)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" WasmBackend DemoFn Oracle WasmBackendTests.Main \
+	  --src-root=WasmBackend=lean/wasm-backend \
+	  --src-root=DemoFn=lean/wasm-backend \
+	  --src-root=Oracle=lean/wasm-backend \
+	  --src-root=WasmBackendTests=lean/wasm-backend)
+	(PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env "$LK" EdgePython EdgePythonTests.Main \
+	  --src-root=EdgePython=lean/edgepython \
+	  --src-root=EdgeGenMain=lean/edgepython \
+	  --src-root=EdgePythonTests=lean/edgepython)
 
 # Codegen pipeline shim — all logic lives in the forge crate.
 gen:
@@ -274,13 +309,14 @@ gen:
 # writes — closes forge gen --check's `just gen dirties the tree`
 # weakness. Same artifact surface as the old forge check.
 gen-check:
-	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates gen-check
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates gen-check
 
 # Every output declared in a forge jobs manifest exists and carries the
 # GENERATED header (a headerless file at a declared path = hand-written
 # file squatting on a generated artifact's path — the one-writer rule).
+# SINGLE-LAKE: LintKit is absorbed — the exe runs from the root build dir.
 artifact-headers:
-	cd lean/LintKit && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env .lake/build/bin/guestlang-lint --artifacts-root=../..
+	PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake env .lake/build/bin/guestlang-lint --artifacts-root=.
 
 # ── Cloudflare Pages (devenv/dev/cloudflare.nix) ─────────────────────
 # Pages as static host: no wrangler.toml, token via secretspec at
@@ -360,7 +396,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-pkg-inventory lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms native-policy kernel-check manifest-check coverage check-schema breaking wasm-diff-check splice-smoke rt-conformance lean-lint budget-check
+gates: lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms native-policy kernel-check manifest-check coverage check-schema breaking wasm-diff-check splice-smoke rt-conformance lean-lint budget-check
 	@echo "gates: clean"
 
 # Axiom gate (delegated to the gates exe — Gates.Axioms): one process,
@@ -374,33 +410,37 @@ lean-axioms:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	# wasm-backend's Tests exe not in defaultTargets (guide 2.4) — the
-	# report covers Tests.Main, so its oleans must exist.
-	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake build WasmBackendTests)
+	# report covers its test root, so its oleans must exist.
+	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. build WasmBackendTests)
 	# SHARDED per package (the monolithic one-process mode peaked ~26.5GB
 	# and OOM'd this box; per-package peaks ~2-4GB — the sharding order).
 	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
-	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates axioms --package $p || exit 1; \
+	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates axioms --package $p || exit 1; \
 	done
 
 # Lakefile ↔ manifest drift (delegated to the gates exe — Gates.Manifest):
 # every lean/*/lake-manifest.json agrees with its lakefile.toml
 # (require↔entry, rev pins, checkout HEADs). Structural + offline.
 manifest-check:
-	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates manifest-check
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates manifest-check
 
 # The coverage matrix (delegated to the gates exe — Gates.Coverage):
 # Ty ctors x registered emitters x the oracle's replay surface; diffs the
 # committed notes/coverage-matrix.md (`--strict` fails on quiet ctors —
 # pass it via the exe: `cd lean/gates && lake exe gates coverage --strict`).
 coverage:
-	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates coverage
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates coverage
 
 # The lean4lean double-check (delegated to the gates exe —
 # Gates.KernelCheck): every gated package's modules replayed through the
 # pure-Lean kernel. Requires `lean-build`. Disagreements are ledgered in
 # notes/divergences.md (investigated before the gate is bypassed).
+# SHARDED like lean-axioms (--package, the NativePolicy filter pattern):
+# the unsharded single-process run exceeded 30 min on this box.
 kernel-check:
-	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates kernel-check
+	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
+	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates kernel-check --package $p || exit 1; \
+	done
 
 # The native_decide policy (delegated to the gates exe —
 # Gates.NativePolicy): no decl in the checked set depends on the
@@ -412,7 +452,7 @@ native-policy:
 	# SHARDED like lean-axioms (one env per process — the full sweep
 	# accumulates every package's env in one process and OOMs).
 	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
-	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake exe gates native-policy --package $p || exit 1; \
+	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates native-policy --package $p || exit 1; \
 	done
 
 # ── The compiler line: LCNF → WAT → binary WASM ──────────────────────
@@ -429,8 +469,8 @@ wasm-compile:
 	# (target/ = the scratch dir, untracked).
 	mkdir -p lean/wasm-backend/target
 	cp src/observability_generated.rs lean/wasm-backend/target/observability_generated.rs.committed
-	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" build DemoFn wasm-gen oracle \
-	  && PATH="$TC:$PATH" "$TC/lake" exe wasm-gen)
+	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" --dir ../.. build DemoFn wasm-gen oracle \
+	  && PATH="$TC:$PATH" "$TC/lake" --dir ../.. exe wasm-gen)
 	# THE OBSERVABILITY BYTE-TIE (the fast-observe seam — steel-host's
 	# hot-reload span surface): strip the 2-line GENERATED header (the
 	# wall-clock + git state vary per regen — the byte-tie only binds the
@@ -449,7 +489,7 @@ wasm-compile:
 	# generated inputs) — Lean's semantics is the authority the wasm_diff
 	# test replays against. Regenerated WITH the WAT so the manifest can
 	# never go stale against the module it audits.
-	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" exe oracle \
+	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" --dir ../.. exe oracle \
 	  | grep '^\[' > target/diff.json)
 	# The SMOKE is the DIFFERENTIAL GATE (steel-host's wasm_diff): the
 	# oracle manifest (regenerated above — Lean's own evals) replays
@@ -574,10 +614,10 @@ edgepython:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	TC="{{lean_tc}}"
-	(cd lean/edgepython && PATH="$TC:$PATH" "$TC/lake" build \
-	  && PATH="$TC:$PATH" "$TC/lake" test \
-	  && PATH="$TC:$PATH" "$TC/lake" env lean Tests/Axioms.lean > /dev/null \
-	  && PATH="$TC:$PATH" "$TC/lake" exe py-gen)
+	(cd lean/edgepython && PATH="$TC:$PATH" "$TC/lake" --dir ../.. build EdgePython EdgeGen EdgePythonTests py-gen \
+	  && PATH="$TC:$PATH" "$TC/lake" --dir ../.. test \
+	  && PATH="$TC:$PATH" "$TC/lake" --dir ../.. env lean EdgePythonTests/Axioms.lean > /dev/null \
+	  && PATH="$TC:$PATH" "$TC/lake" --dir ../.. exe py-gen)
 	WT="$HOME/.local/guestlang-tools/bin/wasm-tools"
 	[ -x "$WT" ] || WT=wasm-tools
 	"$WT" parse lean/edgepython/target/py.wat -o lean/edgepython/target/py.wasm
@@ -666,10 +706,12 @@ new-project name:
 	open(pf, "w").write(s)
 	# AUTO-registration 3: seed the git-dep checkouts. gonzalgo resolves
 	# from the vendored bundle (vendor/gonzalgo.bundle — the pinned rev was
-	# rewritten upstream), so a fresh clone works without this. The seed
-	# is the FALLBACK: it also carries the prebuilt dep oleans (mathlib's
-	# 6.6G) without new disk. Lake skips re-fetch when HEAD already matches
-	# the manifest rev.
+	# SINGLE-LAKE NOTE (2026-09-19): this scaffolding recipe predates the
+	# monolith — it scaffolds a lean/<pkg> PACKAGE (own lakefile + cone),
+	# which no longer exists as a shape. New work = a new [[lean_lib]] in
+	# the root lakefile. The recipe below is kept for its registration
+	# steps and will fail at the dep-seeding step; a new-library recipe
+	# is a named follow-up. The seed
 	import json
 	mirror = os.path.join(root, "lean", "faults", ".lake", "packages")
 	man = json.load(open(os.path.join(pkg, "lake-manifest.json")))

@@ -45,6 +45,13 @@ structure DriverConfig where
   overrides     : NameMap Bool := {}
   /-- Comma-separated extra prefixes for `packageNamespace`. -/
   extraPrefixes : String := ""
+  /-- `--src-root=<module-root>=<dir>` mappings (repeatable): where a linted
+  module root's sources live RELATIVE TO THE DRIVER'S CWD. The single-lake
+  migration's fix: the driver runs from the repo root, but absorbed packages'
+  sources stay at `lean/<dir>/` — text lints must resolve them there or they
+  are silently skipped (the cwd fallback below stays for the classic
+  `cd lean/<pkg>` invocation). -/
+  srcRoots      : Array (Name × String) := {}
   deriving Inhabited
 
 /-- The guestlang env-linters, with their options. This list is the driver's
@@ -140,11 +147,19 @@ def initLintSearchPath : IO Unit := do
   let cwd ← IO.currentDir
   Lean.searchPathRef.modify fun sp => (cwd / ".lake" / "build" / "lib" / "lean") :: sp
 
+/-- The `--src-root` mapping lookup: the FIRST mapping whose root prefixes
+the module wins (the justfile passes one flag per absorbed lib); `none` =
+the cwd fallback. Pure so the self-tests can pin the resolution order. -/
+def srcRootFor (srcRoots : Array (Name × String)) (m : Name) : Option String :=
+  (srcRoots.find? fun (r, _) => r.isPrefixOf m).map (·.2)
+
 /-- Source-text lints over the `.lean` files of all linted modules. Sources
-are resolved cwd-relative (every linted module belongs to the cwd package —
-see `initLintSearchPath`), never via the search path, so dependency modules
-with colliding names are never scanned. Missing sources are reported as
-warnings by the caller, never silently skipped. -/
+resolve through the `--src-root` mappings first (`<module-root>=<dir>`, the
+single-lake driver's absorbed-package mounts), then cwd-relative (the
+classic `cd lean/<pkg>` invocation — every linted module belongs to the cwd
+package, see `initLintSearchPath`), never via the search path, so dependency
+modules with colliding names are never scanned. Missing sources are reported
+as warnings by the caller, never silently skipped. -/
 def runTextLintsOnModules (env : Environment) (roots : Array Name)
     (cfg : DriverConfig := {}) : IO (Array TextFinding × Array Name) := do
   let cwd ← IO.currentDir
@@ -152,7 +167,11 @@ def runTextLintsOnModules (env : Environment) (roots : Array Name)
   let mut missing := #[]
   for m in env.header.moduleNames do
     unless roots.any (·.isPrefixOf m) do continue
-    let file := modToFilePath cwd m "lean"
+    -- first --src-root mapping whose root prefixes the module wins; the
+    -- cwd fallback keeps the pre-monolith per-package invocation working
+    let file := match srcRootFor cfg.srcRoots m with
+      | some dir => modToFilePath dir m "lean"
+      | none => modToFilePath cwd m "lean"
     unless ← file.pathExists do
       missing := missing.push m
       continue

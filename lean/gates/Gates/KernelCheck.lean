@@ -97,10 +97,10 @@ def knownReduceBoolGaps : Array (String × Name) := #[
     Theory/Verify libs are lean4lean's own proof lane, not the checker's
     runtime). -/
 def ensureExe : IO System.FilePath := do
-  let exe : System.FilePath := ".lake/packages/lean4lean/.lake/build/bin/lean4lean"
+  let exe : System.FilePath := "../../.lake/packages/lean4lean/.lake/build/bin/lean4lean"
   unless ← exe.pathExists do
     IO.println "kernel-check: building the lean4lean exe (one-time; only the exe target)"
-    let out ← IO.Process.output { cmd := "lake", args := #["build", "lean4lean:exe"] }
+    let out ← IO.Process.output { cmd := "lake", args := #["--dir", "../..", "build", "lean4lean:exe"] }
     unless out.exitCode == 0 do
       throw <| IO.userError s!"kernel-check: `lake build lean4lean:exe` failed:\n{out.stdout}\n{out.stderr}"
   return exe
@@ -155,10 +155,31 @@ def sourceHasDecls (path : System.FilePath) : IO Bool := do
     carries the whole dep closure. -/
 def leanPathOf (pkg : PkgSpec) (pkgDir : System.FilePath) : IO String := do
   match pkg.leanPath with
-  | some own => return own
+  | some own =>
+    -- ABSOLUTIZE the override and APPEND the root workspace's closure: the
+    -- root build dir carries the ABSORBED modules, but while sibling
+    -- packages are still standing (pre-phase-5), their oleans live in
+    -- THEIR OWN .lake dirs — `lake env printenv LEAN_PATH` from the ROOT
+    -- dir enumerates them (absolute paths, so the spawn's cwd := pkgDir
+    -- cannot break them; observed pre-fix: `unknown module prefix
+    -- 'SchemaLang'`). Root build dir FIRST (own-dir-first — the same-
+    -- named-module fix in the header).
+    let rootOut ← IO.Process.output
+      { cmd := "lake", args := #["--dir", s!"{pkgDir}/../..", "env", "printenv", "LEAN_PATH"]
+      , cwd := some "." }
+    unless rootOut.exitCode == 0 do
+      throw <| IO.userError s!"`lake env printenv LEAN_PATH` failed at the root:\n{rootOut.stderr}"
+    let ownAbs : System.FilePath := own
+    let ownAbs ←
+      if ownAbs.isAbsolute then
+        pure ownAbs
+      else do
+        let cwd ← IO.currentDir
+        pure (cwd / ownAbs)
+    return s!"{ownAbs.toString}:{rootOut.stdout.trimAscii}"
   | none =>
     let out ← IO.Process.output
-      { cmd := "lake", args := #["env", "printenv", "LEAN_PATH"]
+      { cmd := "lake", args := #["--dir", s!"{pkgDir}/../..", "env", "printenv", "LEAN_PATH"]
       , cwd := some pkgDir }
     unless out.exitCode == 0 do
       throw <| IO.userError s!"`lake env printenv LEAN_PATH` failed in {pkgDir}:\n{out.stderr}"
@@ -202,7 +223,13 @@ def checkPkg (exe : System.FilePath) (pkg : PkgSpec) : IO (Except String PkgOutc
   let mut skipRoots : Array Name := #[]
   let mut checkMods : Array Name := #[]
   for m in ← modulesOf libDir do
-    let src := pkgDir / (m.toString ++ ".lean")
+    -- OWNERSHIP (the single-lake fix): an ABSORBED package's oleanDir is
+    -- the ROOT build dir — it also holds its sibling packages' modules.
+    -- A module is this package's iff its source sits under its srcDir;
+    -- everything else belongs to an absorbed sibling (checked in THAT
+    -- sibling's shard).
+    let src := modToFilePath pkgDir m "lean"
+    unless ← src.pathExists do continue
     -- nested `if`s, NOT `&&` over monadic operands: do-notation hoists
     -- every `←` out of `&&` eagerly (the short-circuit never engages —
     -- observed: sourceHasDecls read a nonexistent Tests.Main.lean)
@@ -237,14 +264,27 @@ def checkPkg (exe : System.FilePath) (pkg : PkgSpec) : IO (Except String PkgOutc
   return .ok { checked := checkMods.size - killed.size - rejected.size
              , skipRoots, killed, rejected }
 
-unsafe def run : IO UInt32 := do
+unsafe def run (pkgName : Option String) : IO UInt32 := do
+  -- --package filter (the NativePolicy pattern): one package's env per
+  -- process — the sharded mode the kernel-check recipe loops (the whole
+  -- sweep in one process exceeds 30 min on this box).
+  let pkgs := match pkgName with
+    | some d =>
+      match gatedPackages.find? (fun p : PkgSpec => p.dir == d) with
+      | some p => #[p]
+      | none => #[]
+    | none => gatedPackages
+  if pkgs.isEmpty then
+    IO.eprintln s!"kernel-check: unknown --package '{pkgName.getD ""}' — gated: \
+      {", ".intercalate (gatedPackages.map (·.dir)).toList}"
+    return 1
   let exe ← ensureExe
   let mut failures : Array (String × Name) := #[]
   let mut killed : Array (String × Name) := #[]
   let mut gaps : Array (String × Name) := #[]
   let mut skipped : Array String := #[]
   let mut roots : Array (String × Name) := #[]
-  for pkg in gatedPackages do
+  for pkg in pkgs do
     match ← checkPkg exe pkg with
     | .error e => skipped := skipped.push e; IO.println s!"kernel-check: {e}"
     | .ok o =>

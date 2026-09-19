@@ -11,7 +11,7 @@ INCREMENTAL MIGRATION: the escape hatch `Instr.raw (s : String)` renders
 `s` as one verbatim WAT line. Each migrated emission site is typed; the
 un-migrated sites cross the bridge as `.raw` lines. The raw-count = the
 migration's progress metric (`S.rawCount` — the emitter state's tally,
-printed by GenMain). The
+printed by WasmGenMain). The
 ledger of what remains raw is owned by WasmBackend.lean's header.
 
 Rendering: `Std.Format` (the doctrine — never string interpolation for
@@ -254,7 +254,7 @@ structure Export where
 /-- One module field. The task's Module (imports/funcs/exports/memory/
     start) = these typed constructors; `raw` = the module-level escape
     hatch (verbatim line — used for the runtime.wat splice marker, which
-    GenMain replaces by exact bytes). -/
+    WasmGenMain replaces by exact bytes). -/
 inductive Item where
   | imp (i : Import)
   | ty (t : TypeDef)

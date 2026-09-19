@@ -1,5 +1,5 @@
 /-
-# Faults.GenMain — the artifact writer (one-writer-per-artifact)
+# Faults.FaultsGenMain — the artifact writer (one-writer-per-artifact)
 
 The buf driver: iterates `Faults.Emit.jobs`, runs each emitter's pure
 `run` over its spec, prepends the GENERATED header (from the emitter's

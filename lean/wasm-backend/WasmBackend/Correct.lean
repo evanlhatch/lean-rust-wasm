@@ -97,7 +97,7 @@ THE BRIDGE (what is proved vs what is tested):
 
 THE EXTRACTION GAP (honest): the backend's `emitCode` is `partial` (the
 LCNF `Code` recursion) and its INPUT is the impure-phase LCNF that
-GenMain re-runs in CoreM. So (a) the backend's emission is pinned to the
+WasmGenMain re-runs in CoreM. So (a) the backend's emission is pinned to the
 templates only at the CONCRETE shapes below (#guard), not for ALL LCNF;
 and (b) the LCNF decls here are hand-constructed to the known pipeline
 shape (verified against the emitted goldens' structure), not extracted

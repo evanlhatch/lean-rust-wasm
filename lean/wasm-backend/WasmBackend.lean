@@ -9,7 +9,7 @@ import GuestlangStd.StrOps
 /-!
 # WasmBackend — LCNF → WAT emission
 
-The `leanir` re-run pattern (see GenMain): the final impure-phase LCNF →
+The `leanir` re-run pattern (see WasmGenMain): the final impure-phase LCNF →
 WebAssembly Text. Toolchain: `wasm-tools parse -g` → validate → wasmtime.
 
 TYPED WAT (the doctrine): the module is assembled as a `Wat.Module` and
@@ -21,7 +21,7 @@ the emitted instrs are structurally the proved function's outputs. The
 adapters, the general path (emitCode/emitLet/emitCases/goAlts/
 emitReturn/emitArg), the trampolines, the callbacks, cabi_realloc, the
 module assembly — is typed. The ONE raw is the `Wat.Item.raw
-"  ;;RUNTIME-SPLICE"` marker (GenMain replaces those exact bytes with
+"  ;;RUNTIME-SPLICE"` marker (WasmGenMain replaces those exact bytes with
 runtime.wat) — not an instruction, so the raw-count stays 0.
 
 Record-param adapter's ABI fact (probed against the encoder): a record
@@ -175,7 +175,7 @@ def specBEqArg : Arg .impure → M FVarId
 
 /-! ## The ONE impure-`Code` traversal skeleton (the layering audit's
 consolidation: the walker shape was hand-duplicated — `jumpsTo`, the
-`resultTy` family here, `fapCalleesOf` in GenMain.lean — each re-writing
+`resultTy` family here, `fapCalleesOf` in WasmGenMain.lean — each re-writing
 the same structural recursion).
 
 `Code.foldImpure` is a structural fold; a WALKER = a `spineAcc` + a
@@ -195,20 +195,20 @@ walker's fit is checkable):
   leaf decision is the walker's — no forced unification. EAGER (pure
   walkers only; every consumer is).
 
-Exposed (not private): GenMain.lean's `fapCalleesOf` walks with it —
+Exposed (not private): WasmGenMain.lean's `fapCalleesOf` walks with it —
 same exposure surface as `binop?`/`inlineNatFap?`.
 
 Walkers that do NOT fit (left alone, honestly): the `emitCode` mutual
 family (stateful `M` emission — per-node instruction ORDERING, state
 FORKING in `emitScoped`, let/return tail-call fusion; not a fold), and
-GenMain.lean's `reportUnsupportedLCNF` walk (its diagnostic PATHS are
+WasmGenMain.lean's `reportUnsupportedLCNF` walk (its diagnostic PATHS are
 child-position labels — `/jpK`, `/caseD` — the skeleton does not
 carry). -/
 
 -- The skeleton stays in the WasmBackend namespace (the file's `open`s
 -- open Lean/Compiler/LCNF SEPARATELY, so `Code.foldImpure` would NOT
 -- resolve through Lean.Compiler.LCNF from here); exposed (not private)
--- for GenMain.lean's `fapCalleesOf` — the same exposure surface as
+-- for WasmGenMain.lean's `fapCalleesOf` — the same exposure surface as
 -- `binop?`/`inlineNatFap?`. Referenced cross-file as
 -- `WasmBackend.Code.foldImpure`.
 
@@ -1095,7 +1095,7 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
   -- takes the return-area pointer as its LAST param; the adapter calls
   -- the impl (→ the string object), then writes (bytes-ptr, byte-len)
   -- into it. (The STRING-ness comes from the ORIGINAL def type —
-  -- GenMain looks it up in the imported env — the LCNF type is erased
+  -- WasmGenMain looks it up in the imported env — the LCNF type is erased
   -- to `obj` for every object result.)
   if shape == "string" then
     -- the shim: pass the flat args through, call the impl, write the
@@ -1592,7 +1592,7 @@ def emitModule (decls : List (Decl .impure))
                , .export { name := "__indirect_function_table", desc := .table 0 } ]
           else [ .export { name := "__indirect_function_table", desc := .table 0 } ])
   -- THE TYPED MODULE: rendered by Wat.Module.render (Std.Format). The
-  -- splice marker = the ONE module-level raw (GenMain replaces its exact
+  -- splice marker = the ONE module-level raw (WasmGenMain replaces its exact
   -- bytes with runtime.wat).
   let mod : Wat.Module :=
     { start := none
@@ -1602,7 +1602,7 @@ def emitModule (decls : List (Decl .impure))
         ++ table ++ exports ++ cbExports ++ memExport }
   -- the outer StateT state = the mut var's final value (the decl loop
   -- runs in INNER .run's — without this put, StateT.run returns the
-  -- initial {}). GenMain reads rawCount from it.
+  -- initial {}). WasmGenMain reads rawCount from it.
   modify (fun _ => st)
   pure mod.render
 

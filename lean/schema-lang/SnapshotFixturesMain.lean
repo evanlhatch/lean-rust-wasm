@@ -21,7 +21,7 @@ Usage:
   lake exe snapshot-fixtures <path>       — write a given path
   lake exe snapshot-fixtures --stdout     — print to stdout (debug)
 -/
-import Tests.SnapshotRT
+import SchemaLangTests.SnapshotRT
 
 open SnapshotRT
 

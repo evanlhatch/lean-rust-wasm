@@ -37,6 +37,12 @@ def Cli.parse (args : List String) : Cli := Id.run do
       cfg := { cfg with extraPrefixes :=
         if cfg.extraPrefixes.isEmpty then p.toString
         else cfg.extraPrefixes ++ "," ++ p.toString }
+    else if let some rs := a.dropPrefix? "--src-root=" then
+      -- repeatable `--src-root=<module-root>=<dir>`: the absorbed-package
+      -- source mounts for the text lints (notes/single-lake-migration.md §3)
+      match rs.toString.splitOn "=" with
+      | [r, dir] => cfg := { cfg with srcRoots := cfg.srcRoots.push (r.toName, dir) }
+      | _ => pure ()  -- malformed flag: ignored (the usage line documents the shape)
     else if let some r := a.dropPrefix? "--artifacts-root=" then
       root := some r.toString
     else
@@ -59,7 +65,7 @@ unsafe def main (args : List String) : IO UInt32 := do
     return ← runArtifactGate root
   if mods.isEmpty then
     IO.eprintln "usage: guestlang-lint [--disable=<linter.option>] \
-      [--extra-prefix=<Prefix>] <Module>..."
+      [--extra-prefix=<Prefix>] [--src-root=<Root>=<dir>] <Module>..."
     return 1
   LintKit.initLintSearchPath
   Lean.enableInitializersExecution

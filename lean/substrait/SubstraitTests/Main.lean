@@ -54,10 +54,12 @@ abbrev goldenPlan : Rel units (projectOut units goldenOut) :=
 def goldenText : Except String String :=
   Emit.Text.emit goldenPlan.toPlan
 
-/-- The `Tests/` directory, resolved from an env override or the cwd. -/
+/-- The test directory, resolved from an env override or the cwd.
+(SINGLE-LAKE §5: renamed from `Tests/` to `SubstraitTests/` — the Tests.*
+names collide in one package.) -/
 def testDir : IO String := do
   let envDir ← IO.getEnv "LEAN_SUBSTRAIT_TEST_DIR"
-  pure (envDir.getD "Tests")
+  pure (envDir.getD "SubstraitTests")
 
 def goldenPath : IO String := do
   pure ((← testDir) ++ "/golden/filter_project.substrait")

@@ -10,8 +10,13 @@ work on packages that never import LintKit):
 * `linter.guestlang.testImportDiscipline` (notes/lean-doctrine.md §4): files
   under a `Tests/` directory import TestKit (the blessed surface), never
   LSpec directly.
+* `linter.guestlang.importBan` (notes/single-lake-migration.md §3): files
+  under a banned directory prefix must not import the banned module roots —
+  the per-package core-only-ness that used to be a lakefile boundary
+  (no mathlib/Dbsp require), held as DATA so it survives the single-lake
+  migration (a package's discipline ratchets in when it absorbs).
 
-Both are pure `String → Array TextFinding`, unit-tested in LintKit's own
+All are pure `String → Array TextFinding`, unit-tested in LintKit's own
 Tests with positive and negative controls. The options are declared at top
 level (see LintKit.Basic's header note).
 -/
@@ -34,6 +39,13 @@ register_option linter.guestlang.noLinterDisable : Bool := {
 register_option linter.guestlang.testImportDiscipline : Bool := {
   defValue := true
   descr := "text lint: files under Tests/ import TestKit, never LSpec directly"
+}
+
+@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
+register_option linter.guestlang.importBan : Bool := {
+  defValue := true
+  descr := "text lint: files under a banned directory prefix import no banned \
+    module root (the single-lake migration's dependency discipline as data)"
 }
 
 @[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
@@ -177,11 +189,81 @@ def splitCodeComments (content : String) : Array (Nat × String × String) := Id
     i := i + 1
   return out
 
+/-- The import-ban table (the single-lake migration's discipline rows):
+`(dirPrefix, bannedRoots, reason)`. A source file whose path starts with
+`dirPrefix` must not `import` a module whose name is or starts with one of
+`bannedRoots` (name-boundary exact: `Mathlib.Data` matches, `MathlibX` does
+not). Rows carry the DISCIPLINE each package already enforces through its
+(dead or dying) lakefile's require set; a package's row lands when its
+discipline is ratcheted in and keeps firing after absorption — the physical
+`lean/<dir>/` layout does not move. Notes/canon: the lakefile boundary dies,
+the rule survives as this table. -/
+def importBans : List (String × List String × String) :=
+  [("lean/codegen-core/",
+    ["Mathlib", "Dbsp", "Machines", "Substrait", "SchemaLang", "GuestlangStd",
+     "Faults", "Ledger", "QLang", "Proofkit", "FeatureFlags", "WasmBackend",
+     "EdgePython"],
+    "codegen-core is core-only: it imports nothing above TestKit/LintKit/LSpec \
+      (the D1 doctrine — every downstream package's internals import it)"),
+   ("lean/substrait/",
+    ["Mathlib", "Dbsp", "Machines", "SchemaLang", "GuestlangStd", "Faults",
+     "Ledger", "QLang", "Proofkit", "FeatureFlags", "WasmBackend", "EdgePython"],
+    "substrait is core-only: the typed query language owns no mathlib cone \
+      (the package's dependency policy)"),
+   ("lean/TestKit/",
+    ["Mathlib", "Dbsp", "Machines", "SchemaLang", "GuestlangStd", "Substrait",
+     "CodegenCore", "Faults", "Ledger", "QLang", "Proofkit", "FeatureFlags",
+     "WasmBackend", "EdgePython"],
+    "TestKit is core + LSpec only — every package's test lane requires it, so \
+      its closure must stay cheap"),
+   ("lean/LintKit/",
+    ["Mathlib", "Dbsp", "Machines", "TestKit", "LSpec", "SchemaLang",
+     "GuestlangStd", "Substrait", "CodegenCore", "Faults", "Ledger", "QLang",
+     "Proofkit", "FeatureFlags", "WasmBackend", "EdgePython"],
+    "LintKit is pure Lean core + meta code — the linter must never sit in the \
+      closure it lints (core-only per the lakefile's contract)")]
+
+/-- Is `mod` (a module-name token from an import line) exactly `root` or a
+`root.`-prefixed child? Name-boundary exact, unlike a raw string prefix. -/
+def importsRoot (mod : String) (root : Name) : Bool :=
+  let r := root.toString
+  mod == r || mod.startsWith (r ++ ".")
+
+/-- `importBan`: for each table row whose `dirPrefix` matches the file, an
+`import` line naming a banned root is a finding. Code-channel only (the
+comment/string scanner) — a commented-out import never fires. -/
+def checkImportBan (file : String) (content : String) : Array TextFinding := Id.run do
+  let mut out := #[]
+  for (dirPrefix, roots, reason) in importBans do
+    unless (file.splitOn dirPrefix).length > 1 do continue
+    for (i, code, _) in splitCodeComments content do
+      let toks := code.trimAscii.toString.splitOn.filter (!·.isEmpty)
+      if toks.head? == some "import" then
+        for t in toks.tail do
+          -- a second `import` on the line restarts the token scan
+          if t == "import" then continue
+          for r in roots do
+            if importsRoot t r.toName then
+              out := out.push { file, line := i
+                                linter := `linter.guestlang.importBan
+                                message := s!"import of `{t}` under `{dirPrefix}` \
+                                  violates the dependency discipline: {reason}" }
+  return out
+
+/-- Is `file` a TEST file? Path-shape-robust (the single-lake lesson): the
+old predicate matched the substring `/Tests/` — true for the absolute
+cwd-relative paths of the per-package runs and for absolute paths, but
+FALSE for the root-run's relative `lean/<dir>/<Pkg>Tests/…` paths (the §5
+renamed test roots). A test file is any file under a path component named
+`Tests` or ending in `Tests` (the renamed per-package test roots). -/
+def isTestsFile (file : String) : Bool :=
+  (file.splitOn "/").any fun c => c == "Tests" || c.endsWith "Tests"
+
 /-- `testImportDiscipline`: files under `Tests/` must not `import LSpec`,
 nor drive LSpec directly (`LSpec.lspecIO` etc.) — the runner goes through
 TestKit so the harness discipline (controls, verdicts) holds. -/
 def checkTestImportDiscipline (file : String) (content : String) : Array TextFinding := Id.run do
-  unless (file.splitOn "/Tests/").length > 1 do return #[]
+  unless isTestsFile file do return #[]
   let mut out := #[]
   for (i, code, _comment) in splitCodeComments content do
     let t := code.trimAscii.toString
@@ -224,7 +306,7 @@ def checkNoNewPartial (file : String) (content : String) : Array TextFinding := 
   let mut count := 0
   for (i, code, _) in splitCodeComments content do
     -- test files are exempt: generators/fixtures don't ship proofs
-    if (file.splitOn "/Tests/").length > 1 then continue
+    if isTestsFile file then continue
     if code.trimAscii.toString.startsWith "partial def" then
       count := count + 1
       match allowed with
@@ -332,8 +414,9 @@ def checkNolintReason (file : String) (content : String) : Array TextFinding := 
 /-- All text lints over one source file. -/
 def runTextLints (file : String) (content : String) : Array TextFinding :=
   checkNoLinterDisable file content ++ checkTestImportDiscipline file content
-    ++ checkNoNewPartial file content ++ checkNoReprInEmit file content
-    ++ checkNoFormatInDebug file content ++ checkCoreHasNoClaim file content
-    ++ checkStaleNotesPath file content ++ checkNolintReason file content
+    ++ checkImportBan file content ++ checkNoNewPartial file content
+    ++ checkNoReprInEmit file content ++ checkNoFormatInDebug file content
+    ++ checkCoreHasNoClaim file content ++ checkStaleNotesPath file content
+    ++ checkNolintReason file content
 
 end LintKit

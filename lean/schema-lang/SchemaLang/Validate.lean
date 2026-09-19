@@ -40,10 +40,10 @@ tail: `ColPath.get` is an ordinary recursive target.
 Ownership: this module (the validator lane). The wasm backend compiles
 `evalU`/`evalB`/`validates`/`ColPath.get` as ordinary targets — they are
 marked `@[guest_std]` (the guest-mark registry; the backend's manifest
-fold — GenMain.lean's `targetDeclsOf` — picks marked decls up, no
+fold — SchemaGenMain.lean's `targetDeclsOf` — picks marked decls up, no
 hand-list). `evalV` stays UNMARKED (the boxed reading constructs `Value`
 boxes the guest cannot compile); the `user-valid` differential duel
-rows (GenMain's oracle) are the end-to-end proof.
+rows (SchemaGenMain's oracle) are the end-to-end proof.
 
 Deliberate exclusions: option's is-some, string/order comparisons,
 arithmetic on anything but u64 — they join when a schema needs them
@@ -86,7 +86,7 @@ IS the payload access in the shape the backend already emits (the
 tag case + the payload sproj — the `area` ctor-dispatch pattern).
 Flip this when the backend emits the variant raw lane.
 
-The differential duel rows (GenMain's oracle) are the authority for
+The differential duel rows (SchemaGenMain's oracle) are the authority for
 BOTH lanes; the validator pattern = the registered compiled fn, the
 GADT = the scalar-condition story (Phase 3's family = the SPEC-side
 story, the strlen precedent).

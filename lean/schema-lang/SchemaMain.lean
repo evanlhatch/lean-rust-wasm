@@ -1,18 +1,18 @@
 /-
 # SchemaLang.SchemaMain — unified driver: schema gen|check|breaking
 
-Dispatches to GenMain, CheckMain, or BreakingMain based on the first
+Dispatches to SchemaGenMain, CheckMain, or BreakingMain based on the first
 CLI argument. All three share the CodegenCore registry-load preamble
 (`importModulesReplayed` / `loadRegisteredItems`), now lives in each
 submodule's `run` rather than duplicated inline.
 
 Usage:
-  lake exe schema gen       — regenerate all artifacts (GenMain)
+  lake exe schema gen       — regenerate all artifacts (SchemaGenMain)
   lake exe schema check     — type-check the demo universe (CheckMain)
   lake exe schema breaking  — compat diff vs baseline (BreakingMain)
   lake exe schema breaking --update  — rewrite baseline
 -/
-import GenMain
+import SchemaGenMain
 import CheckMain
 import BreakingMain
 

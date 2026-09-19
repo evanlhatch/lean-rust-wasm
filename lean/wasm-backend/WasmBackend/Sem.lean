@@ -2246,7 +2246,7 @@ end FrameTests
 
 /-! ## The allocator layer — the SPEC of the spliced `runtime.wat`
 
-THE LOAD-BEARING SPLICE: GenMain splices `runtime.wat`'s funcs/globals
+THE LOAD-BEARING SPLICE: WasmGenMain splices `runtime.wat`'s funcs/globals
 into the emitted module (single module, no imports) — the allocator
 (`$alloc`: size-class freelist + bump) and the Perceus RC discipline
 (`$rc_inc`/`$rc_dec`: dec→0 pushes the block back to its class pool).

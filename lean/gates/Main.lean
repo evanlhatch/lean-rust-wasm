@@ -40,15 +40,17 @@ unsafe def runManifestCheck (_p : Parsed) : IO UInt32 := Gates.Manifest.run
 unsafe def runCoverage (p : Parsed) : IO UInt32 :=
   Gates.Coverage.run (p.hasFlag "write") (p.hasFlag "strict")
 
-unsafe def runKernelCheck (_p : Parsed) : IO UInt32 := Gates.KernelCheck.run
+unsafe def runKernelCheck (p : Parsed) : IO UInt32 :=
+  Gates.KernelCheck.run (p.flag? "package" |>.map (·.as! String))
 
 unsafe def runNativePolicy (p : Parsed) : IO UInt32 := Gates.NativePolicy.run (p.flag? "package" |>.map (·.as! String))
 
-/-- `just <recipe>` from the repo root (gates runs from lean/gates). -/
+/-- `just <recipe>` from the repo root (the exe runs at the root — the
+    single-lake layout). -/
 def shellJust (args : List String) : IO UInt32 := do
   let out ← IO.Process.output
     { cmd := "just", args := args.toArray
-    , cwd := some ("../.." : System.FilePath) }
+    , cwd := some ("." : System.FilePath) }
   IO.print out.stdout
   IO.eprint out.stderr
   return out.exitCode
@@ -126,6 +128,11 @@ unsafe def kernelCheckCmd : Cmd := `[Cli|
    header: no reduceBool (the 3 disclosed native_decide uses are outside \
    its checking), shared lineage with the C++ kernel = double-check, \
    not independence."
+
+  FLAGS:
+    package : String; "Check ONE gated package — one lean4lean env in this \
+      process (the sharded mode the kernel-check recipe loops; the full \
+      sweep in one process exceeds 30 minutes on this box)."
 ]
 
 unsafe def nativePolicyCmd : Cmd := `[Cli|

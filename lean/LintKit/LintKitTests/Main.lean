@@ -99,6 +99,12 @@ unsafe def run : M Unit := do
   check "noLinterDisable ignores `set_option ... true`" notFalse.isEmpty
   let lspecInTests := checkTestImportDiscipline "/pkg/Tests/Main.lean" "import LSpec\n"
   check "testImportDiscipline flags `import LSpec` under Tests/" (lspecInTests.size == 1)
+  let lspecInRenamedTests := checkTestImportDiscipline
+    "lean/substrait/SubstraitTests/Main.lean" "import LSpec\n"
+  check "testImportDiscipline flags LSpec under a renamed <Pkg>Tests/ root"
+    (lspecInRenamedTests.size == 1)
+  let lspecRelativeTests := checkTestImportDiscipline "Tests/Main.lean" "import LSpec\n"
+  check "testImportDiscipline flags LSpec under a relative Tests/" (lspecRelativeTests.size == 1)
   let testkitInTests := checkTestImportDiscipline "/pkg/Tests/Main.lean" "import TestKit\n"
   check "testImportDiscipline accepts `import TestKit`" testkitInTests.isEmpty
   let lspecInLib := checkTestImportDiscipline "/pkg/Lib.lean" "import LSpec\n"
@@ -109,10 +115,14 @@ unsafe def run : M Unit := do
   let testkitCall := checkTestImportDiscipline "/pkg/Tests/Main.lean"
     "def main := TestKit.mainOfSuites s\n"
   check "testImportDiscipline accepts TestKit drivers" testkitCall.isEmpty
-  -- noNewPartial: legacy allowance + new-site flagging
+  -- noNewPartial: legacy allowance + new-site flagging (+ the renamed
+  -- test-root exemption — the single-lake path shape)
   let legacyOk := checkNoNewPartial "lean/wasm-backend/WasmBackend.lean"
     "partial def a := 1\npartial def b := 2\n"
   check "noNewPartial accepts sites within the legacy allowance" legacyOk.isEmpty
+  let testsExempt := checkNoNewPartial "lean/substrait/SubstraitTests/Main.lean"
+    "partial def x := 1\n"
+  check "noNewPartial exempts a renamed <Pkg>Tests/ file" testsExempt.isEmpty
   let legacyOver := checkNoNewPartial "lean/wasm-backend/WasmBackend.lean"
     (String.intercalate "" (List.replicate 10 "partial def x := 1\n"))
   check "noNewPartial flags overage past the legacy allowance" (legacyOver.size == 1)
@@ -168,6 +178,35 @@ unsafe def run : M Unit := do
   let reasonedNolint := checkNolintReason "M.lean"
     "@[nolint linter.guestlang.foo \"because the test\", linter.guestlang.bar \"why\"]\ndef x := 1\n"
   check "nolintReason accepts a reasoned opt-out" reasonedNolint.isEmpty
+  -- importBan (the single-lake discipline rows) — positive control: a heavy
+  -- root under a banned prefix; negative: the same import outside the prefix,
+  -- a clean root under the prefix, and a name-boundary near-miss (MathlibX).
+  let bannedImport := checkImportBan "lean/codegen-core/CodegenCore/Emit/Rust.lean"
+    "import Mathlib.Data.Nat.Defs\n"
+  check "importBan flags Mathlib under lean/codegen-core/" (bannedImport.size == 1)
+  let bannedChild := checkImportBan "lean/substrait/Substrait.lean"
+    "import Dbsp.Operators\n"
+  check "importBan flags a banned-root CHILD (Dbsp.Operators)" (bannedChild.size == 1)
+  let outsidePrefix := checkImportBan "lean/schema-lang/SchemaLang.lean"
+    "import Mathlib.Data.Nat.Defs\n"
+  check "importBan ignores files outside every banned prefix" outsidePrefix.isEmpty
+  let cleanImport := checkImportBan "lean/codegen-core/CodegenCore/Kit.lean"
+    "import TestKit\n"
+  check "importBan accepts TestKit under lean/codegen-core/" cleanImport.isEmpty
+  let nearMiss := checkImportBan "lean/TestKit/TestKit.lean"
+    "import MathlibX\n"
+  check "importBan is name-boundary exact (MathlibX ≠ Mathlib)" nearMiss.isEmpty
+  let commentedImport := checkImportBan "lean/LintKit/LintKit/Basic.lean"
+    "-- import Mathlib.Data.Nat.Defs\n"
+  check "importBan ignores commented-out imports" commentedImport.isEmpty
+  -- srcRootFor: the --src-root mapping lookup the text-lint driver uses
+  -- (first root-prefixing mapping wins; none = the cwd fallback).
+  let mapped := srcRootFor #[(`EdgePython, "lean/edgepython")] `EdgePython.Parity
+  check "srcRootFor maps a root-prefixed module" (mapped == some "lean/edgepython")
+  let unmapped := srcRootFor #[(`EdgePython, "lean/edgepython")] `Tests.Main
+  check "srcRootFor falls through for a non-matching module" (unmapped == none)
+  let second := srcRootFor #[(`A, "dirA"), (`Tests, "lean/ledger")] `Tests.Main
+  check "srcRootFor picks the first matching mapping" (second == some "lean/ledger")
 
 def main : IO UInt32 := do
   let (_, failures) ← (unsafe run).run #[]

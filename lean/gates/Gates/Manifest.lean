@@ -176,23 +176,27 @@ def checkPkg (dir : System.FilePath) (pkg : String) : IO (Array Finding) := do
       findings := findings.push ⟨pkg, s!"manifest entry '{e.name}' has no lakefile require — zombie, run `lake update`"⟩
   return findings
 
-/-- The gate: every lean/*/ with a lakefile.toml. Run from lean/gates
-    (`..` = lean/). -/
+/-- The gate (single-lake, 2026-09-19): ONE root lakefile.toml ↔
+    lake-manifest.json, plus NO stray per-package lakefiles/manifests
+    under lean/ (a stray = an un-absorbed package — the inventory rule's
+    successor). Run from lean/gates (`../..` = the repo root). -/
 unsafe def run : IO UInt32 := do
-  let leanDir : System.FilePath := ".."
-  let mut findings : Array Finding := #[]
-  let mut checked : Nat := 0
-  for entry in ← leanDir.readDir do
+  let root : System.FilePath := "../.."
+  let mut findings ← checkPkg root "LeanRoot"
+  for entry in ← (root / "lean").readDir do
     unless ← entry.path.isDir do continue
-    unless ← (entry.path / "lakefile.toml").pathExists do continue
-    checked := checked + 1
-    findings := findings ++ (← checkPkg entry.path entry.fileName)
+    if ← (entry.path / "lakefile.toml").pathExists then
+      findings := findings.push ⟨entry.fileName,
+        "stray lakefile.toml — the package was never absorbed (single-lake: the root owns all targets)"⟩
+    if ← (entry.path / "lake-manifest.json").pathExists then
+      findings := findings.push ⟨entry.fileName,
+        "stray lake-manifest.json — dead pre-monolith artifact (delete it)"⟩
   for f in findings do
     IO.println s!"{f.pkg}: {f.msg}"
   if findings.isEmpty then
-    IO.println s!"manifest-check: {checked} package manifests agree with their lakefiles"
+    IO.println "manifest-check: the root manifest agrees with the root lakefile; no strays under lean/"
     return 0
-  IO.println s!"manifest-check: {findings.size} finding(s) across {checked} packages"
+  IO.println s!"manifest-check: {findings.size} finding(s)"
   return 1
 
 end Gates.Manifest

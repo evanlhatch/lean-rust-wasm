@@ -2,7 +2,7 @@
 # SchemaLang.CheckMain — `just check-schema` (the buf lint analog)
 
 Fast type-check of the demo universe, no emission: replay the registry
-from the oleans (GenMain's preamble), run the diagnostic authority
+from the oleans (SchemaGenMain's preamble), run the diagnostic authority
 (`universeCheck`); any diagnostic fails loudly with the rendered
 did-you-mean/valid-space text, exit 1. Clean = exit 0.
 -/

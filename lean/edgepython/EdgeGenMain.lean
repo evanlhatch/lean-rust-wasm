@@ -1,5 +1,5 @@
 /-
-# EdgePython.GenMain — the py-artifact writer
+# EdgePython.EdgeGenMain — the py-artifact writer
 
 The wasm-gen pattern, minus the LCNF re-run: this frontend's source is
 the Lean DSL (the `Py` inductives), so there is nothing to re-run —

@@ -1,5 +1,5 @@
 /-
-# SchemaLang.GenMain — the artifact writer (the buf driver)
+# SchemaLang.SchemaGenMain — the artifact writer (the buf driver)
 
 Imports the demo module (running `@[schema]` reflection), reads ALL
 THREE registries from the elaborated environment into one `GenCtx` (the

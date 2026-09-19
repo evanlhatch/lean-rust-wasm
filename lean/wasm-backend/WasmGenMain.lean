@@ -8,7 +8,7 @@ import WasmBackend.Check
 import Oracle
 
 /-!
-# WasmBackend.GenMain — the LCNF → WAT artifact writer
+# WasmBackend.WasmGenMain — the LCNF → WAT artifact writer
 
 The `leanir` pattern: import the manifest's modules' oleans, re-run the
 LCNF pipeline (the impure-phase LCNF — Perceus RC included — is NOT

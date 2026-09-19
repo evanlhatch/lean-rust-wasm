@@ -3,7 +3,7 @@
 
 Mirrors `SchemaLang.Emit.Registry`: one `Emitter` record per artifact,
 declared output paths (the one-writer audit surface), pure `run`. The
-driver (`GenMain`) iterates `jobs`, prepends the GENERATED header from
+driver (`FaultsGenMain`) iterates `jobs`, prepends the GENERATED header from
 each emitter's `style` + `specSource`, and writes — emitters never
 prepend headers themselves (the `CodegenCore.Emit.Core` contract).
 
