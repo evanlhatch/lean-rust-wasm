@@ -448,7 +448,7 @@ refactor around lean4lean where helpful.
 |---|---|---|
 | **Kernel** | Checks every proof term at build — the sole correctness authority for proofs | **Absorbed as authority**: lean4lean re-checks the oleans independently (W9.0); for decls in the checked set, the lean4lean verdict becomes the cited authority. The C++ kernel still runs (it is inside the build) but is no longer trusted ALONE |
 | **Elaborator / frontend** | Elaborates all spec modules; every attribute/macro (`@[schema]`, `machine!`, `declare_enum_wire`) runs it | **CANNOT be absorbed — the hard floor.** No Lean-written frontend exists; lean4lean is a kernel, not an elaborator. Stated plainly: elaboration is permanently C++-toolchain-hosted. The directive's floor |
-| **Compiler + runtime (LCNF→C)** | Builds oleans, runs metaprograms, runs the test drivers | **Already bypassed for shipped artifacts**: guests are compiled by OUR wasm emitter (lean/wasm-backend), hosts are Rust (steel-host, guestlang-rt, forge). The C++ compiler's role is the DEV loop only — development-speed relevance, zero artifact relevance |
+| **Compiler + runtime (LCNF→C)** | Builds oleans, runs metaprograms, runs the test drivers | **Already bypassed for shipped artifacts**: guests are compiled by OUR wasm emitter (lean/wasm-backend), hosts are Rust (guestlang-host, guestlang-rt, forge). The C++ compiler's role is the DEV loop only — development-speed relevance, zero artifact relevance |
 | **reduceBool (`native_decide` trust base)** | Compiles+runs proof-irrelevant evaluation inside proofs | **Cannot be absorbed** (lean4lean: no reduceBool). Quarantined by policy — §6.3 |
 
 ### 6.2 The target invariant (doctrine addition)

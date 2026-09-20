@@ -1,0 +1,51 @@
+[package]
+name = "guestlang-host"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# wasi 0.3 (streams/futures) needs wasmtime 47+ — wasmtime-wasi 28 only
+# implements wasi 0.2 and cannot satisfy the wasip3 guest's imports.
+# Features mirror wasmtime's defaults minus the fat we don't use; p3
+# needs component-model-async + component-model-bytes.
+wasmtime = { version = "47", default-features = false, features = [
+  "async",
+  "component-model",
+  "component-model-async",
+  "cranelift",
+  "pooling-allocator",
+  "runtime",
+  "std",
+  # wasip3 guest target builds with +atomics (shared memory) — needed to
+  # compile the std binary.
+  "threads",
+] }
+wasmtime-wasi = { version = "47", default-features = false, features = ["p3"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# `instant` = the span accumulator — the observability seam's backend
+# (the spans = the schema's manifest: observability_generated.rs).
+# `default-features = false` per fast-observe's own manifest: defaults
+# (`fastrace`, `bridge-log`) are the BINARY's call (the root crate keeps
+# them); a library must not forward them.
+fast-observe = { version = "0.1", default-features = false, features = ["instant"] }
+# The schema hash (sha256 of the canonical schema-surface string) —
+# twin of oracle-runner's schema_hash; see schema.rs's header for why
+# this duplicates instead of sharing.
+sha2 = "0.10"
+
+[dev-dependencies]
+# Property/fuzz layer over the hostgen snapshot parser
+# (tests/fuzz_hostgen.rs): arbitrary strings never panic; mutated
+# fixture pairs stay error-or-shape-stable against the Lean
+# authority's fixtures. Default features = the cargo-test lane.
+bolero = "0.13"
+wasmtime = { version = "47", default-features = false, features = ["wat"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+# The framework crate: guest fault registry (faults_generated) for the
+# cross-boundary E-code lookup test.
+lean-rust-wasm = { path = "../.." }
+# Stage F round-trip gate: parse the GENERATED wit/gateway.wit back and
+# assert the schema the Rust side reads matches the Lean SSOT.
+wit-parser = "0.258"
+serde_json = "1"

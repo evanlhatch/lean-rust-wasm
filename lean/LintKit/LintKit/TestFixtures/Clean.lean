@@ -32,6 +32,20 @@ point: the pair must fire with exactly two members.) -/
 def addFortyOne (n : Nat) : Nat := n + 40
 def addFortyTwo (n : Nat) : Nat := n + 42
 
+/-- Clean (upstreamDup, non-triviality calibration): this body collides
+with core `id` — but a one-line `fun x => x` copy is not a finding, the
+node count sits under the filter. The linter must stay silent. -/
+def identityPlanted {α : Sort u} (x : α) : α := x
+
+/-- Clean (bareChecker): a Bool check* def WITH its companion bridge
+theorem (the correspondence the lint wants). Body deliberately different
+from `checkNoBridge`'s — identical bodies would form a dupDefBodies
+cluster of their own. -/
+def checkWithBridge (x : Nat) : Bool := x < 100
+
+theorem checkWithBridge_ok (x : Nat) : checkWithBridge x = true ↔ x < 100 := by
+  simp [checkWithBridge]
+
 end LintKit.TestFixtures.Clean
 
 /-- Clean (packageNamespace, foreign rule): an unprefixed module-local name

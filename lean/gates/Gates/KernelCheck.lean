@@ -75,10 +75,13 @@ notes/divergences.md):
   requires `just lean-build` first — a skipped package is NOT a checked
   package).
 
-Pure Lean core + Gates.Packages — no LintKit/schema-lang imports.
+Pure Lean core + Gates.Packages (+ Gates.Common's shared driver tails).
 -/
 import Lean
 import Gates.Packages
+import Gates.Common  -- the shared driver tails (R4); transitively pulls
+                     -- schema-lang oleans — import-graph only, the exe
+                     -- loads the whole tree anyway
 
 open Lean
 
@@ -268,16 +271,7 @@ unsafe def run (pkgName : Option String) : IO UInt32 := do
   -- --package filter (the NativePolicy pattern): one package's env per
   -- process — the sharded mode the kernel-check recipe loops (the whole
   -- sweep in one process exceeds 30 min on this box).
-  let pkgs := match pkgName with
-    | some d =>
-      match gatedPackages.find? (fun p : PkgSpec => p.dir == d) with
-      | some p => #[p]
-      | none => #[]
-    | none => gatedPackages
-  if pkgs.isEmpty then
-    IO.eprintln s!"kernel-check: unknown --package '{pkgName.getD ""}' — gated: \
-      {", ".intercalate (gatedPackages.map (·.dir)).toList}"
-    return 1
+  let some pkgs ← Driver.selectPackages "kernel-check" pkgName | return 1
   let exe ← ensureExe
   let mut failures : Array (String × Name) := #[]
   let mut killed : Array (String × Name) := #[]

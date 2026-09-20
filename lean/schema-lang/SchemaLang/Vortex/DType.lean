@@ -173,4 +173,58 @@ def DType.fieldsWellFormed : List (FieldName × DType) → Bool
   | (_, t) :: rest => t.wellFormed && fieldsWellFormed rest
 end
 
+/-! ## The bridge (the WF lane's checker↔relation pattern, Wf.lean)
+
+`DType.wellFormed` is the executable gate the Vortex emitter's
+well-formedness check rides (Tests: every emitted dtype is wellFormed
+— the fork's construction-time decimal bounds). The relation below is
+its reasoning twin: EVERY decimal node in the type tree is within the
+fork's bounds. -/
+
+mutual
+/-- The Prop mirror of `DType.wellFormed`: every DECIMAL node in the
+    type tree respects the fork's i256 bounds (`DecimalDType.isValid`). -/
+def DecimalOk : DType → Prop
+  | .decimal d _ => d.isValid = true
+  | .list e _ => DecimalOk e
+  | .fixedSizeList e _ _ => DecimalOk e
+  | .struct fs _ => DecimalFieldsOk fs
+  | .union vs _ => DecimalFieldsOk vs
+  | .extension _ _ s => DecimalOk s
+  | _ => True
+
+def DecimalFieldsOk : List (FieldName × DType) → Prop
+  | [] => True
+  | (_, t) :: rest => DecimalOk t ∧ DecimalFieldsOk rest
+end
+
+/-- The checker↔relation bridge, both directions (functional induction
+    over the mutual fold — `DType.wellFormed.induct`). -/
+theorem DType.wellFormed_iff (d : DType) : d.wellFormed = true ↔ DecimalOk d := by
+  induction d using DType.wellFormed.induct with
+  | motive_2 fs => exact (DType.fieldsWellFormed fs = true ↔ DecimalFieldsOk fs)
+  | case1 => rfl
+  | case2 e n ih => exact ih
+  | case3 e sz n ih => exact ih
+  | case4 fs n ih => exact ih
+  | case5 vs n ih => exact ih
+  | case6 id m s ih => exact ih
+  | case7 t h1 h2 h3 h4 h5 h6 =>
+      cases t with
+      | null => exact ⟨fun _ => trivial, fun _ => rfl⟩
+      | bool _ => exact ⟨fun _ => trivial, fun _ => rfl⟩
+      | primitive _ _ => exact ⟨fun _ => trivial, fun _ => rfl⟩
+      | decimal dn n => exact absurd rfl (h1 dn n)
+      | list e n => exact absurd rfl (h2 e n)
+      | fixedSizeList e s n => exact absurd rfl (h3 e s n)
+      | utf8 _ => exact ⟨fun _ => trivial, fun _ => rfl⟩
+      | binary _ => exact ⟨fun _ => trivial, fun _ => rfl⟩
+      | struct fs n => exact absurd rfl (h4 fs n)
+      | union vs n => exact absurd rfl (h5 vs n)
+      | variant _ => exact ⟨fun _ => trivial, fun _ => rfl⟩
+      | extension id m s => exact absurd rfl (h6 id m s)
+  | case8 => simp [DType.fieldsWellFormed, DecimalFieldsOk]
+  | case9 f t rest ih1 ih2 =>
+      simp [DType.fieldsWellFormed, DecimalFieldsOk, ih1, ih2]
+
 end SchemaLang.Vortex

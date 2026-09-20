@@ -10,8 +10,7 @@
 5. Harness additions: expectErrorContaining / assertPointwiseEq /
    assertContains, each with a negative control that MUST fail.
 6. CheckM: the accumulator driver reports failures and exit codes.
-7. GateKit: byteTie detects drift, writes under update; parseGateArgs
-   accepts exactly --check / --update / --help.
+7. GateKit: parseGateArgs accepts exactly --check / --update / --help.
 8. DiffSpec: the corruption-negative discipline for differential gates —
    a good gate (positive + 2 context-naming corruptions) passes; an
    IDENTITY corruption (gate vacuous), a context-poor rejection, and an
@@ -198,15 +197,6 @@ def main : IO UInt32 := do
   if cmBad == 0 then
     IO.println "FAIL: CheckM driver swallowed a failure"
     failures := failures + 1
-  -- GateKit: byteTie write / match / drift-detection against a temp file
-  let gtmp : System.FilePath := "/tmp/testkit-gatekit-demo.txt"
-  let gWrite ← GateKit.byteTie "gate-demo" gtmp (pure "committed bytes\n") true
-  let gMatch ← GateKit.byteTie "gate-demo" gtmp (pure "committed bytes\n") false
-  let gDrift ← GateKit.byteTie "gate-demo" gtmp (pure "drifted bytes\n") false
-  if gWrite != 0 || gMatch != 0 || gDrift == 0 then
-    IO.println "FAIL: byteTie write/match/drift paths"
-    failures := failures + 1
-  else IO.println "✓ byteTie write/match/drift paths"
   -- GateKit: parseGateArgs accepts exactly the uniform surface
   let argsOk :=
     GateKit.parseGateArgs [] == some false &&

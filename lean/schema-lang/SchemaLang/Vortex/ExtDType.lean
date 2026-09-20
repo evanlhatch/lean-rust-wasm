@@ -67,6 +67,20 @@ def ExtDTypeItem.wellFormed (it : ExtDTypeItem) : Bool :=
   | .u8Enum allowed _, .fixed _ => allowed.length > 0
   | _, _ => true
 
+/-- The reasoning twin (the WF lane's checker↔relation pattern): a
+    u8Enum over a FIXED storage admits ≥ 1 value; everything else is
+    structurally fine. -/
+def ExtDTypeOk (it : ExtDTypeItem) : Prop :=
+  match it.metadata, it.storage with
+  | .u8Enum allowed _, .fixed _ => allowed.length > 0
+  | _, _ => True
+
+/-- The bridge, both directions. -/
+theorem ExtDTypeItem.wellFormed_iff (it : ExtDTypeItem) :
+    ExtDTypeItem.wellFormed it = true ↔ ExtDTypeOk it := by
+  unfold ExtDTypeItem.wellFormed ExtDTypeOk
+  cases it.metadata <;> cases it.storage <;> first | exact Iff.rfl | simp
+
 end SchemaLang.Vortex
 
 namespace SchemaLang.Vortex.Emit
@@ -198,7 +212,14 @@ def extDTypes : List ExtDTypeItem :=
 
 /-- The ext-dtype emitter: does NOT consume schema items (ext dtypes
     are registered separately, as the `extDTypes` constant above); the
-    `List SchemaLang.Item` parameter is ignored. -/
+    `List SchemaLang.Item` parameter is ignored.
+
+    W7.9 `Emitter.law` sweep — NO law, and why: the emitter consumes no
+    schema universe (zero-input), so there is no checked-view contract
+    to state; the ext-dtype table IS the spec (`extDTypes` as data —
+    the metadata/storage correspondence is enforced at the literal by
+    the `ExtDTypeItem` shape, not by a theorem over an input). The
+    bytes are the byte-tie's own. -/
 def extVortexEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "ext-vortex"
   style := .doubleSlash

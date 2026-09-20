@@ -336,19 +336,14 @@ def evalProject {p : Schema} (outs : List (Projection p)) :
       let cols : Schema := outs.map fun pr => ((pr.name, pr.dtype, pr.nullable) : SchemaCol)
       pure (row.appendCells cols extra))
 
-/-- Stable insertion of a row into a sorted list (`lessEq x y`: x placed before y). -/
-def stableInsert (lessEq : Row s → Row s → Bool) (x : Row s) : List (Row s) → List (Row s)
-  | [] => [x]
-  | y :: ys => if lessEq x y then x :: y :: ys else y :: stableInsert lessEq x ys
-
 /-- Whether an ordering is not `.gt` (with the lexicographic fold). -/
 def isNotGt : Ordering → Bool
   | .gt => false | _ => true
 
-/-- Sort rows stably by the given keys. -/
+/-- Sort rows stably by the given keys (core `List.mergeSort` — stable —
+    with the same preorder the insertion sort used). -/
 def sortByKeys (keys : List (SortKey s)) (rows : List (Row s)) : List (Row s) :=
-  let le (a b : Row s) : Bool := isNotGt (Row.cmpKeys keys a b)
-  rows.foldl (fun acc x => stableInsert le x acc) []
+  rows.mergeSort (fun a b => isNotGt (Row.cmpKeys keys a b))
 
 /-- Apply limit/offset to a list. -/
 def applyFetch : Option Nat → Option Nat → List ρ → List ρ

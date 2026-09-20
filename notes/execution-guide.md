@@ -30,8 +30,8 @@ LEAN_PATH="$PWD/.lake/build/lib/lean" PATH="$TC:$PATH" $TC/lake exe schema-gen
 cd /home/evan/lean-rust-wasm
 devenv shell --profile wasm -- bash -c 'cargo check -p lean-rust-wasm'
 
-# Rust: build + test steel-host
-devenv shell --profile wasm -- bash -c 'cargo test -p steel-host'
+# Rust: build + test guestlang-host
+devenv shell --profile wasm -- bash -c 'cargo test -p guestlang-host'
 
 # Full gates
 devenv shell --profile wasm -- bash -c 'just gates'
@@ -64,13 +64,13 @@ the hand-written `Spec/Demo.lean` data becomes generated.
 
 **Goal**: The Rust host calls guest functions through the component model with TYPED arguments (not untyped `Val` marshalling).
 
-**Current state**: `steel-host` calls via `instance.get_typed_func` on the raw component — works but untyped. `wit-bindgen` is installed in the wasm profile but not used.
+**Current state**: `guestlang-host` calls via `instance.get_typed_func` on the raw component — works but untyped. `wit-bindgen` is installed in the wasm profile but not used.
 
 **Do**:
-1. Add `wit-bindgen = "0.42"` (or whatever version is in the nix profile) to `steel-host`'s dev-dependencies (or use the `wasmtime::component::bindgen!` macro)
+1. Add `wit-bindgen = "0.42"` (or whatever version is in the nix profile) to `guestlang-host`'s dev-dependencies (or use the `wasmtime::component::bindgen!` macro)
 2. Generate host-side bindings from `wit/gateway.wit`:
    ```rust
-   // In steel-host/src/bindings.rs
+   // In guestlang-host/src/bindings.rs
    wasmtime::component::bindgen!({
        path: "../wit/gateway.wit",
        world: "gateway",
@@ -81,18 +81,18 @@ the hand-written `Spec/Demo.lean` data becomes generated.
 4. In the test: instantiate the guest through the typed bindings, call `get-user(id)` — the args and return are TYPED (not `Val`)
 5. The generated code references the schema types (User etc.) — connect them to `schema_generated.rs`
 
-**Done when**: the steel-host test calls `add(1,2)` through TYPED bindings (not raw `Val`), and `get-user` returns a structured `User` (not a blob).
+**Done when**: the guestlang-host test calls `add(1,2)` through TYPED bindings (not raw `Val`), and `get-user` returns a structured `User` (not a blob).
 
 ## Stage C: Generated host faults
 
 **Goal**: The host's error codes (E110-E113) come from the SAME Lean registry as the guest's (E100-E103). One code allocator across the stack.
 
-**Current state**: `steel-host/src/valves.rs` (or wherever) hardcodes the host fault codes. The faults emitter generates `OrderError` for the GUEST but not the HOST faults.
+**Current state**: `guestlang-host/src/valves.rs` (or wherever) hardcodes the host fault codes. The faults emitter generates `OrderError` for the GUEST but not the HOST faults.
 
 **Do**:
 1. The faults registry (`lean/faults/Faults/Spec/Demo.lean`) has the guest faults (E100-E103). ADD host-side faults (E110+: engine error, missing export, fuel exhausted, timeout).
 2. The faults emitter generates TWO modules: the guest's `OrderError` (already done) and the HOST's `HostFault`. Same registry, same allocation.
-3. Replace the hardcoded E110-E113 in steel-host with the generated types.
+3. Replace the hardcoded E110-E113 in guestlang-host with the generated types.
 4. The host's `HostFault` uses `fast_observe::error!` with the same `#[code]`/`#[category]`/`#[advice]` attributes.
 
 **Done when**: `lookup_error("E110")` resolves from BOTH the host and guest sides. The E-code means the same thing across the boundary.
@@ -152,7 +152,7 @@ the hand-written `Spec/Demo.lean` data becomes generated.
    ```just
    demo: gen wasm-guest
        # host loads the component, calls add(1,2) through typed bindings
-       cargo test -p steel-host
+       cargo test -p guestlang-host
    ```
 2. This is the "edit Lean → get a working component" loop, closed.
 

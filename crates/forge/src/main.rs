@@ -7,7 +7,13 @@
 //! Never contains: emitters (Lean owns those — they read the elaborated
 //! environment), devenv logic (shell stays thin).
 
-use forge::{manifest, oci, registry};
+// error! emits Error::provide — nightly-only (same gate as the root crate).
+#![feature(error_generic_member_access)]
+
+// The workspace's ONE global-allocator policy (crates/workspace-alloc).
+workspace_alloc::init_global_alloc!();
+
+use forge::oci;
 
 // GENERATED driver surface (byte-tied): the pipeline stage machine.
 // (path is relative to THIS file's dir: crates/forge/src)
@@ -18,7 +24,49 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use fast_observe::exn::Fault;
 use pipeline_generated::{PipelineEvent, PipelineStage};
+
+// The driver's fault domain (fast-observe is the error tool — the
+// valves.rs pattern, local to this bin): manifest loads/parses, lake
+// subprocess runs, and the driver's own environment/usage. F-space
+// codes — the Lean faults registry owns E1xx; no collision. The message
+// text rides `detail` (bare `{detail}` Display) so the driver's
+// `forge: <diagnostic>` stderr lines stay byte-identical — the
+// fault-injection suite pins their content. EXCLUDED from this
+// conversion: the io Result channels in oci.rs (tests consume them);
+// they map at this driver's seam.
+fast_observe::error! {
+    /// A forge driver fault: a failed manifest, subprocess, or
+    /// environment problem.
+    #[derive(Debug)]
+    pub enum ForgeFault {
+        /// A generated job manifest failed to load or parse (the byte-tie
+        /// domain — never hand-edit GENERATED files).
+        #[error("{detail}")]
+        #[code = "F101", category = Content, advice = "regenerate with `just gen`; never hand-edit GENERATED files"]
+        Manifest {
+            detail: String,
+        },
+
+        /// A lake subprocess failed (build or exe run).
+        #[error("{detail}")]
+        #[code = "F102", category = Transient, advice = "re-run the failed job; the lake output names the cause"]
+        Subprocess {
+            detail: String,
+        },
+
+        /// The driver's environment or CLI usage is wrong.
+        #[error("{detail}")]
+        #[code = "F104", category = Content, advice = "fix the environment or arguments named in the detail"]
+        Environment {
+            detail: String,
+        },
+    }
+}
+
+/// The driver's fallible flow: fast-observe faults over [`ForgeFault`].
+type DriverResult<T> = fast_observe::Result<T, ForgeFault>;
 
 /// One codegen job: a Lean package whose generator exe writes committed
 /// artifacts (repo-root-relative paths). One writer per artifact (the
@@ -46,87 +94,180 @@ const MANIFESTS: &[&str] = &[
     "crates/forge/src/faults_jobs_generated.json",
 ];
 
-fn load_jobs(root: &Path) -> Result<Vec<Job>, String> {
+fn load_jobs(root: &Path) -> DriverResult<Vec<Job>> {
     let mut jobs = Vec::new();
     for manifest in MANIFESTS {
         jobs.extend(load_jobs_of(root, manifest)?);
     }
     if jobs.is_empty() {
-        return Err("job manifests parsed to ZERO jobs — regenerate (just gen)".into());
+        return Err(ForgeFault::Manifest(Manifest {
+            detail: "job manifests parsed to ZERO jobs — regenerate (just gen)".into(),
+        })
+        .into());
     }
     Ok(jobs)
 }
 
 /// Parse one package's manifest file (generated; see MANIFESTS).
-fn load_jobs_of(root: &Path, manifest: &str) -> Result<Vec<Job>, String> {
-    let raw = fs::read_to_string(root.join(manifest)).map_err(|e| format!("{manifest}: {e}"))?;
+///
+/// serde_json does the parsing (the hand-rolled string scan it replaced
+/// had the dead-code truncation bug the fault-injection suite caught);
+/// the DIAGNOSTICS stay byte-compatible with it — the fault-injection
+/// suite pins the corruption classes:
+///   - truncated inside a list    → `unterminated {args,outputs} (job)`
+///   - truncated inside a string  → `unterminated string`
+///   - `outputs` absent/non-list  → `job missing outputs (job)`
+/// Unknown fields are TOLERATED deliberately (additive tolerance): a
+/// newer emitter adding a field must not break an older forge — the
+/// byte-tie (`just gen --check`) owns drift control, not the parser.
+fn load_jobs_of(root: &Path, manifest: &str) -> DriverResult<Vec<Job>> {
+    // The io error rides the tree as the wrapped original AND in `detail`
+    // (the pinned diagnostic names the file + the cause).
+    let raw = fs::read_to_string(root.join(manifest)).map_err(|e| {
+        let detail = format!("{manifest}: {e}");
+        Fault::new(e).wrap(ForgeFault::Manifest(Manifest { detail }))
+    })?;
     // Strip the GENERATED header (comment lines) — JSON has no comments.
     let json = raw
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
         .join("\n");
-    // Minimal parse: the manifest is generated, single-line objects, one
-    // key-set shape ("package"/"exe" strings + an "outputs" string list).
-    // Unknown fields are TOLERATED deliberately (additive tolerance): a
-    // newer emitter adding a field must not break an older forge — the
-    // byte-tie (`just gen --check`) owns drift control, not the parser.
+    // The generated shape is a JSON array of job objects; a truncated
+    // tail surfaces as a parse error classified against the UNPARSED
+    // tail (the raw text after the last fully consumed value).
     let mut jobs = Vec::new();
-    for obj in json.split("{").skip(1) {
-        let string_val = |key: &str| -> Result<String, String> {
-            let needle = format!("\"{key}\": \"");
-            let idx = obj
-                .find(&needle)
-                .ok_or_else(|| format!("{manifest}: job missing `{key}`"))?;
-            let rest = &obj[idx + needle.len()..];
-            let end = rest.find('"').ok_or("unterminated string")?;
-            Ok(rest[..end].to_string())
-        };
-        let package = string_val("package")?;
-        let exe = string_val("exe")?;
-        // Optional subcommand args (absent = none). Same shape as outputs.
-        // The closing `]` MUST be present in the field's raw slice:
-        // `split(']').next()` always yields `Some`, which used to make
-        // the unterminated-list errors dead code — a manifest truncated
-        // inside a list was silently accepted with a PREFIX of the
-        // committed list (fewer byte-tie checks than committed).
-        let args: Vec<String> = match obj.split("\"args\": [").nth(1) {
-            Some(rest) => rest
-                .find(']')
-                .map(|end| &rest[..end])
-                .ok_or_else(|| format!("{manifest}: unterminated args ({package})"))?
-                .split(", ")
-                .map(|s| s.trim().trim_matches('"').to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-            None => Vec::new(),
-        };
-        let outputs_rest = obj
-            .split("\"outputs\": [")
-            .nth(1)
-            .ok_or_else(|| format!("{manifest}: job missing outputs ({package})"))?;
-        let outputs: Vec<String> = outputs_rest
-            .find(']')
-            .map(|end| &outputs_rest[..end])
-            .ok_or_else(|| format!("{manifest}: unterminated outputs ({package})"))?
-            .split(", ")
-            .map(|s| s.trim().trim_matches('"').to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        jobs.push(Job {
-            package,
-            exe,
-            args,
-            outputs,
-        });
+    let mut consumed = 0usize;
+    let mut stream = serde_json::Deserializer::from_str(&json).into_iter::<serde_json::Value>();
+    while let Some(item) = stream.next() {
+        match item {
+            Ok(value) => {
+                consumed = stream.byte_offset();
+                match value {
+                    serde_json::Value::Array(elements) => {
+                        for element in elements {
+                            jobs.push(job_from_value(manifest, element)?);
+                        }
+                    }
+                    // A bare object (no array wrap) — the old scanner
+                    // tolerated both shapes; keep the tolerance.
+                    element => jobs.push(job_from_value(manifest, element)?),
+                }
+            }
+            Err(e) => {
+                let tail = json.get(consumed..).unwrap_or("");
+                return Err(ForgeFault::Manifest(Manifest {
+                    detail: format!("{manifest}: {}", truncation_class(tail, &e)),
+                })
+                .into());
+            }
+        }
     }
     Ok(jobs)
+}
+
+/// Name the corruption class in the UNPARSED tail (the fault-injection
+/// suite's pins). The generated shape is known — `package`/`args`/
+/// `outputs` — so the tail's raw text is enough to name the owning job
+/// and the truncated key (the old scanner's diagnostics, kept verbatim).
+fn truncation_class(tail: &str, err: &serde_json::Error) -> String {
+    // The owning job's `package`, for the error text (diagnostic only —
+    // the structural parse is serde's above).
+    let package = || {
+        tail.split("\"package\": \"")
+            .nth(1)
+            .and_then(|rest| rest.find('"').map(|end| &rest[..end]))
+            .unwrap_or("?")
+    };
+    // A list field is truncated when its opening `[` has no closing `]`
+    // after it in the tail (args precedes outputs in the generated
+    // objects, so an outputs cut leaves args' `]` intact — no ambiguity).
+    let unterminated_list = |key: &str| -> Option<String> {
+        let marker = format!("\"{key}\": [");
+        let idx = tail.find(&marker)?;
+        tail[idx + marker.len()..]
+            .find(']')
+            .is_none()
+            .then(|| format!("unterminated {key} ({})", package()))
+    };
+    if let Some(class) = unterminated_list("args") {
+        return class;
+    }
+    if let Some(class) = unterminated_list("outputs") {
+        return class;
+    }
+    // `outputs` as a non-list (a bare string where the list belongs).
+    if tail.contains("\"outputs\": \"") {
+        return format!("job missing outputs ({})", package());
+    }
+    if err.to_string().contains("EOF while parsing a string") {
+        return "unterminated string".into();
+    }
+    format!("truncated manifest ({err})")
+}
+
+/// Extract one [`Job`] from a parsed manifest object. Schema errors name
+/// the manifest file + the offending key (the pinned `job missing` family).
+fn job_from_value(manifest: &str, value: serde_json::Value) -> DriverResult<Job> {
+    let obj = value.as_object().ok_or_else(|| {
+        ForgeFault::Manifest(Manifest {
+            detail: format!("{manifest}: job is not an object"),
+        })
+    })?;
+    let string_field = |key: &str| -> core::result::Result<String, ForgeFault> {
+        obj.get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| {
+                ForgeFault::Manifest(Manifest {
+                    detail: format!("{manifest}: job missing `{key}`"),
+                })
+            })
+    };
+    let package = string_field("package")?;
+    let exe = string_field("exe")?;
+    // Optional subcommand args (absent = none; a non-list also reads as
+    // none — the generated shape never emits one, and the old scanner
+    // tolerated the shape).
+    let args: Vec<String> = obj
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    // The outputs list is NOT optional: absent or non-list = a named
+    // error (the fault-injection suite pins the wrong-type class).
+    let outputs: Vec<String> = obj
+        .get("outputs")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .ok_or_else(|| {
+            ForgeFault::Manifest(Manifest {
+                detail: format!("{manifest}: job missing outputs ({package})"),
+            })
+        })?;
+    Ok(Job {
+        package,
+        exe,
+        args,
+        outputs,
+    })
 }
 
 /// The driver's stage machine, in its Lean-proved form: `step` returns
 /// `None` on an illegal transition. `None` here is a DRIVER BUG (the
 /// pipeline machine is deadlock-free over its own phases) — abort loudly
-/// instead of running stages out of order.
+/// instead of running stages out of order. DELIBERATE INVARIANT (audit
+/// class (a)): the Lean-proved machine never returns None over its own
+/// phases, so this abort is unreachable by construction — kept as a
+/// loud exit (not an error path) for exactly that reason.
 fn advance(stage: PipelineStage, e: PipelineEvent, what: &str) -> PipelineStage {
     match pipeline_generated::step(stage, e) {
         Some(s) => s,
@@ -137,34 +278,46 @@ fn advance(stage: PipelineStage, e: PipelineEvent, what: &str) -> PipelineStage 
     }
 }
 
-fn lean_tc() -> PathBuf {
+fn lean_tc() -> DriverResult<PathBuf> {
     if let Ok(tc) = std::env::var("LEAN_TC") {
-        return PathBuf::from(tc);
+        return Ok(PathBuf::from(tc));
     }
     let version = "leanprover--lean4---v4.33.0";
-    let home = std::env::var("HOME").expect("HOME unset");
-    PathBuf::from(home)
+    let home = std::env::var("HOME").map_err(|_| {
+        ForgeFault::Environment(Environment {
+            detail: "HOME unset — cannot locate the elan toolchain (set LEAN_TC or HOME)".into(),
+        })
+    })?;
+    Ok(PathBuf::from(home)
         .join(".elan/toolchains")
         .join(version)
-        .join("bin")
+        .join("bin"))
 }
 
 fn repo_root() -> PathBuf {
     PathBuf::from(std::env::var("DEVENV_ROOT").unwrap_or_else(|_| ".".into()))
 }
 
-fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
-    let status = cmd.status().map_err(|e| format!("{what}: {e}"))?;
+fn run(cmd: &mut Command, what: &str) -> DriverResult<()> {
+    // The io error (spawn failure) rides the tree as the wrapped original
+    // AND in `detail` (the diagnostic carries the command label + cause).
+    let status = cmd.status().map_err(|e| {
+        let detail = format!("{what}: {e}");
+        Fault::new(e).wrap(ForgeFault::Subprocess(Subprocess { detail }))
+    })?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("{what}: exited {status}"))
+        Err(ForgeFault::Subprocess(Subprocess {
+            detail: format!("{what}: exited {status}"),
+        })
+        .into())
     }
 }
 
 /// Build + run one generator exe. CWD is the lean package dir; the exe
 /// writes repo-root-relative paths (GenMain convention).
-fn run_job(tc: &Path, root: &Path, job: &Job) -> Result<(), String> {
+fn run_job(tc: &Path, root: &Path, job: &Job) -> DriverResult<()> {
     let pkg_dir = root.join("lean").join(&job.package);
     let lake = tc.join("lake");
     let mut path = std::env::var("PATH").unwrap_or_default();
@@ -192,133 +345,32 @@ fn read_if_exists(p: &Path) -> Option<Vec<u8>> {
     fs::read(p).ok()
 }
 
-/// `forge push <label> <registry>/<repo>:<tag>`: pack the stored artifact
-/// into an OCI image manifest and upload blobs + manifest to the registry.
-fn cli_push(store: &mut oci::OciStore, args: &[String]) -> Result<(), String> {
-    let usage = "usage: forge push <label> <registry>/<repo>:<tag> [--axiom-report <path>] [--lean-version]";
-    // Positionals first, then flags (anywhere after): --axiom-report
-    // takes a path argument; --lean-version is a bare switch that
-    // captures `lean --version` output as the kernel version.
-    let mut positional: Vec<&String> = Vec::new();
-    let mut axiom_report: Option<&String> = None;
-    let mut want_lean_version = false;
-    let mut i = 2;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--axiom-report" => {
-                i += 1;
-                axiom_report = Some(args.get(i).ok_or("--axiom-report needs a path argument")?);
-            }
-            "--lean-version" => want_lean_version = true,
-            _ => positional.push(&args[i]),
-        }
-        i += 1;
-    }
-    let label = positional.get(0).ok_or(usage)?;
-    let target = positional.get(1).ok_or(usage)?;
-    let (reg, tag) = registry::Registry::parse(target)?;
-
-    // Provenance: axioms = verbatim report file (default "unchecked"),
-    // kernel = `lean --version` output (default "unknown"), schema =
-    // forge constant filled in by Provenance::default().
-    let mut provenance = manifest::Provenance::default();
-    if let Some(path) = axiom_report {
-        provenance.axioms = fs::read_to_string(path)
-            .map_err(|e| format!("read axiom report {}: {e}", path))?;
-    }
-    if want_lean_version {
-        let out = Command::new("lean")
-            .arg("--version")
-            .output()
-            .map_err(|e| format!("run `lean --version`: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "`lean --version` failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            ));
-        }
-        provenance.kernel = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    }
-
-    let m = manifest::pack(store, label, &provenance).map_err(|e| format!("pack {label}: {e}"))?;
-    let layer = m.layers.first().ok_or("manifest: zero layers")?;
-    // Config + layer blobs, read from the content-addressed store; the
-    // client re-hashes each, so a drifted cache blob fails the push.
-    let blobs = vec![
-        store.blob_path(&m.config.digest),
-        store.blob_path(&layer.digest),
-    ];
-    reg.push(&tag, &m, &blobs)?;
-
-    println!(
-        "forge: push {label} → {}/{}:{} (layer sha256:{}, config sha256:{})",
-        reg.base, reg.repo, tag, layer.digest, m.config.digest
-    );
-    // Persist the config-blob entry pack() added to the store.
-    store.write_index().map_err(|e| format!("write index: {e}"))
-}
-
-/// `forge pull <registry>/<repo>:<tag>`: fetch the manifest, verify +
-/// store every blob into target/oci/, and materialize the artifact at
-/// its annotated label (repo-root-relative).
-fn cli_pull(store: &mut oci::OciStore, root: &Path, args: &[String]) -> Result<(), String> {
-    let usage = "usage: forge pull <registry>/<repo>:<tag> [--allow-unchecked]";
-    let allow_unchecked = args.iter().any(|a| a == "--allow-unchecked");
-    let target = args
-        .get(2)
-        .filter(|a| !a.starts_with("--"))
-        .ok_or(usage)?;
-    let (reg, tag) = registry::Registry::parse(target)?;
-
-    let pulled = reg.pull(&tag, store, root, allow_unchecked)?;
-    println!(
-        "forge: pull {target}: image `{}` ({} annotation[s])",
-        pulled.manifest.label,
-        pulled.manifest.annotations.len()
-    );
-    for (label, digest, bytes) in &pulled.artifacts {
-        println!(
-            "forge: pull {label} → sha256:{digest} ({} bytes) at {}",
-            bytes.len(),
-            root.join(label).display()
-        );
-    }
-    // Persist the pulled label → digest mappings in the local index.
-    store.write_index().map_err(|e| format!("write index: {e}"))
-}
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let check = args.iter().any(|a| a == "--check");
     let store_artifacts = args.iter().any(|a| a == "--store");
-    let tc = lean_tc();
+    // The clean-error paths below keep the pinned failure contract:
+    // exit 1 + a `forge:` diagnostic, never a panic (the fault-injection
+    // suite asserts this shape on every manifest corruption).
+    let tc = match lean_tc() {
+        Ok(tc) => tc,
+        Err(e) => {
+            eprintln!("forge: {e}");
+            std::process::exit(1);
+        }
+    };
     let root = repo_root();
 
     // Initialize the OCI store (lazy — only used with --store, and
     // read-only for drift checks with --check).
     let oci_root = root.join("target/oci");
-    let mut store = oci::OciStore::open(&oci_root).expect("oci store init");
-
-    // Registry verbs: `forge push <label> <registry>/<repo>:<tag>` and
-    // `forge pull <registry>/<repo>:<tag>`. Everything else stays the
-    // gen pipeline.
-    match args.get(1).map(String::as_str) {
-        Some("push") => {
-            if let Err(e) = cli_push(&mut store, &args) {
-                eprintln!("forge: push failed: {e}");
-                std::process::exit(1);
-            }
-            return;
+    let mut store = match oci::OciStore::open(&oci_root) {
+        Ok(store) => store,
+        Err(e) => {
+            eprintln!("forge: oci store init: {e}");
+            std::process::exit(1);
         }
-        Some("pull") => {
-            if let Err(e) = cli_pull(&mut store, &root, &args) {
-                eprintln!("forge: pull failed: {e}");
-                std::process::exit(1);
-            }
-            return;
-        }
-        _ => {}
-    }
+    };
 
     let jobs = match load_jobs(&root) {
         Ok(j) => j,

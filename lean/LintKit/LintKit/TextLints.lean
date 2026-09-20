@@ -28,59 +28,50 @@ public meta section
 
 open Lean
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.noLinterDisable : Bool := {
   defValue := true
   descr := "text lint: `set_option linter.* false` requires an adjacent comment \
     justifying it (same or previous line, containing \"because\")"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.testImportDiscipline : Bool := {
   defValue := true
   descr := "text lint: files under Tests/ import TestKit, never LSpec directly"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.importBan : Bool := {
   defValue := true
   descr := "text lint: files under a banned directory prefix import no banned \
     module root (the single-lake migration's dependency discipline as data)"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.noNewPartial : Bool := {
   defValue := true
   descr := "text lint: no new `partial def` (a per-file legacy allowance ratchets \
     the existing ones down); use structural or well-founded recursion"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.noReprInEmit : Bool := {
   defValue := true
   descr := "text lint: no `repr` in Emit/ modules (Repr is not a stable format)"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.noFormatInDebug : Bool := {
   defValue := true
   descr := "text lint: Debug.lean calls emitter functions, never re-renders"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.coreHasNoClaim : Bool := {
   defValue := true
   descr := "text lint: a \"core has no X\" comment must cite the check run"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.staleNotesPath : Bool := {
   defValue := true
   descr := "text lint: stale notes-subdirectory path references (the \
     flatland-era `notes` subdir does not exist in this repo)"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.nolintReason : Bool := {
   defValue := true
   descr := "text lint: `@[nolint]` requires the reason string"

@@ -16,6 +16,16 @@ Semantics (flatland's observability rules as a type):
 The policy is DATA here and a method in the generated Rust
 (`retryable()`), with fast-observe's `category` attribute driven from
 the same value — three renderings, one source.
+
+Boundary note: `unsupported` is currently UNEMITTABLE — fast-observe's
+`ErrorCategory` has no Unsupported variant and its `Policy` no degrade
+action, so a spec carrying `.unsupported` would fail rustc in the
+CONSUMER, not at generation. The registry therefore rejects it at
+registration (`registerFaultItem`, named diagnostic). Mapping it to an
+expressible category (e.g. `Content` = fix-the-caller's-input) changes
+policy semantics and is a deliberate decision, not emitter default —
+until that decision lands, the ctor stays taxonomic-only (no spec may
+use it).
 -/
 
 namespace Faults

@@ -465,49 +465,12 @@ theorem splitAppend_map_parseNamedCol
 
 -- ── the bindings/line-shape inversions (W5.3 phase 2b) ────────────────────
 
-/-- A digit-headed text is not a space-headed text (Nat decimal forms). -/
-private theorem toString_head_ne_space (n : Nat) : (toString n).toList.head? ≠ some ' ' := by
-  cases hn : (toString n).toList with
-  | nil => simp
-  | cons c cs =>
-    simp only [List.head?_cons]
-    have hd := toString_head_isDigit n c cs hn
-    intro hcontra
-    rw [Option.some.inj hcontra] at hd
-    exact absurd hd (by decide)
-
-/-- Dropping leading spaces of a Nat's decimal text changes nothing. -/
-private theorem dropWhile_toString (n : Nat) :
-    (toString n).toList.dropWhile (· == ' ') = (toString n).toList := by
-  have hd := toString_head_ne_space n
-  cases hs : (toString n).toList with
-  | nil => rfl
-  | cons c cs =>
-    rw [List.dropWhile_cons_of_neg]
-    rw [hs] at hd
-    simp only [List.head?_cons] at hd
-    intro hc
-    exact hd (by simp [beq_iff_eq.mp hc])
-
 /-- The emitter's space repetition, list-form. -/
 private theorem replicate_space (k : Nat) :
     (Emit.Text.replicate " " k).toList = List.replicate k ' ' := by
-  have step : ∀ (pre : String) (n : Nat),
-      (List.range n).foldl (fun acc _ => acc ++ " ") pre =
-        pre ++ String.ofList (List.replicate n ' ') := by
-    intro pre n
-    induction n generalizing pre with
-    | zero =>
-      show pre = pre ++ String.ofList (List.replicate 0 ' ')
-      rw [List.replicate_zero, String.ofList_nil, String.append_empty]
-    | succ n ih =>
-      rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, ih pre,
-        String.append_assoc]
-      congr 1
-      rw [List.replicate_succ', String.ofList_append]
-  unfold Emit.Text.replicate
-  rw [step "" k]
-  simp [String.toList_ofList]
+  have hs : " ".toList = [' '] := by decide
+  rw [Emit.Text.replicate, String.toList_join, List.flatMap_replicate, hs,
+    List.flatten_replicate_singleton]
 
 /-- The right-justified anchor field, space-stripped, with a tail: the
     padding is exactly the leading-space run the decoder's `dropWhile`
@@ -542,21 +505,13 @@ private theorem rightJustify_dropWhile_append (a : Nat) (tail : List Char) :
 
 /-- `expect colonTok` on a literal `:` head. -/
 private theorem expect_colon (rest : List Char) :
-    expect Grammar.colonTok (':' :: rest) = some rest := by
-  have h : (':' :: rest) = Grammar.colonTok.toList ++ rest := by
-    rw [show Grammar.colonTok.toList = [':'] from by decide]
-    rfl
-  rw [h]
-  exact expect_self _ _
+    expect Grammar.colonTok (':' :: rest) = some rest :=
+  expect_cons_tok Grammar.colonTok [':'] rest (by decide)
 
 /-- `expect dotTok` on a literal `.` head. -/
 private theorem expect_dot (rest : List Char) :
-    expect Grammar.dotTok ('.' :: rest) = some rest := by
-  have h : ('.' :: rest) = Grammar.dotTok.toList ++ rest := by
-    rw [show Grammar.dotTok.toList = ['.'] from by decide]
-    rfl
-  rw [h]
-  exact expect_self _ _
+    expect Grammar.dotTok ('.' :: rest) = some rest :=
+  expect_cons_tok Grammar.dotTok ['.'] rest (by decide)
 
 /-- The version dots' tail is not a digit (scanNat stops there). -/
 private theorem notDigitHead_dot (rest : List Char) : notDigitHead ('.' :: rest) :=

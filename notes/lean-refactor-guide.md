@@ -247,7 +247,7 @@ open = the research-tail + the owner's WIP):
   interposed component (the counting wrapper: the AtomicU64 counters +
   the inner-forward, the wit-bindgen guest); the wac composition
   (the demo's exports feed the middleware's imports; the composed =
-  the 3 exports); the steel-host test: the calls through the
+  the 3 exports); the guestlang-host test: the calls through the
   interposer (the double 21→42, the calls 0→1→2→3), the spans =
   the spec's manifest (the `calls` export = NOT spanned — the host
   can't invent a span!); `just splicer-mw` = the standalone gate.
@@ -263,7 +263,7 @@ open = the research-tail + the owner's WIP):
 - **The observability seam (the fast-observe LEAN manifestation)**:
   `SchemaLang.Observe` (spanName/spanFields = the spec-side functions)
   + the wasm-gen emits `src/observability_generated.rs` (the span
-  table = the world fold's twin — ONE writer); steel-host's `call`
+  table = the world fold's twin — ONE writer); guestlang-host's `call`
   path spans EXACTLY the spec's declared exports (the lookup in the
   generated table; an unregistered fn = no span — the coverage = the
   registry by construction); the control test pins the span's name +
@@ -375,7 +375,7 @@ open = the research-tail + the owner's WIP):
   + the duel cover it — the check-schema gate stays Demo-only).
 - **wasmi 2.0 consumed and proved (this round)**: the engine-duel now
   replays the SCALAR subset of the Lean-authority oracle manifest
-  (~140 rows) under wasmi — same manifest steel-host replays under
+  (~140 rows) under wasmi — same manifest guestlang-host replays under
   wasmtime, one authority, two engines; `invoke_core` coerces i64 args
   to the export's param types (the pick-bool I32 via introspection, no
   per-fn table); `invoke_core_fueled` exposes consumed fuel and the

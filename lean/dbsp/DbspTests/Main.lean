@@ -15,14 +15,12 @@ error → False) with a `Testable` instance that carries the failure message.
 Run: `lake build DbspTests && .lake/build/bin/DbspTests`
 -/
 import Dbsp
-import Plausible
 import TestKit
 
 namespace DbspTests
 
 open Dbsp
 open TestKit
-open Plausible
 
 /-- A concrete strict operator: `F s = 1 + z⁻¹ s` (pointwise over ℤ).
     Strict: output at n+1 reads input at n; output at 0 is constant. -/
@@ -112,12 +110,12 @@ def delaySanity : CheckResult := Id.run do
 
 /-! ## Determinism — the hash-chained event log (`Dbsp.Determinism`), executed
 
-The replay-spine laws, executed on concrete + generated logs (the theory
-is over ABSTRACT step/combine; this sweep instantiates Int/Int): the
-hot-reload replay equality + the chain-hash extension. The NEGATIVE
-CONTROL is the anti-Replicas statement: swapping the arrival order does
-NOT preserve the ordered replay — order is the artifact here (the group
-law covers delta sets, doctrine §8: protocols are sequences). -/
+The replay-spine laws on concrete logs: the hot-reload replay equality +
+the chain-hash extension + the tamper pin. The GENERATED-input sweeps
+(retired 2026-12 with their negative controls, per T5 — the covering
+theorems `Determinism.replay_append`/`chainHash_append` are axiom-gated;
+a control guarding a retired suite has no vacuity to catch) — the
+witness below is the concrete pin. -/
 
 /-- The concrete instantiation: state = Horner evaluation (`s*2 + e`) —
     deliberately NON-commutative in the events, so the ordered replay's
@@ -150,6 +148,61 @@ def determinismWitness : CheckResult := Id.run do
     return .error "tamper undetected"
   .ok ()
 
+/-! ## Effects — the DeltaSystem IS a `CodegenCore.DisjointCommute`
+
+The delta/lens unification: `DeltaSystem` instantiates
+`CodegenCore.DisjointCommute` (a mutation's location = its write set,
+`LocDisjoint` = the disjointness, the law CITES `disjoint_commutes`).
+The concrete point-write system below pins the instance on a fixture;
+the negative control pins the hypothesis (an OVERLAP breaks the
+commutation — it is load-bearing, not vacuous). -/
+
+/-- Point writes on a location→value map: state = `Nat → Int`, a
+    mutation is `(loc, value)`, the write set is the singleton. (The
+    def lives outside the instance so the proof's `simp` unfolds it.) -/
+def ptPatch : (Nat → Int) → Nat × Int → (Nat → Int) :=
+  fun s m x => if x = m.1 then m.2 else s x
+
+instance ptChange : Change (Nat → Int) (Nat × Int) where
+  patch := ptPatch
+  valid _ _ := True
+
+/-- The concrete delta system (the fixture). -/
+instance ptSystem : DeltaSystem (Nat → Int) Nat (Nat × Int) where
+  patch := ptPatch
+  valid _ _ := True
+  writesOf m := [m.1]
+  disjoint_commutes := by
+    intro m₁ m₂ hd s
+    have hne : m₁.1 ≠ m₂.1 := fun h =>
+      hd (a := m₁.1) (by simp) (by simp [h])
+    funext x
+    simp only [ptPatch]
+    by_cases h1 : x = m₁.1 <;> by_cases h2 : x = m₂.1
+    · exact absurd (h1.symm.trans h2) hne
+    · simp only [if_neg h2, if_pos h1]
+    · simp only [if_pos h2, if_neg h1]
+    · simp only [if_neg h1, if_neg h2]
+
+/-- The shared law, executed on the fixture: disjoint point writes
+    compose in either order; the overlap control shows the two orders
+    DIFFER when the write sets collide. -/
+def disjointCommuteWitness : CheckResult := Id.run do
+  let s : Nat → Int := fun _ => 0
+  let m₁ : Nat × Int := (0, 1)
+  let m₂ : Nat × Int := (5, 7)
+  -- both orders agree at every sampled location (the law computes)
+  let lhs := ptPatch (ptPatch s m₁) m₂
+  let rhs := ptPatch (ptPatch s m₂) m₁
+  for x in [0, 5, 3] do
+    if lhs x != rhs x then return .error s!"disjoint commute broke at {x}"
+  -- NEGATIVE CONTROL: overlapping write sets — the orders observe
+  -- differently (later-wins), the hypothesis is load-bearing
+  let ov₁ := ptPatch (ptPatch s (0, 1)) (0, 2)
+  let ov₂ := ptPatch (ptPatch s (0, 2)) (0, 1)
+  if ov₁ 0 == ov₂ 0 then return .error "overlap control failed to observe order"
+  .ok ()
+
 /-- The suite: every check becomes an LSpec test with the same name and the
     same Boolean outcome the hand-rolled driver gave it. -/
 def suite : TestSeq :=
@@ -158,107 +211,24 @@ def suite : TestSeq :=
   test "cycle-incremental-witness" (checkPasses cycleIncrementalWitness) $
   test "seminaive-witness" (checkPasses seminaiveWitness) $
   test "delay-sanity" (checkPasses delaySanity) $
-  test "determinism-witness" (checkPasses determinismWitness)
+  test "determinism-witness" (checkPasses determinismWitness) $
+  test "disjoint-commute-witness" (checkPasses disjointCommuteWitness)
 
-namespace DetSweep
+-- The generated-input determinism sweep (DetSweep) retired as a pair with
+-- its order-swap control (T5): `Determinism.replay_append` and
+-- `chainHash_append` — both axiom-gated — prove the spine for ALL logs;
+-- `determinismWitness` above is the concrete pin.
 
-open Determinism
+/-! ## Property sweep (retired with its control)
 
-def detOk (xs ys : List Int) : Bool :=
-  replay detStep 0 (xs ++ ys) == replay detStep (replay detStep 0 xs) ys
-    && chainHash detCombine 7 (xs ++ ys)
-      == chainHash detCombine (chainHash detCombine 7 xs) ys
-
-/-- The sabotaged control: ORDER-SWAPPED replay — the CRDT convergence
-    claim is FALSE for the ordered event log (it is a delta claim, not
-    an event-chain claim). Caught for any generated pair with xs ≠ ys. -/
-def detCtrl (xs ys : List Int) : Bool :=
-  replay detStep 0 (xs ++ ys) == replay detStep 0 (ys ++ xs)
-
-instance : Arbitrary (List Int) where
-  arbitrary := Gen.listOf (Arbitrary.arbitrary : Gen Int)
-
-def suite : TestSeq :=
-  checkPlausibleIO "determinism: reload equality + chain extension (generated logs)"
-    (∀ (xs ys : List Int), detOk xs ys = true)
-    .done { numInst := 300, randomSeed := some 20261104 }
-
-def controlSuite : TestSeq :=
-  checkPlausibleIO "sabotaged: order-swapped replay (must be caught)"
-    (∀ (xs ys : List Int), detCtrl xs ys = true)
-    .done { numInst := 300, randomSeed := some 20261104 }
-
-def spec : TestKit.PropSpec :=
-  { name := "determinism spine: same-chain same-replay"
-  , suite := suite
-  , control := controlSuite
-  , controlName := "order-swap" }
-
-end DetSweep
-
-/-! ## Property sweep (with mandatory negative control)
-
-The theory-side `example`s above PROVE the group laws for ALL ZSets;
-the witnesses check the ported constructions compute on CONCRETE inputs.
-NEITHER exercises a GENERATED input — the AGENTS.md negative-control
-mandate targets property sweeps, and dbsp had none.
-
-This sweep samples finite `Int` lists, lifts each to a stream, and checks
-the D/I inverse pair (`derivative_integral` / `integral_derivative`) at
-each tick — a GENERATED-input sweep over a COMPUTABLE surface (ZSet
-itself is noncomputable, so the group laws stay as proofs above). The
-sabotaged control (`D(I s) t = s t + 1`) is caught iff the generator
-produces a non-trivial stream — a vacuous generator is flagged as a
-failure (TestKit.PropSpec). -/
-namespace PropSweep
-
-/-- Lift a finite list to a stream (0-padded past the list). -/
-def liftStream (xs : List Int) : Stream Int := fun n =>
-  if h : n < xs.length then xs.get ⟨n, h⟩ else 0
-
-/-- The D/I inverse pair holds at every tick up to the list length
-    (both directions: `D (I s) = s` and `I (D s) = s`). Computable: `D`,
-    `I`, `delay`, `Int` arithmetic all reduce. -/
-def diOk (xs : List Int) : Bool :=
-  let s := liftStream xs
-  (List.range (xs.length + 1)).all fun t =>
-    D (I s) t == s t && I (D s) t == s t
-
-/-- The sabotaged control: `D (I s) t = s t + 1` — refuted for any
-    non-trivial stream (the theorem gives `D (I s) t = s t`, so the
-    off-by-one bites whenever the tick is in range). -/
-def diOkCtrl (xs : List Int) : Bool :=
-  let s := liftStream xs
-  (List.range (xs.length + 1)).all fun t => D (I s) t == s t + 1
-
--- the `Arbitrary (List Int)` instance is DetSweep's (one copy — the
--- dupDefBodies lint): both sweeps sample the same finite Int lists
-
-/-- The property: the D/I inverse pair over generated streams. -/
-def suite : TestSeq :=
-  checkPlausibleIO "D/I inverse pair (generated streams)"
-    (∀ (xs : List Int), diOk xs = true)
-    .done { numInst := 500, randomSeed := some 20260909 }
-
-/-- The negative control: the off-by-one variant must be CAUGHT (fail). -/
-def controlSuite : TestSeq :=
-  checkPlausibleIO "sabotaged: D(I s) t = s t + 1 (must be caught)"
-    (∀ (xs : List Int), diOkCtrl xs = true)
-    .done { numInst := 500, randomSeed := some 20260909 }
-
-def spec : TestKit.PropSpec :=
-  { name := "D/I inverse pair"
-  , suite := suite
-  , control := controlSuite
-  , controlName := "off-by-one" }
-
-end PropSweep
+The D/I generated-input sweep retired as a pair with its off-by-one
+control (T5): `derivative_integral` / `integral_derivative` (axiom-gated)
+prove the inverse pair for ALL streams; `inversePairWitness` above is the
+concrete executed pin. A control guarding a retired suite has no vacuity
+to catch. -/
 
 end DbspTests
 
 open DbspTests in
 def main : IO UInt32 := do
-  let code ← TestKit.mainOfSuites [("DbspTests", suite)]
-  if code != 0 then return code
-  -- the property sweep WITH its mandatory negative control
-  TestKit.runSpecs [PropSweep.spec, DetSweep.spec]
+  TestKit.mainOfSuites [("DbspTests", suite)]

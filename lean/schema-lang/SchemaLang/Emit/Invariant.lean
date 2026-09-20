@@ -85,7 +85,7 @@ def checkFn (it : InvariantItem) : List CodegenCore.Emit.Rust.Item :=
   let proofLine := match it.proofName with
     | some thm => s!" — proved via `{thm}` (citation resolved in CI)"
     | none => ""
-  [ .comment s!"invariant `{it.name}` on {it.schemaRef} — tier: {it.tier.render}{proofLine}"
+  [ .comment s!"invariant `{it.name}` on {it.schemaRef} — tier: {SchemaLang.Tier.render it.tier}{proofLine}"
   , .fn s!"fn {checkFnName it}(v: &{pascal it.schemaRef}) -> bool"
       (Emit.Expr.boolRustI (vexprLang it.inv.fields)
         (fun n => s!"v.{rustIdent n}") it.inv.expr) ]
@@ -138,7 +138,13 @@ def invariantFiles (invs : List InvariantItem) : List CodegenCore.Emit.Generated
 /-- The invariant emitter: buf-plugin shape (name/style/specSource/
     declared outputs/pure run). The parent registry wires it into
     `SchemaLang.Emit.coreEmitters`. The lane reads `ctx.invariants` —
-    the replayed registry, no committed mirror (the v2 contract). -/
+    the replayed registry, no committed mirror (the v2 contract).
+
+    W7.9 phase 2 sweep: nothing to migrate — the lane consumes NO item
+    universe (`ctx.invariants` only), so the checked bundle does not
+    apply; its partiality (`defaultVerdict`'s none arms,
+    `rustLiteral?`'s exclusions) is row-data reachability, not
+    item-WF defense. -/
 def invariantEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "invariant"
   style := .doubleSlash

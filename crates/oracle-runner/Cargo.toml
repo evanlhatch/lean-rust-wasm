@@ -8,7 +8,13 @@ publish = false
 # W6.3 phase 2: the differential oracle's host-side driver + debug loop.
 # Dev tooling — never shipped into a guest or a host production path.
 [dependencies]
-steel-host = { path = "../steel-host" }
+guestlang-host = { path = "../guestlang-host" }
+# Errors: fast-observe IS the error tool (root Cargo.toml policy) — the
+# driver's INPUT-validation faults (manifest + rows) flow as
+# Fault<OracleFault>; replay machinery errors stay wasmtime faults
+# (HostFault via guestlang-host's HostResult). default-features = false:
+# don't force fastrace (guestlang-host's manifest note).
+fast-observe = { version = "0.1", default-features = false, features = ["instant"] }
 wasmtime = { version = "47", default-features = false, features = [
   "async",
   "component-model",
@@ -24,3 +30,4 @@ serde_json = "1"
 # The schema hash (sha256 of the oracle's canonical schema-surface
 # string) — already in the workspace lock via wasmtime.
 sha2 = "0.10"
+workspace-alloc = { path = "../workspace-alloc" }

@@ -114,6 +114,7 @@ module
 
 public import Machines.Core
 public import Machines.Tactics
+public meta import CodegenCore.DidYouMean
 public import Lean
 public import Mathlib.Tactic.FinCases
 
@@ -135,11 +136,53 @@ open Lean.Elab.Command (elabCommand CommandElabM)
     read obligations as SAFETY goals. -/
 macro "machine_safety" : tactic => `(tactic| guestlang_solver)
 
-/-- One event clause of `machine!`. Colon-suffixed keywords so the global
-    token table is untouched. Bracketed binders after the event name are
-    the PAYLOAD: Label-ctor arguments, pattern-bound in the guard/action/
-    safety bodies (explicit binders only — the pattern is positional). -/
-syntax machineEvent := "event:" ident bracketedBinder* "guard:" term "action:" term ("safety:" term)?
+/-! ## The clause kit (the shared clause-list idiom)
+
+Every declaration DSL in the tree hand-rolls colon-suffixed keyword
+lines (`machine!`'s clauses, `schema_entity_machine`'s,
+`schema_template`'s slot:/field: lines). The shared mechanics live here:
+
+1. ONE syntax category per DSL, one NAMED rule per clause — the clause
+   kind is the dispatch key (the elaborator matches on `getKind`, not
+   raw position).
+2. The unknown-clause catch-all: a low-priority `ident ": " term` rule
+   parses ANY well-formed clause line the DSL didn't name, so a typo'd
+   clause (`intial:`, `transitionz:`) reaches the ELABORATOR, which
+   rejects it with a did-you-mean over the legal clauses
+   (`didYouMeanError`) — instead of a bare parse error listing
+   expected tokens. THE LIMIT below: only for grammars with no term
+   slot before the clause list.
+3. `didYouMeanHint` — the did-you-mean suffix every DSL error path
+   appends (one format tree-wide).
+
+Acceptance note: a uniform clause list widens the grammar (clauses in
+any order; the previously positional State/Inv become named fields the
+cardinality checks police). Every program the old grammar accepted
+still elaborates to the SAME generated surface — the emit half is
+untouched; only clause COLLECTION changed. -/
+
+/-! ### `machine!`'s clauses -/
+
+declare_syntax_cat machineClause
+
+/-- The did-you-mean suffix (the `Meta.Keys` message discipline; the
+    single tree-wide format — `CodegenCore.didYouMean` returns the
+    candidates nearest first, empty = nothing close enough). -/
+def didYouMeanHint (got : String) (cands : List String) : String :=
+  let c := CodegenCore.didYouMean got cands
+  if c.isEmpty then "" else s!" — did you mean: {String.intercalate ", " c}?"
+
+/-- The unknown-clause rejection (the catch-all rule's elaborator half):
+    the error ENUMERATES the legal clauses (the closed-world discipline —
+    the valid space, not a heuristic) and did-you-means the typo. -/
+def didYouMeanError (ctx got : String) (legal : List String) : CommandElabM Unit :=
+  throwError s!"{ctx}: unknown clause `{got}:` — legal clauses: " ++
+    s!"{String.intercalate ", " (legal.map (fun l => s!"`{l}:`"))}" ++ didYouMeanHint got legal
+
+/-- The machine's state type. -/
+syntax (name := machineStateClause) "State:" term : machineClause
+/-- The machine's invariant. -/
+syntax (name := machineInvClause) "Inv:" term : machineClause
 
 -- The optional acyclicity clause: `rank:` names the STATE's rank function
 -- (a def on the state type — the theorem statements unfold it), `rewind:`
@@ -148,14 +191,38 @@ syntax machineEvent := "event:" ident bracketedBinder* "guard:" term "action:" t
 -- event strictly increases the rank) + `X_rank_advances_tr` (the same over
 -- `X.tr`) — the hand-written pair this replaces lived in three machines
 -- byte-identical modulo names.
-syntax machineRank := "rank:" term "rewind:" ident
+syntax (name := machineRankClause) "rank:" term "rewind:" ident : machineClause
 
 -- The optional finite-state entourage clause: `states:` names the state's
 -- finite enumeration (a list literal — the generated tie theorem case-
 -- splits it with `fin_cases`). When present, `machine!` generates the
 -- `<m>States`/`<m>Trans`/`<m>TableStep?`/`<m>TableStep?_eq_step?` table
 -- stack + the `DecidablePred <m>.Inv` instance (see the module header).
-syntax machineStates := "states:" term
+syntax (name := machineStatesClause) "states:" term : machineClause
+
+/-- One event clause. Colon-suffixed keywords so the global
+    token table is untouched. Bracketed binders after the event name are
+    the PAYLOAD: Label-ctor arguments, pattern-bound in the guard/action/
+    safety bodies (explicit binders only — the pattern is positional). -/
+syntax (name := machineEventClause) "event:" ident bracketedBinder*
+  "guard:" term "action:" term ("safety:" term)? : machineClause
+
+/- The unknown-clause catch-all (the clause-kit discipline): low
+    priority, so the named clauses win; anything else well-formed
+    (`<typo>: <term>`) parses and is rejected at ELABORATION with a
+    did-you-mean over the legal clauses.
+
+    THE LIMIT (do not re-pay): a catch-all only works in grammars with NO
+    term slots before the clause list. A term-led clause SWALLOWS an
+    unknown clause's first word by juxtaposition — `Inv: fun _ => True`
+    + `eventz: …` parses the term as `True eventz` (application) and the
+    error degrades to a bare parse error at the `:`. `machine!`'s
+    State/Inv/rank/states are ALL term-led, so `machine!` carries NO
+    catch-all: its clause-keyword typos stay parse errors (same surface
+    as the positional grammar — no regression). The entity-machine
+    command (ident-led: `… := <col> : <Ty>` then clauses) has no term
+    slot before the list, so IT carries the catch-all
+    (`Meta.EntityMachine.entityUnknownClause`). -/
 
 /-- Generate a `Machines.Machine` from State/Inv and a list of events.
     Optional binders between the name and `where` make a parameterized
@@ -164,28 +231,113 @@ syntax machineStates := "states:" term
     (the Label inductive and the labels list stay parameter-free — event
     names don't depend on parameters). A PAYLOAD machine (an event with
     ctor binders) flips both: the Label takes the machine's binders (a
-    payload type may mention them) and no labels list is generated. -/
+    payload type may mention them) and no labels list is generated.
+
+    The `where` body is a uniform CLAUSE LIST (the clause-kit discipline):
+    clauses in source order, `State:`/`Inv:` mandatory (exactly one each,
+    cardinality enforced by the elaborator), `rank:`/`states:` optional
+    (at most one each), `event:`* — the events' order is the Label-ctor
+    order. -/
 syntax (name := machineCmd) "machine!" ident bracketedBinder* "where"
-  "State:" term "Inv:" term (machineRank)? (machineStates)? machineEvent* : command
+  machineClause* : command
+
+/-! ### The entourage unexpanders (the generated names' display surface)
+
+The states-entourage table stack (`<m>States`/`<m>Trans`/`<m>TableStep?`/…),
+the acyclicity pair, and the entity-machine preset's artifacts are
+GENERATED decls with concatenated names — when one shows up in an
+elaboration error, a goal, or a hover, the user wrote
+`machine! m … where …` (or `schema_entity_machine m …`), so it should
+render as the machine's possessive phrase: `«door's states»`, not
+`doorStates`. PP-ONLY: unexpanders touch display, never elaboration —
+no emitted artifact changes (the byte-tie holds by construction).
+
+Honesty discipline: the render is a display ABBREVIATION, not a
+re-typeable reference — the printer's own escaping (the guillemets,
+`«…»`) marks exactly that. The phrase names the machine it belongs to
+and says what the decl IS (`states` / `transitions` / `table`), never
+disguising a generated decl as user syntax.
+
+Discipline (the `NotationExtra` pattern, Lean's own unexpanders):
+unexpanders are tried in reverse-registration order and must `throw ()`
+when not responsible — the factory's catch-all arm is NOT laziness: a
+nullary constant's unexpander receives the BARE head ident (kind
+`ident`, not an app quotation — the zero-argument delaboration), so for
+a nullary or partially-applied reference every input IS the generated
+decl and the render is the responsible answer.
+
+Module-mode constraint (the W5.4 phase-2 note): `@[app_unexpander]`
+decls must be `meta` AND `public` (`private` unexpanders are rejected)
+— the emitted per-decl definitions are `public meta def`s, and the
+factory itself lives in this `public meta section`. -/
+
+/-- The entourage-unexpander factory: renders one generated decl as the
+    machine's possessive phrase (`render`, e.g. `"door's states"`).
+    Applications rebuild under the phrase ident (partial applications
+    render too); the nullary input (the bare head ident) renders the
+    phrase alone. -/
+def entourageUnexp (render : String) : Lean.PrettyPrinter.Unexpander := fun stx =>
+  match stx with
+  | `($_ $args:term*) =>
+      let head : Term := ⟨mkIdent (Name.mkSimple render)⟩
+      return (Syntax.mkApp head args).raw
+  | _ => return mkIdent (Name.mkSimple render)
+
+/-- Emit one entourage unexpander: an `@[app_unexpander]`-carrying
+    `public meta def` rendering `tgt` as `render` (see
+    `entourageUnexp` for the honesty + module-mode discipline). -/
+def addEntourageUnexp (stx : Syntax) (tgt : Name) (render : String) :
+    CommandElabM Unit := do
+  let tid := mkIdentFrom stx tgt
+  let uid := mkIdentFrom stx (tgt ++ `unexp)
+  let renderT : Lean.Term := (quote render : Lean.Term)
+  elabCommand (← `(command|
+    @[app_unexpander $tid:ident]
+    public meta def $uid:ident : Lean.PrettyPrinter.Unexpander :=
+      Machines.Dsl.entourageUnexp $renderT))
 
 open Lean.Parser.Term in
 def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
-  -- stx = [machine!, name, bindersNode, where, State:, StateTerm, Inv:, InvTerm,
-  --        optRank, optStates, eventsNode]
+  -- stx = [machine!, name, bindersNode, where, clausesNode] — the clauses
+  -- arrive in SOURCE ORDER (the events' order is the Label-ctor order).
+  -- The clause sweep is the clause-kit discipline: dispatch on the clause
+  -- KIND (not raw position), enforce the cardinalities the old positional
+  -- grammar baked into the parser. (No unknown-clause catch-all here —
+  -- the term-slot limit, see the kit note above.)
   let name : TSyntax `ident := ⟨stx[1]!⟩
   let binders : Array (TSyntax `Lean.Parser.Term.bracketedBinder) :=
     (stx[2]!.getArgs).map (⟨·⟩)
-  let sty : Term := ⟨stx[5]!⟩
-  let invty : Term := ⟨stx[7]!⟩
-  -- stx[8] = the optional rank/rewind group (a null node when absent:
-  -- [rank:, term, rewind:, ident] when present); stx[9] = the optional
-  -- states group (likewise); stx[10] = the events.
-  -- the optional groups wrap the NAMED nodes (arity 1):
-  -- optRank[0] = machineRank = [rank:, term, rewind:, ident]
-  -- optStates[0] = machineStates = [states:, term]
-  let optRank : Syntax := stx[8]!
-  let optStates : Syntax := stx[9]!
-  let evs : Array Syntax := stx[10]!.getArgs
+  let mut styStx? : Option Syntax := none
+  let mut invtyStx? : Option Syntax := none
+  let mut optRank : Option Syntax := none
+  let mut optStates : Option Syntax := none
+  let mut evs : Array Syntax := #[]
+  for c in stx[4]!.getArgs do
+    match c.getKind with
+    | ``machineStateClause =>
+        if styStx?.isSome then
+          throwErrorAt c "machine!: duplicate `State:` clause — exactly one"
+        styStx? := some c[1]!
+    | ``machineInvClause =>
+        if invtyStx?.isSome then
+          throwErrorAt c "machine!: duplicate `Inv:` clause — exactly one"
+        invtyStx? := some c[1]!
+    | ``machineRankClause =>
+        if optRank.isSome then
+          throwErrorAt c "machine!: duplicate `rank:` clause — at most one"
+        optRank := some c
+    | ``machineStatesClause =>
+        if optStates.isSome then
+          throwErrorAt c "machine!: duplicate `states:` clause — at most one"
+        optStates := some c
+    | ``machineEventClause => evs := evs.push c
+    | _ => Lean.Elab.throwUnsupportedSyntax
+  let sty : Term ← match styStx? with
+    | some t => pure ⟨t⟩
+    | none => throwError "machine!: missing `State:` clause — the machine's state type"
+  let invty : Term ← match invtyStx? with
+    | some t => pure ⟨t⟩
+    | none => throwError "machine!: missing `Inv:` clause — the machine's invariant"
   let labelId := mkIdentFrom stx (name.getId ++ `Label)
   let specId := mkIdentFrom stx (name.getId ++ `spec)
   -- binder NAMES for application sites (spec is applied to them in the
@@ -198,7 +350,7 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   let hasPayload : Bool := evs.any fun ev => (ev[2]!.getArgs).size > 0
   -- the `states:` table is computed from the generated `labels`
   -- enumeration, which a payload machine cannot have — reject the mix.
-  if optStates.getNumArgs > 0 && hasPayload then
+  if optStates.isSome && hasPayload then
     throwErrorAt stx
       "machine!: payload-carrying events defeat the `labels` enumeration \
        the `states:` table is computed from — drop the `states:` clause \
@@ -277,8 +429,8 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   -- the enumeration covers every guard-satisfying state (an under-
   -- enumeration fails the BUILD, loudly). Names are CONCATENATED
   -- (`doorTrans`, not `door.Trans`) — the hand-written convention.
-  if optStates.getNumArgs > 0 then
-    let statesT : Term := ⟨optStates[0]![1]!⟩
+  if let some stCl := optStates then
+    let statesT : Term := ⟨stCl[1]!⟩
     let base : String := name.getId.getString!
     let statesId := mkIdentFrom stx (Name.mkSimple (base ++ "States"))
     let transId := mkIdentFrom stx (Name.mkSimple (base ++ "Trans"))
@@ -334,13 +486,18 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
           clause opts the machine into the finite-space entourage). -/
       instance $[$binders]* : _root_.DecidablePred ($name $binderNames*).Inv :=
         fun s => inferInstanceAs (_root_.Decidable (($name $binderNames*).Inv s))))
+    -- the entourage's unexpanders (pp-only; the honesty + module-mode
+    -- notes at `entourageUnexp`)
+    addEntourageUnexp stx statesId.getId s!"{base}'s states"
+    addEntourageUnexp stx transId.getId s!"{base}'s transitions"
+    addEntourageUnexp stx tstepId.getId s!"{base}'s table"
+    addEntourageUnexp stx tieId.getId s!"{base}'s table = step?"
   -- The acyclicity pair, generated when the rank clause is present. The
   -- proof mirrors the hand-written originals verbatim (cases over the
   -- enumerated state/label space, then omega over the rank arithmetic).
-  if optRank.getNumArgs > 0 then
-    let mr : Syntax := optRank[0]!
-    let rankT : Term := ⟨mr[1]!⟩
-    let rewindId : TSyntax `ident := ⟨mr[3]!⟩
+  if let some rkCl := optRank then
+    let rankT : Term := ⟨rkCl[1]!⟩
+    let rewindId : TSyntax `ident := ⟨rkCl[3]!⟩
     let advId := mkIdentFrom stx (name.getId ++ `rank_advances)
     let advTrId := mkIdentFrom stx (name.getId ++ `rank_advances_tr)
     let rewindFull : Term :=
@@ -372,6 +529,10 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
         have h := $advId s l hnr w
         rw [hact] at h
         exact h))
+    -- the acyclicity pair's unexpanders (pp-only; see `entourageUnexp`)
+    let baseS : String := name.getId.getString!
+    addEntourageUnexp stx advId.getId s!"{baseS}'s rank advances"
+    addEntourageUnexp stx advTrId.getId s!"{baseS}'s rank advances (tr)"
 
 /-- The registration form the attribute accepts: the type must be the
     literal `CommandElab` synonym, so the impl is a separate def. -/

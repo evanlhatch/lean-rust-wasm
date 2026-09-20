@@ -39,6 +39,6 @@ pub mod faults_generated;
 
 // The certified dbsp circuit (lean/schema-lang Emit/Circuit) — the Lean
 // proof (`incrementalize_ok`, cited in the header) IS the correctness
-// story; steel-host's tests/circuit.rs replays it.
+// story; guestlang-host's tests/circuit.rs replays it.
 #[rustfmt::skip]
 pub mod circuit_generated;

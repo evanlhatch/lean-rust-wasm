@@ -10,3 +10,10 @@ description = "Host-side persistence for the schema-lang delta/trace model: appe
 # durable backend is std::fs. The sled/redb embedded-KV follow-up is a
 # named decision in the crate docs (src/lib.rs).
 [dependencies]
+
+[dev-dependencies]
+# Property/fuzz layer over the decoder (tests/fuzz_decode.rs): random
+# journals must open Ok-or-structured-Err, never panic. Default
+# features = the cargo-test lane (deterministic iterations); `just
+# fuzz` runs the long campaigns.
+bolero = "0.13"

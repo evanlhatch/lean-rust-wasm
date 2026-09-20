@@ -19,12 +19,8 @@
 //! - Results-equality against Lean's oracle: that is the differential
 //!   manifest's job (Lean generates the expected values; re-fuzzing
 //!   them would duplicate the oracle).
-//! - The pool (`Pool`/`Pool::new_hard`): its classification logic is
-//!   pinned by `tests/pool.rs`; the pool's own boundary reduces to
-//!   this same `Runtime::new` + `call` path per worker.
-//! - Wall-clock hangs: fuel is the deterministic timeout proxy (see
-//!   pool.rs's mode table); a bounded fuel endowment below keeps every
-//!   iteration finite.
+//! - Wall-clock hangs: fuel is the deterministic timeout proxy; the
+//!   bounded fuel endowment below keeps every iteration finite.
 
 use bolero::check;
 

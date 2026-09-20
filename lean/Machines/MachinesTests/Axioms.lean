@@ -8,6 +8,7 @@ import Machines
 #print axioms Machines.Machine.compose_commute
 #print axioms Machines.Convergent.run_length_le
 #print axioms Machines.Convergent.run_length_bound
+#print axioms Machines.LinearMachine.incremental_run_equiv
 #print axioms Machines.Convergent.terminates
 
 -- Machines.Sync (the asyncbound primitive contracts)
@@ -26,6 +27,12 @@ import Machines
 #print axioms Machines.Sync.mpsc_blocked_send_unblocks
 #print axioms Machines.Sync.sem_blocked_acquire_unblocks
 #print axioms Machines.Sync.latch_blocked_wait_unblocks
+
+-- Machines.Session (the choreography laws the tests' runtime re-asserts
+-- shadowed — the typed lane + these pins carry the facts now)
+#print axioms Machines.Session.tdual_dual
+#print axioms Machines.Session.tdual_types
+#print axioms Machines.Session.tdual_directions_oppose
 
 -- Machines.Sim (the DST core)
 #print axioms Machines.Sim.stepSim_det

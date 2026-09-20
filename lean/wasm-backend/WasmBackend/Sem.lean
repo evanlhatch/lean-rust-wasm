@@ -86,6 +86,9 @@ namespace WasmBackend.Sem
 
 /-! ## Values, types -/
 
+set_option hygiene false in
+set_option hygiene false in
+set_option hygiene false in
 /-- A runtime value. The fragment is integer-only. -/
 inductive Val where
   | i32 (n : UInt32)
@@ -299,6 +302,49 @@ never changes a decided answer. This is what makes the fuel-insensitive
 ALL fuel, termination is a separate convergence witness, and the two
 compose to the old fuel-bounded forms via the monotonicity lemmas. -/
 
+set_option hygiene false in
+/-- The XFER: the subrun hypothesis `hb : execList fuel … = r` flows
+    through the IH (`hb'` — the SAME run at the successor fuel) into
+    `h`. The skeleton of every decided-error arm of `execList_mono`'s
+    frame-instruction cases (the `#3` cut: the four-line blocks
+    collapsed). `_pos`/`_neg` are the `if_` arms' variants (the stack
+    shape and the condition discriminate in the `simp only`s);
+    `mono_fuel`/variants discharge the `outOfFuel` arms (no IH
+    transfer — the hypothesis IS the contradiction). Hygiene is off so
+    the templates resolve the caller's locals (`ih`, `h`, `hle'`, and
+    the fixed binder names `hb`/`hstk`/`hb0` every call site uses). -/
+local macro "mono_xfer" X:tactic : tactic =>
+  `(tactic| (have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle';
+             simp only [execList, hb] at h;
+             simp only [execList, hb'];
+             $X))
+
+set_option hygiene false in
+local macro "mono_xfer_pos" X:tactic : tactic =>
+  `(tactic| (have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle';
+             simp only [execList, hstk, if_pos hb0, hb] at h;
+             simp only [execList, hstk, if_pos hb0, hb'];
+             $X))
+
+set_option hygiene false in
+local macro "mono_xfer_neg" X:tactic : tactic =>
+  `(tactic| (have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle';
+             simp only [execList, hstk, if_neg hb0, hb] at h;
+             simp only [execList, hstk, if_neg hb0, hb'];
+             $X))
+
+set_option hygiene false in
+local macro "mono_fuel" : tactic =>
+  `(tactic| (simp only [execList, hb] at h; exact absurd h.symm hr))
+
+set_option hygiene false in
+local macro "mono_fuel_pos" : tactic =>
+  `(tactic| (simp only [execList, hstk, if_pos hb0, hb] at h; exact absurd h.symm hr))
+
+set_option hygiene false in
+local macro "mono_fuel_neg" : tactic =>
+  `(tactic| (simp only [execList, hstk, if_neg hb0, hb] at h; exact absurd h.symm hr))
+
 /-- THE MONOTONICITY LEMMA: any decided result — `.ok`, `trap`,
     `underflow`, `structural`, or a `branch` signal — is stable under
     extra fuel (only `outOfFuel` can flip, to the decided result the
@@ -343,83 +389,30 @@ theorem execList_mono :
         cases i with
         | block body =>
           cases hb : execList fuel s body with
-          | ok s1 =>
-            have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-            simp only [execList, hb] at h
-            simp only [execList, hb']
-            exact ih _ _ _ h hr _ hle'
+          | ok s1 => mono_xfer (exact ih _ _ _ h hr _ hle')
           | error e1 =>
             cases e1 with
             | branch n ls =>
               cases n with
-              | zero =>
-                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                simp only [execList, hb] at h
-                simp only [execList, hb']
-                exact ih _ _ _ h hr _ hle'
-              | succ n' =>
-                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                simp only [execList, hb] at h
-                simp only [execList, hb']
-                exact h
-            | outOfFuel =>
-              simp only [execList, hb] at h
-              exact absurd h.symm hr
-            | trap =>
-              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-              simp only [execList, hb] at h
-              simp only [execList, hb']
-              exact h
-            | underflow =>
-              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-              simp only [execList, hb] at h
-              simp only [execList, hb']
-              exact h
-            | structural =>
-              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-              simp only [execList, hb] at h
-              simp only [execList, hb']
-              exact h
+              | zero => mono_xfer (exact ih _ _ _ h hr _ hle')
+              | succ n' => mono_xfer (exact h)
+            | outOfFuel => mono_fuel
+            | trap => mono_xfer (exact h)
+            | underflow => mono_xfer (exact h)
+            | structural => mono_xfer (exact h)
         | loop body =>
           cases hb : execList fuel s body with
-          | ok s1 =>
-            have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-            simp only [execList, hb] at h
-            simp only [execList, hb']
-            exact ih _ _ _ h hr _ hle'
+          | ok s1 => mono_xfer (exact ih _ _ _ h hr _ hle')
           | error e1 =>
             cases e1 with
             | branch n ls =>
               cases n with
-              | zero =>
-                -- the restart re-enters the SAME list at the predecessor
-                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                simp only [execList, hb] at h
-                simp only [execList, hb']
-                exact ih _ _ _ h hr _ hle'
-              | succ n' =>
-                have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                simp only [execList, hb] at h
-                simp only [execList, hb']
-                exact h
-            | outOfFuel =>
-              simp only [execList, hb] at h
-              exact absurd h.symm hr
-            | trap =>
-              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-              simp only [execList, hb] at h
-              simp only [execList, hb']
-              exact h
-            | underflow =>
-              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-              simp only [execList, hb] at h
-              simp only [execList, hb']
-              exact h
-            | structural =>
-              have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-              simp only [execList, hb] at h
-              simp only [execList, hb']
-              exact h
+              | zero => mono_xfer (exact ih _ _ _ h hr _ hle')
+              | succ n' => mono_xfer (exact h)
+            | outOfFuel => mono_fuel
+            | trap => mono_xfer (exact h)
+            | underflow => mono_xfer (exact h)
+            | structural => mono_xfer (exact h)
         | if_ t e =>
           cases hstk : s.stack with
           | nil =>
@@ -433,84 +426,33 @@ theorem execList_mono :
             | i32 b =>
               by_cases hb0 : b != 0
               . cases hb : execList fuel { s with stack := vs } t with
-                | ok s1 =>
-                  have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                  simp only [execList, hstk, if_pos hb0, hb] at h
-                  simp only [execList, hstk, if_pos hb0, hb']
-                  exact ih _ _ _ h hr _ hle'
+                | ok s1 => mono_xfer_pos (exact ih _ _ _ h hr _ hle')
                 | error e1 =>
                   cases e1 with
                   | branch n ls =>
                     cases n with
-                    | zero =>
-                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                      simp only [execList, hstk, if_pos hb0, hb] at h
-                      simp only [execList, hstk, if_pos hb0, hb']
-                      exact ih _ _ _ h hr _ hle'
-                    | succ n' =>
-                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                      simp only [execList, hstk, if_pos hb0, hb] at h
-                      simp only [execList, hstk, if_pos hb0, hb']
-                      exact h
-                  | outOfFuel =>
-                    simp only [execList, hstk, if_pos hb0, hb] at h
-                    exact absurd h.symm hr
-                  | trap =>
-                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                    simp only [execList, hstk, if_pos hb0, hb] at h
-                    simp only [execList, hstk, if_pos hb0, hb']
-                    exact h
-                  | underflow =>
-                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                    simp only [execList, hstk, if_pos hb0, hb] at h
-                    simp only [execList, hstk, if_pos hb0, hb']
-                    exact h
-                  | structural =>
-                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                    simp only [execList, hstk, if_pos hb0, hb] at h
-                    simp only [execList, hstk, if_pos hb0, hb']
-                    exact h
+                    | zero => mono_xfer_pos (exact ih _ _ _ h hr _ hle')
+                    | succ n' => mono_xfer_pos (exact h)
+                  | outOfFuel => mono_fuel_pos
+                  | trap => mono_xfer_pos (exact h)
+                  | underflow => mono_xfer_pos (exact h)
+                  | structural => mono_xfer_pos (exact h)
               . cases hb : execList fuel { s with stack := vs } e with
-                | ok s1 =>
-                  have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                  simp only [execList, hstk, if_neg hb0, hb] at h
-                  simp only [execList, hstk, if_neg hb0, hb']
-                  exact ih _ _ _ h hr _ hle'
+                | ok s1 => mono_xfer_neg (exact ih _ _ _ h hr _ hle')
                 | error e1 =>
                   cases e1 with
                   | branch n ls =>
                     cases n with
-                    | zero =>
-                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                      simp only [execList, hstk, if_neg hb0, hb] at h
-                      simp only [execList, hstk, if_neg hb0, hb']
-                      exact ih _ _ _ h hr _ hle'
-                    | succ n' =>
-                      have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                      simp only [execList, hstk, if_neg hb0, hb] at h
-                      simp only [execList, hstk, if_neg hb0, hb']
-                      exact h
-                  | outOfFuel =>
-                    simp only [execList, hstk, if_neg hb0, hb] at h
-                    exact absurd h.symm hr
-                  | trap =>
-                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                    simp only [execList, hstk, if_neg hb0, hb] at h
-                    simp only [execList, hstk, if_neg hb0, hb']
-                    exact h
-                  | underflow =>
-                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                    simp only [execList, hstk, if_neg hb0, hb] at h
-                    simp only [execList, hstk, if_neg hb0, hb']
-                    exact h
-                  | structural =>
-                    have hb' := ih _ _ _ hb (fun he => by simp at he) _ hle'
-                    simp only [execList, hstk, if_neg hb0, hb] at h
-                    simp only [execList, hstk, if_neg hb0, hb']
-                    exact h
+                    | zero => mono_xfer_neg (exact ih _ _ _ h hr _ hle')
+                    | succ n' => mono_xfer_neg (exact h)
+                  | outOfFuel => mono_fuel_neg
+                  | trap => mono_xfer_neg (exact h)
+                  | underflow => mono_xfer_neg (exact h)
+                  | structural => mono_xfer_neg (exact h)
         | _ =>
           simp only [execList, hst] at h ⊢
           exact h
+
 
 /-- The `.ok` specialization: a completed run's answer is stable under
     extra fuel. -/
@@ -650,8 +592,143 @@ theorem checkFrame_ok (locals : Nat → Ty) (base : List Ty) (body : List Instr)
 local macro "err_tail" : tactic =>
   `(tactic| exact ⟨fun h => (nomatch h), fun s' h => (nomatch h), fun n' ls' hEq => (nomatch hEq)⟩)
 
+set_option hygiene false in
+/-- The TWO-OPERAND skeleton (the #3 cut's biggest per-case win: the
+    `i32add`/`i32eq`/`i64add` arms — pop two `V` scalars, push one; the
+    arms differ only in the pushed VALUE). The base/stack shape is
+    destructured with the WRONG ty (`W`) `simp`-refuted at each level;
+    the check's tail re-derives (`hcheck'`) and the surviving-tail type
+    (`hts`) is extracted; the IH applies to the pushed-value state.
+    `pushT`/`pushV` are the result-type / stack terms — they capture the
+    template's `a`, `b`, `ts2`, `vs2` binders (hygiene off). NOTE: a
+    `by` inside a tactic-paren quote swallows the rest of the group, so
+    every by-block sits alone in its own paren group. -/
+local macro "two_operand" W:ident V:ident pushT:term "," pushV:term : tactic =>
+  `(tactic| (cases base with
+             | nil => simp [checkStack] at hcheck
+             | cons t1 ts1 =>
+               cases t1 with
+               | $W => simp [checkStack] at hcheck
+               | _ =>
+                 cases ts1 with
+                 | nil => simp [checkStack] at hcheck
+                 | cons t2 ts2 =>
+                   cases t2 with
+                   | $W => simp [checkStack] at hcheck
+                   | _ =>
+                     cases stk with
+                     | nil => simp [stackTys] at hstack
+                     | cons v1 vs1 =>
+                       cases v1 with
+                       | $W _ => simp [stackTys] at hstack
+                       | $V a =>
+                         cases vs1 with
+                         | nil => simp [stackTys] at hstack
+                         | cons v2 vs2 =>
+                           cases v2 with
+                           | $W _ => simp [stackTys] at hstack
+                           | $V b =>
+                             ((have hcheck' : checkStack locals $pushT is = .ok final := by
+                                 (simp only [checkStack] at hcheck; exact hcheck));
+                              (have hts : stackTys vs2 = ts2 := by
+                                 (simp [stackTys] at hstack; exact hstack));
+                              simp only [execList, step];
+                              exact ih.1 is $pushT final
+                                ⟨loc, $pushV, mem, msz⟩
+                                hcheck' (by simp [stackTys, hts]) hloc')))
+
+set_option hygiene false in
+/-- The SUBRUN case tree (the `block`/`loop` arms + part 2's shared
+    skeleton): case on the body/subrun result; the `.ok` arm and the
+    `.branch 0` arm are the caller's (they re-enter the IH for the tail
+    and differ per frame shape); `underflow` contradicts the body's
+    non-underflow clause; the three observable errors are `err_tail`;
+    `.branch (n+1)` propagates the branch signal with the locals
+    clause. -/
+local macro "sub_case" hin:ident stE:term "," okTac:tactic zeroTac:tactic : tactic =>
+  `(tactic| (cases hx : execList fuel $stE body with
+             | ok s'' => (simp only [execList, hx]; $okTac)
+             | error e =>
+               cases e with
+               | underflow => (simp only [execList, hx]; exact absurd hx ($hin).1)
+               | trap => (simp only [execList, hx]; err_tail)
+               | outOfFuel => (simp only [execList, hx]; err_tail)
+               | structural => (simp only [execList, hx]; err_tail)
+               | branch k ls =>
+                 cases k with
+                 | zero => (simp only [execList, hx]; $zeroTac)
+                 | succ k' =>
+                   (simp only [execList, hx];
+                    refine ⟨fun h => by simp at h, fun s' h => by simp at h, fun n' ls' hEq => ?_⟩;
+                    injection hEq with hI;
+                    injection hI with _ hls;
+                    subst hls;
+                    exact ($hin).2.2 (k'+1) ls hx)))
+
+set_option hygiene false in
+/-- The SUBRUN case tree, `if_` variant: the guard's `simp only
+    [execList, if_pos/if_neg cond]` (the `pre` param) precedes the case,
+    and the ok arm's goal is then already reduced — no further simp
+    (which would make no progress); otherwise identical to `sub_case`. -/
+local macro "sub_case_if" hin:ident stE:term "," il:term "," pre:tactic okTac:tactic zeroTac:tactic : tactic =>
+  `(tactic| ($pre;
+             cases hx : execList fuel $stE $il with
+             | ok s'' => (skip; $okTac)
+             | error e =>
+               cases e with
+               | underflow => (simp only [execList, hx]; exact absurd hx ($hin).1)
+               | trap => (simp only [execList, hx]; err_tail)
+               | outOfFuel => (simp only [execList, hx]; err_tail)
+               | structural => (simp only [execList, hx]; err_tail)
+               | branch k ls =>
+                 cases k with
+                 | zero => (simp only [execList, hx]; $zeroTac)
+                 | succ k' =>
+                   (simp only [execList, hx];
+                    refine ⟨fun h => by simp at h, fun s' h => by simp at h, fun n' ls' hEq => ?_⟩;
+                    injection hEq with hI;
+                    injection hI with _ hls;
+                    subst hls;
+                    exact ($hin).2.2 (k'+1) ls hx)))
+
+/-- The frame-check FACTORIZATION (the `block`/`loop` arms' shared
+    head, lifted to a lemma so the `sub_case` macros carry no `by`): the
+    case check implies the frame check holds and the tail is checked
+    from `base`. -/
+theorem block_checkStack_inv (locals : Nat → Ty) (body is : List Instr)
+    (base final : List Ty)
+    (hcheck : checkStack locals base (.block body :: is) = .ok final) :
+    checkFrame locals base body = .ok () ∧ checkStack locals base is = .ok final := by
+  simp only [checkStack] at hcheck
+  cases hf : checkFrame locals base body with
+  | error _ => rw [hf] at hcheck; simp at hcheck
+  | ok _ =>
+      rw [hf] at hcheck; simp at hcheck
+      exact ⟨rfl, hcheck⟩
+
+/-- The `.loop` mirror of `block_checkStack_inv` (the restart form). -/
+theorem loop_checkStack_inv (locals : Nat → Ty) (body is : List Instr)
+    (base final : List Ty)
+    (hcheck : checkStack locals base (.loop body :: is) = .ok final) :
+    checkFrame locals base body = .ok () ∧ checkStack locals base is = .ok final := by
+  simp only [checkStack] at hcheck
+  cases hf : checkFrame locals base body with
+  | error _ => rw [hf] at hcheck; simp at hcheck
+  | ok _ =>
+      rw [hf] at hcheck; simp at hcheck
+      exact ⟨rfl, hcheck⟩
+
 /-- THE core lemma. Part 2 additionally assumes the tail `is` is checked
-    `base → final` (the restart re-enters at `.loop body :: is`). -/
+    `base → final` (the restart re-enters at `.loop body :: is`). The
+    per-arm proofs are the `#3` cut's skeletons: `two_operand` (the
+    pop-two-push-one arithmetic/compare arms), `frame_prelude` +
+    `sub_case` (the block/loop arms and part 2), `sub_case_if` (the
+    `if_` arms), `err_tail` (the observable-error triples). The
+    genuinely divergent arms stay hand-written: `localset` (the locals
+    update's pointwise proof), `drop`/`brif`/`i32load8u` (pop-ONE
+    shapes, each with its own discrimination), `i32store8` (pop-two
+    with NO push plus the bounds `by_cases`), and the short
+    `i32const`/`i64const`/`localget` pushes. -/
 theorem exec_typed (locals : Nat → Ty) :
     ∀ fuel : Nat,
       (∀ body base final s,
@@ -738,110 +815,9 @@ theorem exec_typed (locals : Nat → Ty) :
                         rw [if_neg hm]
                         exact hloc' m)
             . simp [checkStack, hteq] at hcheck
-        | i32add =>
-          cases base with
-          | nil => simp [checkStack] at hcheck
-          | cons t1 ts1 =>
-            cases t1 with
-            | i64 => simp [checkStack] at hcheck
-            | i32 =>
-              cases ts1 with
-              | nil => simp [checkStack] at hcheck
-              | cons t2 ts2 =>
-                cases t2 with
-                | i64 => simp [checkStack] at hcheck
-                | i32 =>
-                  cases stk with
-                  | nil => simp [stackTys] at hstack
-                  | cons v1 vs1 =>
-                    cases v1 with
-                    | i64 _ => simp [stackTys] at hstack
-                    | i32 a =>
-                      cases vs1 with
-                      | nil => simp [stackTys] at hstack
-                      | cons v2 vs2 =>
-                        cases v2 with
-                        | i64 _ => simp [stackTys] at hstack
-                        | i32 b =>
-                          have hcheck' : checkStack locals (.i32 :: ts2) is = .ok final := by
-                            simp only [checkStack] at hcheck; exact hcheck
-                          have hts : stackTys vs2 = ts2 := by
-                            simp [stackTys] at hstack
-                            exact hstack
-                          simp only [execList, step]
-                          exact ih.1 is (.i32 :: ts2) final
-                            ⟨loc, .i32 (a + b) :: vs2, mem, msz⟩
-                            hcheck' (by simp [stackTys, hts]) hloc'
-        | i32eq =>
-          -- same stack shape as i32add (pop two i32, push one); VALUE irrelevant for typing.
-          cases base with
-          | nil => simp [checkStack] at hcheck
-          | cons t1 ts1 =>
-            cases t1 with
-            | i64 => simp [checkStack] at hcheck
-            | i32 =>
-              cases ts1 with
-              | nil => simp [checkStack] at hcheck
-              | cons t2 ts2 =>
-                cases t2 with
-                | i64 => simp [checkStack] at hcheck
-                | i32 =>
-                  cases stk with
-                  | nil => simp [stackTys] at hstack
-                  | cons v1 vs1 =>
-                    cases v1 with
-                    | i64 _ => simp [stackTys] at hstack
-                    | i32 a =>
-                      cases vs1 with
-                      | nil => simp [stackTys] at hstack
-                      | cons v2 vs2 =>
-                        cases v2 with
-                        | i64 _ => simp [stackTys] at hstack
-                        | i32 b =>
-                          have hcheck' : checkStack locals (.i32 :: ts2) is = .ok final := by
-                            simp only [checkStack] at hcheck; exact hcheck
-                          have hts : stackTys vs2 = ts2 := by
-                            simp [stackTys] at hstack
-                            exact hstack
-                          simp only [execList, step]
-                          exact ih.1 is (.i32 :: ts2) final
-                            ⟨loc, .i32 (if a == b then 1 else 0) :: vs2, mem, msz⟩
-                            hcheck' (by simp [stackTys, hts]) hloc'
-        | i64add =>
-          -- mirror of i32add for i64; see header ledger.
-          cases base with
-          | nil => simp [checkStack] at hcheck
-          | cons t1 ts1 =>
-            cases t1 with
-            | i32 => simp [checkStack] at hcheck
-            | i64 =>
-              cases ts1 with
-              | nil => simp [checkStack] at hcheck
-              | cons t2 ts2 =>
-                cases t2 with
-                | i32 => simp [checkStack] at hcheck
-                | i64 =>
-                  cases stk with
-                  | nil => simp [stackTys] at hstack
-                  | cons v1 vs1 =>
-                    cases v1 with
-                    | i32 _ => simp [stackTys] at hstack
-                    | i64 a =>
-                      cases vs1 with
-                      | nil => simp [stackTys] at hstack
-                      | cons v2 vs2 =>
-                        cases v2 with
-                        | i32 _ => simp [stackTys] at hstack
-                        | i64 b =>
-                          have hcheck' : checkStack locals (.i64 :: ts2) is = .ok final := by
-                            simp only [checkStack] at hcheck; exact hcheck
-                          have hts : stackTys vs2 = ts2 := by
-                            simp [stackTys] at hstack
-                            exact hstack
-                          simp only [execList, step]
-                          exact ih.1 is (.i64 :: ts2) final
-                            ⟨loc, .i64 (a + b) :: vs2, mem, msz⟩
-                            hcheck' (by simp [stackTys, hts]) hloc'
+        | i32add => two_operand i64 i32 (.i32 :: ts2), (.i32 (a + b) :: vs2)
+        | i32eq => two_operand i64 i32 (.i32 :: ts2), (.i32 (if a == b then 1 else 0) :: vs2)
+        | i64add => two_operand i32 i64 (.i64 :: ts2), (.i64 (a + b) :: vs2)
         | drop =>
           cases base with
           | nil => simp [checkStack] at hcheck
@@ -892,89 +868,21 @@ theorem exec_typed (locals : Nat → Ty) :
                   . simp only [execList, step, if_neg hb]
                     exact ih.1 is ts1 final ⟨loc, vs, mem, msz⟩ hcheck' hts hloc'
         | block body =>
-          have hfr : checkFrame locals base body = .ok ()
-              ∧ checkStack locals base is = .ok final := by
-            simp only [checkStack] at hcheck
-            cases hf : checkFrame locals base body with
-            | error _ => rw [hf] at hcheck; simp at hcheck
-            | ok _ =>
-                rw [hf] at hcheck; simp at hcheck
-                exact ⟨rfl, hcheck⟩
+          have hfr := block_checkStack_inv locals body is base final hcheck
           have hin := ih.1 body base base ⟨loc, stk, mem, msz⟩
             (checkFrame_ok locals base body hfr.1) hstack hloc
-          cases hx : execList fuel ⟨loc, stk, mem, msz⟩ body with
-          | ok s'' =>
-            simp only [execList, hx]
-            exact ih.1 is base final s'' hfr.2 (hin.2.1 s'' hx).1 (hin.2.1 s'' hx).2
-          | error e =>
-            cases e with
-            | underflow =>
-              simp only [execList, hx]
-              exact absurd hx hin.1
-            | trap =>
-              simp only [execList, hx]
-              err_tail
-            | outOfFuel =>
-              simp only [execList, hx]
-              err_tail
-            | structural =>
-              simp only [execList, hx]
-              err_tail
-            | branch k ls =>
-              cases k with
-              | zero =>
-                simp only [execList, hx]
-                exact ih.1 is base final ⟨ls, stk, mem, msz⟩ hfr.2
-                  (by simp [stackTys, hstack]) (fun m => hin.2.2 0 ls hx m)
-              | succ k' =>
-                simp only [execList, hx]
-                refine ⟨fun h => by simp at h, fun s' h => by simp at h, fun n' ls' hEq => ?_⟩
-                injection hEq with hI
-                injection hI with _ hls
-                subst hls
-                exact hin.2.2 (k'+1) ls hx
+          sub_case hin ⟨loc, stk, mem, msz⟩,
+            (exact ih.1 is base final s'' hfr.2 (hin.2.1 s'' hx).1 (hin.2.1 s'' hx).2)
+            (exact ih.1 is base final ⟨ls, stk, mem, msz⟩ hfr.2
+              (by simp [stackTys, hstack]) (fun m => hin.2.2 0 ls hx m))
         | loop body =>
-          have hfr : checkFrame locals base body = .ok ()
-              ∧ checkStack locals base is = .ok final := by
-            simp only [checkStack] at hcheck
-            cases hf : checkFrame locals base body with
-            | error _ => rw [hf] at hcheck; simp at hcheck
-            | ok _ =>
-                rw [hf] at hcheck; simp at hcheck
-                exact ⟨rfl, hcheck⟩
+          have hfr := loop_checkStack_inv locals body is base final hcheck
           have hin := ih.1 body base base ⟨loc, stk, mem, msz⟩
             (checkFrame_ok locals base body hfr.1) hstack hloc
-          cases hx : execList fuel ⟨loc, stk, mem, msz⟩ body with
-          | ok s'' =>
-            simp only [execList, hx]
-            exact ih.1 is base final s'' hfr.2 (hin.2.1 s'' hx).1 (hin.2.1 s'' hx).2
-          | error e =>
-            cases e with
-            | underflow =>
-              simp only [execList, hx]
-              exact absurd hx hin.1
-            | trap =>
-              simp only [execList, hx]
-              err_tail
-            | outOfFuel =>
-              simp only [execList, hx]
-              err_tail
-            | structural =>
-              simp only [execList, hx]
-              err_tail
-            | branch k ls =>
-              cases k with
-              | zero =>
-                simp only [execList, hx]
-                exact ih.2 is body base final ⟨ls, stk, mem, msz⟩ hfr.1 hfr.2
-                  (by simp [stackTys, hstack]) (fun m => hin.2.2 0 ls hx m)
-              | succ k' =>
-                simp only [execList, hx]
-                refine ⟨fun h => by simp at h, fun s' h => by simp at h, fun n' ls' hEq => ?_⟩
-                injection hEq with hI
-                injection hI with _ hls
-                subst hls
-                exact hin.2.2 (k'+1) ls hx
+          sub_case hin ⟨loc, stk, mem, msz⟩,
+            (exact ih.1 is base final s'' hfr.2 (hin.2.1 s'' hx).1 (hin.2.1 s'' hx).2)
+            (exact ih.2 is body base final ⟨ls, stk, mem, msz⟩ hfr.1 hfr.2
+              (by simp [stackTys, hstack]) (fun m => hin.2.2 0 ls hx m))
         | if_ t e =>
           cases base with
           | nil => simp [checkStack] at hcheck
@@ -1008,72 +916,16 @@ theorem exec_typed (locals : Nat → Ty) :
                   have hthen := ih.1 t ts1 ts1 ⟨loc, vs, mem, msz⟩ hcks.2.1 hts hloc'
                   have helse := ih.1 e ts1 ts1 ⟨loc, vs, mem, msz⟩ hcks.2.2 hts hloc'
                   by_cases hb : b != 0
-                  . simp only [execList, if_pos hb]
-                    cases hx : execList fuel ⟨loc, vs, mem, msz⟩ t with
-                    | ok s'' =>
-                      exact ih.1 is ts1 final s'' hcks.1 (hthen.2.1 s'' hx).1
-                        (hthen.2.1 s'' hx).2
-                    | error ex =>
-                      cases ex with
-                      | underflow =>
-                        simp only [execList, hx]
-                        exact absurd hx hthen.1
-                      | trap =>
-                        simp only [execList, hx]
-                        err_tail
-                      | outOfFuel =>
-                        simp only [execList, hx]
-                        err_tail
-                      | structural =>
-                        simp only [execList, hx]
-                        err_tail
-                      | branch k ls =>
-                        cases k with
-                        | zero =>
-                          simp only [execList, hx]
-                          exact ih.1 is ts1 final ⟨ls, vs, mem, msz⟩ hcks.1 hts
-                            (fun m => hthen.2.2 0 ls hx m)
-                        | succ k' =>
-                          simp only [execList, hx]
-                          refine ⟨fun h => by simp at h, fun s' h => by simp at h,
-                                  fun n' ls' hEq => ?_⟩
-                          injection hEq with hI
-                          injection hI with _ hls
-                          subst hls
-                          exact hthen.2.2 (k'+1) ls hx
-                  . simp only [execList, if_neg hb]
-                    cases hx : execList fuel ⟨loc, vs, mem, msz⟩ e with
-                    | ok s'' =>
-                      exact ih.1 is ts1 final s'' hcks.1 (helse.2.1 s'' hx).1
-                        (helse.2.1 s'' hx).2
-                    | error ex =>
-                      cases ex with
-                      | underflow =>
-                        simp only [execList, hx]
-                        exact absurd hx helse.1
-                      | trap =>
-                        simp only [execList, hx]
-                        err_tail
-                      | outOfFuel =>
-                        simp only [execList, hx]
-                        err_tail
-                      | structural =>
-                        simp only [execList, hx]
-                        err_tail
-                      | branch k ls =>
-                        cases k with
-                        | zero =>
-                          simp only [execList, hx]
-                          exact ih.1 is ts1 final ⟨ls, vs, mem, msz⟩ hcks.1 hts
-                            (fun m => helse.2.2 0 ls hx m)
-                        | succ k' =>
-                          simp only [execList, hx]
-                          refine ⟨fun h => by simp at h, fun s' h => by simp at h,
-                                  fun n' ls' hEq => ?_⟩
-                          injection hEq with hI
-                          injection hI with _ hls
-                          subst hls
-                          exact helse.2.2 (k'+1) ls hx
+                  . sub_case_if hthen ⟨loc, vs, mem, msz⟩, t, (simp only [execList, if_pos hb])
+                      (exact ih.1 is ts1 final s'' hcks.1 (hthen.2.1 s'' hx).1
+                        (hthen.2.1 s'' hx).2)
+                      (exact ih.1 is ts1 final ⟨ls, vs, mem, msz⟩ hcks.1 hts
+                        (fun m => hthen.2.2 0 ls hx m))
+                  . sub_case_if helse ⟨loc, vs, mem, msz⟩, e, (simp only [execList, if_neg hb])
+                      (exact ih.1 is ts1 final s'' hcks.1 (helse.2.1 s'' hx).1
+                        (helse.2.1 s'' hx).2)
+                      (exact ih.1 is ts1 final ⟨ls, vs, mem, msz⟩ hcks.1 hts
+                        (fun m => helse.2.2 0 ls hx m))
         | unreach =>
           simp only [execList, step]
           refine ⟨?_, ?_, ?_⟩
@@ -1149,37 +1001,11 @@ theorem exec_typed (locals : Nat → Ty) :
       have hloc' : ∀ m, tyOf (loc m) = locals m := fun m => hloc m
       have hcheck' := checkFrame_ok locals base body hfr
       have hin := ih.1 body base base ⟨loc, stk, mem, msz⟩ hcheck' hstack hloc
-      cases hx : execList fuel ⟨loc, stk, mem, msz⟩ body with
-      | ok s' =>
-        simp only [execList, hx]
-        exact ih.1 is base final s' hcheck (hin.2.1 s' hx).1 (hin.2.1 s' hx).2
-      | error e =>
-        cases e with
-        | underflow =>
-          simp only [execList, hx]
-          exact absurd hx hin.1
-        | trap =>
-          simp only [execList, hx]
-          err_tail
-        | outOfFuel =>
-          simp only [execList, hx]
-          err_tail
-        | structural =>
-          simp only [execList, hx]
-          err_tail
-        | branch k ls =>
-          cases k with
-          | zero =>
-            simp only [execList, hx]
-            exact ih.2 is body base final ⟨ls, stk, mem, msz⟩ hfr hcheck
-              (by simp [stackTys, hstack]) (fun m => hin.2.2 0 ls hx m)
-          | succ k' =>
-            simp only [execList, hx]
-            refine ⟨fun h => by simp at h, fun s' h => by simp at h, fun n' ls' hEq => ?_⟩
-            injection hEq with hI
-            injection hI with _ hls
-            subst hls
-            exact hin.2.2 (k'+1) ls hx
+      sub_case hin ⟨loc, stk, mem, msz⟩,
+        (exact ih.1 is base final s'' hcheck (hin.2.1 s'' hx).1 (hin.2.1 s'' hx).2)
+        (exact ih.2 is body base final ⟨ls, stk, mem, msz⟩ hfr hcheck
+          (by simp [stackTys, hstack]) (fun m => hin.2.2 0 ls hx m))
+
 
 /-- THE deliverable theorem, FUEL-INSENSITIVE (the Velvet primary —
     W6.9): at ANY budget, a well-typed program (checked against its

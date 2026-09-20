@@ -38,14 +38,8 @@ public meta section
 
 open Lean Meta Linter EnvLinter
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
-register_option linter.guestlang.dupDefBodies : Bool := {
-  defValue := true
-  descr := "flag clusters of ≥2 public definitions/theorems (defs, theorems) with \
-    alpha-equivalent bodies sharing one package root"
-}
-
-initialize Linter.addEnvLinterOption linter.guestlang.dupDefBodies
+-- the dupDefBodies option lives in the `register_guestlang_linter` call at
+-- the bottom (LintKit.Basic's one-liner registration).
 
 namespace LintKit
 
@@ -134,5 +128,6 @@ meta def dupDefBodiesLinter : EnvLinter where
 
 end LintKit
 
-@[builtin_env_linter linter.guestlang.dupDefBodies]
-meta def LintKit.dupDefBodiesLinter.reg : EnvLinter := LintKit.dupDefBodiesLinter
+register_guestlang_linter linter.guestlang.dupDefBodies LintKit.dupDefBodiesLinter
+  "flag clusters of ≥2 public definitions/theorems (defs, theorems) with \
+    alpha-equivalent bodies sharing one package root"

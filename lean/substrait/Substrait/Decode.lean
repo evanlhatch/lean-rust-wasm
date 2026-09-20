@@ -48,8 +48,9 @@ are not invertible and rejected.
 
 Module map (W5.3 phase 1 — pure code-motion split along the section
 structure; this hub only imports):
-- `Substrait.Decode.Basic` — the parser monad, escapes, name scanners,
-  the prefix kit.
+- `Substrait.Decode.Basic` — the parser core, RE-HOMED onto `TextKit.Basic`
+  (core-only; this module re-exports the historical `Substrait.Decode.*`
+  names to the TextKit constants).
 - `Substrait.Decode.Types` — `parseType`, the fuel lemmas, the type
   inversion ladder.
 - `Substrait.Decode.Expr` — the literal/expression parsers and their

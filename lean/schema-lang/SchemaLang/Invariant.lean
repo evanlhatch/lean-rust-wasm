@@ -9,13 +9,18 @@ This module defines the registry ITEM; the authoring surface (the
 lives in `SchemaLang.Meta.Reflect` (one command + one extension, the
 file's lock discipline), and the emission in `SchemaLang.Emit.Invariant`.
 
-- `Tier` — the computed enforcement ladder: `boundaryCheck` (the
-  executable VExpr is compiled to the emitted check fn — v1's computed
-  rung), `proved` (a theorem name is CITED at registration and RESOLVED
+- `Tier` — the computed enforcement ladder: THE KIT'S
+  `CodegenCore.Obligation.Tier` (one ladder, one type — the former
+  private `boundaryCheck`/`proved`/`oracleCovered` enumeration is
+  gone; the rungs map 1:1 onto `generatedCheck`/`provedAtElab`/
+  `oracleSwept`, the kit's `decidableNow`/`guestVerified` rungs are
+  the newer backends). `generatedCheck` (the executable VExpr is
+  compiled to the emitted check fn — v1's computed rung),
+  `provedAtElab` (a theorem name is CITED at registration and RESOLVED
   at registration — `checkCitation?` below, the `Dbsp.Certs`
   `#check_cert` pattern: a missing, non-theorem, sorry-tainted, or
   wrong-shape citation is an ELABORATION error),
-  `oracleCovered` (a differential-oracle row covers it — wired when the
+  `oracleSwept` (a differential-oracle row covers it — wired when the
   first oracle consumer lands; a closed ctor so the ladder is total).
 - `SchemaInvariant` — the existential wrapper: the field list PLUS the
   `VExpr fields .bool` value (the GADT index rides the stored fields —
@@ -41,6 +46,7 @@ reading).
 
 module
 
+public import CodegenCore
 public import Lean
 public import SchemaLang.Validate
 
@@ -48,30 +54,47 @@ public import SchemaLang.Validate
 
 namespace SchemaLang
 
-/-! ## The enforcement ladder -/
+/-! ## The enforcement ladder (THE kit's tier — one ladder, one type) -/
 
-/-- The tier: HOW the invariant is enforced. v1 computes
-    `boundaryCheck` for executable VExpr rows; `proved` rows cite a
-    theorem name (RESOLVED at registration — `checkCitation?` below). -/
-inductive Tier where
-  | boundaryCheck
-  | proved
-  | oracleCovered
-deriving Repr, BEq, DecidableEq, Inhabited
+/-- The tier: HOW the invariant is enforced. THE KIT'S
+    `CodegenCore.Obligation.Tier` (the obligation substrate IS the
+    ladder): the former schema-lang-private enumeration
+    (`boundaryCheck`/`proved`/`oracleCovered`) was two enumerations
+    for one ladder — unified as the abbrev discipline. The lane's rung
+    names map 1:1: `boundaryCheck` → `generatedCheck`, `proved` →
+    `provedAtElab`, `oracleCovered` → `oracleSwept`; the kit's
+    `decidableNow`/`guestVerified` rungs are the newer backends (no
+    invariant-lane computation produces them — invariants execute on
+    rows, they are not closed props; hand-tiering only). -/
+abbrev Tier := CodegenCore.Obligation.Tier
 
-/-- The tier's rendering (the emitted doc comment + the test pins). -/
+/-- THE PIN: `SchemaLang.Tier` IS the kit's `Obligation.Tier` — the
+    alias reduces (rfl), so the obligation view's tier and the item's
+    tier are the same type by construction, not by translation. -/
+theorem Tier_is_kit : Tier = CodegenCore.Obligation.Tier := rfl
+
+/-- The tier's rendering (the emitted doc comment + the test pins).
+    BYTE-TIE: the lane's computed rungs render EXACTLY as
+    pre-unification — these strings are embedded in the committed
+    `src/invariants_generated.rs` comments (`tier: boundary-check`,
+    `tier: proved`). NOTE dot-notation: `it.tier.render` would resolve
+    the KIT's `Obligation.Tier.render` (different strings) — emitters
+    must call `SchemaLang.Tier.render it.tier` qualified. The kit's
+    newer rungs render their kit strings (nothing byte-tied reaches
+    them — no invariant-lane computation produces those rungs). -/
 def Tier.render : Tier → String
-  | .boundaryCheck => "boundary-check"
-  | .proved => "proved"
-  | .oracleCovered => "oracle-covered"
+  | .generatedCheck => "boundary-check"
+  | .provedAtElab => "proved"
+  | .oracleSwept => "oracle-covered"
+  | .decidableNow => "decidable-now"
+  | .guestVerified => "guest-verified"
 
-instance : ToString Tier := ⟨Tier.render⟩
-
-/-- The v1 computation: a cited proof name lifts the row to `proved`;
-    an executable VExpr alone computes `boundaryCheck`. -/
+/-- The v1 computation (the schema lane's — it knows the payload): a
+    cited proof name lifts the row to `provedAtElab`; an executable
+    VExpr alone computes `generatedCheck`. -/
 def tierOf : Option Lean.Name → Tier
-  | some _ => .proved
-  | none => .boundaryCheck
+  | some _ => .provedAtElab
+  | none => .generatedCheck
 
 /-! ## The proved-tier citation resolver (the `Dbsp.Certs` wire) -/
 
@@ -143,7 +166,7 @@ structure InvariantItem where
 instance : Inhabited SchemaInvariant := ⟨[], .gt (.lit 0) (.lit 0)⟩
 
 instance : Inhabited InvariantItem :=
-  ⟨{ name := "", schemaRef := "", tier := .boundaryCheck
+  ⟨{ name := "", schemaRef := "", tier := .generatedCheck
    , proofName := none, inv := default }⟩
 
 /-! ## Execution — the existential's eliminator -/

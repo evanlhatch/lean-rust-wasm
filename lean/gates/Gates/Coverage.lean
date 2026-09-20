@@ -264,21 +264,8 @@ unsafe def run (write strict : Bool) : IO UInt32 := do
       of the closed universe (findings, not failures; `--strict` promotes): \
       {String.intercalate ", " quiet}"
   if strict && !quiet.isEmpty then failed := true
-  if write then
-    IO.FS.writeFile baselinePath (text ++ "\n")
-    IO.println s!"wrote {baselinePath}"
-  else
-    if ← baselinePath.pathExists then
-      let committed ← IO.FS.readFile baselinePath
-      if committed != text ++ "\n" then
-        IO.println s!"coverage: matrix DRIFTED from {baselinePath} — \
-          the coverage surface changed; run `lake exe gates coverage --write` and commit"
-        failed := true
-    else
-      IO.println s!"coverage: {baselinePath} absent — run `lake exe gates coverage --write` and commit"
-      failed := true
-  if failed then return 1
-  IO.println "coverage: matrix in sync with the committed baseline"
-  return 0
+  Driver.reportGate "coverage" "matrix" "the coverage surface changed"
+    baselinePath text write failed
+    "coverage: matrix in sync with the committed baseline"
 
 end Gates.Coverage

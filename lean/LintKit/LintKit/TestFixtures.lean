@@ -5,3 +5,4 @@
 import LintKit.TestFixtures.Violations
 import LintKit.TestFixtures.Clean
 import LintKit.TestFixtures.Cross
+import LintKit.TestFixtures.Derived

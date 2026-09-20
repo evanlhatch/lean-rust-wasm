@@ -24,6 +24,7 @@ instead of a hand-copied stale table.
 module
 
 public import CodegenCore
+public import Machines.Core
 public import SchemaLang.Item
 public import SchemaLang.Pipeline
 public import SchemaLang.Emit.GenCtx
@@ -86,14 +87,17 @@ def pipelineEventRust : pipeline.Label → String
   | .reflect => "Reflect" | .check => "Check" | .emit => "Emit"
   | .tie => "Tie" | .reset => "Reset"
 
-/-- The Rust expression for a CONCRETE pipeline state. `failed` carries
+/-- The Rust rendering of a pipeline state. The `failed` arm renders
+    the ENUM VARIANT DECLARATION (`Failed { stage: &'static str }` —
+    the emitted enum derives from this fold via `Machine.moduleRust`);
+    `failed` never renders in a match arm (the wildcard covers it), so
+    the declaration form is the only rendered one. `failed` carries
     arbitrary strings — data can't wildcard it; `pipelineTableStep?`
-    handles the enumerated representative and the arm fold below
-    wildcards the rest (it never reaches this function). -/
+    handles the enumerated representative. -/
 def pipelineStateRust : PipelineState → String
   | .idle => "Idle" | .reflecting => "Reflecting" | .checked => "Checked"
   | .emitted => "Emitted" | .tied => "Tied"
-  | .failed _ _ => "Failed { .. }"
+  | .failed _ _ => "Failed { stage: &'static str }"
 
 /-- The pipeline machine's Rust renderings: state names as-is, event
     ctors QUALIFIED (`PipelineEvent::Check`) — the emitted `match`
@@ -109,7 +113,11 @@ def pipelineRenderings : Machine.Renderings PipelineState pipeline.Label where
     structural `failed` arm's target (`pipelineTableStep?`: only `reset`
     recovers from the enumerated `failed`) — a single wildcard arm. The
     wildcard collapse is checked against the table by `matchArms`
-    itself, so the emitted Rust stays a function of the proved data. -/
+    itself, so the emitted Rust stays a function of the proved data.
+    (Stands as the citable arms pin — Pipeline.lean's doc references
+    it; `pipelineRust` routes through `Machine.moduleRust`, which
+    recomputes this same fold internally over the full
+    `pipelineStates` — same arms.) -/
 def pipelineArms : List String :=
   Machine.matchArms pipelineRenderings pipelineTrans (some .reset)
     [.idle, .reflecting, .checked, .emitted, .tied]
@@ -117,40 +125,39 @@ def pipelineArms : List String :=
 /-- The pipeline stage machine as Rust: the `PipelineStage` enum + the
     `step` fn, mirroring `Pipeline.pipelineTrans` (+ the structural
     `failed` arm the table can't express — data can't wildcard strings;
-    the wildcard fold above covers it exactly when the table justifies
+    the wildcard fold covers it exactly when the table justifies
     it). Consumed by forge; the proved agreement
     (`pipelineTableStep?_eq_step?`) makes the generated Rust the
-    machine, not a sketch of it. -/
+    machine, not a sketch of it.
+
+    ROUTED THROUGH THE GENERIC FOLD (`Machine.moduleRust`) — the
+    hand-rolled item list this replaced duplicated exactly the enum +
+    step + assertion module the order machine emits. The pipeline's
+    divergent shape is parameterized, not forked: the `Failed` variant
+    joins the state enum through `pipelineStates` (the failed
+    representative's rendering IS the declaration form), the arms stay
+    event-QUALIFIED (`pipelineRenderings` — no event glob, so the enum
+    renders bare via `pipelineEventRust`), and the doc'd step fn + the
+    happy-path trace ride `stepDoc`/`assertsFn`/`extraAsserts`. The
+    emitted bytes are UNCHANGED (byte-tie: the committed
+    pipeline_generated.rs golden). -/
 def pipelineRust : String :=
-  CodegenCore.Emit.Rust.renderModule
+  Machine.moduleRust pipelineRenderings pipelineEventRust
     ([ .comment "GENERATED from SchemaLang.Pipeline (pipelineTrans) — the forge"
-    , .comment "driver's stage machine. Agreement with the Lean machine is a"
-    , .comment "THEOREM there (pipelineTableStep?_eq_step?); do not edit — regenerate."
-    , .raw ""
-    , .raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
-    , .enum "PipelineStage" []
-        [ "Idle", "Reflecting", "Checked", "Emitted", "Tied"
-        , "Failed { stage: &'static str }" ]
-    , .raw ""
-    , .raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
-    , .enum "PipelineEvent" [] ["Reflect", "Check", "Emit", "Tie", "Reset"]
-    , .raw ""
-    , .raw "/// The machine's step: None = illegal (guard failed). `Reset` fires"
+     , .comment "driver's stage machine. Agreement with the Lean machine is a"
+     , .comment "THEOREM there (pipelineTableStep?_eq_step?); do not edit — regenerate." ])
+    "PipelineStage" "PipelineEvent"
+    pipelineTrans (some .reset) pipelineStates
+    []  -- preStep: the pipeline globs NO event (the arms qualify)
+    [ .raw "/// The machine's step: None = illegal (guard failed). `Reset` fires"
     , .raw "/// from every state (the recovery edge) — including `Failed`, which"
-    , .raw "/// nothing else accepts (the error state is a resting place)."
-    , .raw "pub fn step(s: PipelineStage, e: PipelineEvent) -> Option<PipelineStage> {"
-    , .raw "    use PipelineStage::*;"
-    , .raw "    match (s, e) {"
-    ]
-    ++ (pipelineArms.map CodegenCore.Emit.Rust.Item.raw)
-    ++ [ .raw "        _ => None,"
-    , .raw "    }"
-    , .raw "}"
-    , .raw ""
-    , .raw "/// The happy chain: Idle -> Reflecting -> Checked -> Emitted -> Tied"
-    , .raw "/// (Lean: `happy_path`, proved by rfl). Illegal = driver bug."
-    , .raw "pub fn happy_path_assertions() {"
-    , .raw "    use PipelineStage::*;"
+    , .raw "/// nothing else accepts (the error state is a resting place)." ]
+    [ .raw "    use PipelineStage::*;" ]
+    [] []  -- happy/rejects: the trace below is the hand-pinned form
+    "happy_path_assertions"
+    [ .raw "/// The happy chain: Idle -> Reflecting -> Checked -> Emitted -> Tied"
+    , .raw "/// (Lean: `happy_path`, proved by rfl). Illegal = driver bug." ]
+    [ .raw "    use PipelineStage::*;"
     , .raw "    assert_eq!(step(Idle, PipelineEvent::Reflect), Some(Reflecting));"
     , .raw "    assert_eq!(step(Reflecting, PipelineEvent::Check), Some(Checked));"
     , .raw "    assert_eq!(step(Checked, PipelineEvent::Emit), Some(Emitted));"
@@ -159,9 +166,24 @@ def pipelineRust : String :=
     , .raw "    assert_eq!("
     , .raw "        step(Failed { stage: \"tie\" }, PipelineEvent::Reset),"
     , .raw "        Some(Idle)"
-    , .raw "    );"
-    , .raw "}"
-    ])
+    , .raw "    );" ]
+
+/-! ## The emission law (the vortex lane's `vortexLaw` shape) -/
+
+/-- The pipeline emitter's law: the table the Rust folds IS the
+    machine's `step?` over the enumerated state space — the
+    `pipelineTableStep?_eq_step?` agreement riding the emitter (the
+    `circuitLaw` precedent: ctx-independent, the machine is module
+    data and `run` ignores the ctx). forge steps its driver through
+    the emitted Rust; this law is why the emitted `step` is the
+    machine, not a sketch of it. -/
+def pipelineLaw : GenCtx → Prop := fun _ =>
+  ∀ (e : pipeline.Label) (s : PipelineState), s ∈ pipelineStates →
+    pipelineTableStep? e s = Machines.Machine.step? pipeline s e
+
+/-- The discharge: the machine!-generated agreement theorem, cited. -/
+theorem pipelineLaw_discharged (ctx : GenCtx) : pipelineLaw ctx :=
+  fun _ _ hs => pipelineTableStep?_eq_step? _ _ hs
 
 def pipelineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "pipeline"
@@ -171,10 +193,22 @@ def pipelineEmitter : CodegenCore.Emit.Emitter GenCtx where
   run _ctx :=
     [{ path := "../../src/pipeline_generated.rs"
        contents := pipelineRust }]
+  law := some pipelineLaw
 
 /-- The core emitters (everything but the forge-jobs manifest emitter
     itself — the manifest is derived FROM this list, so the manifest
-    emitter cannot be in it). Order = write order. -/
+    emitter cannot be in it). Order = write order.
+
+    W7.9 phase 2 sweep — the ROUTING CONTRACT: the checked bundle is
+    discharged ONCE per universe, at `GenCtx.checkedItems?` (the single
+    checkpoint — one `universeCheck` + `universeCheck_sound` transport,
+    in GenCtx.lean). Every item-universe consumer routes through it:
+    `rustEmitter` consumes the evidence-threaded checked fold
+    (`schemaItemsChecked`, its `future`/`stream` arms unrepresentable);
+    `genRustEmitter` reads the checkpoint's universe; the WIT/delta
+    emitters are SEAM-KEPT with per-emitter justification (partition
+    subsets are not `WellFormed`; kind-partition partiality is
+    WF-reachable) — see each emitter's header. No emitter re-checks. -/
 def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   [ witEmitter
   , flagsWitEmitter
@@ -219,6 +253,13 @@ def forgeJobs : List (String × List String × List String) :=
 def forgeJobsLines : List String :=
   forgeJobs.map fun (exe, args, outputs) => jobJson "schema-lang" exe args outputs
 
+/-- The forge-jobs manifest emitter. W7.9 `Emitter.law` sweep — NO law,
+    and the reason is structural: the manifest's coverage fact
+    (`jobsCoverEmitters_true`, defined AFTER this emitter because the
+    coverage quantifies over the registry that includes it) is
+    SELF-REFERENTIAL — a law here would quantify over the very emitter
+    it decorates. The coverage lives at the registry as a theorem (not
+    a test claim), which is the audit the law would carry. -/
 def forgeJobsEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "forge-jobs"
   style := .hash

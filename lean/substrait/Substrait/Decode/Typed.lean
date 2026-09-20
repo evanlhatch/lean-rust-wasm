@@ -304,10 +304,7 @@ theorem decodeArgs_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
       intro hok
       have he : Expr.okS ctx s e := hok.1
       have hrest : Args.okS ctx s rest := hok.2
-      show Option.map (fun p => argsLower p ctx)
-          (decodeArgs s inv (e.toProto ctx :: rest.toProto ctx)) =
-        some (e.toProto ctx :: rest.toProto ctx)
-      simp only [decodeArgs]
+      simp only [Args.toProto, decodeArgs]
       cases hd : decodeExpr s inv (e.toProto ctx) with
       | none =>
           have hinv := decodeExpr_reEnc s inv ctx hfn e he
@@ -355,9 +352,7 @@ theorem decodeExpr_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
   match e with
   | .literal t' nv v =>
       intro _
-      show (decodeExpr s inv (Proto.Expression.literal
-        { literalType := toProtoLiteralValue v, nullable := nv })).map (fun p => anyLower p ctx) =
-        some (Proto.Expression.literal { literalType := toProtoLiteralValue v, nullable := nv })
+      simp only [Expr.toProto]
       rw [show decodeExpr s inv (Proto.Expression.literal
           { literalType := toProtoLiteralValue v, nullable := nv }) =
         decodeLiteral s { literalType := toProtoLiteralValue v, nullable := nv } from rfl,
@@ -365,9 +360,7 @@ theorem decodeExpr_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
       simp [anyLower, Expr.toProto]
   | @Expr.field _ c _ _ h =>
       intro hok
-      show (decodeExpr s inv (Proto.Expression.field
-        { ordinal := c.ordinal, segment := none })).map (fun p => anyLower p ctx) =
-        some (Proto.Expression.field { ordinal := c.ordinal, segment := none })
+      simp only [Expr.toProto]
       simp only [decodeExpr]
       split
       · next nm t' n' h1 =>
@@ -379,13 +372,7 @@ theorem decodeExpr_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
       have hargs : Args.okS ctx s args := hok.1
       have hret : stOfPType (toProtoType ctx sig.ret) = some sig.ret := hok.2
       have hfn' := hfn sig
-      show Option.map (fun p => anyLower p ctx)
-          (decodeExpr s inv (Proto.Expression.scalarFunction
-            (ctx.functionAnchor sig.urn sig.name) (args.toProto ctx)
-            (withNullable (toProtoType ctx sig.ret) sig.retNullable))) =
-        some (Proto.Expression.scalarFunction (ctx.functionAnchor sig.urn sig.name)
-          (args.toProto ctx) (withNullable (toProtoType ctx sig.ret) sig.retNullable))
-      simp only [decodeExpr, hfn']
+      simp only [Expr.toProto, decodeExpr, hfn']
       cases hd : decodeArgs s inv (args.toProto ctx) with
       | none =>
           have hinv := decodeArgs_reEnc s inv ctx hfn args hargs
@@ -408,6 +395,37 @@ theorem decodeExpr_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
                 hlow2]
 
 end
+
+/-- The re-encode skeleton, expression slice: the `decodeExpr_reEnc` consequence
+    every cons-step/child-branch of the re-encode family re-derives. -/
+theorem decodeExpr_lower_some {s : Schema} {t : SType} {n : Bool}
+    (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name))
+    (e : Expr s t n) (hok : Expr.okS ctx s e) {pkg : AnyExpr s}
+    (hd : decodeExpr s inv (e.toProto ctx) = some pkg) :
+    ∃ t' n' e', pkg = AnyExpr.mk t' n' e' ∧ e'.toProto ctx = e.toProto ctx := by
+  have hdec := decodeExpr_reEnc s inv ctx hfn e hok
+  rw [hd] at hdec
+  cases pkg with
+  | mk t' n' e' =>
+      simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
+      exact ⟨_, _, _, rfl, hdec⟩
+
+/-- The re-encode skeleton, argument-spine slice (the `argsLower` twin). -/
+theorem decodeArgs_lower_some {s : Schema} {ts : List (SType × Bool)}
+    (inv : FnInv) (ctx : ExtCtx)
+    (hfn : ∀ sig : FunctionSig,
+      fnOf inv (ctx.functionAnchor sig.urn sig.name) = some (sig.urn, sig.name))
+    (a : Args s ts) (hok : Args.okS ctx s a) {pkg : AnyArgs s}
+    (hd : decodeArgs s inv (a.toProto ctx) = some pkg) :
+    ∃ ts' spine, pkg = AnyArgs.mk ts' spine ∧ spine.toProto ctx = a.toProto ctx := by
+  have hdec := decodeArgs_reEnc s inv ctx hfn a hok
+  rw [hd] at hdec
+  cases pkg with
+  | mk ts' spine =>
+      simp only [argsLower, Option.map_some, Option.some.injEq] at hdec
+      exact ⟨_, _, rfl, hdec⟩
 
 -- ── the typed rel decode: Proto.Rel → Typed.Rel ────────────────────────────
 

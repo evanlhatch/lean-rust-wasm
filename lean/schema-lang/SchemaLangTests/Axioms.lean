@@ -152,6 +152,19 @@ import Demo
 #print axioms SchemaLang.Item.keyOfWith_eq_keyOf_of_decl_head
 #print axioms SchemaLang.FieldVal.beq_refl
 
+-- R5/R1 (the Update2 proof-surface collapse): the lawful `FieldVal.beq`
+-- kit (byte-comparison IS equality on closed keys — the codec's
+-- decode-encode round trip) + the shared-Delta consolidation (ONE
+-- `EventSourced.Delta`; the update lane's applicator bridge).
+#print axioms SchemaLang.FieldVal.beq_eq_true_iff_eq
+#print axioms SchemaLang.FieldVal.beq_symm
+#print axioms SchemaLang.FieldVal.beq_false_iff_ne
+#print axioms SchemaLang.FieldVal.beq_false_pair_of_ne
+#print axioms SchemaLang.RowVals.project?_type
+#print axioms SchemaLang.keyImgs_closed
+#print axioms SchemaLang.apply2_eq_foldDeltas
+#print axioms SchemaLang.applyRowDelta_eq_apply
+
 -- W9.3: the fifth tier's discharge backend — the arm's equation,
 -- soundness (a fired guestVerified discharge IS the WHolds denotation,
 -- via checkWitnessArtifact_sound), the fires-direction. Bar: the core
@@ -160,6 +173,15 @@ import Demo
 #print axioms SchemaLang.SchemaObligation.discharge_guestVerified_eq
 #print axioms SchemaLang.SchemaObligation.discharge_guestVerified_sound
 #print axioms SchemaLang.SchemaObligation.discharge_guestVerified_of_accept
+
+-- W9.x: the oracleSwept backend — the arm's equation, soundness (a
+-- fired discharge's ref IS well-formed — the whole claim a sweep ref
+-- supports; an oracle row is evidence of a SWEEP, not a proof), and
+-- the fires-direction. Resolution (ref ↔ actual row) is the gates
+-- driver's obligation-check, not a Lean theorem. Bar: the core triple.
+#print axioms SchemaLang.SchemaObligation.discharge_oracleSwept_eq
+#print axioms SchemaLang.SchemaObligation.discharge_oracleSwept_sound
+#print axioms SchemaLang.SchemaObligation.discharge_oracleSwept_of_ref
 
 -- W8.8: table-level invariants — the existential executor's interface
 -- (guarded-cast collapse), the decidableNow backend's soundness and
@@ -272,3 +294,34 @@ import Demo
 #print axioms SchemaLang.PrePostObligation.discharge_decidableNow_of_claim
 #print axioms SchemaLang.PrePostObligation.discharge_pre_isSome
 #print axioms SchemaLang.PrePostObligation.discharge_post_proved
+
+-- The ladder-audit bridges (W-iso batch): the table-invariant lane's
+-- checker↔relation family (the Keys.lean pattern, table sibling), the
+-- diff's clean-verdict reading, the Vortex dtype WF gates' relations,
+-- and the specEq law (equality implies spec equality; the body-blind
+-- gap pinned). Bar: the core triple.
+#print axioms SchemaLang.tableInvCheck_eq_nil_iff
+#print axioms SchemaLang.tableInvWellFormed_iff
+#print axioms SchemaLang.TableAgg.fieldDiags_eq_nil_iff
+#print axioms SchemaLang.TableInvItem.diags_eq_nil_iff
+#print axioms SchemaLang.backwardCompatible_iff
+#print axioms SchemaLang.Vortex.DType.wellFormed_iff
+#print axioms SchemaLang.Vortex.ExtDTypeItem.wellFormed_iff
+#print axioms SchemaLang.Item.specEq_refl
+#print axioms SchemaLang.Item.specEq_body_blind
+
+-- The lawful-lens core (SchemaLang.Lens): the class's law proofs —
+-- the two new spines (get_set/set_get), the path-level prism laws,
+-- and over's derived trio. Bar: the core triple.
+#print axioms SchemaLang.ColPath.lens_get_set
+#print axioms SchemaLang.ColPath.lens_set_get
+#print axioms SchemaLang.CasePath.inject_payloadOf
+#print axioms SchemaLang.CasePath.payloadOf_miss
+#print axioms SchemaLang.CasePrism.eval_inject
+#print axioms SchemaLang.SchemaPath.over_id
+#print axioms SchemaLang.SchemaPath.over_get
+#print axioms SchemaLang.SchemaPath.put_eq_over
+
+-- the delta/lens unification: the SchemaPath→DisjointCommute instance
+-- (its law field CITES put_comm — no new trust base)
+#print axioms SchemaLang.instDisjointCommuteOfSchemaPath

@@ -73,29 +73,124 @@ def registeredRecord? (env : Environment) (declName : Name) :
 
 /-! ## The term builders (the emitted literals, kebab-cased) -/
 
-/-- The key literal (a `KeyTy` term — the arms are the scalar
-    constructors; direct, mirroring `tyTerm`'s scalar row). -/
+/-- THE `KeyTy` reifier at TERM level — the one walker, shared by
+    every consumer (the derive commands, `Meta.Gen`,
+    `Meta.EntityMachine`, the faults registry). The Expr-level core is
+    the `ToExpr Ty` instance in `SchemaLang.Ty`; the drift-pin below
+    makes the two agree. Fully `SchemaLang.`-qualified: generated text
+    must not depend on the consumer's `open`s (the EntityMachine
+    rule). A new `KeyTy` ctor extends THIS match or the build
+    fails. -/
 def keyTerm : KeyTy → CommandElabM Term
-  | .bool => `(.bool) | .u8 => `(.u8) | .u16 => `(.u16) | .u32 => `(.u32)
-  | .u64 => `(.u64) | .i8 => `(.i8) | .i16 => `(.i16) | .i32 => `(.i32)
-  | .i64 => `(.i64) | .string => `(.string)
+  | .bool => `(term| SchemaLang.KeyTy.bool)
+  | .u8 => `(term| SchemaLang.KeyTy.u8)
+  | .u16 => `(term| SchemaLang.KeyTy.u16)
+  | .u32 => `(term| SchemaLang.KeyTy.u32)
+  | .u64 => `(term| SchemaLang.KeyTy.u64)
+  | .i8 => `(term| SchemaLang.KeyTy.i8)
+  | .i16 => `(term| SchemaLang.KeyTy.i16)
+  | .i32 => `(term| SchemaLang.KeyTy.i32)
+  | .i64 => `(term| SchemaLang.KeyTy.i64)
+  | .string => `(term| SchemaLang.KeyTy.string)
 
+/-- THE `Ty` reifier at TERM level — the one walker, shared by every
+    consumer (the derive commands, `Meta.Gen`, `Meta.EntityMachine`,
+    the faults registry). The Expr-level core is the `ToExpr Ty`
+    instance in `SchemaLang.Ty`; the drift-pin below makes the two
+    agree on the full vocabulary. Fully `SchemaLang.`-qualified:
+    generated text must not depend on the consumer's `open`s (the
+    EntityMachine rule). A new `Ty` ctor extends THIS match or the
+    build fails. -/
 def tyTerm : Ty → CommandElabM Term
-  | .bool => `(.bool) | .u8 => `(.u8) | .u16 => `(.u16) | .u32 => `(.u32)
-  | .u64 => `(.u64) | .i8 => `(.i8) | .i16 => `(.i16) | .i32 => `(.i32)
-  | .i64 => `(.i64) | .f32 => `(.f32) | .f64 => `(.f64)
-  | .string => `(.string) | .bytes => `(.bytes)
-  | .option a => do `(.option $(← tyTerm a))
-  | .result o e => do `(.result $(← tyTerm o) $(← tyTerm e))
-  | .list a => do `(.list $(← tyTerm a))
-  | .map k v => do `(.map $(← keyTerm k) $(← tyTerm v))
-  | .set k => do `(.set $(← keyTerm k))
+  | .bool => `(term| SchemaLang.Ty.bool)
+  | .u8 => `(term| SchemaLang.Ty.u8)
+  | .u16 => `(term| SchemaLang.Ty.u16)
+  | .u32 => `(term| SchemaLang.Ty.u32)
+  | .u64 => `(term| SchemaLang.Ty.u64)
+  | .i8 => `(term| SchemaLang.Ty.i8)
+  | .i16 => `(term| SchemaLang.Ty.i16)
+  | .i32 => `(term| SchemaLang.Ty.i32)
+  | .i64 => `(term| SchemaLang.Ty.i64)
+  | .f32 => `(term| SchemaLang.Ty.f32)
+  | .f64 => `(term| SchemaLang.Ty.f64)
+  | .string => `(term| SchemaLang.Ty.string)
+  | .bytes => `(term| SchemaLang.Ty.bytes)
+  | .option a => do `(term| SchemaLang.Ty.option $(← tyTerm a))
+  | .result o e =>
+      do `(term| SchemaLang.Ty.result $(← tyTerm o) $(← tyTerm e))
+  | .list a => do `(term| SchemaLang.Ty.list $(← tyTerm a))
+  | .map k v =>
+      do `(term| SchemaLang.Ty.map $(← keyTerm k) $(← tyTerm v))
+  | .set k => do `(term| SchemaLang.Ty.set $(← keyTerm k))
   | .tensor dims a => do
-      let ds : Array Term := (dims.map (fun d => (⟨Syntax.mkNatLit d⟩ : Term))).toArray
-      `(.tensor ([$ds,*] : List Nat) $(← tyTerm a))
-  | .future a => do `(.future $(← tyTerm a))
-  | .stream a => do `(.stream $(← tyTerm a))
-  | .ty n => `(.ty $(quote n))
+      -- the dims as RAW nat literals (the `Syntax.mkNatLit` form —
+      -- `quote` would elaborate to `OfNat.ofNat … instOfNatNat`, a
+      -- different Expr shape than `ToExpr Ty`'s `.lit`; the drift-pin
+      -- below enforces the literal form)
+      let ds : Array Term :=
+        (dims.map fun d => (⟨Syntax.mkNatLit d⟩ : Term)).toArray
+      `(term| SchemaLang.Ty.tensor ([$ds,*] : List Nat) $(← tyTerm a))
+  | .future a => do `(term| SchemaLang.Ty.future $(← tyTerm a))
+  | .stream a => do `(term| SchemaLang.Ty.stream $(← tyTerm a))
+  | .ty n => `(term| SchemaLang.Ty.ty $(quote n))
+
+/-! ## The drift-class pin (the consolidation's evidence)
+
+`tyTerm`/`keyTerm` (Term level) and `ToExpr Ty` (Expr level,
+`SchemaLang.Ty`) are walks over ONE universe; the pin makes the Term
+core AGREE with the Expr core on the full vocabulary: every fixture
+elaborates through `tyTerm` to EXACTLY `toExpr`'s output (structural
+`Expr` equality, checked at THIS module's compile — every build). A
+new `Ty` ctor misses both walkers' exhaustive matches at once (the
+build fails); the pin additionally catches shape drift that still
+compiles (arity, literal form, namespace spelling). The consumers
+(`Meta.Gen`, `Meta.EntityMachine`, the faults registry) share these
+walkers, so the pin covers every path. -/
+
+private def tyPinFixtures : List Ty :=
+  [.bool, .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f32, .f64,
+   .string, .bytes,
+   .option .u64, .result .u64 .string, .list .string,
+   .map .u64 (.list .string), .set .i32,
+   .future (.option .u64), .stream .string,
+   .tensor [2, 3] .f32, .tensor [] .u8, .ty "User",
+   .option (.result (.map .string .u64) (.set .bool))]
+
+run_cmd do
+  let tyT : Expr := .const ``SchemaLang.Ty []
+  -- the elaboration helper: the RowIso.elabGen pattern (TermElabM.run'
+  -- under MetaM.run' in CoreM — the one proven mvar-discipline here;
+  -- elaborates + synthesizes + instantiates, then the mvar guard).
+  -- Agreement is DEFINITIONAL equality (the byte-tie property: the
+  -- same VALUE, e.g. a Nat dim either as a raw `.lit` or as
+  -- `OfNat.ofNat … instOfNatNat` — both spellings, one value).
+  let elabPinAgrees (stx : Term) (tyT? : Option Expr) (expected : Expr) :
+      CoreM Bool :=
+    Lean.Meta.MetaM.run' <| Lean.Elab.Term.TermElabM.run' do
+      let goal ← Lean.Elab.Term.elabTerm stx tyT?
+      Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
+      let goal ← instantiateMVars goal
+      if goal.hasExprMVar then
+        throwError s!"drift-pin: internal: unresolved metavariables in `{goal}`"
+      Lean.Meta.isDefEq goal expected
+  for t in tyPinFixtures do
+    let stx ← tyTerm t
+    let ok ← liftCoreM <| elabPinAgrees stx (some tyT) (toExpr t)
+    unless ok do
+      throwError s!"drift-pin: `tyTerm` and `ToExpr Ty` disagree on \
+        `{repr t}`"
+  let keyArms : List (KeyTy × Name) :=
+    [(.bool, ``SchemaLang.KeyTy.bool), (.u8, ``SchemaLang.KeyTy.u8),
+     (.u16, ``SchemaLang.KeyTy.u16), (.u32, ``SchemaLang.KeyTy.u32),
+     (.u64, ``SchemaLang.KeyTy.u64), (.i8, ``SchemaLang.KeyTy.i8),
+     (.i16, ``SchemaLang.KeyTy.i16), (.i32, ``SchemaLang.KeyTy.i32),
+     (.i64, ``SchemaLang.KeyTy.i64), (.string, ``SchemaLang.KeyTy.string)]
+  for (k, nm) in keyArms do
+    let stx ← keyTerm k
+    let ok ← liftCoreM <| elabPinAgrees stx none (.const nm [])
+    unless ok do
+      throwError s!"drift-pin: `keyTerm` arm `{repr k}` does not \
+        elaborate to `{nm}`"
 
 def variantCaseTerm : String × Option Ty → CommandElabM Term
   | (c, none) => `(( $(quote (CodegenCore.Emit.kebab c)), none ))

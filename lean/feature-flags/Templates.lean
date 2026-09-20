@@ -174,7 +174,11 @@ def registeredTemplates (env : Environment) : List (Name × SchemaTemplate) :=
 -- contain) ends the previous line's term. The suffixed tokens reserve
 -- nothing bare (`slot` stays an identifier).
 
-set_option linter.guestlang.packageNamespace false in -- because declare_syntax_cat parks the category in Lean's namespace by design
+-- The category lives in `Lean.Parser.Category` BY LEAN ITSELF — a syntax
+-- category cannot live in a library namespace (the machineClause lesson,
+-- 2026-09-19) — and PackageNamespace exempts `Lean.Parser.Category.*`
+-- structurally, so the old `set_option … packageNamespace false` ritual
+-- here is dead and gone.
 declare_syntax_cat templateLine
 
 -- Syntax-category bodies are identical by construction (a category

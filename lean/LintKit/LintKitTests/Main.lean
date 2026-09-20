@@ -38,10 +38,16 @@ def expected : Array (Name × Array Name) := #[
     `LintKit.TestFixtures.Cross.dupCrossB]),
   (`linter.guestlang.packageNamespace, #[
     `List.badNs,
-    `Substrait.strayFromLintKit]),
+    `Substrait.strayFromLintKit,
+    -- the `@[derived]` pair: the UNSTAMPED twin fires...
+    `List.unstampedBad]),
   (`linter.guestlang.guestBan, #[
     `LintKit.TestFixtures.Violations.evilIo,
-    `LintKit.TestFixtures.Violations.evilNatArith])
+    `LintKit.TestFixtures.Violations.evilNatArith]),
+  (`linter.guestlang.upstreamDup, #[
+    `LintKit.TestFixtures.Violations.swapPlanted]),
+  (`linter.guestlang.bareChecker, #[
+    `LintKit.TestFixtures.Violations.checkNoBridge])
 ]
 
 unsafe def run : M Unit := do
@@ -50,7 +56,8 @@ unsafe def run : M Unit := do
   let env ← importModules
     #[{ module := `LintKit.TestFixtures.Violations },
       { module := `LintKit.TestFixtures.Clean },
-      { module := `LintKit.TestFixtures.Cross }]
+      { module := `LintKit.TestFixtures.Cross },
+      { module := `LintKit.TestFixtures.Derived }]
     {} (trustLevel := 1024) (loadExts := true)
   let roots := #[`LintKit.TestFixtures]
   -- recursiveSimpEqns and guestBan are default-OFF tree-wide (see their
@@ -78,11 +85,19 @@ unsafe def run : M Unit := do
   for n in [`LintKit.TestFixtures.Violations.nativeOk,
             `LintKit.TestFixtures.Violations.evilNolint,
             `LintKit.TestFixtures.Violations.evilSnap,
+            -- ...the STAMPED emitted sibling passes (the structural skip —
+            -- the set_option packageNamespace ritual's replacement)
+            `List.stampedOk,
             `LintKit.TestFixtures.Clean.twoEqTwo,
             `LintKit.TestFixtures.Clean.extOk,
             `LintKit.TestFixtures.Clean.recSimp,
             `LintKit.TestFixtures.Clean.addFortyOne,
-            `LintKit.TestFixtures.Clean.addFortyTwo] do
+            `LintKit.TestFixtures.Clean.addFortyTwo,
+            -- upstreamDup non-triviality calibration: the `id` collision is
+            -- under the node-count filter
+            `LintKit.TestFixtures.Clean.identityPlanted,
+            -- bareChecker: the bridge theorem silences the checker
+            `LintKit.TestFixtures.Clean.checkWithBridge] do
     check s!"no linter flags {n}" (!allFlagged.contains n)
   -- text lints: pure-function +/− controls
   let bare := checkNoLinterDisable "M.lean"
@@ -207,6 +222,46 @@ unsafe def run : M Unit := do
   check "srcRootFor falls through for a non-matching module" (unmapped == none)
   let second := srcRootFor #[(`A, "dirA"), (`Tests, "lean/ledger")] `Tests.Main
   check "srcRootFor picks the first matching mapping" (second == some "lean/ledger")
+  -- unregisteredRoundtrip: both directions + no registration vocabulary =
+  -- a finding; either direction alone, or a registered pair, is silent;
+  -- Tests files are exempt.
+  let codecBoth := checkUnregisteredRoundtrip "lean/x/X.lean"
+    "def encodeFoo : Foo → List UInt8 := Foo.toBytes\ndef decodeFoo : List UInt8 → Option Foo := Foo.ofBytes\n"
+  check "unregisteredRoundtrip flags an enc/dec pair without registration"
+    (codecBoth.size == 1)
+  let codecEncOnly := checkUnregisteredRoundtrip "lean/x/X.lean"
+    "def encodeFoo : Foo → List UInt8 := Foo.toBytes\n"
+  check "unregisteredRoundtrip is silent on encoder-only" codecEncOnly.isEmpty
+  let codecDecOnly := checkUnregisteredRoundtrip "lean/x/X.lean"
+    "def parseFoo : String → Option Foo := some ∘ Foo.parse\n"
+  check "unregisteredRoundtrip is silent on decoder-only" codecDecOnly.isEmpty
+  let codecRegistered := checkUnregisteredRoundtrip "lean/x/X.lean"
+    "def encodeFoo : Foo → List UInt8 := Foo.toBytes\ndef decodeFoo : List UInt8 → Option Foo := Foo.ofBytes\ninstance : PartialIso (List UInt8) Foo := ⟨encodeFoo, decodeFoo, by intro a; rfl⟩\n"
+  check "unregisteredRoundtrip accepts a registered codec" codecRegistered.isEmpty
+  let codecInTests := checkUnregisteredRoundtrip "lean/x/XTests/Main.lean"
+    "def encodeFoo : Foo → List UInt8 := Foo.toBytes\ndef decodeFoo : List UInt8 → Option Foo := Foo.ofBytes\n"
+  check "unregisteredRoundtrip exempts Tests files" codecInTests.isEmpty
+  let codecRenderParse := checkUnregisteredRoundtrip "lean/x/X.lean"
+    "def renderRow : Row → String := toString\ndef parseRow : String → Option Row := none\n"
+  check "unregisteredRoundtrip catches render/parse spellings" (codecRenderParse.size == 1)
+  -- didyoumeanDiscipline: an unknown-name rejection in a file with none of
+  -- the machinery; the file-level exemption when the machinery appears;
+  -- non-error lines and non-backticked payloads are silent.
+  let dymBare := checkDidyoumeanDiscipline "lean/x/X.lean"
+    "throwError s!\"unknown slot `{got}` for this item\"\n"
+  check "didyoumeanDiscipline flags a bare unknown-name rejection" (dymBare.size == 1)
+  let dymUsing := checkDidyoumeanDiscipline "lean/x/X.lean"
+    "throwError (unknownNameMessage ctx got what legal)\n"
+  check "didyoumeanDiscipline exempts a file using the machinery" dymUsing.isEmpty
+  let dymSuffix := checkDidyoumeanDiscipline "lean/x/X.lean"
+    "throwError s!\"unknown slot `{got}` — did you mean: {c}?\"\n"
+  check "didyoumeanDiscipline exempts the did-you-mean suffix" dymSuffix.isEmpty
+  let dymComment := checkDidyoumeanDiscipline "lean/x/X.lean"
+    "-- unknown slots live here\ndef x := 1\n"
+  check "didyoumeanDiscipline ignores comments" dymComment.isEmpty
+  let dymNoBacktick := checkDidyoumeanDiscipline "lean/x/X.lean"
+    "throw s!\"oracle row: unknown fn '{fn}'\"\n"
+  check "didyoumeanDiscipline requires a backticked payload" dymNoBacktick.isEmpty
 
 def main : IO UInt32 := do
   let (_, failures) ← (unsafe run).run #[]

@@ -116,25 +116,39 @@ def manifestJson : String :=
 
 /-! ## The emitters -/
 
+/-- The fixture MANIFEST emitter. W7.9 `Emitter.law` sweep — NO law,
+    and why: the manifest folds the FIXTURE registry (module data, the
+    wit-parser roundtrip's replay targets), not a spec universe — there
+    is no well-formedness contract over test-vector NAME LISTS to
+    state, and the bytes are pinned by the byte-tie. -/
 def manifestEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "wit-fixture-manifest"
   style := .doubleSlash
   specSource := "SchemaLang.Emit.WitFixture (fixtures)"
-  outputs := ["../../crates/steel-host/tests/fixtures/wit_manifest.json"]
+  outputs := ["../../crates/guestlang-host/tests/fixtures/wit_manifest.json"]
   run _ctx :=
-    [{ path := "../../crates/steel-host/tests/fixtures/wit_manifest.json"
+    [{ path := "../../crates/guestlang-host/tests/fixtures/wit_manifest.json"
        contents := manifestJson }]
 
 /-- One emitter outputting ALL fixture WIT files (one emitter, many
-    files — the outputs list is the one-writer claim). -/
+    files — the outputs list is the one-writer claim).
+
+    W7.9 `Emitter.law` sweep — NO law, and why: the fixtures are the
+    wit-parser roundtrip's TEST VECTORS (including the async universe —
+    WIT-native, outside the Rust lane's banAsync contract), not a
+    spec-correspondence surface; the render (`worldOf`) is total over
+    the closed `Ty`/`Item` grammars, so there is no well-formedness
+    impossibility to carry. Illegal-emission classes (empty variants,
+    mangled collisions) are refused at the `universeCheck` gate; the
+    bytes are the goldens' own. -/
 def fixtureEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "wit-fixtures"
   style := .doubleSlash
   specSource := "SchemaLang.Emit.WitFixture (fixtures)"
-  outputs := fixtures.map fun (n, _) => "../../crates/steel-host/tests/fixtures/wit_fixture_" ++ n ++ ".wit"
+  outputs := fixtures.map fun (n, _) => "../../crates/guestlang-host/tests/fixtures/wit_fixture_" ++ n ++ ".wit"
   run _ctx :=
     fixtures.map fun (n, items) =>
-      { path := "../../crates/steel-host/tests/fixtures/wit_fixture_" ++ n ++ ".wit"
+      { path := "../../crates/guestlang-host/tests/fixtures/wit_fixture_" ++ n ++ ".wit"
       , contents := SchemaLang.Emit.Wit.worldOf ("demo:fixture-" ++ n) ("fixture-" ++ n) items }
 
 end SchemaLang.Emit.WitFixture

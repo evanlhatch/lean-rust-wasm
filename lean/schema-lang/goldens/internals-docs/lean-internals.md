@@ -150,8 +150,6 @@ is a global constant (resolved through marks).
 
 ## The session machine (Label = the script's indices) 
 
-## The gateway instance — the real WIT world's conversation 
-
 ### Peer agreement as a TYPE — the elaboration-error property
 
 `IsDualOf theirs mine` is inhabited EXACTLY when `theirs` is the typed
@@ -254,9 +252,31 @@ compiled reading.
 
 ## Laws 4/5 — the two-update order-freedom 
 
-## Law 6 — the lowering to deltas (Delta.lean's change shape) 
+## Law 6 — the lowering to THE SHARED DELTA (R1 consolidation) 
 
 ### The keyed table semantics + the table-level correspondence 
+
+### The lawful key kit (R5) — the `nodup2` family retired
+
+`FieldVal.beq` IS equality on codec-closed keys (Keys.lean's
+`beq_eq_true_iff_eq`, riding the codec's decode-encode round trip), so
+the correspondence's key premises speak CORE `List.Nodup` and `≠`: the
+hand-rolled `nodup2` def, its append decomposition, and the
+`A ++ k :: B` both-direction inversion pack are gone. The honest price
+is the closure of the key images (`CodecClosed` — key types are `KeyTy`
+scalars, the W8.1 discipline): ONE closed type fact
+(`keyFieldType` — the key column's own type) seeds ALL of them, because
+the key projection's TYPE is determined by the field list + column
+name — never by the row. 
+
+### The applicator bridge (R1: ONE delta, ONE keyed reading)
+
+The update lane's keyed applicator (`applyRowDelta`: update REPLACES
+every key-matching row, remove DROPS them, insert APPENDS) and the
+event-sourcing lane's (`EventSourced.apply`: insert/update UPSERT the
+first match, remove erases the first) are the SAME keyed reading on
+key-unique tables — the correspondence the W8.3 lowering law rides:
+one shared Delta, two equivalent applicators. 
 
 ## The obligation view (W7.1's substrate, the keys-lane shape) 
 
@@ -291,6 +311,15 @@ compiled reading.
 ## The item 
 
 ## The elaboration-gate checker (String diagnostics — the `checkCitation?` precedent) 
+
+## The reasoning authority + the bridge (the Wf lane's table sibling)
+
+The `Keys.lean` family, mirrored rung for rung: the checker's String
+rungs get Prop mirrors (`TableAggFieldOk` ← `TableAgg.fieldDiags`,
+`TableInvOk` ← `TableInvItem.diags`), each with its `_eq_nil_iff`
+bridge, packed under `TableInvsWellFormed` and bridged to the Bool
+gate by `tableInvWellFormed_iff` (the `universeWellFormed_iff` shape).
+
 
 ## The obligation view (what a table invariant MEANS, as data)
 
@@ -347,7 +376,10 @@ inheritance rule.
 
 ## The term builders (CoreM; the `Meta.Derive`/`Meta.Gen` builders
     are CommandElabM-typed and cannot ride an attribute handler — the
-    shapes are theirs, the monad is the difference) 
+    shapes are theirs, the monad is the difference. The row-bridge
+    builders — field literal, toRow cons-chain, ofRow nested match —
+    live in `Meta.RowIso` now; only the `FieldsClosed` witness is
+    event-sourcing-specific.) 
 
 ## SchemaLang.Meta.Keys
 

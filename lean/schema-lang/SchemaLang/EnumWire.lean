@@ -17,11 +17,16 @@ generates, in the enclosing namespace:
     and the binary codec over `Codec.encEnum`/`Codec.decEnum?` with the
     round-trip laws proved (the Codec.lean append form, so per-field
     lemmas compose) —
-(c) the plausible instances (`Arbitrary`/`Shrinkable` — the Gen!),
-    tags 0..k-1 uniformly, shrinking to the first ctor —
-(d) the PropSpec with its MANDATORY negative control (TestKit.PropSpec):
-    the sweep pins `decode? ∘ encode = some`; the sabotaged sibling
-    (`tag + 1` corruption) must be caught or the suite fails.
+(c) the plausible instances (`Arbitrary`/`Shrinkable` — the Gen;
+    `SnapshotRT.genSem` draws the func-sem axes from them), tags
+    0..k-1 uniformly, shrinking to the first ctor —
+(d) the Bool round-trip predicate + its EXHAUSTIVE kernel proof
+    (`roundTrips_true`, one `cases` per ctor) and the sabotage
+    predicate (`wireSabotage`, executed by the tests' `enumWireChecks`).
+    The per-enum PropSpec + control RETIRED (T5): the proof decides
+    the round trip for every constructor — a random sweep over an
+    exhaustively-decided 3-4 ctor space re-rolls dice the kernel
+    already settled.
 
 Placement: schema-lang, not codegen-core — the generated codec consumes
 `SchemaLang.Codec`'s enum combinators, and the dogfood consumer is the
@@ -95,17 +100,16 @@ meta def generatedSources (n : String) (ctors : Array String) : Array String :=
   s!"theorem {n}.roundTrips_true (e : {n}) : {n}.roundTrips e = true := by\n  cases e <;> simp [{n}.roundTrips, {n}.decode_encode]",
   s!"instance : Plausible.Arbitrary {n} where\n  arbitrary := do\n    let i ← Plausible.Gen.chooseNat\n    pure (match i % {k} with\n{genArms})",
   s!"instance : Plausible.Shrinkable {n} where\n  shrink e := if e == {n}.{first} then [] else [{n}.{first}]",
-  -- (d) the PropSpec with the MANDATORY negative control
-  s!"def {n}.wireSabotage (e : {n}) : Bool :=\n  {n}.ofTag? ({n}.toTag e + 1) == some e",
-  s!"meta def {n}.wireSuite : LSpec.TestSeq :=\n  LSpec.checkPlausibleIO \"enum wire: decode? ∘ encode = some (round trip)\"\n    (∀ (e : {n}), {n}.roundTrips e = true)\n    .done \{ numInst := 256, randomSeed := some 20261104 }",
-  s!"meta def {n}.wireControl : LSpec.TestSeq :=\n  LSpec.checkPlausibleIO \"sabotaged: tag+1 corruption (must be caught)\"\n    (∀ (e : {n}), {n}.wireSabotage e = true)\n    .done \{ numInst := 256, randomSeed := some 20261104 }",
-  s!"meta def {n}.wirePropSpec : TestKit.PropSpec :=\n  \{ name := \"enum wire: {n} decode∘encode round trip\"\n  , suite := {n}.wireSuite\n  , control := {n}.wireControl\n  , controlName := \"tag+1 sabotage\" }"
+  -- (d) the sabotage predicate — enumWireChecks' executed pin (the
+  -- round-trip PropSpec + control retired: roundTrips_true IS the
+  -- exhaustive decision, T5)
+  s!"def {n}.wireSabotage (e : {n}) : Bool :=\n  {n}.ofTag? ({n}.toTag e + 1) == some e"
   ]
 
 /-- `declare_enum_wire <Name> where <ctor> | ... | <ctor>` — generate the
     enum inductive, its token spelling, its binary wire codec with the
-    proved round-trip laws, the plausible instances, and the PropSpec
-    with its mandatory negative control (module header: the family). -/
+    proved round-trip laws, the plausible instances, and the sabotage
+    predicate (module header: the family). -/
 syntax (name := declareEnumWire) "declare_enum_wire " ident " where "
   ident (" | " ident)* : command
 

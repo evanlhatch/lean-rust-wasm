@@ -1,5 +1,5 @@
 //! ENGINE-PORTABILITY CONFORMANCE: the SAME compiled wasm runs under
-//! wasmi (this crate — the standalone rt) AND wasmtime (steel-host's
+//! wasmi (this crate — the standalone rt) AND wasmtime (guestlang-host's
 //! engine) with IDENTICAL results. The compiler line's output is engine-
 //! agnostic: the IR seam holds.
 
@@ -189,7 +189,7 @@ fn manifest_partition_is_exhaustive() {
 
 #[test]
 fn engine_duel_wasmi_matches_the_lean_authority() {
-    // the SAME manifest rows steel-host replays under wasmtime, replayed
+    // the SAME manifest rows guestlang-host replays under wasmtime, replayed
     // here under wasmi: one authority (Lean's evals), two engines
     let wasm = demo_wasm();
     let mut ran = 0;

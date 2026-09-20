@@ -431,38 +431,29 @@ def transitionObligations (machine tname : String) (u : SomeUpdate2)
     claim is the evidence. `none` = the loud gap: a hand-set tier the
     lane cannot serve, or a FALSE decide verdict (a guard that refuses
     its own from-row, a postcondition that misses the to-code — the
-    negative controls pin both). -/
+    negative controls pin both). (The decidableNow backend is the
+    KIT's — `decideDischarge`; this definition is the lane's named
+    application of it, the claim riding the payload.) -/
 def EntityObligation.discharge (o : EntityObligation) :
     Option CodegenCore.Obligation.Evidence :=
-  match o.tier with
-  | .decidableNow =>
-      match decide o.payload.claim with
-      | true => some (.decided true)
-      | false => none
-  | .provedAtElab | .generatedCheck | .oracleSwept | .guestVerified => none
+  CodegenCore.Obligation.decideDischarge (fun c => c.payload.claim) o
 
 /-- SOUNDNESS of the entity lane's decidableNow backend: a
     `.decided true` verdict means the claim HOLDS (the kernel's
     `decide` validated the guard/postcondition on the pinned row —
-    `of_decide_eq_true`; no new trust base). -/
+    `of_decide_eq_true`; no new trust base). Routes through the kit's
+    `decideDischarge_sound` — the proof object is shared. -/
 theorem EntityObligation.discharge_sound (o : EntityObligation)
     (ht : o.tier = .decidableNow)
-    (h : o.discharge = some (.decided true)) : o.payload.claim := by
-  unfold EntityObligation.discharge at h
-  rw [ht] at h
-  cases hd : decide o.payload.claim with
-  | true => exact of_decide_eq_true hd
-  | false =>
-      rw [hd] at h
-      simp at h
+    (h : o.discharge = some (.decided true)) : o.payload.claim :=
+  CodegenCore.Obligation.decideDischarge_sound _ _ ht h
 
 /-- COMPLETENESS: a true claim discharges to the `.decided true`
     evidence — the backend FIRES on the claims it can decide. -/
 theorem EntityObligation.discharge_of_claim (o : EntityObligation)
     (ht : o.tier = .decidableNow) (hc : o.payload.claim) :
-    o.discharge = some (.decided true) := by
-  unfold EntityObligation.discharge
-  rw [ht, decide_eq_true hc]
+    o.discharge = some (.decided true) :=
+  CodegenCore.Obligation.decideDischarge_of_claim _ _ ht hc
 
 /-! ## The transition delta -/
 

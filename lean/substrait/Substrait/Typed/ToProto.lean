@@ -34,12 +34,11 @@ namespace Substrait.Typed
 
 /-! ## Extension context (anchors computed at emission) -/
 
-/-- Core Lean has no `List.enum`; local (index, value) enumeration helper. -/
-def enumerate (xs : List α) : List (Nat × α) :=
-  let rec go : Nat → List α → List (Nat × α)
-    | _, [] => []
-    | i, x :: rest => (i, x) :: go (i + 1) rest
-  go 0 xs
+/-- (value, index) enumeration — core Lean has no `List.enum` (checked the
+    4.33 toolchain: no enum/zipWithIndex), but `List.zipIdx` IS enumerate
+    (element-first pairing, 0-based). -/
+def enumerate (xs : List α) : List (α × Nat) :=
+  List.zipIdx xs
 
 /--
 The extension declarations a plan uses, collected in deterministic
@@ -87,13 +86,13 @@ def addType (c : ExtCtx) (urn name : String) : ExtCtx :=
 
 /-- The `SimpleExtensionUrn` list (anchor order). -/
 def toUrns (c : ExtCtx) : List Proto.SimpleExtensionUrn :=
-  (enumerate c.urns).map (fun (i, urn) => { extensionUrnAnchor := i + 1, urn := urn })
+  (enumerate c.urns).map (fun (urn, i) => { extensionUrnAnchor := i + 1, urn := urn })
 
 /-- The `SimpleExtensionDeclaration` list (functions, then types; anchor order). -/
 def toDeclarations (c : ExtCtx) : List Proto.ExtensionDeclaration :=
-  (enumerate c.functions).map (fun (i, (urn, name)) =>
+  (enumerate c.functions).map (fun ((urn, name), i) =>
       .function (indexOf1 urn c.urns) (i + 1) name) ++
-  (enumerate c.types).map (fun (i, (urn, name)) =>
+  (enumerate c.types).map (fun ((urn, name), i) =>
       .extType (indexOf1 urn c.urns) (i + 1) name)
 
 /-- True when nothing is declared (nothing to emit in `=== Extensions`). -/

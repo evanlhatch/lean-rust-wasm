@@ -319,6 +319,41 @@ def Rel.okS (ctx : ExtCtx) (inv : FnInv) : {inS outS : Schema} → Rel inS outS 
 
 /-! ## the rel re-encode: the decode-shape lemma and the helpers -/
 
+/-- The re-encode skeleton, square-child slice: a decoded child whose decode
+    is schema-pinned (`SqPred`) IS the square package of a rel re-lowering to
+    the same wire term — the `decodeRel_reEnc` child branch (case on the
+    input decode, pin the schema, rewrite the IH, transport the lowering)
+    stated once. -/
+theorem sqChild_of_decode (inv : FnInv) (ctx : ExtCtx) (w : Proto.Rel) (s : Schema)
+    (hsq : SqPred inv w s)
+    (ihc : (decodeRel inv w).map (fun a => relLower a ctx) = some w)
+    {pkg : AnyRel} (hx : decodeRel inv w = some pkg) :
+    ∃ r1 : Rel s s, pkg = AnyRel.mk s s r1 ∧ r1.toProtoWith ctx = w := by
+  simp only [SqPred, hx] at hsq
+  obtain ⟨r1, hpkg⟩ := hsq pkg rfl
+  rw [hx, hpkg] at ihc
+  simp only [Option.map_some, relLower, Option.some.injEq] at ihc
+  exact ⟨r1, hpkg, ihc⟩
+
+/-- The re-encode skeleton, pair-child slice (the `PairPred` twin). -/
+theorem pairChild_of_decode (inv : FnInv) (ctx : ExtCtx) (w : Proto.Rel) (s1 s2 : Schema)
+    (hpred : PairPred inv w (s1, s2))
+    (ihc : (decodeRel inv w).map (fun a => relLower a ctx) = some w)
+    {pkg : AnyRel} (hx : decodeRel inv w = some pkg) :
+    ∃ r1 : Rel s1 s2, pkg = AnyRel.mk s1 s2 r1 ∧ r1.toProtoWith ctx = w := by
+  simp only [PairPred, hx] at hpred
+  obtain ⟨r1, hpkg⟩ := hpred pkg rfl
+  rw [hx, hpkg] at ihc
+  simp only [Option.map_some, relLower, Option.some.injEq] at ihc
+  exact ⟨r1, hpkg, ihc⟩
+
+/-- The re-encode skeleton, lowering transport: the map-form IH on a concrete
+    package is the child's re-lowering. -/
+theorem relLower_some_map {ctx : ExtCtx} {w : Proto.Rel} {s1 s2 : Schema} (r : Rel s1 s2)
+    (h : (some (AnyRel.mk s1 s2 r)).map (fun a => relLower a ctx) = some w) :
+    r.toProtoWith ctx = w := by
+  simpa [relLower] using h
+
 /-- The decode-shape lemma (the rel-level workhorse): a well-formed typed
     expression decodes back to a package with its EXACT `(t, n)` indices —
     what the rel GADT's constructors demand. -/
@@ -353,15 +388,15 @@ theorem decodeExpr_shape (s : Schema) (inv : FnInv) (ctx : ExtCtx)
           rw [hd] at hinv
           simp at hinv
       | some q =>
-          cases q with
-          | mk ts' spine =>
-              have hret' : stOfPType (withNullable (toProtoType ctx sig.ret) sig.retNullable) =
-                  some sig.ret := by
-                rw [stOfPType_withNullable]
-                exact hret
-              rw [hret', pTypeNullable_withNullable]
-              exact ⟨Expr.call (FunctionSig.mkSig sig.name sig.urn ts' sig.ret
-                sig.retNullable true) spine, rfl⟩
+          obtain ⟨ts', spine, hq, hlow2⟩ := decodeArgs_lower_some inv ctx hfn args hargs hd
+          rw [hq]
+          have hret' : stOfPType (withNullable (toProtoType ctx sig.ret) sig.retNullable) =
+              some sig.ret := by
+            rw [stOfPType_withNullable]
+            exact hret
+          rw [hret', pTypeNullable_withNullable]
+          exact ⟨Expr.call (FunctionSig.mkSig sig.name sig.urn ts' sig.ret
+            sig.retNullable true) spine, rfl⟩
 
 /-- Projection-list inversion: the lowered projections decode (with
     placeholder names) and re-lower to the same wire expressions. -/
@@ -381,18 +416,15 @@ theorem decodeProjections_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
       cases hd : decodeExpr s inv (pr.expr.toProto ctx) with
       | none => rw [hd] at hdec; simp at hdec
       | some pkg =>
-          cases pkg with
-          | mk t n ex =>
-              rw [hd] at hdec
-              simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
-              refine ⟨{ name := "", dtype := t, nullable := n, expr := ex } :: ps', ?_, ?_⟩
-              · simp only [List.map_cons, decodeProjections, hd, h1]
-              · show ({ name := "", dtype := t, nullable := n, expr := ex } :: ps').map
-                    (fun pr => pr.expr.toProto ctx) =
-                  (pr :: rest).map (fun pr => pr.expr.toProto ctx)
-                show ex.toProto ctx :: ps'.map (fun pr => pr.expr.toProto ctx) =
-                  pr.expr.toProto ctx :: rest.map (fun pr => pr.expr.toProto ctx)
-                rw [hdec, h2]
+          obtain ⟨t, n, ex, hpkg, hlow⟩ := decodeExpr_lower_some inv ctx hfn pr.expr hpr hd
+          refine ⟨{ name := "", dtype := t, nullable := n, expr := ex } :: ps', ?_, ?_⟩
+          · simp only [List.map_cons, decodeProjections, hd, hpkg, h1]
+          · show ({ name := "", dtype := t, nullable := n, expr := ex } :: ps').map
+                (fun pr => pr.expr.toProto ctx) =
+              (pr :: rest).map (fun pr => pr.expr.toProto ctx)
+            show ex.toProto ctx :: ps'.map (fun pr => pr.expr.toProto ctx) =
+              pr.expr.toProto ctx :: rest.map (fun pr => pr.expr.toProto ctx)
+            rw [hlow, h2]
 
 /-- Grouping-list inversion (grouping keys; the `AnyExpr` list shape). -/
 theorem decodeAnyExprs_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
@@ -413,22 +445,19 @@ theorem decodeAnyExprs_reEnc (s : Schema) (inv : FnInv) (ctx : ExtCtx)
       cases hd : decodeExpr s inv (e.toProto ctx) with
       | none => rw [hd] at hdec; simp at hdec
       | some pkg =>
-          cases pkg with
-          | mk t' n' ex =>
-              rw [hd] at hdec
-              simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
-              refine ⟨AnyExpr.mk t' n' ex :: xs', ?_, ?_⟩
-              · rw [anyExprsLower_cons]
-                simp only [decodeAnyExprs, hd, h1]
-              · show (AnyExpr.mk t' n' ex :: xs').map
-                    (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
-                  (AnyExpr.mk t n e :: rest).map
-                    (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
-                show ex.toProto ctx ::
-                    xs'.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
-                  e.toProto ctx ::
-                    rest.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
-                rw [hdec, h2]
+          obtain ⟨t', n', ex, hpkg, hlow⟩ := decodeExpr_lower_some inv ctx hfn e hae hd
+          refine ⟨AnyExpr.mk t' n' ex :: xs', ?_, ?_⟩
+          · rw [anyExprsLower_cons]
+            simp only [decodeAnyExprs, hd, hpkg, h1]
+          · show (AnyExpr.mk t' n' ex :: xs').map
+                (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+              (AnyExpr.mk t n e :: rest).map
+                (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+            show ex.toProto ctx ::
+                xs'.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx) =
+              e.toProto ctx ::
+                rest.map (fun ae => match ae with | .mk _ _ e => e.toProto ctx)
+            rw [hlow, h2]
 
 /-- Argument-spine inversion over a plain type-erased list: the lowered list
     decodes to a spine, and re-packing + re-lowering recovers the wire list. -/
@@ -449,19 +478,16 @@ theorem decodeArgs_anyExprs (s : Schema) (inv : FnInv) (ctx : ExtCtx)
       cases hd : decodeExpr s inv (e.toProto ctx) with
       | none => rw [hd] at hdec; simp at hdec
       | some pkg =>
-          cases pkg with
-          | mk t' n' ex =>
-              rw [hd] at hdec
-              simp only [anyLower, Option.map_some, Option.some.injEq] at hdec
-              refine ⟨(t', n') :: ts', Args.cons t' n' ex spine', ?_, ?_⟩
-              · rw [anyExprsLower_cons]
-                simp only [decodeArgs, hd, h1]
-              · rw [show argsPack (Args.cons t' n' ex spine') =
-                  AnyExpr.mk t' n' ex :: argsPack spine' from rfl,
-                  anyExprsLower_cons, anyExprsLower_cons]
-                show ex.toProto ctx :: anyExprsLower (argsPack spine') ctx =
-                  e.toProto ctx :: anyExprsLower rest ctx
-                rw [hdec, h2]
+          obtain ⟨t', n', ex, hpkg, hlow⟩ := decodeExpr_lower_some inv ctx hfn e hae hd
+          refine ⟨(t', n') :: ts', Args.cons t' n' ex spine', ?_, ?_⟩
+          · rw [anyExprsLower_cons]
+            simp only [decodeArgs, hd, hpkg, h1]
+          · rw [show argsPack (Args.cons t' n' ex spine') =
+              AnyExpr.mk t' n' ex :: argsPack spine' from rfl,
+              anyExprsLower_cons, anyExprsLower_cons]
+            show ex.toProto ctx :: anyExprsLower (argsPack spine') ctx =
+              e.toProto ctx :: anyExprsLower rest ctx
+            rw [hlow, h2]
 
 /-- Measure-list inversion: the lowered measures decode and re-lower to the
     same wire measures. -/
@@ -613,19 +639,12 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       intro hok
       obtain ⟨hin, hsq, hcond⟩ := hok
       have ihc := ih hin
-      show (decodeRel inv (Proto.Rel.filter
-        { condition := cond.toProto ctx, input := input.toProtoWith ctx,
-          common := none })).map (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>
-          rw [hx] at ihc
-          simp only [SqPred, hx] at hsq
-          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
-          rw [hpkg] at ihc
-          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
-            simpa [relLower] using ihc
+          obtain ⟨r1, hpkg, hlow⟩ :=
+            sqChild_of_decode inv ctx (input.toProtoWith ctx) s hsq ihc hx
           rw [hpkg]
           simp only [squareOf_mk]
           obtain ⟨ce, hce'⟩ := decodeExpr_shape s inv ctx hfn cond hcond
@@ -639,21 +658,12 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       intro hok
       obtain ⟨hin, hpr, houts⟩ := hok
       have ihc := ih hin
-      show (decodeRel inv (Proto.Rel.project
-        { expressions := outs.map (fun pr => pr.expr.toProto ctx),
-          input := input.toProtoWith ctx,
-          common := emit.map (fun m => { emit := some (.emit m), advancedExtension := none }) })).map
-        (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>
-          rw [hx] at ihc
-          simp only [PairPred, hx] at hpr
-          obtain ⟨r1, hpkg⟩ := hpr pkg rfl
-          rw [hpkg] at ihc
-          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
-            simpa [relLower] using ihc
+          obtain ⟨r1, hpkg, hlow⟩ :=
+            pairChild_of_decode inv ctx (input.toProtoWith ctx) s p hpr ihc hx
           rw [hpkg]
           obtain ⟨ps', hp1, hp2⟩ := decodeProjections_reEnc p inv ctx hfn outs houts
           simp only [hp1]
@@ -673,12 +683,8 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>
-          rw [hx] at ihc
-          simp only [SqPred, hx] at hsq
-          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
-          rw [hpkg] at ihc
-          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
-            simpa [relLower] using ihc
+          obtain ⟨r1, hpkg, hlow⟩ :=
+            sqChild_of_decode inv ctx (input.toProtoWith ctx) s hsq ihc hx
           rw [hpkg]
           simp only [squareOf_mk]
           obtain ⟨gxs, hg1, hg2⟩ := decodeAnyExprs_reEnc s inv ctx hfn grouping hg
@@ -719,12 +725,8 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>
-          rw [hx] at ihc
-          simp only [SqPred, hx] at hsq
-          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
-          rw [hpkg] at ihc
-          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
-            simpa [relLower] using ihc
+          obtain ⟨r1, hpkg, hlow⟩ :=
+            sqChild_of_decode inv ctx (input.toProtoWith ctx) s hsq ihc hx
           rw [hpkg]
           simp only [squareOf_mk]
           obtain ⟨ks', hk1', hk2'⟩ := decodeSortKeys_reEnc s orderBy hk
@@ -734,19 +736,12 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       intro hok
       obtain ⟨hin, hsq⟩ := hok
       have ihc := ih hin
-      show (decodeRel inv (Proto.Rel.fetch
-        { limit := limit, offset := offset, input := input.toProtoWith ctx,
-          common := none })).map (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>
-          rw [hx] at ihc
-          simp only [SqPred, hx] at hsq
-          obtain ⟨r1, hpkg⟩ := hsq pkg rfl
-          rw [hpkg] at ihc
-          have hlow : r1.toProtoWith ctx = input.toProtoWith ctx := by
-            simpa [relLower] using ihc
+          obtain ⟨r1, hpkg, hlow⟩ :=
+            sqChild_of_decode inv ctx (input.toProtoWith ctx) s hsq ihc hx
           rw [hpkg]
           simp only [squareOf_mk]
           simp [relLower, Rel.toProtoWith, hlow]
@@ -755,29 +750,17 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       obtain ⟨hl, hr, hpl, hpr, hcond⟩ := hok
       have ihcL := ihl hl
       have ihcR := ihr hr
-      show (decodeRel inv (Proto.Rel.join
-        { joinType := jt, left := left.toProtoWith ctx, right := right.toProtoWith ctx,
-          condition := cond.toProto ctx, postJoinFilter := none, common := none })).map
-        (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx1 : decodeRel inv (left.toProtoWith ctx) with
       | none => rw [hx1] at ihcL; simp at ihcL
       | some pkgL =>
           cases hx2 : decodeRel inv (right.toProtoWith ctx) with
           | none => rw [hx2] at ihcR; simp at ihcR
           | some pkgR =>
-              rw [hx1] at ihcL
-              rw [hx2] at ihcR
-              simp only [PairPred, hx1] at hpl
-              simp only [PairPred, hx2] at hpr
-              obtain ⟨rl, hpkgL⟩ := hpl pkgL rfl
-              obtain ⟨rr, hpkgR⟩ := hpr pkgR rfl
-              rw [hpkgL] at ihcL
-              rw [hpkgR] at ihcR
-              have hlowL : rl.toProtoWith ctx = left.toProtoWith ctx := by
-                simpa [relLower] using ihcL
-              have hlowR : rr.toProtoWith ctx = right.toProtoWith ctx := by
-                simpa [relLower] using ihcR
+              obtain ⟨rl, hpkgL, hlowL⟩ :=
+                pairChild_of_decode inv ctx (left.toProtoWith ctx) sl sl' hpl ihcL hx1
+              obtain ⟨rr, hpkgR, hlowR⟩ :=
+                pairChild_of_decode inv ctx (right.toProtoWith ctx) sr sr' hpr ihcR hx2
               rw [hpkgL, hpkgR]
               show Option.map (fun a => relLower a ctx)
                   (match decodeExpr (sl' ++ sr') inv (cond.toProto ctx) with
@@ -800,10 +783,7 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       obtain ⟨hl, hr, hpair⟩ := hok
       have ihcL := ihl hl
       have ihcR := ihr hr
-      show (decodeRel inv (Proto.Rel.set
-        { op := op, inputs := [left.toProtoWith ctx, right.toProtoWith ctx],
-          common := none })).map (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx1 : decodeRel inv (left.toProtoWith ctx) with
       | none => rw [hx1] at ihcL; simp at ihcL
       | some pkgL =>
@@ -816,10 +796,10 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
               | mk s1 s1' rl =>
                   cases pkgR with
                   | mk s2 s2' rr =>
-                      have hlowL : rl.toProtoWith ctx = left.toProtoWith ctx := by
-                        simpa [relLower] using ihcL
-                      have hlowR : rr.toProtoWith ctx = right.toProtoWith ctx := by
-                        simpa [relLower] using ihcR
+                      have hlowL : rl.toProtoWith ctx = left.toProtoWith ctx :=
+                        relLower_some_map rl ihcL
+                      have hlowR : rr.toProtoWith ctx = right.toProtoWith ctx :=
+                        relLower_some_map rr ihcR
                       rw [hx1, hx2] at hpair
                       have heq : (s1, s1') = (s2, s2') := by
                         have hp := hpair (AnyRel.mk s1 s1' rl) (AnyRel.mk s2 s2' rr) rfl rfl
@@ -842,13 +822,7 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
       intro hok
       obtain ⟨hin, hts⟩ := hok
       have ihc := ih hin
-      show (decodeRel inv (Proto.Rel.write
-        { tableName := table, op := op,
-          tableSchema := ts.map (fun sc =>
-            { fields := sc.map (toProtoColType ctx), names := sc.names }),
-          input := input.toProtoWith ctx, common := none })).map
-        (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>
@@ -878,10 +852,7 @@ theorem decodeRel_reEnc (inv : FnInv) (ctx : ExtCtx)
   | @extensionSingle s s' detail input ih =>
       intro hok
       have ihc := ih hok
-      show (decodeRel inv (Proto.Rel.extensionSingle
-        { input := input.toProtoWith ctx, detail := some detail, common := none })).map
-        (fun a => relLower a ctx) = some _
-      simp only [decodeRel]
+      simp only [Rel.toProtoWith, decodeRel]
       cases hx : decodeRel inv (input.toProtoWith ctx) with
       | none => rw [hx] at ihc; simp at ihc
       | some pkg =>

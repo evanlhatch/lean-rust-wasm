@@ -25,21 +25,14 @@ public meta section
 
 open Lean Meta Linter EnvLinter
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
-register_option linter.guestlang.recursiveSimpEqns : Bool := {
-  -- DEFAULT-OFF (2026-11 census): 83 violations across the tree (substrait
-  -- 64, Machines 7, dbsp 8, wasm-backend 4) and the dominant cluster is
-  -- DELIBERATE — doctrine §8: substrait's Decode proofs consume raw
-  -- equation lemmas (`parseType.eq_*`), and fuel-based runners
-  -- (`Machine.run`, …) keep equations out of simp to
-  -- avoid simp loops. Far past the "handful of nolint sites" bar for
-  -- default-on. Run explicitly as a census:
-  --   guestlang-lint --enable=linter.guestlang.recursiveSimpEqns <roots>
-  defValue := false
-  descr := "flag recursive definitions whose equation lemmas do not carry `@[simp]`"
-}
-
-initialize Linter.addEnvLinterOption linter.guestlang.recursiveSimpEqns
+-- Default-OFF (2026-11 census): 83 violations across the tree (substrait
+-- 64, Machines 7, dbsp 8, wasm-backend 4) and the dominant cluster is
+-- DELIBERATE — doctrine §8: substrait's Decode proofs consume raw
+-- equation lemmas (`parseType.eq_*`), and fuel-based runners
+-- (`Machine.run`, …) keep equations out of simp to
+-- avoid simp loops. Far past the "handful of nolint sites" bar for
+-- default-on. Run explicitly as a census:
+--   guestlang-lint --enable=linter.guestlang.recursiveSimpEqns <roots>
 
 namespace LintKit
 
@@ -87,5 +80,8 @@ meta def recursiveSimpEqnsLinter : EnvLinter where
 
 end LintKit
 
-@[builtin_env_linter linter.guestlang.recursiveSimpEqns]
-meta def LintKit.recursiveSimpEqnsLinter.reg : EnvLinter := LintKit.recursiveSimpEqnsLinter
+-- the census linter: registered default-OFF via `register_guestlang_linter`'s
+-- `default_false` token (LintKit.Basic — the one-liner registration).
+register_guestlang_linter linter.guestlang.recursiveSimpEqns
+  LintKit.recursiveSimpEqnsLinter default_false
+  "flag recursive definitions whose equation lemmas do not carry `@[simp]`"

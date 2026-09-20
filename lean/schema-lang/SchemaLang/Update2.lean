@@ -42,16 +42,20 @@ ALL read pre-update state; no cascade WITHIN an update.
    premise: order-dependent by design (later-wins — the overwrite
    channel's row-level twin; the negative witness is pinned in Tests).
 3. `apply2_eq_foldDeltas` — the LOWERING correspondence: the update's
-   table effect IS the fold of its per-row deltas (`RowDelta` is
-   Delta.lean's change shape — insert/update carry the FULL row,
-   remove carries the KEY image) applied through the keyed table
-   semantics (`applyRowDelta`). Premise: `KeyCoherent` — the key
-   column is not written, every row projects its key, key images are
-   pairwise beq-distinct BOTH directions (`FieldVal.beq` is not
-   provably symmetric: ByteArray's `BEq` carries no lawful instance —
-   the two directions are DATA), insert keys fresh. Row level
-   (`keepRow_eq_fold_patchKeep`, `newRow_eq_fold_patchNew`) is
-   premise-light; the table fold carries coherence.
+   table effect IS the fold of its per-row deltas (`RowDelta` is the
+   SHARED change variant — `EventSourced.Delta` at the schema row:
+   insert/update carry the FULL row, remove carries the KEY image)
+   applied through the keyed table semantics (`applyRowDelta`; the
+   applicator bridge `applyRowDelta_eq_apply` proves it is the
+   event-sourcing lane's keyed reading on key-unique tables). Premise:
+   `KeyCoherent` — the key column is not written, every row projects
+   its key, the key column's type is codec-closed (ONE fact — the
+   lawful `FieldVal.beq`'s warranty, spread by `keyImgs_closed`), the
+   key images are pairwise distinct (core `List.Nodup` — R5 collapsed
+   the both-direction `nodup2` ball onto the codec's round-trip laws),
+   insert keys fresh. Row level (`keepRow_eq_fold_patchKeep`,
+   `newRow_eq_fold_patchNew`) is premise-light; the table fold carries
+   coherence.
 4. The OBLIGATION view: a keyed v2 update produces one obligation —
    key-uniqueness is PRESERVED on the pinned all-default singleton
    table (the invariant/key lane's default-row discipline) — tier
@@ -72,6 +76,7 @@ module
 
 public import SchemaLang.Update
 public import SchemaLang.Keys
+public import SchemaLang.Change
 public import CodegenCore
 
 @[expose] public section
@@ -426,7 +431,11 @@ theorem foldl_step_congr {fs : List Field} {s : List (SetClause fs)}
       exact ih (fun c' hc' => h c' (List.mem_cons_of_mem c hc')) _
 
 /-- LAW 3: two SET folds with DISJOINT columns and cross-neutral value
-    reads commute. -/
+    reads commute. (THE unification marker: this family instantiates
+    `CodegenCore.DisjointCommute` at the batch granularity — clause
+    lists as mutations, column names as locations, name-inequality as
+    disjointness; the landing belongs to the update lane's own
+    follow-up. Read-only here — the lane was busy.) -/
 theorem applySets_comm {fs : List Field} {s₁ s₂ : List (SetClause fs)}
     (hdisj : ∀ c₁ ∈ s₁, ∀ c₂ ∈ s₂, c₁.field.name ≠ c₂.field.name)
     (hval₂ : ∀ c₂ ∈ s₂, ∀ n ∈ c₂.value.reads, ∀ c₁ ∈ s₁,
@@ -766,17 +775,19 @@ theorem apply2_comm {fs : List Field} {u₁ u₂ : Update2Item fs}
     c.filterMap_newRow_keepRow, c.symm.filterMap_newRow_keepRow,
     n₁nil, n₂nil, hkk]
 
-/-! ## Law 6 — the lowering to deltas (Delta.lean's change shape) -/
+/-! ## Law 6 — the lowering to THE SHARED DELTA (R1 consolidation) -/
 
-/-- The row-level delta (Delta.lean's change variant, target-neutral):
-    `insert`/`update` carry the FULL row (v1's full-replacement
-    contract — the ChangeSpec patch law `patch old Δ = new` is
-    self-contained); `remove` carries the KEY IMAGE (the W8.2
-    declared-key projection, not the first-field convention). -/
-inductive RowDelta (fs : List Field) where
-  | insert (row : RowVals fs)
-  | update (row : RowVals fs)
-  | remove (key : FieldVal)
+/-- THE SHARED CHANGE VARIANT (R1): the update lane's old `RowDelta`
+    inductive RETIRES onto the event-sourcing row's type —
+    `EventSourced.Delta` (insert/update carry the full row, remove the
+    key) at the schema row (`RowVals fs`, `FieldVal` keys). ONE
+    inductive, three specializations (the event-sourcing lane's
+    journals, the update lane's lowering, the emitter's
+    `dbsp::Change` shape — Delta.lean's emitter emits the contract
+    whose Lean side is THIS type). The constructor names resolve
+    through the abbreviation. -/
+abbrev RowDelta (fs : List Field) :=
+  EventSourced.Delta (RowVals fs) FieldVal
 
 /-- The keep-channel's patch reading (ChangeSpec's `patch`, at the
     row's Option): update REPLACES, remove DELETES, insert rides the
@@ -812,7 +823,7 @@ def Update2Item.lowerRow {fs : List Field} (u : Update2Item fs)
         | none => []
       else if u.sets.isEmpty then []
       else [.update (applySets u.sets r)])
-      ++ (u.insert?.map fun t => RowDelta.insert (t.eval r)).toList
+      ++ (u.insert?.map fun t => EventSourced.Delta.insert (t.eval r)).toList
   else []
 
 /-- The ROW-LEVEL correspondence, keep channel: the surviving row IS
@@ -909,109 +920,59 @@ theorem mem_keyImgs_of_project? {fs : List Field} {key : String}
     k ∈ keyImgs fs key l :=
   List.mem_filterMap.mpr ⟨r, hr, h⟩
 
-/-- Pairwise beq-distinct, BOTH directions. `FieldVal.beq` is not
-    provably symmetric (ByteArray's `BEq` carries no lawful instance),
-    so the correspondence's key premise carries the two directions as
-    DATA. Implies the keys lane's `FieldVal.nodup` (the obligation
-    lane's check keeps its single-direction form). -/
-def FieldVal.nodup2 : List FieldVal → Bool
-  | [] => true
-  | k :: ks => ks.all (fun k' => !k.beq k' && !k'.beq k) && FieldVal.nodup2 ks
+/-! ### The lawful key kit (R5) — the `nodup2` family retired
 
-theorem Bool.of_not_eq_true {b : Bool} (h : !b = true) : b = false := by
-  cases b <;> simp_all
+`FieldVal.beq` IS equality on codec-closed keys (Keys.lean's
+`beq_eq_true_iff_eq`, riding the codec's decode-encode round trip), so
+the correspondence's key premises speak CORE `List.Nodup` and `≠`: the
+hand-rolled `nodup2` def, its append decomposition, and the
+`A ++ k :: B` both-direction inversion pack are gone. The honest price
+is the closure of the key images (`CodecClosed` — key types are `KeyTy`
+scalars, the W8.1 discipline): ONE closed type fact
+(`keyFieldType` — the key column's own type) seeds ALL of them, because
+the key projection's TYPE is determined by the field list + column
+name — never by the row. -/
 
-theorem Bool.and_eq_true' {a b : Bool} (h : (a && b) = true) :
-    a = true ∧ b = true :=
-  Bool.and_eq_true a b |>.mp h
+/-- The key column's type: the first field named `key`'s type (an
+    if-chain, so the reduction is stepwise); the `.bool` fallback is
+    unreachable when any row projects (and harmless when none does). -/
+def keyFieldType : List Field → String → Ty
+  | [], _ => .bool
+  | f :: fs, key => if f.name == key then f.ty else keyFieldType fs key
 
-/-- The append decomposition (the scan premises' supply). -/
-theorem FieldVal.nodup2_append : ∀ (l₁ l₂ : List FieldVal),
-    FieldVal.nodup2 (l₁ ++ l₂) = (FieldVal.nodup2 l₁ && FieldVal.nodup2 l₂ &&
-      l₁.all fun a => l₂.all fun b => !a.beq b && !b.beq a) := by
-  intro l₁
-  induction l₁ with
-  | nil => intro l₂; simp [FieldVal.nodup2]
-  | cons a as ih =>
-      intro l₂
-      simp only [List.cons_append, FieldVal.nodup2, ih, List.all_append,
-        List.all_cons]
-      by_cases h1 : FieldVal.nodup2 as = true <;>
-        by_cases h2 : FieldVal.nodup2 l₂ = true <;>
-        by_cases h3 : (as.all fun k' => !a.beq k' && !k'.beq a) = true <;>
-        by_cases h4 : (l₂.all fun k' => !a.beq k' && !k'.beq a) = true <;>
-        by_cases h5 : (as.all fun a' => l₂.all fun b => !a'.beq b && !b.beq a')
-          = true <;>
-        simp [h1, h2, h3, h4, h5]
+/-- The key projection's type is COLUMN-determined: any successful
+    projection's type index is `keyFieldType` — never row-dependent. -/
+theorem RowVals.project?_type {fs : List Field} {key : String}
+    {x : RowVals fs} {v : FieldVal} (hp : RowVals.project? fs x key = some v) :
+    v.1 = keyFieldType fs key := by
+  induction fs with
+  | nil =>
+      cases x
+      exact absurd hp (by simp [RowVals.project?])
+  | cons f fs' ih =>
+      cases x with
+      | cons vx xs =>
+          simp only [RowVals.project?] at hp
+          by_cases hname : (f.name == key) = true
+          · rw [if_pos hname] at hp
+            have hv : ⟨f.ty, vx⟩ = v := Option.some.inj hp
+            subst hv
+            show (f.ty : Ty) = keyFieldType (f :: fs') key
+            rw [keyFieldType, if_pos hname]
+          · rw [if_neg hname] at hp
+            rw [keyFieldType, if_neg hname]
+            exact ih hp
 
-/-- The `A ++ k :: B` inversion pack: the head's cross facts (both
-    directions), the shrunk list, and the moved-to-the-left list
-    (the keep-step's invariant maintenance). -/
-theorem FieldVal.beq_false_of_nodup2_append {A B : List FieldVal}
-    {k : FieldVal} (h : FieldVal.nodup2 (A ++ k :: B) = true) :
-    (∀ a ∈ A, a.beq k = false ∧ k.beq a = false)
-      ∧ (∀ b ∈ B, k.beq b = false ∧ b.beq k = false)
-      ∧ FieldVal.nodup2 (A ++ B) = true
-      ∧ FieldVal.nodup2 ((A ++ [k]) ++ B) = true := by
-  rw [FieldVal.nodup2_append] at h
-  have hA : FieldVal.nodup2 A = true :=
-    (Bool.and_eq_true' (Bool.and_eq_true' h).1).1
-  have hkBall : FieldVal.nodup2 (k :: B) = true :=
-    (Bool.and_eq_true' (Bool.and_eq_true' h).1).2
-  have hcross : (A.all fun a => (k :: B).all fun b => !a.beq b && !b.beq a)
-      = true :=
-    (Bool.and_eq_true' h).2
-  -- hkBall : nodup2 (k :: B); unfold the cons step
-  have hkB : FieldVal.nodup2 (k :: B) = true := hkBall
-  have hBk : (B.all fun k' => !k.beq k' && !k'.beq k) = true :=
-    (Bool.and_eq_true' hkB).1
-  have hB : FieldVal.nodup2 B = true := (Bool.and_eq_true' hkB).2
-  -- the cross fact at the head: a ∈ A → Q a k
-  have crossHead : ∀ a ∈ A, (!a.beq k && !k.beq a) = true := by
-    intro a ha
-    have := List.all_eq_true.mp hcross a ha
-    rw [List.all_cons, Bool.and_eq_true] at this
-    exact this.1
-  have crossTail : ∀ a ∈ A, ∀ b ∈ B, (!a.beq b && !b.beq a) = true := by
-    intro a ha
-    have := List.all_eq_true.mp hcross a ha
-    rw [List.all_cons, Bool.and_eq_true] at this
-    exact List.all_eq_true.mp this.2
-  have bothOf : ∀ {x y : FieldVal}, (!x.beq y && !y.beq x) = true →
-      x.beq y = false ∧ y.beq x = false := by
-    intro x y hxy
-    obtain ⟨h1, h2⟩ := Bool.and_eq_true' hxy
-    constructor
-    · cases hx : x.beq y <;> simp [hx] at h1 ⊢
-    · cases hy : y.beq x <;> simp [hy] at h2 ⊢
-  refine ⟨fun a ha => bothOf (crossHead a ha),
-    fun b hb => bothOf (List.all_eq_true.mp hBk b hb), ?_, ?_⟩
-  · -- nodup2 (A ++ B)
-    rw [FieldVal.nodup2_append, Bool.and_eq_true, Bool.and_eq_true]
-    exact ⟨⟨hA, hB⟩, List.all_eq_true.mpr fun a ha =>
-      List.all_eq_true.mpr fun b hb => crossTail a ha b hb⟩
-  · -- nodup2 ((A ++ [k]) ++ B)
-    rw [FieldVal.nodup2_append, Bool.and_eq_true, Bool.and_eq_true]
-    refine ⟨⟨?_, hB⟩, ?_⟩
-    · -- nodup2 (A ++ [k])
-      rw [FieldVal.nodup2_append, Bool.and_eq_true, Bool.and_eq_true]
-      refine ⟨⟨hA, rfl⟩, ?_⟩
-      rw [List.all_eq_true]
-      intro a ha
-      have hck := crossHead a ha
-      simp only [List.all_cons, List.all_nil, Bool.and_true]
-      exact hck
-    · rw [List.all_eq_true]
-      intro x hx
-      rw [List.all_eq_true]
-      intro b hb
-      rw [List.mem_append] at hx
-      cases hx with
-      | inl hxA => exact crossTail x hxA b hb
-      | inr hxk =>
-          rw [List.mem_singleton] at hxk
-          subst hxk
-          exact List.all_eq_true.mp hBk b hb
+/-- EVERY key image is codec-closed — the ONE closedness fact seeds
+    them all (the projection's type is column-determined). -/
+def keyImgs_closed {fs : List Field} {key : String}
+    (hclTy : CodecClosed (keyFieldType fs key)) {L : List (RowVals fs)}
+    {j : FieldVal} (hj : j ∈ keyImgs fs key L) : CodecClosed j.1 := by
+  have hty : j.1 = keyFieldType fs key := by
+    obtain ⟨row, _, hpj⟩ := List.mem_filterMap.mp hj
+    exact RowVals.project?_type hpj
+  rw [hty]
+  exact hclTy
 
 /-- The key projection is stable under a write fold that avoids the
     key column (the `project?`-level sibling of
@@ -1072,19 +1033,19 @@ theorem map_eq_self_of_forall {α : Type _} {f : α → α} {l : List α}
         ih (fun y hy => h y (List.mem_cons_of_mem x hy))]
 
 /-- The update-delta's map over the working table replaces EXACTLY the
-    source row (its key image): every other kept row's key is
-    beq-distinct (`nodup2`), the accumulated inserts are fresh. The
-    statement's lambda is `applyRowDelta`'s update arm VERBATIM (the
-    inner key match reduces via `hk'`). -/
+    source row (its key image): every other kept row's key is distinct
+    (core `List.Nodup` — R5's lawful `FieldVal.beq`), the accumulated
+    inserts are fresh. The statement's lambda is `applyRowDelta`'s
+    update arm VERBATIM (the inner key match reduces via `hk'`). -/
 theorem applyRowDelta_update_map {fs : List Field} (key : String)
     (K rest I : List (RowVals fs)) (r r' : RowVals fs) (k : FieldVal)
     (hk : RowVals.project? fs r key = some k)
     (hk' : RowVals.project? fs r' key = some k)
-    (hnd : FieldVal.nodup2 (keyImgs fs key (K ++ r :: rest)) = true)
+    (hnd : (keyImgs fs key (K ++ r :: rest)).Nodup)
+    (hclTy : CodecClosed (keyFieldType fs key))
     (hI : ∀ ik ∈ keyImgs fs key I,
-      ∀ wk ∈ keyImgs fs key (K ++ r :: rest),
-        ik.beq wk = false ∧ wk.beq ik = false) :
-    applyRowDelta key (RowDelta.update r') (K ++ r :: rest ++ I)
+      ∀ wk ∈ keyImgs fs key (K ++ r :: rest), ik ≠ wk) :
+    applyRowDelta key (EventSourced.Delta.update r') (K ++ r :: rest ++ I)
       = K ++ r' :: rest ++ I := by
   show (K ++ r :: rest ++ I).map (fun old =>
       match RowVals.project? fs old key with
@@ -1094,10 +1055,15 @@ theorem applyRowDelta_update_map {fs : List Field} (key : String)
           | none => old
       | none => old) = _
   rw [keyImgs_append, keyImgs_cons_of_some hk] at hnd
-  obtain ⟨hcross, htail, -, -⟩ := FieldVal.beq_false_of_nodup2_append hnd
+  obtain ⟨hKnd, hRestNd, hcross⟩ := List.nodup_append.mp hnd
+  -- hcross : ∀ a ∈ keyImgs K, ∀ b ∈ k :: keyImgs rest, a ≠ b
   have hself : k ∈ keyImgs fs key (K ++ r :: rest) := by
     rw [keyImgs_append, keyImgs_cons_of_some hk]
     exact List.mem_append_right _ List.mem_cons_self
+  have hKne : ∀ a ∈ keyImgs fs key K, a ≠ k := fun a ha =>
+    hcross a ha k List.mem_cons_self
+  have hRestNe : ∀ a ∈ keyImgs fs key rest, a ≠ k := fun a ha hkeq =>
+    (List.nodup_cons.mp hRestNd).1 (hkeq ▸ ha)
   have fixK : ∀ old ∈ K,
       (match RowVals.project? fs old key with
         | some a =>
@@ -1109,7 +1075,11 @@ theorem applyRowDelta_update_map {fs : List Field} (key : String)
     cases hp : RowVals.project? fs old key with
     | none => rfl
     | some a =>
-        have hae := (hcross a (List.mem_filterMap.mpr ⟨old, ho, hp⟩)).1
+        have hae : a.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne
+            (keyImgs_closed hclTy (L := K) (List.mem_filterMap.mpr ⟨old, ho, hp⟩))
+            (keyImgs_closed hclTy hself)
+            (hKne a (List.mem_filterMap.mpr ⟨old, ho, hp⟩))).1
         simp [hk', hae]
   have fixRest : ∀ old ∈ rest,
       (match RowVals.project? fs old key with
@@ -1122,7 +1092,12 @@ theorem applyRowDelta_update_map {fs : List Field} (key : String)
     cases hp : RowVals.project? fs old key with
     | none => rfl
     | some a =>
-        have hae := (htail a (List.mem_filterMap.mpr ⟨old, ho, hp⟩)).2
+        have hae : a.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne
+            (keyImgs_closed hclTy (L := rest)
+              (List.mem_filterMap.mpr ⟨old, ho, hp⟩))
+            (keyImgs_closed hclTy hself)
+            (hRestNe a (List.mem_filterMap.mpr ⟨old, ho, hp⟩))).1
         simp [hk', hae]
   have fixI : ∀ old ∈ I,
       (match RowVals.project? fs old key with
@@ -1135,7 +1110,12 @@ theorem applyRowDelta_update_map {fs : List Field} (key : String)
     cases hp : RowVals.project? fs old key with
     | none => rfl
     | some a =>
-        have hae := (hI a (List.mem_filterMap.mpr ⟨old, ho, hp⟩) k hself).1
+        have hae : a.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne
+            (keyImgs_closed hclTy (L := I)
+              (List.mem_filterMap.mpr ⟨old, ho, hp⟩))
+            (keyImgs_closed hclTy hself)
+            (hI a (List.mem_filterMap.mpr ⟨old, ho, hp⟩) k hself)).1
         simp [hk', hae]
   have fr : (match RowVals.project? fs r key with
         | some a =>
@@ -1153,25 +1133,27 @@ theorem applyRowDelta_insert {fs : List Field} (key : String) (x : RowVals fs)
     (T : List (RowVals fs)) : applyRowDelta key (.insert x) T = T ++ [x] := rfl
 
 /-- The remove-delta's filter over the working table drops EXACTLY the
-    source row (the same inversion pack, mirrored). -/
+    source row (the same Nodup kit, mirrored). -/
 theorem applyRowDelta_remove_filter {fs : List Field} (key : String)
     (K rest I : List (RowVals fs)) (r : RowVals fs) (k : FieldVal)
     (hk : RowVals.project? fs r key = some k)
-    (hnd : FieldVal.nodup2 (keyImgs fs key (K ++ r :: rest)) = true)
+    (hnd : (keyImgs fs key (K ++ r :: rest)).Nodup)
+    (hclTy : CodecClosed (keyFieldType fs key))
     (hI : ∀ ik ∈ keyImgs fs key I,
-      ∀ wk ∈ keyImgs fs key (K ++ r :: rest),
-        ik.beq wk = false ∧ wk.beq ik = false) :
-    applyRowDelta key (RowDelta.remove k) (K ++ r :: rest ++ I)
+      ∀ wk ∈ keyImgs fs key (K ++ r :: rest), ik ≠ wk) :
+    applyRowDelta key (EventSourced.Delta.remove k) (K ++ r :: rest ++ I)
       = K ++ rest ++ I := by
   show (K ++ r :: rest ++ I).filter (fun old =>
       match RowVals.project? fs old key with
       | some a => !a.beq k
       | none => true) = _
   rw [keyImgs_append, keyImgs_cons_of_some hk] at hnd
-  obtain ⟨hcross, htail, -, -⟩ := FieldVal.beq_false_of_nodup2_append hnd
+  obtain ⟨hKnd, hRestNd, hcross⟩ := List.nodup_append.mp hnd
   have hself : k ∈ keyImgs fs key (K ++ r :: rest) := by
     rw [keyImgs_append, keyImgs_cons_of_some hk]
     exact List.mem_append_right _ List.mem_cons_self
+  have hRestNe : ∀ a ∈ keyImgs fs key rest, a ≠ k := fun a ha hkeq =>
+    (List.nodup_cons.mp hRestNd).1 (hkeq ▸ ha)
   have keepK : ∀ old ∈ K,
       (match RowVals.project? fs old key with
         | some a => !a.beq k | none => true) = true := by
@@ -1179,7 +1161,13 @@ theorem applyRowDelta_remove_filter {fs : List Field} (key : String)
     cases hp : RowVals.project? fs old key with
     | none => rfl
     | some a =>
-        have hae := (hcross a (List.mem_filterMap.mpr ⟨old, ho, hp⟩)).1
+        have hae : a.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne
+            (keyImgs_closed hclTy (L := K)
+              (List.mem_filterMap.mpr ⟨old, ho, hp⟩))
+            (keyImgs_closed hclTy hself)
+            (hcross a (List.mem_filterMap.mpr ⟨old, ho, hp⟩) k
+              List.mem_cons_self)).1
         simp [hae]
   have keepRest : ∀ old ∈ rest,
       (match RowVals.project? fs old key with
@@ -1188,7 +1176,12 @@ theorem applyRowDelta_remove_filter {fs : List Field} (key : String)
     cases hp : RowVals.project? fs old key with
     | none => rfl
     | some a =>
-        have hae := (htail a (List.mem_filterMap.mpr ⟨old, ho, hp⟩)).2
+        have hae : a.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne
+            (keyImgs_closed hclTy (L := rest)
+              (List.mem_filterMap.mpr ⟨old, ho, hp⟩))
+            (keyImgs_closed hclTy hself)
+            (hRestNe a (List.mem_filterMap.mpr ⟨old, ho, hp⟩))).1
         simp [hae]
   have keepI : ∀ old ∈ I,
       (match RowVals.project? fs old key with
@@ -1197,7 +1190,12 @@ theorem applyRowDelta_remove_filter {fs : List Field} (key : String)
     cases hp : RowVals.project? fs old key with
     | none => rfl
     | some a =>
-        have hae := (hI a (List.mem_filterMap.mpr ⟨old, ho, hp⟩) k hself).1
+        have hae : a.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne
+            (keyImgs_closed hclTy (L := I)
+              (List.mem_filterMap.mpr ⟨old, ho, hp⟩))
+            (keyImgs_closed hclTy hself)
+            (hI a (List.mem_filterMap.mpr ⟨old, ho, hp⟩) k hself)).1
         simp [hae]
   have dropR : (match RowVals.project? fs r key with
         | some a => !a.beq k | none => true) = false := by
@@ -1210,36 +1208,8 @@ theorem applyRowDelta_remove_filter {fs : List Field} (key : String)
 theorem keyImgs_nil {fs : List Field} {key : String} :
     keyImgs fs key [] = [] := rfl
 
-/-- DISTINCT field values are beq-false — the codec-faithful direction
-    of `FieldVal.beq`. The kernel cannot EVALUATE this (the encoder's
-    `encVarNat` is wf-recursive — opaque to `whnf`, so `decide` sticks),
-    so the proof rides the round-trip: beq-true would give byte-equal
-    images (LawfulBEq on `List UInt8`), and `decode_encodeValue`
-    collapses byte-equal images to equal values. The `CodecClosed`
-    premise is the codec's provable sub-universe (key types — the W8.1
-    scalar discipline — are closed). -/
-theorem FieldVal.beq_eq_false_of_ne {a b : FieldVal} (h : a ≠ b)
-    (ha : CodecClosed a.1) : a.beq b = false := by
-  obtain ⟨ta, va⟩ := a
-  obtain ⟨tb, vb⟩ := b
-  unfold FieldVal.beq
-  by_cases hty : ta = tb
-  · subst hty
-    rw [dif_pos rfl]
-    show (encodeValue ta va == encodeValue ta vb) = false
-    cases hb : (encodeValue ta va == encodeValue ta vb) with
-    | false => rfl
-    | true =>
-        have henc : encodeValue ta va = encodeValue ta vb := beq_iff_eq.mp hb
-        have h1 := decode_encodeValue ta va ha
-        have h2 := decode_encodeValue ta vb ha
-        rw [henc] at h1
-        rw [h1] at h2
-        exact (h (by rw [Option.some.inj h2])).elim
-  · rw [dif_neg hty]
-
 /-- The u64-key specialisation (the fixtures' shape): distinct u64 keys
-    are beq-distinct. -/
+    are beq-distinct (Keys.lean's lawful `FieldVal.beq` kit). -/
 theorem FieldVal.beq_u64_ne {a b : UInt64} (h : a ≠ b) :
     FieldVal.beq ⟨.u64, .u64 a⟩ ⟨.u64, .u64 b⟩ = false :=
   FieldVal.beq_eq_false_of_ne (by
@@ -1275,32 +1245,45 @@ theorem mem_keyImgs_shrunk {fs : List Field} {key : String}
   rw [List.mem_append] at h ⊢
   exact h.elim Or.inl (fun h' => Or.inr (List.mem_cons_of_mem _ h'))
 
-/-- The keep-step preserves the pairwise-distinct invariant. -/
-theorem nodup2_keyImgs_kept {fs : List Field} {key : String}
+/-- The keep-step preserves `Nodup` of the key images (core
+    `List.Nodup` — both sides' images are
+    `keyImgs K ++ k :: keyImgs rest`, so this is the identity). -/
+theorem nodup_keyImgs_kept {fs : List Field} {key : String}
     {K rest : List (RowVals fs)} {r r' : RowVals fs} {k : FieldVal}
     (hk : RowVals.project? fs r key = some k)
     (hk' : RowVals.project? fs r' key = some k)
-    (h : FieldVal.nodup2 (keyImgs fs key (K ++ r :: rest)) = true) :
-    FieldVal.nodup2 (keyImgs fs key ((K ++ [r']) ++ rest)) = true := by
-  rw [keyImgs_append, keyImgs_cons_of_some hk] at h
-  obtain ⟨-, -, -, h4⟩ := FieldVal.beq_false_of_nodup2_append h
-  rw [keyImgs_append, keyImgs_append, keyImgs_cons_of_some hk', keyImgs_nil]
-  exact h4
+    (h : (keyImgs fs key (K ++ r :: rest)).Nodup) :
+    (keyImgs fs key ((K ++ [r']) ++ rest)).Nodup := by
+  have h1 : keyImgs fs key (K ++ r :: rest)
+      = keyImgs fs key K ++ k :: keyImgs fs key rest := by
+    rw [keyImgs_append, keyImgs_cons_of_some hk]
+  have h2 : keyImgs fs key ((K ++ [r']) ++ rest)
+      = keyImgs fs key K ++ k :: keyImgs fs key rest := by
+    rw [keyImgs_append, keyImgs_append, keyImgs_cons_of_some hk', keyImgs_nil,
+      List.append_assoc, List.cons_append, List.nil_append]
+  rw [h1] at h
+  rw [h2]
+  exact h
 
-/-- The delete-step preserves the pairwise-distinct invariant. -/
-theorem nodup2_keyImgs_shrunk {fs : List Field} {key : String}
+/-- The delete-step preserves `Nodup` of the key images (the append
+    decomposition repacked — one `List.nodup_append` round trip). -/
+theorem nodup_keyImgs_shrunk {fs : List Field} {key : String}
     {K rest : List (RowVals fs)} {r : RowVals fs} {k : FieldVal}
     (hk : RowVals.project? fs r key = some k)
-    (h : FieldVal.nodup2 (keyImgs fs key (K ++ r :: rest)) = true) :
-    FieldVal.nodup2 (keyImgs fs key (K ++ rest)) = true := by
+    (h : (keyImgs fs key (K ++ r :: rest)).Nodup) :
+    (keyImgs fs key (K ++ rest)).Nodup := by
   rw [keyImgs_append, keyImgs_cons_of_some hk] at h
+  obtain ⟨hA, hkB, hcross⟩ := List.nodup_append.mp h
   rw [keyImgs_append]
-  exact (FieldVal.beq_false_of_nodup2_append h).2.2.1
+  exact List.nodup_append.mpr ⟨hA, (List.nodup_cons.mp hkB).2,
+    fun a ha b hb => hcross a ha b (List.mem_cons_of_mem _ hb)⟩
 
 /-- THE TABLE-LEVEL CORRESPONDENCE, generalized for the induction: the
     working table splits into processed keeps `K`, the unprocessed
     suffix `rest`, and accumulated inserts `I` (appended at the end —
-    the deterministic placement). -/
+    the deterministic placement). The key premises are the lawful kit:
+    images codec-closed (ONE seed — `keyImgs_closed` spreads it),
+    pairwise distinct (`Nodup`), inserted keys fresh (`≠`). -/
 theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
     (key : String) (hkey : u.key? = some key)
     (himm : ∀ c ∈ u.sets, c.field.name ≠ key) :
@@ -1308,23 +1291,50 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
       (∀ r ∈ rest, (RowVals.project? fs r key).isSome = true) →
       (∀ r ∈ rest, ∀ new, u.newRow r = some new → ∀ k',
         RowVals.project? fs new key = some k' →
-        ∀ wk ∈ keyImgs fs key (K ++ rest),
-          k'.beq wk = false ∧ wk.beq k' = false) →
-      FieldVal.nodup2 (keyImgs fs key (K ++ rest)) = true →
-      (∀ ik ∈ keyImgs fs key I, ∀ wk ∈ keyImgs fs key (K ++ rest),
-        ik.beq wk = false ∧ wk.beq ik = false) →
+        ∀ wk ∈ keyImgs fs key (K ++ rest), k' ≠ wk) →
+      CodecClosed (keyFieldType fs key) →
+      (keyImgs fs key (K ++ rest)).Nodup →
+      (∀ ik ∈ keyImgs fs key I, ∀ wk ∈ keyImgs fs key (K ++ rest), ik ≠ wk) →
       (rest.flatMap u.lowerRow).foldl (fun t d => applyRowDelta key d t)
           (K ++ rest ++ I)
         = K ++ rest.filterMap u.keepRow ++ (I ++ rest.filterMap u.newRow) := by
   intro K rest I
   induction rest generalizing K I with
   | nil =>
-      intro _ _ _ _
+      intro _ _ _ _ _
       simp [List.flatMap_nil, List.filterMap_nil, List.append_nil]
   | cons r rs ih =>
-      intro hproj hfresh hnd hI
+      intro hproj hfreshN hclTy hnd hI
       obtain ⟨k, hk⟩ := Option.isSome_iff_exists.mp (hproj r List.mem_cons_self)
       rw [List.flatMap_cons, List.foldl_append]
+      -- the shrunk-range kit (every recursive call over `rs` rides it)
+      have hprojS : ∀ r' ∈ rs, (RowVals.project? fs r' key).isSome = true :=
+        fun r' hr' => hproj r' (List.mem_cons_of_mem r hr')
+      have hfreshS : ∀ r' ∈ rs, ∀ new, u.newRow r' = some new → ∀ k',
+          RowVals.project? fs new key = some k' →
+          ∀ wk ∈ keyImgs fs key (K ++ rs), k' ≠ wk := by
+        intro r' hr' new hn k' hp' wk hwk
+        exact hfreshN r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
+          (mem_keyImgs_shrunk hk hwk)
+      have hndS := nodup_keyImgs_shrunk hk hnd
+      have hIS : ∀ ik ∈ keyImgs fs key I, ∀ wk ∈ keyImgs fs key (K ++ rs),
+          ik ≠ wk := by
+        intro ik hik wk hwk
+        exact hI ik hik wk (mem_keyImgs_shrunk hk hwk)
+      -- the K-extended kit (every keep/refuse-recursive call rides it;
+      -- the written row's image is the source row's image)
+      have hfreshK : ∀ r' ∈ rs, ∀ new, u.newRow r' = some new → ∀ k',
+          RowVals.project? fs new key = some k' →
+          ∀ wk ∈ keyImgs fs key ((K ++ [r]) ++ rs), k' ≠ wk := by
+        intro r' hr' new hn k' hp' wk hwk
+        exact hfreshN r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
+          ((mem_keyImgs_kept hk hk).mpr hwk)
+      have hndK : (keyImgs fs key ((K ++ [r]) ++ rs)).Nodup :=
+        nodup_keyImgs_kept hk hk hnd
+      have hIK : ∀ ik ∈ keyImgs fs key I,
+          ∀ wk ∈ keyImgs fs key ((K ++ [r]) ++ rs), ik ≠ wk := by
+        intro ik hik wk hwk
+        exact hI ik hik wk ((mem_keyImgs_kept hk hk).mpr hwk)
       by_cases hg : validates u.guard r = true
       · by_cases hd : u.delete = true
         · -- DELETE: the row leaves the keeps; the insert may still fire
@@ -1332,8 +1342,8 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
             unfold Update2Item.keepRow
             rw [if_pos hg, if_pos hd]
           have hlow : u.lowerRow r
-              = [RowDelta.remove k]
-                  ++ (u.insert?.map fun t => RowDelta.insert (t.eval r)).toList := by
+              = [EventSourced.Delta.remove k]
+                  ++ (u.insert?.map fun t => EventSourced.Delta.insert (t.eval r)).toList := by
             simp [Update2Item.lowerRow, hg, hd, hkey, hk]
           rw [hlow]
           cases hi : u.insert? with
@@ -1344,14 +1354,8 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
                 rfl
               rw [Option.map_none, Option.toList_none, List.append_nil]
               simp only [List.foldl_cons, List.foldl_nil]
-              rw [applyRowDelta_remove_filter key K rs I r k hk hnd hI]
-              rw [ih K I
-                (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-                (fun r' hr' new hn k' hp' wk hwk =>
-                  hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-                    (mem_keyImgs_shrunk hk hwk))
-                (nodup2_keyImgs_shrunk hk hnd)
-                (fun ik hik wk hwk => hI ik hik wk (mem_keyImgs_shrunk hk hwk))]
+              rw [applyRowDelta_remove_filter key K rs I r k hk hnd hclTy hI]
+              rw [ih K I hprojS hfreshS hclTy hndS hIS]
               simp only [List.filterMap_cons, hkr, hnr]
           | some t =>
               have hnr : u.newRow r = some (t.eval r) := by
@@ -1360,41 +1364,32 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
                 rfl
               rw [Option.map_some, Option.toList_some]
               simp only [List.singleton_append, List.foldl_cons, List.foldl_nil]
-              rw [applyRowDelta_remove_filter key K rs I r k hk hnd hI]
+              rw [applyRowDelta_remove_filter key K rs I r k hk hnd hclTy hI]
               rw [applyRowDelta_insert]
               have hT : (K ++ rs ++ I) ++ [t.eval r]
                   = (K ++ rs) ++ (I ++ [t.eval r]) := by
                 simp only [List.append_assoc]
               rw [hT]
-              rw [ih K (I ++ [t.eval r])
-                (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-                (fun r' hr' new hn k' hp' wk hwk =>
-                  hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-                    (mem_keyImgs_shrunk hk hwk))
-                (nodup2_keyImgs_shrunk hk hnd)
-                (by
-                  intro ik hik wk hwk
-                  rw [keyImgs_append] at hik
-                  rw [List.mem_append] at hik
-                  cases hik with
-                  | inl hikI => exact hI ik hikI wk (mem_keyImgs_shrunk hk hwk)
-                  | inr hiknew =>
-                      cases hpk : RowVals.project? fs (t.eval r) key with
-                      | none =>
-                          have hempty : keyImgs fs key [t.eval r] = [] := by
-                            simp [keyImgs, hpk]
-                          rw [hempty] at hiknew
-                          exact (List.not_mem_nil hiknew).elim
-                      | some k' =>
-                          have hsing : keyImgs fs key [t.eval r] = [k'] := by
-                            have h1 := keyImgs_cons_of_some (rs := []) hpk
-                            rw [keyImgs_nil] at h1
-                            exact h1
-                          rw [hsing] at hiknew
-                          have hik' : ik = k' := List.mem_singleton.mp hiknew
-                          rw [hik']
-                          exact hfresh r List.mem_cons_self (t.eval r) hnr k' hpk
-                            wk (mem_keyImgs_shrunk hk hwk))]
+              -- the insert-extended I: the fresh image's ≠ against the
+              -- shrunk table (the membership juggling, once)
+              have hI1 : ∀ ik ∈ keyImgs fs key (I ++ [t.eval r]),
+                  ∀ wk ∈ keyImgs fs key (K ++ rs), ik ≠ wk := by
+                intro ik hik wk hwk
+                rw [keyImgs_append] at hik
+                rcases List.mem_append.mp hik with hik | hik
+                · exact hI ik hik wk (mem_keyImgs_shrunk hk hwk)
+                · cases hpk : RowVals.project? fs (t.eval r) key with
+                  | none => simp [keyImgs, hpk] at hik
+                  | some k' =>
+                      have hsing : keyImgs fs key [t.eval r] = [k'] := by
+                        have h1 := keyImgs_cons_of_some (rs := []) hpk
+                        rw [keyImgs_nil] at h1
+                        exact h1
+                      rw [hsing, List.mem_singleton] at hik
+                      rw [← hik] at hpk
+                      exact hfreshN r List.mem_cons_self (t.eval r) hnr ik
+                        hpk wk (mem_keyImgs_shrunk hk hwk)
+              rw [ih K (I ++ [t.eval r]) hprojS hfreshS hclTy hndS hI1]
               simp only [List.filterMap_cons, hkr, hnr]
               simp only [List.append_assoc, List.cons_append, List.nil_append]
         · -- KEEP (no delete): the update-delta fires when sets nonempty
@@ -1406,7 +1401,7 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
               have hkr' : u.keepRow r = some r := by
                 rw [hkr]; rw [hs]; rfl
               have hlow : u.lowerRow r
-                  = (u.insert?.map fun t => RowDelta.insert (t.eval r)).toList := by
+                  = (u.insert?.map fun t => EventSourced.Delta.insert (t.eval r)).toList := by
                 simp [Update2Item.lowerRow, hg, hd, hs]
               rw [hlow]
               cases hi : u.insert? with
@@ -1418,18 +1413,13 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
                   rw [Option.map_none, Option.toList_none]
                   simp only [List.foldl_nil]
                   have hT : (K ++ r :: rs) ++ I = (K ++ [r]) ++ rs ++ I := by
-                    simp only [List.append_assoc, List.cons_append, List.nil_append]
+                    simp only [List.append_assoc, List.cons_append,
+                      List.nil_append]
                   rw [hT]
-                  rw [ih (K ++ [r]) I
-                    (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-                    (fun r' hr' new hn k' hp' wk hwk =>
-                      hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-                        ((mem_keyImgs_kept hk hk).mpr hwk))
-                    (nodup2_keyImgs_kept hk hk hnd)
-                    (fun ik hik wk hwk =>
-                      hI ik hik wk ((mem_keyImgs_kept hk hk).mpr hwk))]
+                  rw [ih (K ++ [r]) I hprojS hfreshK hclTy hndK hIK]
                   simp only [List.filterMap_cons, hkr', hnr]
-                  simp only [List.append_assoc, List.cons_append, List.nil_append]
+                  simp only [List.append_assoc, List.cons_append,
+                    List.nil_append]
               | some t =>
                   have hnr : u.newRow r = some (t.eval r) := by
                     unfold Update2Item.newRow
@@ -1440,49 +1430,40 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
                   rw [applyRowDelta_insert]
                   have hT : (K ++ r :: rs ++ I) ++ [t.eval r]
                       = (K ++ [r]) ++ rs ++ (I ++ [t.eval r]) := by
-                    simp only [List.append_assoc, List.cons_append, List.nil_append]
+                    simp only [List.append_assoc, List.cons_append,
+                      List.nil_append]
                   rw [hT]
-                  rw [ih (K ++ [r]) (I ++ [t.eval r])
-                    (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-                    (fun r' hr' new hn k' hp' wk hwk =>
-                      hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-                        ((mem_keyImgs_kept hk hk).mpr hwk))
-                    (nodup2_keyImgs_kept hk hk hnd)
-                    (by
-                      intro ik hik wk hwk
-                      rw [keyImgs_append] at hik
-                      rw [List.mem_append] at hik
-                      cases hik with
-                      | inl hikI =>
-                          exact hI ik hikI wk ((mem_keyImgs_kept hk hk).mpr hwk)
-                      | inr hiknew =>
-                          cases hpk : RowVals.project? fs (t.eval r) key with
-                          | none =>
-                              have hempty : keyImgs fs key [t.eval r] = [] := by
-                                simp [keyImgs, hpk]
-                              rw [hempty] at hiknew
-                              exact (List.not_mem_nil hiknew).elim
-                          | some k' =>
-                              have hsing : keyImgs fs key [t.eval r] = [k'] := by
-                                have h1 := keyImgs_cons_of_some (rs := []) hpk
-                                rw [keyImgs_nil] at h1
-                                exact h1
-                              rw [hsing] at hiknew
-                              have hik' : ik = k' := List.mem_singleton.mp hiknew
-                              rw [hik']
-                              exact hfresh r List.mem_cons_self (t.eval r) hnr
-                                k' hpk wk ((mem_keyImgs_kept hk hk).mpr hwk))]
+                  have hI1 : ∀ ik ∈ keyImgs fs key (I ++ [t.eval r]),
+                      ∀ wk ∈ keyImgs fs key ((K ++ [r]) ++ rs), ik ≠ wk := by
+                    intro ik hik wk hwk
+                    rw [keyImgs_append] at hik
+                    rcases List.mem_append.mp hik with hik | hik
+                    · exact hI ik hik wk ((mem_keyImgs_kept hk hk).mpr hwk)
+                    · cases hpk : RowVals.project? fs (t.eval r) key with
+                      | none => simp [keyImgs, hpk] at hik
+                      | some k' =>
+                          have hsing : keyImgs fs key [t.eval r] = [k'] := by
+                            have h1 := keyImgs_cons_of_some (rs := []) hpk
+                            rw [keyImgs_nil] at h1
+                            exact h1
+                          rw [hsing, List.mem_singleton] at hik
+                          rw [← hik] at hpk
+                          exact hfreshN r List.mem_cons_self (t.eval r) hnr
+                            ik hpk wk ((mem_keyImgs_kept hk hk).mpr hwk)
+                  rw [ih (K ++ [r]) (I ++ [t.eval r]) hprojS hfreshK hclTy
+                    hndK hI1]
                   simp only [List.filterMap_cons, hkr', hnr]
-                  simp only [List.append_assoc, List.cons_append, List.nil_append]
+                  simp only [List.append_assoc, List.cons_append,
+                    List.nil_append]
           | cons chd ctl =>
               -- the written row
               have hk' : RowVals.project? fs (applySets u.sets r) key
                   = some k := by
                 rw [project?_applySets' himm]; exact hk
               have hlow : u.lowerRow r
-                  = [RowDelta.update (applySets u.sets r)]
+                  = [EventSourced.Delta.update (applySets u.sets r)]
                       ++ (u.insert?.map fun t =>
-                        RowDelta.insert (t.eval r)).toList := by
+                        EventSourced.Delta.insert (t.eval r)).toList := by
                 simp [Update2Item.lowerRow, hg, hd, hs]
               rw [hlow]
               cases hi : u.insert? with
@@ -1494,22 +1475,32 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
                   rw [Option.map_none, Option.toList_none, List.append_nil]
                   simp only [List.foldl_cons, List.foldl_nil]
                   rw [applyRowDelta_update_map key K rs I r (applySets u.sets r) k
-                    hk hk' hnd hI]
+                    hk hk' hnd hclTy hI]
                   have hT : (K ++ applySets u.sets r :: rs) ++ I
                       = (K ++ [applySets u.sets r]) ++ rs ++ I := by
                     simp only [List.append_assoc,
                       List.cons_append, List.nil_append]
                   rw [hT]
-                  rw [ih (K ++ [applySets u.sets r]) I
-                    (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-                    (fun r' hr' new hn k' hp' wk hwk =>
-                      hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-                        ((mem_keyImgs_kept hk hk').mpr hwk))
-                    (nodup2_keyImgs_kept hk hk' hnd)
-                    (fun ik hik wk hwk =>
-                      hI ik hik wk ((mem_keyImgs_kept hk hk').mpr hwk))]
+                  have hfreshK' : ∀ r' ∈ rs, ∀ new, u.newRow r' = some new →
+                      ∀ k'', RowVals.project? fs new key = some k'' →
+                        ∀ wk ∈ keyImgs fs key
+                          ((K ++ [applySets u.sets r]) ++ rs), k'' ≠ wk := by
+                    intro r' hr' new hn k'' hp' wk hwk
+                    exact hfreshN r' (List.mem_cons_of_mem r hr') new hn k''
+                      hp' wk ((mem_keyImgs_kept hk hk').mpr hwk)
+                  have hndK' : (keyImgs fs key
+                      ((K ++ [applySets u.sets r]) ++ rs)).Nodup :=
+                    nodup_keyImgs_kept hk hk' hnd
+                  have hIK' : ∀ ik ∈ keyImgs fs key I,
+                      ∀ wk ∈ keyImgs fs key
+                        ((K ++ [applySets u.sets r]) ++ rs), ik ≠ wk := by
+                    intro ik hik wk hwk
+                    exact hI ik hik wk ((mem_keyImgs_kept hk hk').mpr hwk)
+                  rw [ih (K ++ [applySets u.sets r]) I hprojS hfreshK'
+                    hclTy hndK' hIK']
                   simp only [List.filterMap_cons, hkr, hnr]
-                  simp only [List.append_assoc, List.cons_append, List.nil_append]
+                  simp only [List.append_assoc, List.cons_append,
+                    List.nil_append]
               | some t =>
                   have hnr : u.newRow r = some (t.eval r) := by
                     unfold Update2Item.newRow
@@ -1519,42 +1510,47 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
                   simp only [List.singleton_append, List.foldl_cons,
                     List.foldl_nil]
                   rw [applyRowDelta_update_map key K rs I r (applySets u.sets r) k
-                    hk hk' hnd hI]
+                    hk hk' hnd hclTy hI]
                   rw [applyRowDelta_insert]
                   have hT : (K ++ (applySets u.sets r) :: rs ++ I) ++ [t.eval r]
                       = (K ++ [applySets u.sets r]) ++ rs ++ (I ++ [t.eval r]) := by
                     simp only [List.append_assoc, List.cons_append, List.nil_append]
                   rw [hT]
+                  have hfreshK' : ∀ r' ∈ rs, ∀ new, u.newRow r' = some new →
+                      ∀ k'', RowVals.project? fs new key = some k'' →
+                        ∀ wk ∈ keyImgs fs key
+                          ((K ++ [applySets u.sets r]) ++ rs), k'' ≠ wk := by
+                    intro r' hr' new hn k'' hp' wk hwk
+                    exact hfreshN r' (List.mem_cons_of_mem r hr') new hn k''
+                      hp' wk ((mem_keyImgs_kept hk hk').mpr hwk)
+                  have hndK' : (keyImgs fs key
+                      ((K ++ [applySets u.sets r]) ++ rs)).Nodup :=
+                    nodup_keyImgs_kept hk hk' hnd
+                  have hIK' : ∀ ik ∈ keyImgs fs key I,
+                      ∀ wk ∈ keyImgs fs key
+                        ((K ++ [applySets u.sets r]) ++ rs), ik ≠ wk := by
+                    intro ik hik wk hwk
+                    exact hI ik hik wk ((mem_keyImgs_kept hk hk').mpr hwk)
+                  have hI1 : ∀ ik ∈ keyImgs fs key (I ++ [t.eval r]),
+                      ∀ wk ∈ keyImgs fs key
+                        ((K ++ [applySets u.sets r]) ++ rs), ik ≠ wk := by
+                    intro ik hik wk hwk
+                    rw [keyImgs_append] at hik
+                    rcases List.mem_append.mp hik with hik | hik
+                    · exact hI ik hik wk ((mem_keyImgs_kept hk hk').mpr hwk)
+                    · cases hpk : RowVals.project? fs (t.eval r) key with
+                      | none => simp [keyImgs, hpk] at hik
+                      | some k' =>
+                          have hsing : keyImgs fs key [t.eval r] = [k'] := by
+                            have h1 := keyImgs_cons_of_some (rs := []) hpk
+                            rw [keyImgs_nil] at h1
+                            exact h1
+                          rw [hsing, List.mem_singleton] at hik
+                          rw [← hik] at hpk
+                          exact hfreshN r List.mem_cons_self (t.eval r) hnr
+                            ik hpk wk ((mem_keyImgs_kept hk hk').mpr hwk)
                   rw [ih (K ++ [applySets u.sets r]) (I ++ [t.eval r])
-                    (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-                    (fun r' hr' new hn k' hp' wk hwk =>
-                      hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-                        ((mem_keyImgs_kept hk hk').mpr hwk))
-                    (nodup2_keyImgs_kept hk hk' hnd)
-                    (by
-                      intro ik hik wk hwk
-                      rw [keyImgs_append] at hik
-                      rw [List.mem_append] at hik
-                      cases hik with
-                      | inl hikI =>
-                          exact hI ik hikI wk ((mem_keyImgs_kept hk hk').mpr hwk)
-                      | inr hiknew =>
-                          cases hpk : RowVals.project? fs (t.eval r) key with
-                          | none =>
-                              have hempty : keyImgs fs key [t.eval r] = [] := by
-                                simp [keyImgs, hpk]
-                              rw [hempty] at hiknew
-                              exact (List.not_mem_nil hiknew).elim
-                          | some k' =>
-                              have hsing : keyImgs fs key [t.eval r] = [k'] := by
-                                have h1 := keyImgs_cons_of_some (rs := []) hpk
-                                rw [keyImgs_nil] at h1
-                                exact h1
-                              rw [hsing] at hiknew
-                              have hik' : ik = k' := List.mem_singleton.mp hiknew
-                              rw [hik']
-                              exact hfresh r List.mem_cons_self (t.eval r) hnr
-                                k' hpk wk ((mem_keyImgs_kept hk hk').mpr hwk))]
+                    hprojS hfreshK' hclTy hndK' hI1]
                   simp only [List.filterMap_cons, hkr, hnr]
                   simp only [List.append_assoc, List.cons_append, List.nil_append]
       · -- guard refuses: the row is untouched, no deltas
@@ -1570,24 +1566,20 @@ theorem foldDeltas_go {fs : List Field} (u : Update2Item fs)
         have hT : (K ++ r :: rs) ++ I = (K ++ [r]) ++ rs ++ I := by
           simp only [List.append_assoc, List.cons_append, List.nil_append]
         rw [hT]
-        rw [ih (K ++ [r]) I
-          (fun r' hr' => hproj r' (List.mem_cons_of_mem r hr'))
-          (fun r' hr' new hn k' hp' wk hwk =>
-            hfresh r' (List.mem_cons_of_mem r hr') new hn k' hp' wk
-              ((mem_keyImgs_kept hk hk).mpr hwk))
-          (nodup2_keyImgs_kept hk hk hnd)
-          (fun ik hik wk hwk => hI ik hik wk ((mem_keyImgs_kept hk hk).mpr hwk))]
+        rw [ih (K ++ [r]) I hprojS hfreshK hclTy hndK hIK]
         simp only [List.filterMap_cons, hkr, hnr]
         simp only [List.append_assoc, List.cons_append, List.nil_append]
 
 /-- The correspondence premise bundle (registration-checkable on
     data): the key column is not written; every row projects its key;
-    key images are pairwise beq-distinct BOTH directions
-    (`FieldVal.beq` is not provably symmetric — ByteArray's `BEq` has
-    no lawful instance — so the two directions are data); the inserted
-    rows' keys are beq-fresh against every table row. -/
+    the key column's type is codec-closed (ONE fact — the lawful
+    `FieldVal.beq`'s round-trip warranty, spread over every image by
+    `keyImgs_closed`); the images are pairwise distinct (core
+    `List.Nodup` — R5 collapsed the both-direction `nodup2` ball); the
+    inserted rows' keys are fresh against every table row. The bundle
+    is Type-valued (the `CodecClosed` seed is data, not a Prop). -/
 structure KeyCoherent {fs : List Field} (u : Update2Item fs) (key : String)
-    (rows : List (RowVals fs)) : Prop where
+    (rows : List (RowVals fs)) where
   /-- The update carries the declared key (the elaboration gate). -/
   keyOf : u.key? = some key
   /-- Key immutability: no SET clause writes the key column (a key
@@ -1595,20 +1587,22 @@ structure KeyCoherent {fs : List Field} (u : Update2Item fs) (key : String)
   keyImmutable : ∀ c ∈ u.sets, c.field.name ≠ key
   /-- Every row projects its key. -/
   proj : ∀ r ∈ rows, (RowVals.project? fs r key).isSome = true
-  /-- Key images pairwise beq-distinct (both directions). -/
-  nodup2 : FieldVal.nodup2 (keyImgs fs key rows) = true
-  /-- Insert keys fresh against every table row's key (both
-      directions). -/
+  /-- The key column's type is codec-closed (the key type's `KeyTy`
+      discipline — the lawful `FieldVal.beq`'s warranty). -/
+  imgClosed : CodecClosed (keyFieldType fs key)
+  /-- Key images pairwise distinct (core `List.Nodup`). -/
+  nodup : (keyImgs fs key rows).Nodup
+  /-- Insert keys fresh against every table row's key. -/
   fresh : ∀ r ∈ rows, ∀ new, u.newRow r = some new → ∀ k',
     RowVals.project? fs new key = some k' →
-    ∀ wk ∈ keyImgs fs key rows, k'.beq wk = false ∧ wk.beq k' = false
+    ∀ wk ∈ keyImgs fs key rows, k' ≠ wk
 
 /-- LAW 6 (the lowering correspondence): the update's table effect IS
     the fold of its per-row deltas through the keyed table semantics —
-    `RowDelta` (Delta.lean's change shape: insert/update carry the
-    full row, remove carries the key image) applied by
-    `applyRowDelta`. Under `KeyCoherent`, the positional batch
-    semantics (`Update2Item.apply`) and the delta fold coincide. -/
+    the SHARED delta shape (`EventSourced.Delta` at the schema row:
+    insert/update carry the full row, remove carries the key image)
+    applied by `applyRowDelta`. Under `KeyCoherent`, the positional
+    batch semantics (`Update2Item.apply`) and the delta fold coincide. -/
 theorem apply2_eq_foldDeltas {fs : List Field} (u : Update2Item fs)
     (key : String) (rows : List (RowVals fs)) (h : KeyCoherent u key rows) :
     u.apply rows
@@ -1617,16 +1611,280 @@ theorem apply2_eq_foldDeltas {fs : List Field} (u : Update2Item fs)
   have hgo := foldDeltas_go u key h.keyOf h.keyImmutable [] rows []
     h.proj
     (by
-      intro r hr new hn k' hp wk hwk
-      exact h.fresh r hr new hn k' hp wk (by simpa [keyImgs] using hwk))
-    (by simpa [keyImgs] using h.nodup2)
-    (by intro ik hik; rw [keyImgs_nil] at hik; exact (List.not_mem_nil hik).elim)
+      intro r hr new hn k' hp' wk hwk
+      rw [List.nil_append] at hwk
+      exact h.fresh r hr new hn k' hp' wk hwk)
+    h.imgClosed
+    (by rw [List.nil_append]; exact h.nodup)
+    (by
+      intro ik hik wk _
+      rw [keyImgs_nil] at hik
+      exact (List.not_mem_nil hik).elim)
   -- hgo : foldl … (([] ++ rows) ++ []) = [] ++ keeps ++ ([] ++ news)
   have htable : ([] ++ rows) ++ [] = rows := by
     rw [List.nil_append, List.append_nil]
   rw [htable] at hgo
   rw [hgo]
   simp [Update2Item.apply, List.nil_append]
+
+/-! ### The applicator bridge (R1: ONE delta, ONE keyed reading)
+
+The update lane's keyed applicator (`applyRowDelta`: update REPLACES
+every key-matching row, remove DROPS them, insert APPENDS) and the
+event-sourcing lane's (`EventSourced.apply`: insert/update UPSERT the
+first match, remove erases the first) are the SAME keyed reading on
+key-unique tables — the correspondence the W8.3 lowering law rides:
+one shared Delta, two equivalent applicators. -/
+
+/-- The shared-Delta key view of a row (the event-sourcing lane's key
+    function at the schema row). The `none` default never fires under
+    `KeyCoherent.proj`. -/
+def esKeyOf (fs : List Field) (key : String) (r : RowVals fs) : FieldVal :=
+  match RowVals.project? fs r key with
+  | some k => k
+  | none => ⟨.bool, .bool false⟩
+
+theorem esKeyOf_eq_image {fs : List Field} {key : String} {r : RowVals fs}
+    {k : FieldVal} (h : RowVals.project? fs r key = some k) :
+    esKeyOf fs key r = k := by
+  simp [esKeyOf, h]
+
+/-- The remove arm's bridge: first-erase = drop-every-match, on
+    key-unique tables. -/
+theorem applyRowDelta_remove_eq_apply {fs : List Field} (key : String)
+    (k : FieldVal) (rows : List (RowVals fs))
+    (hproj : ∀ r ∈ rows, (RowVals.project? fs r key).isSome = true)
+    (hclTy : CodecClosed (keyFieldType fs key))
+    (hnd : (keyImgs fs key rows).Nodup) :
+    EventSourced.apply (esKeyOf fs key) (EventSourced.Delta.remove k) rows
+      = applyRowDelta key (EventSourced.Delta.remove k) rows := by
+  show rows.eraseIdx (rows.findIdx (fun x => esKeyOf fs key x == k))
+    = rows.filter (fun old =>
+        match RowVals.project? fs old key with
+        | some a => !a.beq k | none => true)
+  revert hproj
+  revert hnd
+  induction rows with
+  | nil => intro _ _; rfl
+  | cons r rs ih =>
+      intro hnd hproj
+      obtain ⟨ar, har⟩ :=
+        Option.isSome_iff_exists.mp (hproj r List.mem_cons_self)
+      have himgs : keyImgs fs key (r :: rs) = ar :: keyImgs fs key rs :=
+        keyImgs_cons_of_some har
+      rw [himgs] at hnd
+      have hprojS : ∀ x ∈ rs, (RowVals.project? fs x key).isSome = true :=
+        fun x hx => hproj x (List.mem_cons_of_mem r hx)
+      have hndS : (keyImgs fs key rs).Nodup := (List.nodup_cons.mp hnd).2
+      by_cases hhead : ar = k
+      · -- the head IS the (unique) match: erase at 0; the tail stays
+        have hpr : (fun x => esKeyOf fs key x == k) r = true := by
+          simp only [esKeyOf_eq_image har, hhead]
+          exact FieldVal.beq_refl _
+        have hp' : (fun old =>
+            match RowVals.project? fs old key with
+            | some a => !a.beq k | none => true) r = false := by
+          simp [har, hhead, FieldVal.beq_refl]
+        have hkeep : ∀ old ∈ rs,
+            (fun old =>
+              match RowVals.project? fs old key with
+              | some a => !a.beq k | none => true) old = true := by
+          intro old ho
+          show (match RowVals.project? fs old key with
+              | some a => !a.beq k | none => true) = true
+          cases hp2 : RowVals.project? fs old key with
+          | none => rfl
+          | some a =>
+              have hmemA : a ∈ keyImgs fs key rs :=
+                List.mem_filterMap.mpr ⟨old, ho, hp2⟩
+              have hne : a ≠ k := by
+                intro heq
+                rw [heq] at hmemA
+                have h2 : k ∈ keyImgs fs key rs := hmemA
+                rw [← hhead] at h2
+                exact (List.nodup_cons.mp hnd).1 h2
+              have hae : a.beq k = false :=
+                (FieldVal.beq_false_pair_of_ne
+                  (keyImgs_closed hclTy hmemA)
+                  (keyImgs_closed hclTy (by
+                    rw [himgs, ← hhead]; exact List.mem_cons_self))
+                  hne).1
+              simp [hae]
+        rw [List.findIdx_cons]
+        simp only [hpr, cond_true, List.eraseIdx_cons_zero]
+        rw [List.filter_cons_of_neg
+          (p := fun old =>
+            match RowVals.project? fs old key with
+            | some a => !a.beq k | none => true)
+          (a := r) (by simp [hp'])]
+        rw [List.filter_eq_self.mpr hkeep]
+      · -- head ≠ match: the head stays; the tail recurses
+        have hmemAr : ar ∈ keyImgs fs key (r :: rs) := by
+          rw [himgs]; exact List.mem_cons_self
+        have hpr : (fun x => esKeyOf fs key x == k) r = false := by
+          simp only [esKeyOf_eq_image har]
+          exact FieldVal.beq_eq_false_of_ne hhead (keyImgs_closed hclTy hmemAr)
+        have hp' : (fun old =>
+            match RowVals.project? fs old key with
+            | some a => !a.beq k | none => true) r = true := by
+          simp [har, FieldVal.beq_eq_false_of_ne hhead
+            (keyImgs_closed hclTy hmemAr)]
+        rw [List.findIdx_cons]
+        simp only [hpr, cond_true, List.eraseIdx_cons_succ]
+        rw [List.filter_cons_of_pos
+          (p := fun old =>
+            match RowVals.project? fs old key with
+            | some a => !a.beq k | none => true)
+          (a := r) hp']
+        exact congrArg (fun l => r :: l) (ih hndS hprojS)
+
+/-- The update arm's bridge: first-match-upsert = replace-every-match,
+    on key-unique tables with the written key PRESENT. -/
+theorem applyRowDelta_update_eq_apply {fs : List Field} (key : String)
+    (r' : RowVals fs) (k : FieldVal) (rows : List (RowVals fs))
+    (hrr' : RowVals.project? fs r' key = some k)
+    (hproj : ∀ r ∈ rows, (RowVals.project? fs r key).isSome = true)
+    (hclTy : CodecClosed (keyFieldType fs key))
+    (hnd : (keyImgs fs key rows).Nodup)
+    (hak : k ∈ keyImgs fs key rows) :
+    EventSourced.apply (esKeyOf fs key) (EventSourced.Delta.update r') rows
+      = applyRowDelta key (EventSourced.Delta.update r') rows := by
+  show EventSourced.upsert (esKeyOf fs key) r' rows
+    = rows.map (fun old =>
+        match RowVals.project? fs old key with
+        | some a =>
+            match RowVals.project? fs r' key with
+            | some b => if a.beq b then r' else old
+            | none => old
+        | none => old)
+  revert hak
+  revert hproj
+  revert hnd
+  induction rows with
+  | nil =>
+      intro _ _ hak
+      rw [keyImgs_nil] at hak
+      exact (List.not_mem_nil hak).elim
+  | cons r rs ih =>
+      intro hnd hproj hak
+      obtain ⟨ar, har⟩ :=
+        Option.isSome_iff_exists.mp (hproj r List.mem_cons_self)
+      have himgs : keyImgs fs key (r :: rs) = ar :: keyImgs fs key rs :=
+        keyImgs_cons_of_some har
+      rw [himgs] at hnd
+      have hprojS : ∀ x ∈ rs, (RowVals.project? fs x key).isSome = true :=
+        fun x hx => hproj x (List.mem_cons_of_mem r hx)
+      have hndS : (keyImgs fs key rs).Nodup := (List.nodup_cons.mp hnd).2
+      rw [EventSourced.upsert, List.map_cons]
+      by_cases hhead : ar = k
+      · -- the head row IS the match: upsert replaces it in place
+        have hbeq : (esKeyOf fs key r == esKeyOf fs key r') = true := by
+          rw [esKeyOf_eq_image har, esKeyOf_eq_image hrr', hhead]
+          exact FieldVal.beq_refl _
+        have hArmR : (match RowVals.project? fs r key with
+            | some a =>
+                match RowVals.project? fs r' key with
+                | some b => if a.beq b then r' else r
+                | none => r
+            | none => r) = r' := by
+          simp [har, hrr', hhead, FieldVal.beq_refl]
+        have htail : ∀ old ∈ rs,
+            (match RowVals.project? fs old key with
+              | some a =>
+                  match RowVals.project? fs r' key with
+                  | some b => if a.beq b then r' else old
+                  | none => old
+              | none => old) = old := by
+          intro old ho
+          cases hp2 : RowVals.project? fs old key with
+          | none => rfl
+          | some a =>
+              have hmemA : a ∈ keyImgs fs key rs :=
+                List.mem_filterMap.mpr ⟨old, ho, hp2⟩
+              have hne : a ≠ k := by
+                intro heq
+                rw [heq] at hmemA
+                have h2 : k ∈ keyImgs fs key rs := hmemA
+                rw [← hhead] at h2
+                exact (List.nodup_cons.mp hnd).1 h2
+              have hae : a.beq k = false :=
+                (FieldVal.beq_false_pair_of_ne
+                  (keyImgs_closed hclTy hmemA)
+                  (keyImgs_closed hclTy hak) hne).1
+              simp [hrr', hae]
+        rw [if_pos hbeq, hArmR, map_eq_self_of_forall htail]
+      · -- head ≠ match: upsert descends; the map fixes the head
+        have hmemAr : ar ∈ keyImgs fs key (r :: rs) := by
+          rw [himgs]; exact List.mem_cons_self
+        have haeHead : ar.beq k = false :=
+          (FieldVal.beq_false_pair_of_ne (keyImgs_closed hclTy hmemAr)
+            (keyImgs_closed hclTy hak) hhead).1
+        have hbeq : (esKeyOf fs key r == esKeyOf fs key r') = false := by
+          rw [esKeyOf_eq_image har, esKeyOf_eq_image hrr']
+          exact haeHead
+        have hArmR : (match RowVals.project? fs r key with
+            | some a =>
+                match RowVals.project? fs r' key with
+                | some b => if a.beq b then r' else r
+                | none => r
+            | none => r) = r := by
+          simp [har, hrr', haeHead]
+        have hakS : k ∈ keyImgs fs key rs := by
+          have hak2 : k ∈ ar :: keyImgs fs key rs := by rw [← himgs]; exact hak
+          rcases List.mem_cons.mp hak2 with heq | hm
+          · exact absurd heq.symm hhead
+          · exact hm
+        rw [if_neg (by simp [hbeq]), hArmR, ih hndS hprojS hakS]
+
+/-- The insert arm's bridge: a FRESH key means no row matches, so the
+    upsert is the append. -/
+theorem applyRowDelta_insert_eq_apply {fs : List Field} (key : String)
+    (r' : RowVals fs) (k : FieldVal) (rows : List (RowVals fs))
+    (hrr' : RowVals.project? fs r' key = some k)
+    (hproj : ∀ r ∈ rows, (RowVals.project? fs r key).isSome = true)
+    (hclTy : CodecClosed (keyFieldType fs key))
+    (hfresh : ∀ j ∈ keyImgs fs key rows, j ≠ k) :
+    EventSourced.apply (esKeyOf fs key) (EventSourced.Delta.insert r') rows
+      = applyRowDelta key (EventSourced.Delta.insert r') rows := by
+  show EventSourced.upsert (esKeyOf fs key) r' rows = rows ++ [r']
+  have hfind : rows.findIdx (fun x => esKeyOf fs key x == esKeyOf fs key r')
+      = rows.length := by
+    rw [List.findIdx_eq_length_of_false]
+    intro r hr
+    obtain ⟨j, hj⟩ := Option.isSome_iff_exists.mp (hproj r hr)
+    show (esKeyOf fs key r == esKeyOf fs key r') = false
+    rw [esKeyOf_eq_image hj, esKeyOf_eq_image hrr']
+    exact FieldVal.beq_eq_false_of_ne
+      (hfresh j (List.mem_filterMap.mpr ⟨r, hr, hj⟩))
+      (keyImgs_closed hclTy (List.mem_filterMap.mpr ⟨r, hr, hj⟩))
+  rw [EventSourced.upsert_eq_append (esKeyOf fs key) r' rows hfind]
+
+/-- THE APPLICATOR CORRESPONDENCE (R1): the update lane's keyed
+    applicator IS the event-sourcing lane's keyed semantics on
+    key-unique tables — insert appends (fresh key), update replaces
+    the one match (present key), remove drops the one match. The
+    per-variant premises are `KeyCoherent`'s, split by arm. -/
+theorem applyRowDelta_eq_apply {fs : List Field} (key : String)
+    (d : RowDelta fs) (rows : List (RowVals fs))
+    (hproj : ∀ r ∈ rows, (RowVals.project? fs r key).isSome = true)
+    (hclTy : CodecClosed (keyFieldType fs key))
+    (hnd : (keyImgs fs key rows).Nodup)
+    (hd : match d with
+      | .insert r => ∃ k, RowVals.project? fs r key = some k
+          ∧ ∀ j ∈ keyImgs fs key rows, j ≠ k
+      | .update r => ∃ k, RowVals.project? fs r key = some k
+          ∧ k ∈ keyImgs fs key rows
+      | .remove _ => True) :
+    EventSourced.apply (esKeyOf fs key) d rows = applyRowDelta key d rows := by
+  cases d with
+  | insert r =>
+      obtain ⟨k, hk, hf⟩ := hd
+      exact applyRowDelta_insert_eq_apply key r k rows hk hproj hclTy hf
+  | update r =>
+      obtain ⟨k, hk, hmem⟩ := hd
+      exact applyRowDelta_update_eq_apply key r k rows hk hproj hclTy hnd hmem
+  | remove k =>
+      exact applyRowDelta_remove_eq_apply key k rows hproj hclTy hnd
 
 /-! ## The obligation view (W7.1's substrate, the keys-lane shape) -/
 
@@ -1700,36 +1958,27 @@ instance update2ClaimDecidable (o : Update2Obligation) :
 
 /-- THE DISCHARGE (the keys-lane shape): only the `decidableNow` rung
     is an update-lane assignment; the kernel's `decide` over
-    `decidableClaim` is the evidence. `none` = the loud gap. -/
+    `decidableClaim` is the evidence. `none` = the loud gap. (The
+    decidableNow backend is the KIT's — `decideDischarge`.) -/
 def Update2Obligation.discharge (o : Update2Obligation) :
     Option CodegenCore.Obligation.Evidence :=
-  match o.tier with
-  | .decidableNow =>
-      match decide o.decidableClaim with
-      | true => some (.decided true)
-      | false => none
-  | .provedAtElab | .generatedCheck | .oracleSwept | .guestVerified => none
+  CodegenCore.Obligation.decideDischarge Update2Obligation.decidableClaim o
 
 /-- SOUNDNESS: a `.decided true` verdict means the claim HOLDS (the
     kernel's `decide` validated the preservation predicate on the
-    pinned table — `of_decide_eq_true`; no new trust base). -/
+    pinned table — `of_decide_eq_true`; no new trust base). Routes
+    through the kit's `decideDischarge_sound` — the proof object is
+    shared. -/
 theorem Update2Obligation.discharge_decidableNow_sound (o : Update2Obligation)
     (ht : o.tier = .decidableNow)
-    (h : o.discharge = some (.decided true)) : o.decidableClaim := by
-  unfold Update2Obligation.discharge at h
-  rw [ht] at h
-  cases hd : decide o.decidableClaim with
-  | true => exact of_decide_eq_true hd
-  | false =>
-      rw [hd] at h
-      simp at h
+    (h : o.discharge = some (.decided true)) : o.decidableClaim :=
+  CodegenCore.Obligation.decideDischarge_sound _ _ ht h
 
 /-- COMPLETENESS: a true claim discharges to the `.decided true`
     evidence — the backend FIRES on the claims it can decide. -/
 theorem Update2Obligation.discharge_decidableNow_of_claim (o : Update2Obligation)
     (ht : o.tier = .decidableNow) (h : o.decidableClaim) :
-    o.discharge = some (.decided true) := by
-  unfold Update2Obligation.discharge
-  rw [ht, decide_eq_true h]
+    o.discharge = some (.decided true) :=
+  CodegenCore.Obligation.decideDischarge_of_claim _ _ ht h
 
 end SchemaLang

@@ -23,15 +23,19 @@ Runs from the package root (the justfile recipe `cd`s there), like the
 golden checks in Tests.
 -/
 import Lean
+import Cli
 import SchemaLang
 import Demo
 
 open Lean SchemaLang SchemaLang.Meta
 
-unsafe def runBreaking (args : List String) : IO UInt32 := do
+/-- W5.4 hygiene batch: `--update` is a Cli flag now (the hand
+    `args.contains "--update"` check is gone); SchemaMain wires this
+    handler in as the `breaking` subcommand. -/
+unsafe def runBreaking (p : Cli.Parsed) : IO UInt32 := do
   let items := (← CodegenCore.loadRegisteredItems schemaItemExt #[`Demo]).map (·.2)
   let path : System.FilePath := "goldens/universe.snapshot"
-  if args.contains "--update" then
+  if p.hasFlag "update" then
     if Snapshot.namesEncodable items then
       CodegenCore.Emit.createParentDirs path
       IO.FS.writeFile path (Snapshot.render items)

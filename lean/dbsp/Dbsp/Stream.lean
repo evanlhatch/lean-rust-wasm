@@ -13,7 +13,8 @@ source needs evaporates for us).
 
 module
 
-public import Batteries
+-- The umbrella `public import Batteries` was deleted (W5.4 hygiene batch):
+-- no Batteries-named entity is referenced; it was a false coupling.
 public import Dbsp.Lint
 public import Mathlib.Algebra.Group.Pi.Basic
 public import Mathlib.Algebra.Notation.Prod

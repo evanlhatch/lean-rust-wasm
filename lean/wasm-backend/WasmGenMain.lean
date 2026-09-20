@@ -263,7 +263,7 @@ private def collectUndefinedCallees (decls : List (Lean.Compiler.LCNF.Decl .impu
     runtime-spliced WAT body WITHOUT the GENERATED header — the header
     is the driver's prepend (`watEmitter` + `runEmitters`, W7.12); this
     function's result joins the `WasmGenSpec` as spec data. -/
-def emitModuleWasm (targetDecls : Array Name) : CoreM String := do
+def emitModuleWasm (targetDecls : Array Name) (asyncFns : List String := []) : CoreM String := do
   -- THE CLOSURE COMPLETION FIXPOINT (see collectUndefinedCallees): each
   -- round runs the pipeline, scans the local decls for undefined fap
   -- callees, and re-runs with them added (their roots exist in the env;
@@ -364,18 +364,16 @@ def emitModuleWasm (targetDecls : Array Name) : CoreM String := do
         | .const c _ => c == `String
         | _ => false
     | _ => false
-  let res : Except String (String × WasmBackend.S) :=
-    StateT.run (WasmBackend.emitModule decls2 exportTargets stringResult?) {}
+  let res : Except String String := do
+    let (wat, _) := ← StateT.run (WasmBackend.emitModule decls2 exportTargets stringResult? asyncFns) {}
+    pure wat
   match res with
-  | .ok (wat, st) =>
+  | .ok wat =>
     -- splice the hand-written runtime (pooled allocator + Perceus RC)
     -- into the module body: single module, no imports. The splice
     -- marker sits AFTER the async task-intrinsic imports (the core-wasm
     -- section order: imports first) and before the memory.
     let rt ← IO.FS.readFile "runtime.wat"
-    -- the migration's progress metric: the `Instr.raw` count (the
-    -- honest ledger lives in WasmBackend.lean's header)
-    IO.println s!"wasm-backend: {st.rawCount} raw instrs (the Wat.Instr.raw ledger)"
     pure (wat.replace "  ;;RUNTIME-SPLICE\n" (rt ++ "\n"))
   | .error e => throwError e
 
@@ -434,6 +432,21 @@ def worldExportsOf (env : Environment) (targetDecls : Array Name) : List WorldEx
     | some (_, .func sig) => some (CodegenCore.Emit.kebab n.getString!, sig)
     | _ => none
 
+/-- The ASYNC-marked exports (the wire names), DERIVED from the
+    registry fold: a registered fn is async iff its ret is the
+    `Async.Future` marker (`.future`) — the same rule `worldRetOf`
+    renders from (`delivery` only shapes the stream's item type, not
+    async-ness). Replaces WasmBackend's hand list
+    (`["watch-orders", "watch-counts", "watch-users"]`): a new async
+    `@[schema_fn]` joins the async lift with ZERO second site. The
+    emitter consumes this as a SET (filter/contains over
+    `exportTargets`), so fold order is byte-irrelevant; any set change
+    surfaces as a `wasm-compile` byte-tie drift on the emitted
+    artifacts. -/
+def asyncExportsOf (worldExports : List WorldExport) : List String :=
+  worldExports.filterMap fun (name, sig) =>
+    match sig.ret with | .future _ => some name | _ => none
+
 /-- The oracle's fn names — DERIVED from `Oracle.rowUniverse` (the
     library is the single source; kebab, as the JSON spells them). The
     drift surface 3.4 pins: an oracle row for a fn the world does not
@@ -475,10 +488,7 @@ def typeItemWit : SchemaLang.Item → String
     a missing-use error, never a silently stale copy. -/
 def demoTypesIfaceOf (items : List (Name × SchemaLang.Item))
     (worldExports : List WorldExport) : String :=
-  let refs :=
-    ((worldExports.map (·.2)).flatMap fun s => s.params.map (·.2) ++ [s.ret])
-      |>.flatMap SchemaLang.Ty.tyRefs
-      |>.eraseDups
+  let refs := SchemaLang.Emit.Wit.sigRefs (worldExports.map (·.2))
   let typeItems := items.filterMap fun (_, it) =>
     match it with
     | .record _ _ | .variant _ _ =>
@@ -643,13 +653,17 @@ unsafe def main : IO Unit := do
   let state : Core.State := { env := env }
   -- the manifest's fold: the marks = the decls (no hand-list)
   let targetDecls := targetDeclsOf env
-  -- the LCNF re-run + the runtime splice stay in the DRIVER (monadic);
-  -- the wat emitter receives the RESULT as spec data.
-  let (watBody, _) ← (emitModuleWasm targetDecls).toIO ctx state
   -- the folded world: the registry is the export authority. The guard
   -- (3.4): the oracle's rows must cover fns the world actually exports
   -- — checked BEFORE any artifact write (the emitters run after).
   let worldExports := worldExportsOf env targetDecls
+  -- the async exports = the registry's `.future` rets (the derivation
+  -- that replaced WasmBackend's hand list — the wasm-compile byte-tie
+  -- pins the set).
+  let asyncExports := asyncExportsOf worldExports
+  -- The LCNF re-run + the runtime splice stay in the DRIVER (monadic);
+  -- the wat emitter receives the RESULT as spec data.
+  let (watBody, _) ← (emitModuleWasm targetDecls asyncExports).toIO ctx state
   for f in oracleFns do
     unless worldExports.any fun (w, _) => w == f do
       -- the closed-world suggestion (CodegenCore.didYouMean — the

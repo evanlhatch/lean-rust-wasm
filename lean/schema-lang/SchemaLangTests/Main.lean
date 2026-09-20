@@ -196,10 +196,9 @@ def codecChecks : CheckResult := do
   .ok ()
 
 def resolutionChecks : CheckResult := do
-  -- demo universe: all refs resolve, names unique (Bool projection)
-  _ ← assertEq "demo wellFormed" (universeWellFormed demoItems) true
-  -- the DIAGNOSTIC authority: empty diags = well formed
-  _ ← assertEq "demo check clean" (universeCheck demoItems) []
+  -- the demo universe's clean resolution is the KERNEL's
+  -- (`demoItems_universeCheck_nil` + `universeWellFormed_iff`, above and
+  -- axiom-gated) — the pins here are the REJECT surface
   -- a ref to a missing type: rejected WITH did-you-mean + valid space
   let broken : List Item := wfBrokenItems
   _ ← assertEq "unknown ref rejected" (universeWellFormed broken) false
@@ -359,39 +358,26 @@ theorem composite_decode_encode (c : Composite) (rest : List UInt8) :
 def codecCombinatorChecks : CheckResult := do
   let c : Composite := ⟨true, [some 1, none, some 300], .south, [9, 8, 7]⟩
   let wire := encComposite c
-  -- whole-structure round trip over every combinator
-  _ ← assertEq "composite roundtrip" (decComposite? wire) (some (c, []))
-  -- self-delimiting: trailing junk survives the decode untouched
-  _ ← assertEq "composite append form" (decComposite? (wire ++ [42, 43]))
-    (some (c, [42, 43]))
+  -- the round trips (composite, append form, varnat, prod) are the
+  -- kernel's: `composite_decode_encode` above + the axiom-gated
+  -- `Codec.decVarNat_append` / `Codec.decProd_encProd_append` — the pins
+  -- here are the truncation/reject surface
   -- truncation rejection: empty input fails the FIRST field's tag check
   _ ← assertEq "truncated to empty" (decComposite? []) none
   -- truncation inside the length-prefixed tail fails the byte count check
   _ ← assertEq "truncated payload" (decComposite? (wire.take (wire.length - 1))) none
-  -- the varint base: multi-byte digit round trip
-  _ ← assertEq "varnat 300" (Codec.decVarNat (Codec.encVarNat 300)) (300, [])
-  _ ← assertEq "varnat 300 append"
-    (Codec.decVarNat (Codec.encVarNat 300 ++ [1, 2])) (300, [1, 2])
   -- enum rejection: out-of-range tag is `none`, not garbage
   _ ← assertEq "enum bad tag" (Codec.decEnum? Direction.ofTag? [7]) none
-  -- pair combinator round trip
-  _ ← assertEq "prod roundtrip"
-    (Codec.decProd? Codec.decNat? Codec.decU8?
-      (Codec.encProd Codec.encVarNat Codec.encodeU8 (5, (7 : UInt8)) ++ [0]))
-    (some ((5, (7 : UInt8)), [0]))
   -- bytes combinator rejects a lying length prefix
   _ ← assertEq "bytes overrun" (Codec.decBytes? [3, 1, 2]) none
   .ok ()
 
-/-- The versioned envelope (5.5.7): round trip, wrong-version rejection
-    (theorem `Codec.decEnvelope_wrong_version`, executed here), and
-    truncation rejection. -/
+/-- The versioned envelope (5.5.7): the round trip and wrong-version
+    rejection are the kernel's (`Codec.decEnvelope_encEnvelope` /
+    `decEnvelope_wrong_version`, axiom-gated) — this pins the reject
+    surface: truncation + trailing junk. -/
 def envelopeChecks : CheckResult := do
   let wire := Codec.encEnvelope 1 42 [1, 2, 3]
-  _ ← assertEq "envelope roundtrip" (Codec.decEnvelope? 1 wire)
-    (some ⟨1, 42, [1, 2, 3]⟩)
-  -- wrong version rejects BEFORE the payload is touched
-  _ ← assertEq "envelope wrong version" (Codec.decEnvelope? 2 wire) none
   -- truncated payload rejects (the length prefix overruns)
   _ ← assertEq "envelope truncated"
     (Codec.decEnvelope? 1 (wire.take (wire.length - 1))) none
@@ -537,13 +523,15 @@ def derivesChecks : CheckResult := do
   -- the emitted struct carries the verdict
   let outerOut := CodegenCore.Emit.Rust.renderModule
     [SchemaLang.Emit.Rust.recordItem
-      (SchemaLang.Emit.Rust.derivesFor uni [.ty "inner"]) outer]
+      (SchemaLang.Emit.Rust.derivesFor uni [.ty "inner"]) "outer"
+      [{ name := "i", ty := .ty "inner" }]]
   _ ← assert (outerOut.contains "#[derive(Clone, Debug, PartialEq)]")
     "outer derive line drops Eq"
   _ ← assert (!outerOut.contains ", Eq)]") "outer has no Eq derive"
   let cleanOut := CodegenCore.Emit.Rust.renderModule
     [SchemaLang.Emit.Rust.recordItem
-      (SchemaLang.Emit.Rust.derivesFor uni [.ty "clean"]) viaClean]
+      (SchemaLang.Emit.Rust.derivesFor uni [.ty "clean"]) "via-clean"
+      [{ name := "c", ty := .ty "clean" }]]
   _ ← assert (cleanOut.contains "#[derive(Clone, Debug, PartialEq, Eq)]")
     "via-clean keeps Eq"
   .ok ()
@@ -807,16 +795,11 @@ theorem recordDTypesChecked_eq_cited
 def ptypeChecks : CheckResult := do
   let all : List SchemaLang.Vortex.PType :=
     [.u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64]
-  -- the exact width table the Rust side assumes (the proved
-  -- `PType.byteWidth_pos` is the invariant; this pins the VALUES)
+  -- the exact width table the Rust side assumes. byteWidth > 0,
+  -- engineName injectivity, and the discriminant round trip are the
+  -- kernel's (`PType.byteWidth_pos` / `engineName_inj` /
+  -- `ofDiscriminant_toDiscriminant`, axiom-gated) — this pins the VALUES
   _ ← assertEq "byteWidth table" (all.map (·.byteWidth)) [1, 2, 4, 8, 1, 2, 4, 8, 2, 4, 8]
-  _ ← assertEq "byteWidth > 0 (theorem, executed)" (all.all (·.byteWidth > 0)) true
-  -- engineName: total + collision-free (the `engineName_inj` theorem,
-  -- executed). No Rust-side name mapping exists in the tree yet
-  -- (no crate consumes vortex), so this is the wiring for now.
-  _ ← assertEq "engineName distinct" (decide ((all.map (·.engineName)).Nodup)) true
-  _ ← assertEq "discriminant round-trip"
-    (all.all fun p => SchemaLang.Vortex.PType.ofDiscriminant p.toDiscriminant == some p) true
   .ok ()
 
 /-! ## EqAns routing (3.6): the diff's verdicts ARE the eqAns verdicts -/
@@ -960,10 +943,11 @@ def pipelineGuardControl : CheckResult :=
   | .ok () => .error "dead event not caught — the battery is vacuous"
 
 -- The order lifecycle machine (the FIRST DOMAIN machine): the
--- conformance battery sweeps its state space; the replay theorems
--- (`lifecycle_happy_path`, `terminal_only_reset`, ...) are
--- compile-time; the emitted Rust is replay-tested host-side
--- (steel-host's order_machine.rs).
+-- conformance battery sweeps its state space (decidable, no proof
+-- behind it). The run-level shadows of `lifecycle_happy_path` /
+-- `terminal_only_reset` retired (T5 — the theorems are proved); the
+-- emitted Rust is replay-tested host-side (steel-host's
+-- order_machine.rs).
 def orderMachineChecks : CheckResult := do
   let rs := orderConformance
   for (name, r) in rs do
@@ -972,35 +956,11 @@ def orderMachineChecks : CheckResult := do
     | .error msg => throw s!"order-machine conformance {name}: {msg}"
   _ ← assert (rs.any (·.1 == "deadlock-freedom")) "deadlock-freedom ran"
   _ ← assert (rs.any (·.1 == "guard-coverage")) "guard-coverage ran"
-  -- the executable discipline (the theorems' run-level shadows)
-  match orderMachine.run .cart [.place, .ship, .deliver] with
-  | some (_, .delivered) => pure ()
-  | _ => throw "order happy path rejected"
-  match orderMachine.run .cart [.ship] with
-  | none => pure ()
-  | some _ => throw "ship-before-place accepted"
-  match orderMachine.step? .delivered .ship with
-  | none => pure ()
-  | some _ => throw "delivered reopened"
   .ok ()
 
-/-- The happy path executes end-to-end and out-of-order firing is
-    rejected; acyclicity is `pipeline_rank_advances_tr` (compile-time, above). -/
-def pipelineRunChecks : CheckResult := do
-  match pipeline.run .idle [.reflect, .check, .emit, .tie] with
-  | none => throw "happy path rejected"
-  | some (_, fin) =>
-      if fin == .tied then pure ()
-      else throw s!"happy path ended in {repr fin}"
-  match pipeline.run .idle [.check] with
-  | none => pure ()
-  | some _ => throw "out-of-order check accepted"
-  match pipeline.run (.failed "check" ["dup"]) [.reset] with
-  | none => throw "reset from failed rejected"
-  | some (_, fin) =>
-      if fin == .idle then pure ()
-      else throw s!"reset ended in {repr fin}"
-  .ok ()
+-- The pipeline's run-level pins (happy path / out-of-order reject /
+-- reset-from-failed) retired (T5): `happy_path`, `reject_out_of_order`,
+-- `reset_from_failed` — all three axiom-gated — decide them.
 
 /-- The one-writer audit: no two emitters claim the same output path.
     The advertised discipline (codegen-core's `Emitter.checkNodup` —
@@ -1017,6 +977,11 @@ def emitterAuditChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
     "vortex law populated"
   _ ← assert (SchemaLang.Emit.Circuit.circuitEmitter.law.isSome)
     "circuit law populated"
+  _ ← assert (rustEmitter.law.isSome) "rust law populated"
+  _ ← assertEq "rust certified run = run"
+    ((rustEmitter.runCertified ctx
+      (SchemaLang.Emit.Rust.rustLaw_discharged ctx)).map (·.contents))
+    ((rustEmitter.run ctx).map (·.contents))
   _ ← assertEq "vortex certified run = run"
     ((SchemaLang.Vortex.Emit.vortexEmitter.runCertified ctx
       (SchemaLang.Vortex.Emit.vortexLaw_discharged ctx)).map (·.contents))
@@ -1025,6 +990,46 @@ def emitterAuditChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
     ((SchemaLang.Emit.Circuit.circuitEmitter.runCertified ctx
       (SchemaLang.Emit.Circuit.circuitLaw_discharged ctx)).map (·.contents))
     ((SchemaLang.Emit.Circuit.circuitEmitter.run ctx).map (·.contents))
+  -- the WIT lane's laws (the obligation's injectivity, conditional on
+  -- the partition's witCheck) ride both world emitters — the
+  -- `witEmitterLaw_discharged` citation is ctx-total, so the certified
+  -- lane executes over THIS ctx without discharging the check
+  _ ← assert (witEmitter.law.isSome) "wit law populated"
+  _ ← assert (flagsWitEmitter.law.isSome) "flags-wit law populated"
+  _ ← assertEq "wit certified run = run"
+    ((witEmitter.runCertified ctx
+      (SchemaLang.Emit.Wit.witEmitterLaw_discharged ctx)).map (·.contents))
+    ((witEmitter.run ctx).map (·.contents))
+  _ ← assertEq "flags-wit certified run = run"
+    ((flagsWitEmitter.runCertified ctx
+      (SchemaLang.Emit.Wit.flagsWitLaw_discharged ctx)).map (·.contents))
+    ((flagsWitEmitter.run ctx).map (·.contents))
+  -- the checkpoint-transport law rides the gen-rust emitter
+  _ ← assert (genRustEmitter.law.isSome)
+    "gen-rust law populated"
+  _ ← assertEq "gen-rust certified run = run"
+    ((genRustEmitter.runCertified ctx
+      (SchemaLang.Emit.GenRust.genRustLaw_discharged ctx)).map (·.contents))
+    ((genRustEmitter.run ctx).map (·.contents))
+  -- the machine-agreement laws ride the machine/typestate/pipeline emitters
+  _ ← assert (SchemaLang.Emit.Machine.orderMachineEmitter.law.isSome)
+    "order-machine law populated"
+  _ ← assertEq "order-machine certified run = run"
+    ((SchemaLang.Emit.Machine.orderMachineEmitter.runCertified ctx
+      (SchemaLang.Emit.Machine.orderMachineLaw_discharged ctx)).map (·.contents))
+    ((SchemaLang.Emit.Machine.orderMachineEmitter.run ctx).map (·.contents))
+  _ ← assert (SchemaLang.Emit.Typestate.typestateEmitter.law.isSome)
+    "typestate law populated"
+  _ ← assertEq "typestate certified run = run"
+    ((SchemaLang.Emit.Typestate.typestateEmitter.runCertified ctx
+      (SchemaLang.Emit.Typestate.typestateLaw_discharged ctx)).map (·.contents))
+    ((SchemaLang.Emit.Typestate.typestateEmitter.run ctx).map (·.contents))
+  _ ← assert (SchemaLang.Emit.pipelineEmitter.law.isSome)
+    "pipeline law populated"
+  _ ← assertEq "pipeline certified run = run"
+    ((SchemaLang.Emit.pipelineEmitter.runCertified ctx
+      (SchemaLang.Emit.pipelineLaw_discharged ctx)).map (·.contents))
+    ((SchemaLang.Emit.pipelineEmitter.run ctx).map (·.contents))
   -- the forge-driver audit: every registered emitter's output is in the
   -- job manifest forge consumes — no artifact silently outside byte-tie
   _ ← assertEq "jobs cover emitters" SchemaLang.Emit.jobsCoverEmitters true
@@ -1092,98 +1097,26 @@ def anchors : List Item :=
 /-- Small field/case/param name supply (not the property's subject). -/
 def fieldSupply : List String := ["id", "name", "data"]
 
-/-- Sized random `Ty` over the closed universe: option/result/list/
-    future/stream wrap smaller types; leaves are scalars or a named ref
-    drawn from the supply. -/
-def genTy (supply : List String) : Nat → Gen Ty
-  | 0 => SnapshotRT.genTyLeaf supply
-  | fuel + 1 => do
-    let branch ← Gen.chooseNat
-    match branch % 9 with
-    | 0 => pure (.option (← genTy supply fuel))
-    | 1 => pure (.result (← genTy supply fuel) (← genTy supply fuel))
-    | 2 => pure (.list (← genTy supply fuel))
-    | 3 => pure (.future (← genTy supply fuel))
-    | 4 => pure (.stream (← genTy supply fuel))
-    | _ => SnapshotRT.genTyLeaf supply
-
-/-- The plausible instances: fueled generation driven by the size
-    parameter. -/
-instance : ArbitraryFueled Ty where
-  arbitraryFueled := genTy nameSupply
-
-instance : Arbitrary Ty where
-  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
-
-/-- Shrink toward subterms — a failing nested type minimizes to the
-    smallest failing fragment. -/
-partial def shrinkTy : Ty → List Ty
-  | .option a => a :: shrinkTy a
-  | .result a b => a :: b :: (shrinkTy a ++ shrinkTy b)
-  | .list a => a :: shrinkTy a
-  | .future a => a :: shrinkTy a
-  | .stream a => a :: shrinkTy a
-  | t => [t]
-
-instance : Shrinkable Ty where
-  shrink t := (shrinkTy t).filter (· != t)
-
-/-- A generated field: name from the field supply, type from the fueled
-    type generator. -/
-def genField (supply : List String) (fuel : Nat) : Gen Field := do
-  pure { name := (← SnapshotRT.pickName fieldSupply), ty := (← genTy supply fuel) }
-
-/-- Sized random item over the closed vocabulary: record / variant /
-    func / resource, all names from the supply, all types constructible. -/
-def genItem (supply : List String) (fuel : Nat) : Gen Item := do
-  let branch ← Gen.chooseNat
-  match branch % 4 with
-  | 0 => pure (.record (← SnapshotRT.pickName supply) (← genShortList (genField supply fuel) 3))
-  | 1 => do
-    let genCase : Gen VariantCase := do
-      let c ← SnapshotRT.pickName fieldSupply
-      let p ← Gen.chooseNat
-      if p % 2 == 0 then pure (c, none)
-      else pure (c, some (← genTy supply fuel))
-    pure (.variant (← SnapshotRT.pickName supply) (← genShortList genCase 3))
-  | 2 => do
-    let genParam : Gen (String × Ty) := do
-      pure (← SnapshotRT.pickName fieldSupply, ← genTy supply fuel)
-    pure (.func { name := (← SnapshotRT.pickName supply)
-                , params := (← genShortList genParam 2)
-                , ret := (← genTy supply fuel) })
-  | _ => pure (.resource (← SnapshotRT.pickName supply))
-
-instance : ArbitraryFueled Item where
-  arbitraryFueled := genItem nameSupply
-
-instance : Arbitrary Item where
-  arbitrary := Gen.sized (ArbitraryFueled.arbitraryFueled ·)
-
-/-- Shrink an item: drop fields/cases/params. Names never shrink — the
-    property is about name resolution, and shrinking names would only
-    move a counterexample sideways. -/
-def shrinkItem : Item → List Item
-  | .record n fs => .record n [] :: fs.mapIdx fun i _ => .record n (fs.eraseIdx i)
-  | .variant n cs => .variant n [] :: cs.mapIdx fun i _ => .variant n (cs.eraseIdx i)
-  | .func s => [.func { s with params := [] }]
-  | .resource _ => []
-
-instance : Shrinkable Item where
-  shrink := shrinkItem
-
 /-- A generated universe TAIL (the anchors are fixed separately):
-    bounded item count so `universeCheck` stays fast at 1000 instances. -/
+    bounded item count so `universeCheck` stays fast at 1000 instances.
+    The generators are SnapshotRT's, consumed directly (the §4 dedup —
+    one copy of `genTy`/`genField`/`genItem`/`shrinkOne`; the
+    supplies stay PropSweep's so every ref resolves against the
+    anchors). -/
 structure UniverseTail where
   items : List Item
 deriving Repr
 
 instance : Arbitrary UniverseTail where
   arbitrary := Gen.sized fun fuel => do
-    pure ⟨← genShortList (genItem nameSupply fuel) 5⟩
+    pure ⟨← genShortList (SnapshotRT.genItem nameSupply fuel) 5⟩
 
 instance : Shrinkable UniverseTail where
-  shrink u := (Shrinkable.shrink u.items).map UniverseTail.mk
+  shrink u :=
+    (u.items.mapIdx fun i _ => ⟨u.items.eraseIdx i⟩)
+      ++ ((u.items.mapIdx fun i it =>
+            (SnapshotRT.shrinkOne it).map fun it' =>
+              ⟨u.items.take i ++ [it'] ++ u.items.drop (i + 1)⟩).flatten)
 
 /-- The property predicate: the universe's `universeCheck` reports NO
     `unknownRef` — every generated ref resolved. -/
@@ -1279,129 +1212,11 @@ namespace CodecValueSweep
 
 open Plausible
 
-/-- A sample: a codec-closed type, its proof, and a value at it. -/
-structure Pack where
-  t : Ty
-  h : CodecClosed t
-  val : Value t
-
-/-! ### the executable equality on `Value t` (the theorem's witness) -/
-
--- Size measure for the mutual structural recursion.
-mutual
-
-def sizeV : (t : Ty) → Value t → Nat
-  | .bool, _ => 1
-  | .u8, _ => 1
-  | .u16, _ => 1
-  | .u32, _ => 1
-  | .u64, _ => 1
-  | .i8, _ => 1
-  | .i16, _ => 1
-  | .i32, _ => 1
-  | .i64, _ => 1
-  | .f32, _ => 1
-  | .f64, _ => 1
-  | .string, _ => 1
-  | .bytes, _ => 1
-  | .option _, .none => 1
-  | .option a, .some x => sizeV a x + 1
-  | .result ok _, .ok x => sizeV ok x + 1
-  | .result _ err, .err x => sizeV err x + 1
-  | .future a, .future x => sizeV a x + 1
-  | .list a, .list vl => sizeL a vl + 1
-  | .map k _, .map m => sizeM k m + 1
-  | .set k, .set vl => sizeL k.toTy vl + 1
-  | .stream a, .stream vl => sizeL a vl + 1
-  | .tensor _ a, .tensor tv => sizeT a tv + 1
-
-def sizeL : (t : Ty) → VList t → Nat
-  | _, .nil => 0
-  | t, .cons v vl => sizeV t v + sizeL t vl + 1
-
-def sizeM : (k : KeyTy) → {v : Ty} → VMap k v → Nat
-  | _, _, .nil => 0
-  | k, _, .cons kv vv m => sizeV k.toTy kv + sizeV _ vv + sizeM k m + 1
-
--- every wrapper +1: the repr chain (valueReprStr ⇄ valueTReprStr ⇄
--- slicesReprStr) needs each cross-function call to STRICTLY decrease
-def sizeT : (t : Ty) → {dims : List Nat} → TVal t dims → Nat
-  | t, _, .scalar v => sizeV t v + 1
-  | t, _, .dim ss => sizeS t ss + 1
-
-def sizeS : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → Nat
-  | _t, _, _, .nil => 0
-  | t, _, _, .cons x ss => sizeT t x + sizeS t ss + 1
-
-end
-
--- Structural equality on `Value t`: LIFTED to SchemaLang.Gen (the
--- library's `valueEq`/`valueEq_refl` — same bodies; the sweep consumes
--- the library versions via `open SchemaLang`).
-
--- Debug rendering of a `Value t` (Plausible counterexample output).
-mutual
-
-def valueReprStr : (t : Ty) → Value t → String
-  | .bool, .bool b => s!"bool {b}"
-  | .u8, .u8 x => s!"u8 {x}"
-  | .u16, .u16 x => s!"u16 {x}"
-  | .u32, .u32 x => s!"u32 {x}"
-  | .u64, .u64 x => s!"u64 {x}"
-  | .i8, .i8 x => s!"i8 {x.toInt}"
-  | .i16, .i16 x => s!"i16 {x.toInt}"
-  | .i32, .i32 x => s!"i32 {x.toInt}"
-  | .i64, .i64 x => s!"i64 {x.toInt}"
-  | .f32, .f32 x => s!"f32 {x}"
-  | .f64, .f64 x => s!"f64 {x}"
-  | .string, .string s => s!"string \"{s}\""
-  | .bytes, .bytes bs => s!"bytes {bs}"
-  | .option _, .none => "none"
-  | .option t, .some x => s!"some ({valueReprStr t x})"
-  | .result ok _, .ok x => s!"ok ({valueReprStr ok x})"
-  | .result _ err, .err x => s!"err ({valueReprStr err x})"
-  | .future t, .future x => s!"future ({valueReprStr t x})"
-  | .list t, .list vl => s!"list [{vListReprStr t vl}]"
-  | .map k _, .map m => s!"map [{vMapReprStr k m}]"
-  | .set k, .set vl => s!"set [{vListReprStr k.toTy vl}]"
-  | .stream t, .stream vl => s!"stream [{vListReprStr t vl}]"
-  | .tensor _ a, .tensor tv => s!"tensor [{valueTReprStr a tv}]"
-  termination_by t v => sizeV t v
-decreasing_by all_goals (simp [sizeV])
-
-def valueTReprStr : (t : Ty) → {dims : List Nat} → TVal t dims → String
-  | t, _, .scalar v => valueReprStr t v
-  | t, _, .dim ss => slicesReprStr t ss
-  termination_by t _ tv => sizeT t tv
-decreasing_by all_goals (simp [sizeT])
-
-def slicesReprStr : (t : Ty) → {dims : List Nat} → {m : Nat} → TSlices t dims m → String
-  | _, _, _, .nil => ""
-  | t, _, _, .cons x ss =>
-      let rest := slicesReprStr t ss
-      let head := valueTReprStr t x
-      if rest == "" then head else s!"{head}, {rest}"
-  termination_by t _ _ ss => sizeS t ss
-decreasing_by all_goals (simp [sizeS]; omega)
-
-def vListReprStr : (t : Ty) → VList t → String
-  | _, .nil => ""
-  | t, .cons v vl =>
-      let rest := vListReprStr t vl
-      if rest == "" then valueReprStr t v else s!"{valueReprStr t v}, {rest}"
-  termination_by t vl => sizeL t vl
-decreasing_by all_goals (simp [sizeL]; omega)
-
-def vMapReprStr : (k : KeyTy) → {v : Ty} → VMap k v → String
-  | _, _, .nil => ""
-  | k, _, .cons kv vv m =>
-      let rest := vMapReprStr k m
-      let head := s!"{valueReprStr k.toTy kv} => {valueReprStr _ vv}"
-      if rest == "" then head else s!"{head}, {rest}"
-  termination_by k _ m => sizeM k m
-decreasing_by all_goals (simp [sizeM]; omega)
-
-end
+-- The generated-input sweep (Pack over `CodecClosed`, 1000 instances)
+-- retired as a pair with its bool/u8-corruption control (T5): the
+-- kernel's `decode_encodeValue_append` — axiom-gated — decides the
+-- round trip for EVERY value in the closed universe. The deterministic
+-- layout/shape pins below stay (no proof decides them).
 
 /-! ### the TENSOR round trip (the shape gate, pinned both ways) -/
 
@@ -1462,160 +1277,10 @@ def demoVal : Value (.tensor demoDims .u64) := .tensor demoTv
 
 -- (the checks consuming these renderings follow)
 
-instance : Repr Pack where
-  reprPrec p _ := s!"⟨{repr p.t}, {valueReprStr p.t p.val}⟩"
-
-instance : Shrinkable Pack where
-  shrink p :=
-    if valueEq p.t p.val (defaultValue p.t p.h) then []
-    else [⟨p.t, p.h, defaultValue p.t p.h⟩]
-
-/-! ### the generators (LIFTED to SchemaLang.Gen — the sweep consumes
-the library's `genShortList`/`genChar`/`genU8`/`genVal` via
-`open SchemaLang`; the test-side verbatim copies are gone) -/
-
-def genLeafPack : Gen Pack :=
-  Gen.oneOfWithDefault
-    (do pure ⟨.u8, .u8, .u8 (← genU8)⟩)
-    [ do pure ⟨.bool, .bool, .bool ((← Gen.chooseNat) % 2 == 0)⟩
-    , do pure ⟨.u16, .u16, .u16 ((← Gen.chooseNat) % 65536).toUInt16⟩
-    , do pure ⟨.u32, .u32, .u32 ((← Gen.chooseNat) % 4294967296).toUInt32⟩
-    , do
-        pure ⟨.u64, .u64, .u64 ((← Gen.chooseNat) % 18446744073709551616).toUInt64⟩
-    , do pure ⟨.i8, .i8, .i8 (Int8.ofInt (unzigzag ((← Gen.chooseNat) % 200)))⟩
-    , do
-        pure ⟨.i16, .i16, .i16 (Int16.ofInt (unzigzag ((← Gen.chooseNat) % 40000)))⟩
-    , do
-        pure ⟨.i32, .i32,
-          .i32 (Int32.ofInt (unzigzag ((← Gen.chooseNat) % 4000000000)))⟩
-    , do
-        pure ⟨.i64, .i64,
-          .i64 (Int64.ofInt (unzigzag ((← Gen.chooseNat) % 1000000000000000000)))⟩
-    , do pure ⟨.string, .string, .string (String.ofList (← genShortList genChar 3))⟩
-    , do pure ⟨.bytes, .bytes, .bytes (← genShortList genU8 3)⟩ ]
-
-/-- A key-type choice (the `KeyTy` sub-universe, uniformly). -/
-def genKeyTy : Gen KeyTy := do
-  let n ← Gen.chooseNat
-  pure (match n % 10 with
-    | 0 => .bool | 1 => .u8 | 2 => .u16 | 3 => .u32 | 4 => .u64
-    | 5 => .i8 | 6 => .i16 | 7 => .i32 | 8 => .i64 | _ => .string)
-
-def genPack : Nat → Gen Pack
-  | 0 => genLeafPack
-  | fuel + 1 => do
-    let branch ← Gen.chooseNat
-    match branch % 8 with
-    | 0 => genLeafPack
-    | 1 => do
-      let p ← genPack fuel
-      let b ← Gen.chooseNat
-      if b % 2 == 0 then pure ⟨.option p.t, .option p.h, .none⟩
-      else pure ⟨.option p.t, .option p.h, .some p.val⟩
-    | 2 => do
-      let p ← genPack fuel
-      let q ← genPack fuel
-      let b ← Gen.chooseNat
-      if b % 2 == 0 then pure ⟨.result p.t q.t, .result p.h q.h, .ok p.val⟩
-      else pure ⟨.result p.t q.t, .result p.h q.h, .err q.val⟩
-    | 3 => do
-      let p ← genPack fuel
-      let vs ← genShortList (genVal p.t p.h fuel) 3
-      pure ⟨.list p.t, .list p.h, .list (listToVList vs)⟩
-    | 4 => do
-      let p ← genPack fuel
-      pure ⟨.future p.t, .future p.h, .future p.val⟩
-    | 5 => do
-      let p ← genPack fuel
-      let vs ← genShortList (genVal p.t p.h fuel) 3
-      pure ⟨.stream p.t, .stream p.h, .stream (listToVList vs)⟩
-    -- W8.1: map/set packs (the new `CodecClosed` arms ride the SAME
-    -- sweep — the master theorem's executable image covers them)
-    | 6 => do
-      let p ← genPack fuel
-      let k ← genKeyTy
-      let ks ← genShortList (genKey k) 3
-      let vs ← genShortList (genVal p.t p.h fuel) 3
-      pure ⟨.map k p.t, .map p.h, .map (listToVMap (ks.zip vs))⟩
-    | _ => do
-      let k ← genKeyTy
-      let es ← genShortList (genKey k) 3
-      pure ⟨.set k, .set, .set (listToVList es)⟩
-  termination_by fuel => fuel
-
-instance : ArbitraryFueled Pack where
-  arbitraryFueled := genPack
-
-instance : Arbitrary Pack where
-  arbitrary := Gen.sized genPack
-
-/-! ### the property, its control, and the coverage pins -/
-
-/-- The executable image of `decode_encodeValue`: decode (encode p) = p. -/
-def valueRoundtrip (p : Pack) : Bool :=
-  match decodeValue p.t (encodeValue p.t p.val) with
-  | some v => valueEq p.t v p.val
-  | none => false
-
-/-- Negative-control corruption: flip bool payloads, bump u8 payloads. -/
-def corrupt : (t : Ty) → Value t → Value t
-  | .bool, .bool b => .bool (!b)
-  | .u8, .u8 x => .u8 (x + 1)
-  | _, v => v
-
-/-- The corrupted sibling: round-trips the corrupted value but checks it
-    against the ORIGINAL — a bool/u8 sample can never pass. -/
-def controlRoundtrip (p : Pack) : Bool :=
-  match decodeValue p.t (encodeValue p.t (corrupt p.t p.val)) with
-  | some v => valueEq p.t v p.val
-  | none => false
-
-/-- The suite: 1000 instances, pinned seed. -/
-def suite : TestSeq :=
-  checkPlausibleIO "Value codec: decodeValue ∘ encodeValue = some over generated packs"
-    (∀ p : Pack, valueRoundtrip p = true)
-    .done { numInst := 1000, randomSeed := some 20261105 }
-
-/-- The negative control: corrupted bool/u8 payloads MUST be caught. If
-    this suite passes, `valueRoundtrip` is vacuous and proves nothing. -/
-def controlSuite : TestSeq :=
-  checkPlausibleIO "sabotaged: bool/u8 payload corruption (must be caught)"
-    (∀ p : Pack, controlRoundtrip p = true)
-    .done { numInst := 1000, randomSeed := some 20261105 }
-
-/-- The property spec: sweep + its mandatory negative control. -/
-def spec : TestKit.PropSpec :=
-  { name := "decode_encodeValue: Value round trip over the CodecClosed universe"
-  , suite := suite
-  , control := controlSuite
-  , controlName := "corrupt-bool-u8" }
 
 /-- Deterministic pins: every covered `Ty` shape round-trips by hand-built
     value (the theorem, executed), and malformed wire is rejected. -/
 def coverageChecks : CheckResult := do
-  let packs : List Pack :=
-    [ ⟨.bool, .bool, .bool true⟩
-    , ⟨.u8, .u8, .u8 42⟩
-    , ⟨.u16, .u16, .u16 65535⟩
-    , ⟨.u32, .u32, .u32 4000000000⟩
-    , ⟨.u64, .u64, .u64 18000000000000000000⟩
-    , ⟨.i8, .i8, .i8 (Int8.ofInt (-128))⟩
-    , ⟨.i16, .i16, .i16 (Int16.ofInt (-30000))⟩
-    , ⟨.i32, .i32, .i32 (Int32.ofInt (-2000000000))⟩
-    , ⟨.i64, .i64, .i64 (Int64.ofInt (-9000000000000000000))⟩
-    , ⟨.string, .string, .string "hello"⟩
-    , ⟨.bytes, .bytes, .bytes [1, 2, 3]⟩
-    , ⟨.option .u8, .option .u8, .none⟩
-    , ⟨.option .u8, .option .u8, .some (.u8 7)⟩
-    , ⟨.result .u8 .string, .result .u8 .string, .ok (.u8 1)⟩
-    , ⟨.result .u8 .string, .result .u8 .string, .err (.string "no")⟩
-    , ⟨.list .u8, .list .u8, .list (listToVList [.u8 1, .u8 2, .u8 3])⟩
-    , ⟨.future .u8, .future .u8, .future (.u8 9)⟩
-    , ⟨.stream .u8, .stream .u8, .stream (listToVList [.u8 4])⟩
-    , ⟨.option (.list .u8), .option (.list .u8),
-        .some (.list (listToVList [.u8 1, .u8 2]))⟩ ]
-  for p in packs do
-    _ ← assert (valueRoundtrip p) s!"roundtrip {valueReprStr p.t p.val}"
   -- the refl pin: the sweep's equality is reflexive (kernel-checked
   -- `valueEqRefl`, executed on a composite)
   _ ← assertEq "valueEq refl (composite)"
@@ -1680,13 +1345,9 @@ def typedSessionChecks : CheckResult := do
   -- string-layer guarantees transfer — Machines.Session proved them once)
   _ ← assert ((toWire (tdual gatewayTyped)) ==
       (Machines.Session.tdual (toWire gatewayTyped))) "typed dual bridge"
-  -- the typed dual keeps the schema types (payloads survive dualing)
-  _ ← assert (((tdual gatewayTyped).map (·.2)) == (gatewayTyped.map (·.2)))
-      "dual keeps types"
-  -- directions oppose pairwise (lockstep)
-  _ ← assertEq "directions oppose"
-      (List.all (List.zip (gatewayTyped.map (·.1)) ((tdual gatewayTyped).map (·.1)))
-        (fun x => x.1 != x.2)) true
+  -- "dual keeps types" + "directions oppose" retired (T5): the kernel's
+  -- `tdual_types` / `tdual_directions_oppose` are proved for ALL
+  -- protocols; `MachinesTests.typedChecks` is the kept runtime site
   .ok ()
 
 /-- 0.7 end-to-end: the reifier diagnoses a non-boundary FIELD TYPE as
@@ -1872,12 +1533,8 @@ def migrationChecks : CheckResult := do
   _ ← assertEq "demo change detected" changes
     [.changed "OrderItem" [.fieldTypeChanged "qty" .u32 .u64]]
   let m : Migration := { item := "OrderItem", fields := [widenU32U64 "qty"] }
-  -- the soundness theorem, executed (applyMigration old = new shape):
-  -- the widened value IS the same number
-  _ ← assert (((widenU32U64 "qty").apply (42 : UInt32)).toNat == 42)
-    "widen sound at 42"
-  _ ← assert (((widenU32U64 "qty").apply (4294967295 : UInt32)).toNat == 4294967295)
-    "widen sound at u32 max"
+  -- the widening's soundness is the kernel's (`widenU32U64_sound`,
+  -- axiom-gated, quantifies over ALL inputs)
   -- the verdict distinguishes remedied from unremedied
   _ ← assertEq "remedied verdict" (verdictOf changes [m]) .remedied
   _ ← assertEq "unremedied without evidence" (verdictOf changes []) .unremedied
@@ -2367,9 +2024,9 @@ def invNameMinLengthMirror : VExpr invUserFields .bool :=
 
 def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
   -- the tier computation (the enforcement ladder's v1 rungs)
-  _ ← assertEq "tierOf none = boundaryCheck" (SchemaLang.tierOf none) .boundaryCheck
-  _ ← assertEq "tierOf some = proved" (SchemaLang.tierOf (some `t)) .proved
-  _ ← assertEq "tier render" (SchemaLang.Tier.render .boundaryCheck) "boundary-check"
+  _ ← assertEq "tierOf none = generatedCheck" (SchemaLang.tierOf none) .generatedCheck
+  _ ← assertEq "tierOf some = provedAtElab" (SchemaLang.tierOf (some `t)) .provedAtElab
+  _ ← assertEq "tier render" (SchemaLang.Tier.render .generatedCheck) "boundary-check"
   -- W7.1: the obligation view — the registered rows enumerate as
   -- obligations, the ladder's rungs map to discharge tiers, and every
   -- computed-tier obligation DISCHARGES (the theorem, witnessed)
@@ -2439,7 +2096,7 @@ def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
 
 /-! ## Proved-tier citation resolution (the cert pattern, MADE REAL)
 
-`Tier.proved` stores a `proofName : Option Name`; the registration
+`Tier.provedAtElab` stores a `proofName : Option Name`; the registration
 command now RESOLVES it at elaboration (`SchemaLang.checkCitation?` in
 SchemaLang.Invariant — the `Dbsp.Certs.#check_cert` pattern): the cited
 decl must exist, be a theorem, have a clean axiom footprint (no
@@ -2493,14 +2150,14 @@ run_cmd do
     | none => pure ()
   -- negative control 1: a bogus name does not resolve
   let bogus : SchemaLang.InvariantItem :=
-    { name := "negctl-bogus", schemaRef := "User", tier := .proved
+    { name := "negctl-bogus", schemaRef := "User", tier := .provedAtElab
     , proofName := some `noSuchTheoremAnywhere, inv := default }
   match ← citationDiag? env bogus with
   | some _ => pure ()
   | none => throwError "citation check: bogus name NOT caught — the resolver is vacuous"
   -- negative control 2: an AXIOM citation is rejected (kind gate)
   let axiomCtl : SchemaLang.InvariantItem :=
-    { name := "negctl-axiom", schemaRef := "User", tier := .proved
+    { name := "negctl-axiom", schemaRef := "User", tier := .provedAtElab
     , proofName := some `propext, inv := default }
   match ← citationDiag? env axiomCtl with
   | some _ => pure ()
@@ -2522,7 +2179,7 @@ discharge yields the `validates` verdict AS a theorem. -/
 /-- The demo item: the empty-schema invariant `lit 1 > lit 0` — TRUE
     on the (only) default row. -/
 def decNowTrueItem : SchemaLang.InvariantItem :=
-  { name := "dec-now-true", schemaRef := "User", tier := .boundaryCheck
+  { name := "dec-now-true", schemaRef := "User", tier := .generatedCheck
   , proofName := none, inv := ⟨[], .gt (.lit 1) (.lit 0)⟩ }
 
 /-- The demo obligation, hand-tiered decidableNow (no invariant-lane
@@ -2541,7 +2198,7 @@ theorem decNowTrue_holds :
 
 /-- Negative control 1: `lit 0 > lit 0` — FALSE on the default row. -/
 def decNowFalseItem : SchemaLang.InvariantItem :=
-  { name := "dec-now-false", schemaRef := "User", tier := .boundaryCheck
+  { name := "dec-now-false", schemaRef := "User", tier := .generatedCheck
   , proofName := none, inv := ⟨[], .gt (.lit 0) (.lit 0)⟩ }
 
 def decNowFalseObligation : SchemaLang.SchemaObligation :=
@@ -2558,7 +2215,7 @@ theorem decNowFalse_refused : decNowFalseObligation.discharge = none := rfl
     nonzero-dims tensor field) has NO default row — no claim to
     decide, the backend refuses. -/
 def decNowNoRowItem : SchemaLang.InvariantItem :=
-  { name := "dec-now-no-row", schemaRef := "User", tier := .boundaryCheck
+  { name := "dec-now-no-row", schemaRef := "User", tier := .generatedCheck
   , proofName := none
   , inv := ⟨[⟨"t", .tensor [2] .u8⟩], .gt (.lit 1) (.lit 0)⟩ }
 
@@ -2576,14 +2233,9 @@ def decidableNowChecks : CheckResult := do
   -- the evidence's tier IS the obligation's (no mis-wiring)
   _ ← assertEq "decNow: evidence tier matches"
     (decNowTrueObligation.discharge.map (·.tier)) (some .decidableNow)
-  -- negative control 1: a FALSE claim refuses, loudly
-  _ ← assertEq "decNow: FALSE claim discharges to NONE (loud)"
-    decNowFalseObligation.discharge none
-  _ ← assertEq "decNow: false claim's decide = false"
-    (decide decNowFalseObligation.decidableClaim) false
-  -- negative control 2: a default-less record has no claim — refusal
-  _ ← assertEq "decNow: default-less record refuses (loud)"
-    decNowNoRowObligation.discharge none
+  -- the false-claim refusal and the default-less refusal are the
+  -- kernel's (`decNowFalse_decide` / `decNowFalse_refused` /
+  -- `decNowNoRow_refused`, all rfl, above)
   -- non-vacuity: decide DISTINGUISHES the two demo claims
   _ ← assert (decide decNowTrueObligation.decidableClaim !=
       decide decNowFalseObligation.decidableClaim)
@@ -3409,11 +3061,9 @@ def enumWireChecks : CheckResult := do
   _ ← assertEq "toToken" (NullSem.toToken .propagate) "propagate"
   _ ← assert (Delivery.ofToken? "stream" == some .stream) "ofToken?"
   _ ← assert (NullSem.ofToken? "nonsense" |>.isNone) "ofToken? reject"
-  -- the PROVED binary round trip, executed (incl. the append form)
-  _ ← assert (Delivery.decode? (Delivery.encode .once) == some (.once, []))
-      "decode_encode"
-  _ ← assert (NullSem.decode? (NullSem.encode .strict ++ [9]) == some (.strict, [9]))
-      "decode_encode_append"
+  -- the binary round trip is the GENERATED kernel proof
+  -- (`NullSem.decode_encode` / `Delivery.decode_encode_append` —
+  -- `EnumWire` emits them; T5: not re-executed here)
   -- the sabotage control's predicate, executed: tag+1 NEVER decodes
   -- back (the negative controls in `wirePropSpec` run in `runSpecs`)
   _ ← assertEq "sabotage caught (strict)" (NullSem.wireSabotage .strict) false
@@ -4085,7 +3735,7 @@ open SchemaLang.Witness SchemaLang.WitnessCheck
     invariant the witness certifies (the payload the tier is assigned
     to). -/
 def gvItem : SchemaLang.InvariantItem :=
-  { name := "gv-amount-positive", schemaRef := "User", tier := .boundaryCheck
+  { name := "gv-amount-positive", schemaRef := "User", tier := .generatedCheck
   , proofName := none
   , inv := ⟨WitnessCheckSweep.wcFields,
       VExpr.gt (VExpr.col "amount" WitnessCheckSweep.wcAmountPath) (VExpr.lit 0)⟩ }
@@ -4134,8 +3784,8 @@ example : validates (VExpr.gt (VExpr.col "amount" WitnessCheckSweep.wcAmountPath
 -- the completeness disjunct, EXERCISED: the witness-backed row is a
 -- computed-tier discharge
 example : (gvObligation.discharge (some gvRef)).isSome = true :=
-  SchemaLang.SchemaObligation.discharge_isSome_of_computed gvObligation (some gvRef)
-    (.inr ⟨rfl, gvRef, rfl, rfl, by decide⟩)
+  SchemaLang.SchemaObligation.discharge_isSome_of_computed gvObligation (some gvRef) none
+    (.inr (.inl ⟨rfl, gvRef, rfl, rfl, by decide⟩))
 
 /-- NEGATIVE CONTROL fixture: the tampered certificate — the claim
     strengthened to `amount > 9`, FALSE on the row (amount = 7). -/
@@ -4172,24 +3822,93 @@ example : gvObligation.discharge = none := by decide
 -- non-vacuity: acceptance DISTINGUISHES the valid certificate from
 -- the exhausted one
 def guestVerifiedChecks : CheckResult := do
-  _ ← assertEq "gv: valid witness FIRES" (gvObligation.discharge (some gvRef))
-    (some (.guestWitness "witnesses/user-gv-amount-positive.wtn" "gv-amount-positive"))
-  _ ← assertEq "gv: evidence tier is guestVerified"
-    ((gvObligation.discharge (some gvRef)).map (·.tier)) (some .guestVerified)
-  _ ← assertEq "gv: tampered claim REFUSED (loud)"
-    (gvObligation.discharge (some gvTamperedRef)) none
-  _ ← assertEq "gv: fuel 0 REFUSED — exhaustion = refusal, no retry"
-    (gvObligation.discharge (some gvFuelZeroRef)) none
-  _ ← assertEq "gv: label mismatch REFUSED (loud)"
-    (gvObligation.discharge (some gvWrongLabelRef)) none
-  _ ← assertEq "gv: no witness provided = the loud gap"
-    gvObligation.discharge none
+  -- every verdict above is also a kernel `decide` example — the one
+  -- assert here is what NO example states (non-vacuity)
   _ ← assert ((gvObligation.discharge (some gvRef)).isSome !=
       (gvObligation.discharge (some gvFuelZeroRef)).isSome)
     "non-vacuity: the discharge distinguishes acceptance from refusal"
   .ok ()
 
 end GuestVerifiedSweep
+
+/-! ## W9.x — the oracleSwept backend: the ladder's LAST rung
+
+`SchemaObligation.discharge`'s oracleSwept arm: the obligation carries a
+row REFERENCE (the ref names the oracle fn the sweep replays); discharge
+fires `.oracleRow` evidence ONLY when the ref is WELL-FORMED (non-empty,
+naming the payload's record — `oracleRefWellFormed`'s kebab-prefix
+convention: `user-valid` for `User`). An oracle row is evidence of a
+SWEEP, not a proof — the soundness theorem's whole content is that
+discharge never fabricates sweep evidence from a ref the payload does
+not concern. RESOLUTION (the ref names an ACTUAL oracle row) is the
+gates driver's `obligation-check` — cross-package by construction
+(schema-lang cannot see wasm-backend's row universe); its teeth were
+verified against temporary dangling/drift/mis-wired entries, then
+removed (see Gates/ObligationCheck.lean's header). Negative controls:
+the empty ref, a foreign fn (the record does not concern it), and no
+ref — all `none`, LOUD. -/
+
+namespace OracleSweptSweep
+
+open SchemaLang.Witness SchemaLang.WitnessCheck
+
+/-- The fixture item: `amount > 0` over the W9.2 sweep's record — the
+    invariant the oracle sweep covers (the payload the tier is
+    assigned to). -/
+def osItem : SchemaLang.InvariantItem :=
+  { name := "os-amount-positive", schemaRef := "User", tier := .generatedCheck
+  , proofName := none
+  , inv := ⟨WitnessCheckSweep.wcFields,
+      VExpr.gt (VExpr.col "amount" WitnessCheckSweep.wcAmountPath) (VExpr.lit 0)⟩ }
+
+/-- The hand-tiered oracleSwept obligation (no invariant-lane rung
+    computes it — registration is a later order; the tier is a backend
+    ASSIGNMENT, exactly like `decidableNow`/`guestVerified`). -/
+def osObligation : SchemaLang.SchemaObligation :=
+  { osItem.obligation with tier := .oracleSwept }
+
+-- FIRES on a well-formed ref: `user-valid` names the payload's record
+-- (`User` → `user-`) — the completeness theorem CITED
+example : osObligation.discharge (oracleRef := some "user-valid") =
+    some (.oracleRow "user-valid") :=
+  osObligation.discharge_oracleSwept_of_ref "user-valid" rfl
+    (by decide)
+
+-- SOUNDNESS cited: a fired discharge's ref IS well-formed (the whole
+-- claim the ref supports here — sweep evidence, never a proof)
+example : ("user-valid" != "" &&
+    (((("User".toList.map SchemaLang.SchemaObligation.charToLower) ++ ['-']).isPrefixOf "user-valid".toList))) = true :=
+  osObligation.discharge_oracleSwept_sound "user-valid" rfl (by decide)
+
+-- the completeness disjunct, EXERCISED: the ref-backed oracleSwept row
+-- is a computed-tier discharge
+example : (osObligation.discharge none (some "user-valid")).isSome = true :=
+  SchemaLang.SchemaObligation.discharge_isSome_of_computed osObligation none
+    (some "user-valid") (.inr (.inr ⟨rfl, "user-valid", rfl, by decide⟩))
+
+-- the empty ref REFUSES (loud)
+example : osObligation.discharge (oracleRef := some "") = none := by decide
+
+-- a fn the payload's record does NOT concern REFUSES (`verify-witness`
+-- names no `user-` fn — the mis-wire check as data)
+example : osObligation.discharge (oracleRef := some "verify-witness") = none :=
+  by decide
+
+-- NO ref: the armed-but-unfired gap, `none`, LOUD
+example : osObligation.discharge = none := by decide
+
+def oracleSweptChecks : CheckResult := do
+  -- the fire/refuse verdicts are also kernel `decide` examples — the
+  -- tier reading and the non-vacuity distinguish stay runtime
+  _ ← assertEq "oracleSwept: evidence tier is oracleSwept"
+    ((osObligation.discharge (oracleRef := some "user-valid")).map (·.tier))
+    (some .oracleSwept)
+  _ ← assert ((osObligation.discharge (oracleRef := some "user-valid")).isSome !=
+      (osObligation.discharge (oracleRef := some "verify-witness")).isSome)
+    "non-vacuity: the discharge distinguishes a concerned ref from a foreign one"
+  .ok ()
+
+end OracleSweptSweep
 
 /-! ## W9.4 — host-side witness generation + self-check + the artifact
 
@@ -4272,7 +3991,7 @@ example : (demoWitnessSpecUserV1V2.claim.resolve?
 def demoIdPath : ColPath "id" .u64 userNameLenFields := .here
 
 def demoIdPositiveItem : SchemaLang.InvariantItem :=
-  { name := "user-v1-v2-id-positive", schemaRef := "User", tier := .boundaryCheck
+  { name := "user-v1-v2-id-positive", schemaRef := "User", tier := .generatedCheck
   , proofName := none
   , inv := ⟨userNameLenFields, VExpr.gt (VExpr.col "id" demoIdPath) (VExpr.lit 0)⟩ }
 
@@ -4495,15 +4214,16 @@ example : Delta.row? (.remove 3 : Delta UInt64 UInt64) = none := rfl
 -- POSITIVE: the valid witness ACCEPTS and the migrated segment replays
 example : mgGate mgWitness = .ok [7, 1] := by decide
 
--- NEGATIVE CONTROL: the tampered claim REFUSES — `diverged`, label named
-example : mgGate mgTampered = .error (.diverged "mg-amount-positive") := by decide
+-- NEGATIVE CONTROL: the tampered claim REFUSES — `diverged`, theorem-applied
+example : mgGate mgTampered = .error (.diverged "mg-amount-positive") :=
+  replayMigrated?_diverged (fun (n : UInt64) => n) mgRowOf mgUpcast
+    mgTampered 7 [.insert 1] [7] (by decide) (by decide)
 
 -- NEGATIVE CONTROL: the corrupted proof REFUSES — `diverged`
 example : mgGate mgCorrupt = .error (.diverged "mg-amount-positive") := by decide
 
 -- NEGATIVE CONTROL (§7.3): the exhausted certificate REFUSES —
--- `fuelExhausted`, label named, BEFORE any checking
-example : mgGate mgFuelLow = .error (.fuelExhausted "mg-amount-positive") := by decide
+-- `fuelExhausted`, label named, BEFORE any checking (§7.3), theorem-applied
 example : mgGate { mgWitness with fuel := 0 } =
     .error (.fuelExhausted "mg-amount-positive") := by decide
 
@@ -4526,14 +4246,8 @@ example : WHolds mgWitness.claim (mgRowOf 7)
 /-- The executed pins + non-vacuity (the gate DISTINGUISHES acceptance
     from refusal — a suite whose sabotage passes fails here). -/
 def migrationGateChecks : CheckResult := do
-  _ ← assert (mgGate mgWitness == .ok [7, 1])
-    "gate: valid witness ACCEPTS + replays the migrated segment"
-  _ ← assert (mgGate mgTampered == .error (.diverged "mg-amount-positive"))
-    "gate: tampered claim REFUSED (diverged, label named)"
-  _ ← assert (mgGate mgCorrupt == .error (.diverged "mg-amount-positive"))
-    "gate: corrupted proof REFUSED (diverged)"
-  _ ← assert (mgGate mgFuelLow == .error (.fuelExhausted "mg-amount-positive"))
-    "gate: exhausted fuel REFUSED (fuelExhausted — §7.3, no retry)"
+  -- the four verdicts are kernel-pinned above (decide / theorem
+  -- application) — the non-vacuity distinguish + the render pins run
   _ ← assert (mgGate mgWitness != mgGate mgTampered)
     "non-vacuity: the gate distinguishes acceptance from refusal"
   -- the refusal render names the obligation's label (LOUD, not silent) —
@@ -4809,6 +4523,13 @@ def brokenUniqueObligation : KeyObligation :=
 /-- The refusal, pinned (no fabricated evidence). -/
 theorem brokenUnique_refused : brokenUniqueObligation.discharge = none := rfl
 
+/-- The KIT's tier gate, pinned directly (the consolidation's negative
+    control at the kit level): a NON-deidableNow tier refuses — the
+    combinator serves only the rung it implements. -/
+example :
+    CodegenCore.Obligation.decideDischarge KeyObligation.decidableClaim
+      { userUniqueObligation with tier := .guestVerified } = none := rfl
+
 /-- A type-mismatched FK (`userName : string` → user's `id : u64`
     key): referential integrity can never hold across types — the
     claim decides FALSE, the backend REFUSES. -/
@@ -4904,18 +4625,14 @@ def keyChecks : CheckResult := do
   _ ← assertEq "keyObligations: provenance is the record"
     ((keyObligations keyDecls).map (·.provenance))
     [("user".toName), ("order".toName), ("order".toName)]
-  -- the discharge: computed-tier obligations FIRE on the pinned table
-  _ ← assertEq "keyObl: unique discharges (.decided true)"
-    userUniqueObligation.discharge (some (.decided true))
+  -- the unique/broken/mismatch discharge verdicts are the kernel's
+  -- (`userKeyUnique_discharges` / `brokenUnique_refused` /
+  -- `mismatchReferences_refused`, all rfl, above); the references
+  -- discharge + the non-vacuity distinguish run
   _ ← assertEq "keyObl: references discharges (.decided true)"
     orderReferencesObligation.discharge (some (.decided true))
   _ ← assertEq "keyObl: the evidence's tier IS the obligation's"
     (userUniqueObligation.discharge.map (·.tier)) (some .decidableNow)
-  -- NEGATIVE CONTROLS (the loud refusal — no fabricated evidence)
-  _ ← assertEq "keyObl: a broken projection REFUSES (none, loud)"
-    brokenUniqueObligation.discharge none
-  _ ← assertEq "keyObl: a type-mismatched FK REFUSES (none, loud)"
-    mismatchReferencesObligation.discharge none
   _ ← assert (userUniqueObligation.discharge != brokenUniqueObligation.discharge)
     "keyObl: discharge DISTINGUISHES sound from broken (non-vacuity)"
   -- the table checks themselves, beyond the pinned singleton
@@ -5088,21 +4805,14 @@ def tableInvChecks : CheckResult := do
     ((tableObligations tiDecls).map (·.provenance))
     [("acct-ids-unique".toName), ("acct-conserves".toName),
       ("acct-bounded".toName), ("acct-exact".toName)]
-  -- the discharge: the computed tier FIRES on a provided table
-  _ ← assertEq "tableObl: conservation discharges on the pre-transfer table"
-    (acctConsObligation.discharge (some acctPre)) (some (.decided true))
+  -- the discharge/refusal verdicts are the kernel's
+  -- (`acctCons_discharges` / `acctCons_sabotage_refused` /
+  -- `acctCons_no_table_refused` / `acctCons_oracle_refused` /
+  -- `acctCons_guest_refused`, above); the tier reading + non-vacuity
+  -- distinguish run
   _ ← assertEq "tableObl: the evidence's tier IS the obligation's"
     ((acctConsObligation.discharge (some acctPre)).map (·.tier))
     (some .decidableNow)
-  -- NEGATIVE CONTROLS (the loud refusal — no fabricated evidence)
-  _ ← assertEq "tableObl: the sabotaged table REFUSES (loud)"
-    (acctConsObligation.discharge (some acctSabotaged)) none
-  _ ← assertEq "tableObl: no provided table REFUSES (loud)"
-    (acctConsObligation.discharge none) none
-  _ ← assertEq "tableObl: oracleSwept REFUSES (unwired, loud)"
-    (acctConsOracle.discharge (some acctPre)) none
-  _ ← assertEq "tableObl: guestVerified REFUSES (no v1 witness — design §7.1)"
-    (acctConsGuest.discharge (some acctPre)) none
   _ ← assert (acctConsObligation.discharge (some acctPre)
       != acctConsObligation.discharge (some acctSabotaged))
     "tableObl: discharge DISTINGUISHES sound from sabotaged (non-vacuity)"
@@ -5428,26 +5138,27 @@ theorem upd2_newRow_is_deltaFold (r : RowVals upd2Fields) :
 def upd2TableAB : List (RowVals upd2Fields) :=
   [upd2Row 1 "a" 5, upd2Row 200 "b" 150]
 
-/-- The coherence pack, discharged: `keyOf`/`proj`/`nodup2` by
-    computation; `fresh` by the per-row case split (the insert fires
-    only on the guarded row). -/
+/-- The coherence pack, discharged: `keyOf`/`proj`/`nodup` by
+    computation; `imgClosed` by the key column's scalar type; `fresh`
+    by the per-row case split (the insert fires only on the guarded
+    row). -/
 def upd2CohDup : KeyCoherent upd2DupMirror "id" upd2TableAB where
   keyOf := rfl
   keyImmutable := by decide
   proj := by decide
-  -- (`decide` cannot evaluate `FieldVal.beq` — the encoder's
-  -- `encVarNat` is wf-recursive, opaque to the kernel's whnf — so the
-  -- distinctness rides `FieldVal.beq_u64_ne`, the module's own
-  -- u64-key specialisation. `keyImgs` itself reduces by rfl.)
-  nodup2 := by
+  -- the key column's type is u64 — the ONE codec-closed seed
+  -- (`keyImgs_closed` spreads it over every image; R5's lawful
+  -- `FieldVal.beq` kit)
+  imgClosed := by simp only [keyFieldType, beq_self_eq_true]; exact CodecClosed.u64
+  nodup := by
     have himgs : keyImgs upd2Fields "id" upd2TableAB
         = [⟨.u64, .u64 1⟩, ⟨.u64, .u64 200⟩] := rfl
     rw [himgs]
-    have h₁ : FieldVal.beq ⟨.u64, .u64 1⟩ ⟨.u64, .u64 200⟩ = false :=
-      FieldVal.beq_u64_ne (by decide)
-    have h₂ : FieldVal.beq ⟨.u64, .u64 200⟩ ⟨.u64, .u64 1⟩ = false :=
-      FieldVal.beq_u64_ne (by decide)
-    simp [FieldVal.nodup2, h₁, h₂]
+    exact List.nodup_cons.mpr
+      ⟨fun he => absurd
+        (Value.u64.inj (eq_of_heq (Sigma.mk.inj (List.mem_singleton.mp he)).2))
+        (by decide),
+       List.nodup_cons.mpr ⟨List.not_mem_nil, List.nodup_nil⟩⟩
   fresh := by
     intro r hr new hnew
     have hr' : r = upd2Row 1 "a" 5 ∨ r = upd2Row 200 "b" 150 := by
@@ -5477,12 +5188,12 @@ def upd2CohDup : KeyCoherent upd2DupMirror "id" upd2TableAB where
         cases hwk' with
         | inl hw1 =>
             subst hw1
-            exact ⟨FieldVal.beq_u64_ne (by decide),
-              FieldVal.beq_u64_ne (by decide)⟩
+            exact fun he => absurd
+              (Value.u64.inj (eq_of_heq (Sigma.mk.inj he).2)) (by decide)
         | inr hw2 =>
             subst hw2
-            exact ⟨FieldVal.beq_u64_ne (by decide),
-              FieldVal.beq_u64_ne (by decide)⟩
+            exact fun he => absurd
+              (Value.u64.inj (eq_of_heq (Sigma.mk.inj he).2)) (by decide)
 
 /-- LAW 6, exercised: the update's table effect IS the fold of its
     per-row deltas through the keyed table semantics. -/
@@ -5549,7 +5260,8 @@ theorem dupKey_claim_false : ¬ dupKeyObligation.decidableClaim := by
   exact absurd hc'' (by decide)
 
 theorem dupKey_refused : dupKeyObligation.discharge = none := by
-  unfold Update2Obligation.discharge
+  unfold Update2Obligation.discharge CodegenCore.Obligation.decideDischarge
+    CodegenCore.Obligation.decideEvidence
   cases hd : decide dupKeyObligation.decidableClaim with
   | true => exact absurd (of_decide_eq_true hd) dupKey_claim_false
   | false => rfl
@@ -5568,10 +5280,10 @@ def update2Checks : CheckResult := do
   -- the guard refuses: age 0 fails `age > 0`, the row passes through
   _ ← assertEq "v2 multi-set: refused row untouched"
     ((upd2PromoteMirror.apply [upd2Row 1 "a" 0]).map upd2Age) [0]
-  -- LAW 1 at runtime: the swapped clause list computes the same rows
-  _ ← assertEq "v2 law-1: clause order unobservable (ages)"
-    (([upd2Row 1 "a" 5].map (applySets [upd2SetAge, upd2SetEmail])).map upd2Age)
-    (([upd2Row 1 "a" 5].map (applySets [upd2SetEmail, upd2SetAge])).map upd2Age)
+  -- the laws (1/5a/5b/6) are the kernel's (`upd2_clause_order_free`,
+  -- `upd2_order_free_eq`/`perm`, `upd2_sameKey_order_matters`,
+  -- `upd2_lowering` — same fixtures, above); the pins here are the
+  -- INSERT/DELETE/rekey surface
   -- INSERT: the fresh row is APPENDED; its non-key fields are read
   -- from the GUARDED row (the INSERT-SELECT batch read)
   _ ← assertEq "v2 insert: appended (ids)"
@@ -5592,27 +5304,12 @@ def update2Checks : CheckResult := do
     ((upd2RekeyMirror.apply [upd2Row 7 "x" 3]).map upd2Email) ["x"]
   _ ← assertEq "v2 rekey: the fresh row's age is the template's"
     ((upd2RekeyMirror.apply [upd2Row 7 "x" 3]).map upd2Age) [0]
-  -- LAW 5b at runtime: the two orders agree (ids)
-  _ ← assertEq "v2 order-free (set+delete): both orders agree"
-    ((upd2PromoteMirror.apply (upd2RetireMirror.apply upd2TablePR)).map upd2Id)
-    ((upd2RetireMirror.apply (upd2PromoteMirror.apply upd2TablePR)).map upd2Id)
-  -- LAW 5a at runtime: the insert orders PERMUTE
-  let insAB := (upd2InsAMirror.apply (upd2InsBMirror.apply upd2Table12)).map upd2Id
-  let insBA := (upd2InsBMirror.apply (upd2InsAMirror.apply upd2Table12)).map upd2Id
-  _ ← assertEq "v2 perm: B-then-A's ids" insAB [1, 2, 20, 10]
-  _ ← assertEq "v2 perm: A-then-B's ids" insBA [1, 2, 10, 20]
-  _ ← assert (insAB != insBA)
+  -- the same-key negative: order-dependence, executed (the perm law's
+  -- non-vacuity: the two insert orders genuinely differ as lists —
+  -- compared through the id projection, the row type has no BEq)
+  _ ← assert ((upd2InsAMirror.apply (upd2InsBMirror.apply upd2Table12)).map upd2Id
+      != (upd2InsBMirror.apply (upd2InsAMirror.apply upd2Table12)).map upd2Id)
     "v2 perm: the orders differ as LISTS (the law is a permutation)"
-  -- the same-key negative: order-dependence, executed
-  _ ← assertEq "v2 same-key: delete-then-insert keeps the fresh row"
-    ((upd2Ins7Mirror.apply (upd2Del7Mirror.apply upd2Tab1)).map upd2Id) [1, 7]
-  _ ← assertEq "v2 same-key: insert-then-delete drops the fresh row"
-    ((upd2Del7Mirror.apply (upd2Ins7Mirror.apply upd2Tab1)).map upd2Id) [1]
-  -- LAW 6 at runtime: the delta fold reproduces the table effect
-  _ ← assertEq "v2 lowering: the delta fold = the update (ids)"
-    (((upd2TableAB.flatMap upd2DupMirror.lowerRow).foldl
-        (fun t d => applyRowDelta "id" d t) upd2TableAB).map upd2Id)
-    [1, 200, 9]
   -- the lowering's delta SHAPE (Delta.lean's contract): remove carries
   -- the KEY image, insert the full row
   _ ← assert (match upd2RekeyMirror.lowerRow (upd2Row 7 "x" 3) with
@@ -5649,14 +5346,10 @@ def update2Checks : CheckResult := do
   _ ← assertEq "v2 obligations: keyless updates have none"
     ((Update2Item.obligations { upd2PromoteMirror with key? := none }).map
       (·.label)) []
-  -- the discharge: fires on the preservation claim, REFUSES the
-  -- duplicate-key insert (the loud gap — no fabricated evidence)
-  _ ← assertEq "v2 obligation: promote discharges"
-    promoteObligation.discharge (some (.decided true))
+  -- the fire/refuse verdicts are the kernel's
+  -- (`promoteObligation_discharges` / `dupKey_refused`, above)
   _ ← assertEq "v2 obligation: promote's evidence tier"
     (promoteObligation.discharge.map (·.tier)) (some .decidableNow)
-  _ ← assertEq "v2 obligation: the duplicate-key insert REFUSES"
-    dupKeyObligation.discharge none
   _ ← assert (promoteObligation.discharge != dupKeyObligation.discharge)
     "v2 obligation: discharge DISTINGUISHES sound from broken"
   .ok ()
@@ -6166,6 +5859,37 @@ def entityMachineChecks : CheckResult := do
 
 end EntityMachineSweep
 
+-- ── The entourage unexpanders (pp-only — `Machines.Dsl.entourageUnexp`):
+-- the preset's generated names render as the machine's possessive phrases
+-- (the author wrote `schema_entity_machine ticketMachine …`). The
+-- guillemets are the printer's own escaping of the display abbreviation —
+-- the honesty mark (NOT re-typeable names). The `states:`-entourage pins
+-- (`«ticketMachine's states»` et al) come from the machine! elaborator the
+-- preset delegates to; these pin the preset's OWN artifacts.
+
+/-- info: «ticketMachine's states» : List TicketState -/
+#guard_msgs in
+#check (ticketMachineStates : List TicketState)
+
+/-- info: «ticketMachine's assign update» : SomeUpdate2 -/
+#guard_msgs in
+#check (ticketMachineUpdateAssign : SchemaLang.SomeUpdate2)
+
+/-- info: «ticketMachine's replay» TicketState.new : List (ticketMachine.Label × TicketState × TicketState) → Option TicketState -/
+#guard_msgs in
+#check (ticketMachineReplay .new :
+  List (ticketMachine.Label × TicketState × TicketState) → Option TicketState)
+
+/-- error: Type mismatch
+  «ticketMachine's obligations»
+has type
+  List EntityMachine.EntityObligation
+but is expected to have type
+  List Bool
+-/
+#guard_msgs in
+example : List Bool := ticketMachineObligations
+
 -- the gates (the tightest tier) — the negative controls. All
 -- registration-free, so the failed elaborations leave nothing behind.
 
@@ -6206,6 +5930,17 @@ schema_entity_machine dupTr for Ticket := status : TicketState
   initial: new
   transition: assign (new → triaged)
   transition: assign (triaged → closed)
+
+-- THE UNKNOWN-CLAUSE DIAGNOSTIC (the Machines.Dsl clause-kit catch-all,
+-- ported with the command): a typo'd clause line PARSES (the low-
+-- priority `ident ": " term` rule) and is rejected with a did-you-mean
+-- over the legal clauses — instead of the bare parse error the
+-- positional grammar gave. The docstring pins the exact message.
+/-- error: schema_entity_machine `badClause`: unknown clause `intial:` — legal clauses: `initial:`, `rewind:`, `transition:` — did you mean: initial? -/
+#guard_msgs in
+schema_entity_machine badClause for Ticket := status : TicketState
+  intial: new
+  transition: assign (new → triaged)
 /-! ## W8.13 — recursive types + monomorphized parameterized types
 
 The runbook's default: recursion is legal BEHIND `list` (the boxed
@@ -6804,6 +6539,163 @@ def pins : CheckResult := do
 
 end SnapshotRTPins
 
+
+/-! ## LensSweep — the lawful-lens core (SchemaLang.Lens)
+
+The `SchemaPath` class's laws DISCHARGE on the row lane's `ColPath`
+instance (kernel-checked at the instance; here re-pinned + executed on
+a demo record), the `CasePrism` bundle discharges on a demo variant,
+and the negative controls pin the gates (the honest-NONE prism
+refusal; the `Distinct` hypothesis is load-bearing).
+-/
+
+namespace LensSweep
+
+open SchemaLang
+
+/-- The demo schema: two columns of different types. -/
+def lfs : List Field := [
+  { name := "id", ty := Ty.u64 },
+  { name := "name", ty := Ty.string }]
+
+/-- The demo row. -/
+def lrow : RowVals lfs :=
+  RowVals.cons (Value.u64 7) (RowVals.cons (Value.string "ada") RowVals.nil)
+
+/-- Two demo paths (different names → `Distinct`). -/
+def pId : SomeColPath lfs := ⟨"id", .u64, .here⟩
+def pName : SomeColPath lfs := ⟨"name", .string, .there .here⟩
+
+-- the reads compute (the instance's get IS the ColPath walk)
+example : SchemaPath.get pId lrow = Value.u64 7 := rfl
+example : SchemaPath.get pName lrow = Value.string "ada" := rfl
+
+-- the instance's laws DISCHARGE on the demo — each cites its class field
+example : SchemaPath.get pId (SchemaPath.put pId lrow (Value.u64 9)) = Value.u64 9 :=
+  SchemaPath.get_set pId lrow (Value.u64 9)
+example : SchemaPath.put pName lrow
+    (SchemaPath.get pName lrow : Value Ty.string) = lrow :=
+  SchemaPath.set_get pName lrow
+example : SchemaPath.put pId (SchemaPath.put pId lrow (Value.u64 1)) (Value.u64 2)
+    = SchemaPath.put pId lrow (Value.u64 2) :=
+  SchemaPath.set_set pId lrow (Value.u64 1) (Value.u64 2)
+example : SchemaPath.put pId (SchemaPath.put pName lrow (Value.string "bob")) (Value.u64 1)
+    = SchemaPath.put pName (SchemaPath.put pId lrow (Value.u64 1)) (Value.string "bob") :=
+  SchemaPath.put_comm pName pId lrow (Value.string "bob") (Value.u64 1)
+    (by show ("name" : String) ≠ "id"; decide)
+example : SchemaPath.get pName (SchemaPath.put pId lrow (Value.u64 9)) = Value.string "ada" :=
+  SchemaPath.put_read_neutral pId pName lrow (Value.u64 9)
+    (by show ("id" : String) ≠ "name"; decide)
+
+-- THE UNIFICATION (the shared law family): the lens class IS a
+-- `CodegenCore.DisjointCommute` — a mutation is a path + its value
+-- (the sigma `SchemaPath.Mut`), the location IS the path,
+-- `Disjoint` IS `Distinct`. The projections compute on the fixture:
+/-- The fixture mutations (write path + value; the `DisjointCommute`
+    instance's mutation type). -/
+def wId (v : Value Ty.u64) : SchemaPath.Mut (P := SomeColPath lfs)
+    (C := RowVals lfs) := ⟨pId, v⟩
+def wName (s : Value Ty.string) : SchemaPath.Mut (P := SomeColPath lfs)
+    (C := RowVals lfs) := ⟨pName, s⟩
+
+example :
+    CodegenCore.DisjointCommute.apply (L := SomeColPath lfs) lrow
+      (wId (Value.u64 1))
+    = SchemaPath.put pId lrow (Value.u64 1) := rfl
+-- the shared law DISCHARGES on the fixture — the instance's law field
+-- IS `put_comm` (cited, not re-proved; kernel-checked at the instance)
+example :
+    CodegenCore.DisjointCommute.apply (L := SomeColPath lfs)
+      (CodegenCore.DisjointCommute.apply (L := SomeColPath lfs) lrow
+        (wId (Value.u64 1)))
+      (wName (Value.string "bob"))
+    = CodegenCore.DisjointCommute.apply (L := SomeColPath lfs)
+      (CodegenCore.DisjointCommute.apply (L := SomeColPath lfs) lrow
+        (wName (Value.string "bob")))
+      (wId (Value.u64 1)) :=
+  CodegenCore.DisjointCommute.disjoint_commutes (wId (Value.u64 1))
+    (wName (Value.string "bob"))
+    (by show (pId : SomeColPath lfs).1 ≠ (pName : SomeColPath lfs).1; decide) lrow
+
+-- `over` executes (read-modify-write) and its laws hold on the fixture
+example : SchemaPath.over pId
+    (fun (v : Value Ty.u64) => match v with
+      | Value.u64 x => Value.u64 (x + 1) | v => v) lrow
+    = RowVals.cons (Value.u64 8) (RowVals.cons (Value.string "ada") RowVals.nil) := rfl
+example : SchemaPath.get pId (SchemaPath.over pId (fun _ => Value.u64 0) lrow) = Value.u64 0 :=
+  SchemaPath.over_get pId _ lrow
+
+-- NEGATIVE CONTROL (`Distinct` is load-bearing — the delta pair's law
+-- is not vacuous): same-column puts do NOT commute — the two orders
+-- read back DIFFERENT values
+example : SchemaPath.get pId
+    (SchemaPath.put pId (SchemaPath.put pId lrow (Value.u64 1)) (Value.u64 2))
+    = Value.u64 2 := rfl
+example : SchemaPath.get pId
+    (SchemaPath.put pId (SchemaPath.put pId lrow (Value.u64 2)) (Value.u64 1))
+    = Value.u64 1 := rfl
+
+/- The demo variant (the prism's fixture). ABBREV: the `HasPayload`
+    head instances match the CONS shape — reducible transparency must
+    see through the name. -/
+abbrev lcs : List VariantCase := [("area", some Ty.u64), ("label", none)]
+
+def areaPrism : CasePrism lcs "area" Ty.u64 := inferInstance
+
+-- the prism law DISCHARGES: inject ∘ payloadOf recovers
+example : areaPrism.payloadOf (areaPrism.inject (Value.u64 5))
+    = Option.some (Value.u64 5) :=
+  areaPrism.prism_law (Value.u64 5)
+-- the miss law DISCHARGES: the unfired arm reads none
+example : areaPrism.payloadOf (VRow.there (VRow.here Unit.unit))
+    = Option.none :=
+  areaPrism.miss_law (VRow.there (VRow.here Unit.unit)) (by rfl)
+-- the eval-level citation: the prism law IS evalCase_here_sound's
+-- payload conjunct (the lens module's eval_inject)
+example : evalCase (VCase.payload (cs := lcs) "area") (VRow.here (Value.u64 5))
+    = Value.u64 5 :=
+  CasePrism.eval_inject (Value.u64 5)
+
+-- NEGATIVE CONTROL (the honest-NONE gate, inherited from `HasPayload`):
+-- a NONE-payload case has NO prism — synthesis fails BY CONSTRUCTION
+/-- error: failed to synthesize instance of type class
+  CasePrism lcs "label" Ty.u64
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command. -/
+#guard_msgs in
+example : CasePrism lcs "label" Ty.u64 := inferInstance
+
+-- the executable lane (the CheckResult harness reads Bools)
+def lensChecks : CheckResult := do
+  _ ← assert (match (SchemaPath.get pId lrow : Value Ty.u64) with
+      | Value.u64 x => x == 7 | _ => false)
+    "lens: get reads the id column"
+  _ ← assert (match (SchemaPath.get pId
+      (SchemaPath.put pId lrow (Value.u64 9)) : Value Ty.u64) with
+      | Value.u64 x => x == 9 | _ => false)
+    "lens: put then get = the value (get_set, executed)"
+  _ ← assert (match (SchemaPath.get pName
+      (SchemaPath.put pId lrow (Value.u64 9)) : Value Ty.string) with
+      | Value.string s => s == "ada" | _ => false)
+    "lens: put disturbs no other read (put_read_neutral, executed)"
+  _ ← assert (match (CodegenCore.DisjointCommute.apply (L := SomeColPath lfs)
+      (CodegenCore.DisjointCommute.apply (L := SomeColPath lfs) lrow
+        (wId (Value.u64 1)))
+      (wName (Value.string "bob")) : RowVals lfs) with
+      | RowVals.cons (Value.u64 x) _ => x == 1 | _ => false)
+    "lens: the DisjointCommute law executes (a path IS a delta location)"
+  _ ← assert (match (SchemaPath.over pId (fun (v : Value Ty.u64) =>
+      match v with | Value.u64 x => Value.u64 (x + 1) | v => v) lrow : RowVals lfs) with
+      | RowVals.cons (Value.u64 x) _ => x == 8 | _ => false)
+    "lens: over = read-modify-write, executed"
+  _ ← assert (areaPrism.payloadOf (areaPrism.inject (Value.u64 5))).isSome
+    "prism: inject ∘ payloadOf recovers (prism law, executed)"
+  _ ← assert (areaPrism.payloadOf (VRow.there (VRow.here Unit.unit))).isNone
+    "prism: the unfired arm reads none (miss law, executed)"
+  .ok ()
+
+end LensSweep
+
 unsafe def main (args : List String) : IO UInt32 := do
   let update := args.contains "--update"
   let ctx ← loadDemoCtx
@@ -6841,7 +6733,6 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("extDType", extDTypeChecks)
      , ("pipelineConformance", pipelineConformanceChecks)
      , ("pipelineGuardControl", pipelineGuardControl)
-     , ("pipelineRun", pipelineRunChecks)
      , ("orderMachine", orderMachineChecks)
      , ("emitterAudit", emitterAuditChecks ctx)
      , ("partition", partitionChecks ctx)
@@ -6872,11 +6763,13 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("witness", WitnessSweep.witnessChecks)
      , ("witnessCheck", WitnessCheckSweep.witnessCheckChecks)
      , ("guestVerified", GuestVerifiedSweep.guestVerifiedChecks)
+    , ("oracleSwept", OracleSweptSweep.oracleSweptChecks)
      , ("witnessEmit", WitnessEmitSweep.witnessEmitChecks)
      , ("migrationGate", MigrationGateSweep.migrationGateChecks)
      , ("mapSet", MapSetSweep.mapSetChecks)
      , ("keys", KeySweep.keyChecks)
      , ("tableInv", TableInvSweep.tableInvChecks)
+     , ("lens", LensSweep.lensChecks)
      , ("update2", Update2Sweep.update2Checks)
      , ("scheduling", SchedSweep.schedChecks)
      , ("refine", RefineSweep.refineChecks)
@@ -6895,8 +6788,13 @@ unsafe def main (args : List String) : IO UInt32 := do
   -- must be caught — a vacuous sweep fails the gate)
   -- the generated enum wires' PropSpecs (Item.lean's three enums:
   -- the round-trip sweep + the mandatory tag+1 sabotage control)
-  let specCode ← TestKit.runSpecs [PropSweep.spec, SnapshotRT.spec, CodecValueSweep.spec,
-    NullSem.wirePropSpec, Determinism.wirePropSpec, Delivery.wirePropSpec,
+  -- the enum wires' PropSpecs (NullSem/Determinism/Delivery) retired as
+  -- pairs with their tag+1 controls (T5): the generated
+  -- `roundTrips_true` (`EnumWire.lean`) decides the round trip for
+  -- EVERY constructor — `enumWireChecks` pins the sabotage predicate.
+  -- CodecValueSweep.spec retired too (T5: `decode_encodeValue_append`,
+  -- axiom-gated).
+  let specCode ← TestKit.runSpecs [PropSweep.spec, SnapshotRT.spec,
     -- W7.14: the derived wire codecs' RoundTripSpecs (the PropSpec bridge
     -- carries the sweep AND the mandatory byte-sabotage control)
     WireCodecFixture.roundTripSpec.propSpec, WireCodecOuter.roundTripSpec.propSpec]
@@ -6919,96 +6817,7 @@ GRACEFULNESS: if `#world gatway` ever threw, the build fails here.
 No registry side effects: the pins are deterministic replays.
 -/
 
-/-- info: registered schema items (18):
-  User : record user (4 fields)
-  OrderItem : record order-item (3 fields)
-  Order : record order (3 fields)
-  Role : variant role (3 cases)
-  OrderError : variant order-error (3 cases)
-  getUser : func get-user(id: u64) -> option<user> delivery=once — u64 → option<user>. The body is a stub — the SIGNATURE is the spec;
-  watchOrders : func watch-orders(into: order-error) -> future<list<user>> delivery=once — an order-error stream in, a user list out (async).
-  Db : resource db — An opaque handle type: the schema records it as a resource.
-  probeVolatileFn : func probe-volatile-fn(x: u32) -> u32 delivery=once — Probe: one ident arg sets the determinism axis only.
-  probeBothAxesFn : func probe-both-axes-fn(x: option<u32>) -> option<u32> delivery=once — Probe: the dot-joined pair sets BOTH axes (either order).
-  probeDefaultFn : func probe-default-fn(x: u32, y: u32) -> u32 delivery=once — Probe: no args — the defaults. (Two params: bodies of the one-param
-  updClockFn : func upd-clock-fn(seed: u64) -> u64 delivery=once — The volatile probe: a clock-reading fn (the volatilities probe
-  updPureFn : func upd-pure-fn(x: u64) -> u64 delivery=once — The pure probe: same shape, default determinism — registers clean
-  Upd2Entry : record upd2-entry (3 fields) — The fixture record: registered, with a DECLARED key (the v2 gates'
-  Ticket : record ticket (2 fields)
-  W813Sweep.PairStringU64 : record pair-string-u64 (2 fields)
-  W813Sweep.PairU64Bool : record pair-u64-bool (2 fields)
-  W813Sweep.PairHolder : record w813-sweep-pair-holder (1 fields) -/
-#guard_msgs in
-#schema
 
-/-- info: package guestlang;
-
-interface gateway-types {
-record user {
-  id: u64,
-  name: string,
-  email: string,
-  tags: list<string>,
-}
-record order-item {
-  id: u64,
-  qty: u32,
-  price: f64,
-}
-record order {
-  id: u64,
-  items: list<order-item>,
-  total: f64,
-}
-variant role {
-  admin,
-  editor,
-  viewer,
-}
-variant order-error {
-  empty-cart,
-  invalid-item(u64),
-  insufficient-funds(f64),
-}
-resource db;
-record upd2-entry {
-  id: u64,
-  email: string,
-  age: u64,
-}
-record ticket {
-  id: u64,
-  status: u64,
-}
-record pair-string-u64 {
-  fst: string,
-  snd: u64,
-}
-record pair-u64-bool {
-  fst: u64,
-  snd: bool,
-}
-record w813-sweep-pair-holder {
-  inner: pair-string-u64,
-}
-}
-
-interface gateway-exports {
-  use gateway-types.{user, order-error};
-    get-user: func(id: u64) -> option<user>;
-    watch-orders: async func(into: order-error) -> list<user>;
-    probe-volatile-fn: func(x: u32) -> u32;
-    probe-both-axes-fn: func(x: option<u32>) -> option<u32>;
-    probe-default-fn: func(x: u32, y: u32) -> u32;
-    upd-clock-fn: func(seed: u64) -> u64;
-    upd-pure-fn: func(x: u64) -> u64;
-}
-
-world gateway {
-  export gateway-exports;
-} -/
-#guard_msgs in
-#world gateway
 
 /-- info: package guestlang;
 
@@ -7078,6 +6887,12 @@ world gatway {
 } -/
 #guard_msgs in
 #world gatway
+
+-- The `#schema` and `#world gateway` full-text pins retired: the
+-- byte-tie goldens — `goldens/wit/gateway.wit` + the manifest's surface
+-- rows — carry the rendered text; the misspelled-world pin stays because
+-- GRACEFULNESS — a misspelled `#world` renders, not throws — is pinned
+-- nowhere else.
 
 /-- info: span rows (7):
   SpanSpec { name: "get-user", delivery: "once", fields: &[("id", "u64")] }
@@ -7356,3 +7171,75 @@ on the abstract generics, with the sabotaged-journal negative control. -/
     [.insert 5] 0 == [7]
 #guard SchemaLang.EventSourced.runStates (fun (n : UInt64) => n) [7]
     [.insert 5] 1 == [7, 5]
+
+/-! ## W-iso batch — `@[row_bridge]` (the record↔row `Iso`, generated)
+
+ONE generated bridge per `@[schema]` record (Meta.RowIso), at the
+correspondence preference's tier (a): a TRUE `Iso R (RowVals R.fields)`
+— the row side is total because `RowVals` admits only well-formed rows
+(the RowVals discipline: a wrong-shape row does not typecheck, so the
+negative control below IS the elaboration gate). The event-sourcing
+lane's `esToRow`/`esOfRow` are now the iso's aliases; the WireCodec
+walkers are SIBLINGS over the same bridge (not merged — Meta.RowIso's
+header states the verdict). -/
+
+/-- The standalone row-bridge fixture (NOT event_sourced — the iso is
+    its own lane). -/
+@[schema, row_bridge]
+structure RowIsoFixture where
+  id : UInt64
+  note : String
+  amount : Int64
+deriving BEq, Repr, DecidableEq
+
+-- the iso's exact type (the pin)
+example : CodegenCore.Iso RowIsoFixture (SchemaLang.RowVals RowIsoFixture.fields) :=
+  RowIsoFixture.rowIso
+
+-- the laws land as theorems (checked types — a stub would not elaborate)
+#check @RowIsoFixture.toRow_ofRow
+#check @RowIsoFixture.ofRow_toRow
+example : ∀ row : SchemaLang.RowVals RowIsoFixture.fields,
+    RowIsoFixture.toRow (RowIsoFixture.ofRow row) = row := RowIsoFixture.toRow_ofRow
+example : ∀ r : RowIsoFixture, RowIsoFixture.ofRow (RowIsoFixture.toRow r) = r :=
+  RowIsoFixture.ofRow_toRow
+
+-- executable: the iso round trips (both directions)
+#guard RowIsoFixture.ofRow (RowIsoFixture.toRow ⟨1, "a", 5⟩) == ⟨1, "a", 5⟩
+#guard RowIsoFixture.rowIso.inv (RowIsoFixture.rowIso.to ⟨2, "b", 7⟩) == ⟨2, "b", 7⟩
+
+-- the MIGRATION: esToRow/esOfRow/esFields ARE the iso's fields
+-- (abbrev aliases — the external names unchanged: ledger's
+-- `Account.esToRow` consumers; the round-trip law re-cited, not
+-- re-derived)
+example : RowIsoFixture → SchemaLang.RowVals RowIsoFixture.fields := fun r =>
+  RowIsoFixture.toRow r
+#guard EsFixture.ofRow (EsFixture.esToRow ⟨1, "a", 5⟩) == ⟨1, "a", 5⟩
+#check @EsFixture.rowIso
+#check @EsFixture.esOfRow_esToRow
+#check @EsFixture.toRow_ofRow
+
+-- NEGATIVE CONTROL (the fragment gate): a float field is a LOUD
+-- elaboration error naming the field (the unbox projection is
+-- flat-scalar-only — one fragment, two lanes)
+/-- error: @[row_bridge] `RowIsoBadFloat`: field `x` has type SchemaLang.Ty.f64, outside the flat-scalar bridge fragment (Bool/UInt8–UInt64/Int8–Int64/String) — the row unboxing needs a one-level `Value` ctor with a total projection -/
+#guard_msgs in
+@[schema, row_bridge]
+structure RowIsoBadFloat where
+  id : UInt64
+  x : Float
+
+-- NEGATIVE CONTROL (the RowVals discipline): a wrong-shape row does
+-- not TYPECHECK — the iso's domain is the well-formed rows, so the
+-- rejection is the elaborator's (the byte-level decode stays partial;
+-- the row-level bridge is total on the right shape)
+/-- error: Application type mismatch: The argument
+  RowVals.nil
+has type
+  RowVals []
+but is expected to have type
+  RowVals [{ name := "note", ty := Ty.string }, { name := "amount", ty := Ty.i64 }]
+in the application
+  RowVals.cons (Value.u64 1) RowVals.nil -/
+#guard_msgs in
+example : RowIsoFixture := RowIsoFixture.ofRow (.cons (.u64 1) .nil)

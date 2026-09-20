@@ -120,21 +120,15 @@ def Ty.toKeyTy? : Ty → Option KeyTy
 theorem Ty.toKeyTy?_toTy (k : KeyTy) : Ty.toKeyTy? k.toTy = some k := by
   cases k <;> rfl
 
-/-- `ReflBEq`/`LawfulBEq` for the derived structural `BEq` — core's
-    `DecidableEq → LawfulBEq` instance is tied to the decidable-equality
-    `BEq`, not the derived one, so the instances are discharged here
-    with Init's own deriving tactics. -/
-instance : ReflBEq KeyTy where
-  rfl := by deriving_ReflEq_tactic
-
-instance : LawfulBEq KeyTy where
-  eq_of_beq := by deriving_LawfulEq_tactic
-
-instance : ReflBEq Ty where
-  rfl := by deriving_ReflEq_tactic
-
-instance : LawfulBEq Ty where
-  eq_of_beq := by deriving_LawfulEq_tactic
+/- BEq laws for the derived structural `BEq`s (the Item.lean probe:
+    core's `DecidableEq → LawfulBEq` instance is tied to the
+    decidable-equality `BEq`, which `Ty`/`KeyTy` do NOT use — theirs is
+    the derived structural one — so the laws come from core's own
+    `deriving instance` handlers, which adopt cleanly here). -/
+deriving instance ReflBEq for KeyTy
+deriving instance LawfulBEq for KeyTy
+deriving instance ReflBEq for Ty
+deriving instance LawfulBEq for Ty
 
 /-! ## Value payloads, indexed by type ((a) → (b) bridge)
 

@@ -196,7 +196,14 @@ def ctxRows (ctx : GenCtx) : List DemoUpdate :=
     declared outputs/pure run). The parent registry wires it into
     `SchemaLang.Emit.coreEmitters` (one line, the Registry lane's).
     The lane reads `ctx.updates` — the replayed registry, no committed
-    mirror (the v2 contract). -/
+    mirror (the v2 contract).
+
+    W7.9 phase 2 sweep — SEAM-KEPT: the lane's partiality (`recNameOf?`'s
+    honest skip, `valueRust`'s none arms) is reachable on a checked
+    universe — the update registry's row-to-record linkage is NOT part
+    of `WellFormed` (the ctx type carries `updates` and `items` as
+    independent lanes), so no `CheckedUniverse` evidence discharges it;
+    the honest skips stay, per the header. -/
 def updateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "update"
   style := .doubleSlash

@@ -7,12 +7,13 @@ offsets in the emitted instructions are structured FIELDS (Nat), fed
 from `WasmBackend.Layout.offsets` (the proved canonical-ABI layout) —
 the two hand-number clobber bugs this month lived in string literals.
 
-INCREMENTAL MIGRATION: the escape hatch `Instr.raw (s : String)` renders
-`s` as one verbatim WAT line. Each migrated emission site is typed; the
-un-migrated sites cross the bridge as `.raw` lines. The raw-count = the
-migration's progress metric (`S.rawCount` — the emitter state's tally,
-printed by WasmGenMain). The
-ledger of what remains raw is owned by WasmBackend.lean's header.
+TYPED MODULE: the escape hatch `Instr.raw (s : String)` renders `s` as
+one verbatim WAT line. Every emission site is typed today (zero
+`Instr.raw` since the raw→typed migration; `Instr.raw` is banned by
+Audit.lean); the escape hatch remains only for the module-ITEM splice
+marker (`Wat.Item.raw "  ;;RUNTIME-SPLICE"` — WasmGenMain replaces its
+exact bytes with runtime.wat). The ledger of what stays raw is owned by
+WasmBackend.lean's header.
 
 Rendering: `Std.Format` (the doctrine — never string interpolation for
 structure). NO `group`/`fill` is used, so every `Format.line` is a HARD
@@ -55,7 +56,8 @@ inductive Op where
 
 /-- One instruction. Structural forms (`block`/`loop`/`if_`) own their
     bodies; everything else is flat. `raw` = the escape hatch: one
-    verbatim WAT line, counted by `rawCount`. -/
+    verbatim WAT line (no `Instr.raw` emission sites remain — see the
+    module header). -/
 inductive Instr where
   | i32const (n : Nat)
   | i64const (n : Nat)

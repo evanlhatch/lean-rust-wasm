@@ -173,29 +173,26 @@ theorem RangeCheck.obligation_tier (c : RangeCheck) :
 /-- THE DISCHARGE (the decidableNow backend's shape —
     `SchemaObligation.discharge`'s arm): fires `.decided true` on a
     TRUE claim; `none` on false — no fabricated evidence, the loud
-    gap is a REFUSAL, not a fake pass. -/
+    gap is a REFUSAL, not a fake pass. (The backend is the KIT's —
+    `decideEvidence`; this definition is the lane's named
+    application.) -/
 def RangeCheck.discharge (c : RangeCheck) :
     Option CodegenCore.Obligation.Evidence :=
-  match decide c.claim with
-  | true => some (.decided true)
-  | false => none
+  CodegenCore.Obligation.decideEvidence c.claim
 
 /-- SOUNDNESS: a fired discharge means the value IS in range (the
     kernel's `decide` validated it — `of_decide_eq_true`; no new trust
-    base). -/
+    base). Routes through the kit's `decideEvidence_sound` — the proof
+    object is shared. -/
 theorem RangeCheck.discharge_sound (c : RangeCheck)
-    (h : c.discharge = some (.decided true)) : c.claim := by
-  unfold RangeCheck.discharge at h
-  cases hd : decide c.claim with
-  | true => exact of_decide_eq_true hd
-  | false => rw [hd] at h; simp at h
+    (h : c.discharge = some (.decided true)) : c.claim :=
+  CodegenCore.Obligation.decideEvidence_sound h
 
 /-- COMPLETENESS: a true claim fires the backend (the discharge is not
     vacuous). -/
 theorem RangeCheck.discharge_of_claim (c : RangeCheck) (h : c.claim) :
-    c.discharge = some (.decided true) := by
-  unfold RangeCheck.discharge
-  rw [decide_eq_true h]
+    c.discharge = some (.decided true) :=
+  CodegenCore.Obligation.decideEvidence_of_claim h
 
 /-! ## The word lane (the order's bv_decide backend) -/
 

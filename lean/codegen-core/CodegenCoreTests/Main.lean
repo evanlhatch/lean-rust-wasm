@@ -199,6 +199,31 @@ def didYouMeanChecks : CheckResult := do
     (didYouMean "completely-unrelated-token" ["user", "role"]) []
   .ok ()
 
+/-! ## GenKit — the `declare_*` generation runtime (didYouMeanSuffix /
+    unknownName* / freshName*; the first clients are the macro-registered
+    LintKit linters + the `@[derived]` stamp's fixture lane) -/
+
+def genKitChecks : CheckResult := do
+  -- the suffix format: the did-you-mean over the nearest candidates
+  _ ← assertEq "didYouMeanSuffix appends the nearest"
+    (didYouMeanSuffix "usr" ["role", "user", "admin"]) " — did you mean: user?"
+  -- NEGATIVE control: nothing near = empty suffix (no empty suggestion)
+  _ ← assertEq "didYouMeanSuffix empty when nothing near"
+    (didYouMeanSuffix "completely-unrelated" ["user", "role"]) ""
+  -- the unknown-name rejection ENUMERATES the legal space, then hints
+  _ ← assertEq "unknownNameMessage enumerates the legal space"
+    (unknownNameMessage "machine!" "intial" "clause" ["initial", "final"])
+    "machine!: unknown clause `intial` — legal clauses: `initial`, `final` — did you mean: initial, final?"
+  -- the fresh-name verdict: taken name → the rejection with did-you-mean
+  _ ← assertEq "freshNameVerdict rejects a taken name (did-you-mean rides)"
+    (freshNameVerdict "schema_from_template x" "user" "schema item" ["role", "user"])
+    (some "schema_from_template x: `user` is already a registered schema item — \
+      names must be fresh — did you mean: user?")
+  -- NEGATIVE control: a fresh name passes silently
+  _ ← assertEq "freshNameVerdict accepts a fresh name"
+    (freshNameVerdict "ctx" "acct" "schema item" ["role", "user"]) none
+  .ok ()
+
 /-! ## Emitter.law + checkNodup (W7.9 phase 1)
 
 The optional `law` field defaults to `none` (downstream literals unchanged);
@@ -492,6 +517,7 @@ def main : IO UInt32 := do
     , ("registry", registryChecks)
     , ("emit", emitChecks)
   , ("didYouMean", didYouMeanChecks)
+  , ("genKit", genKitChecks)
   , ("bool-image", boolImageChecks)
   , ("emitter-law", emitterLawChecks)
   , ("data-registry", dataRegistryChecks)
@@ -500,6 +526,32 @@ def main : IO UInt32 := do
   , ("obligation", obligationChecks)
     ]
   if code != 0 then return code
+  -- the monadic gates' THROW path (over CoreM — MonadError's real
+  -- instantiation): the rejection message rides verbatim, did-you-mean and all
+  let env ← Lean.mkEmptyEnvironment
+  let thrown ←
+    try
+      let (r, _) ← ((do
+          freshNameCheck "ctx" "user" "item" ["user"]
+          pure "NO-THROW (the gate passed a duplicate — broken)" :
+          Lean.CoreM String)).toIO
+        { fileName := "<genkit>", fileMap := default } { env }
+      pure r
+    catch e => pure (toString e)
+  unless (thrown.splitOn "did you mean").length == 2 do
+    IO.eprintln s!"FAIL: freshNameCheck throw path: {thrown}"
+    return 1
+  let fresh ←
+    try
+      let (r, _) ← ((do
+          freshNameCheck "ctx" "acct" "item" ["user"]
+          pure "fresh-passed" : Lean.CoreM String)).toIO
+        { fileName := "<genkit>", fileMap := default } { env }
+      pure r
+    catch _ => pure "THREW (the gate rejected a fresh name — broken)"
+  unless fresh == "fresh-passed" do
+    IO.eprintln s!"FAIL: freshNameCheck fresh path: {fresh}"
+    return 1
   -- the deterministic +/− suite (TestKit.DetSpec: check must pass AND
   -- the control must fail — a vacuous control fails the gate)
   let detCode ← TestKit.runDets [manglerSpec]

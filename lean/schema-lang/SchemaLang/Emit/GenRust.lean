@@ -53,6 +53,7 @@ module
 
 public import CodegenCore
 public import SchemaLang.Item
+public import SchemaLang.Wf
 public import SchemaLang.Emit.GenCtx
 
 @[expose] public section
@@ -243,18 +244,110 @@ def genRustItems (items : List Item) : List CodegenCore.Emit.Rust.Item :=
   preludeItems items
     ++ (Item.partition items).records.map fun (n, fields) => recordGenItem items n fields
 
+/-! ## W7.9 phase 2 sweep — the checked universe view (seam-kept, with
+    the impossibility cited)
+
+The gen lane's skip machinery is FRAGMENT policy, not a WF defense:
+variant refs, `result`/`map`/`set`/`future`/`stream`/`tensor` exclusions
+all fire on WELL-FORMED input (the v1 fragment), so the skips cannot be
+deleted — the raw entry point is the test seam (Tests over synthetic
+universes), and the registry driver path goes through
+`GenCtx.checkedItems?`. Of the WF-banned reason classes: the
+"inline ref cycle" reason is banned universe-wide by `InlineAcyclic`
+(the W8.13 gate — this module's occurs-check mirror keeps the lane safe
+on unchecked input too, per the header), and the "unresolvable" reason
+is WF-DEAD by the theorem below (every `.ty m` in a checked record's
+fields resolves). -/
+
+/-- The checked-universe resolution fact: every `.ty m` in a checked
+    record's field types names an item of the universe — the lookup
+    `items.find? (fun x => x.name == m)` that `unsupported?`'s ref arm
+    runs is always `some` on checked input, so the skip reason
+    "ref 'm': unresolvable" cannot fire. -/
+theorem checked_ref_resolves (cu : CheckedUniverse)
+    {n : String} {fields : List Field} {f : Field} {m : String}
+    (hit : Item.record n fields ∈ cu.val) (hf : f ∈ fields)
+    (hty : f.ty = .ty m) :
+    (cu.val.find? (fun x => x.name == m)).isSome = true := by
+  obtain ⟨hitems, _, _, _⟩ := cu.property
+  cases hitems _ hit with
+  | record _ _ href =>
+      have hty' : TyRefsOk (Item.typeNames cu.val) f.ty := href f hf
+      rw [hty] at hty'
+      cases hty' with
+      | ty hn =>
+          simp only [Item.typeNames, List.mem_filterMap] at hn
+          obtain ⟨it, hit', hmem⟩ := hn
+          rw [List.find?_isSome]
+          cases it with
+          | record nm fs =>
+              have hnm : nm = m := by
+                have h' : some nm = some m := hmem
+                exact Option.some.inj h'
+              exact ⟨Item.record nm fs, hit', by
+                simp only [Item.name, hnm, beq_self_eq_true]⟩
+          | variant nm cs =>
+              have hnm : nm = m := by
+                have h' : some nm = some m := hmem
+                exact Option.some.inj h'
+              exact ⟨Item.variant nm cs, hit', by
+                simp only [Item.name, hnm, beq_self_eq_true]⟩
+          | func _ | resource _ =>
+              have h' : Option.none = some m := hmem
+              simp at h'
+
+end SchemaLang.Emit.GenRust
+
+/-! ## The emission law (the vortex lane's `vortexLaw` shape) -/
+
+namespace SchemaLang.Emit.GenRust
+
+/-- The generator emitter's law: whenever the ctx's checked view
+    exists, the fold's input IS the ctx's item universe — the check
+    adds evidence, never content. (Ctx-shaped like every `Emitter
+    GenCtx` law; the emitter consumes the projection's value.) -/
+def genRustLaw (ctx : SchemaLang.Emit.GenCtx) : Prop :=
+  ∀ cu : SchemaLang.CheckedUniverse, ctx.checkedItems? = some cu →
+    cu.val = ctx.items
+
+/-- The discharge: the checkpoint's transport lemma — one citation. -/
+theorem genRustLaw_discharged (ctx : SchemaLang.Emit.GenCtx) : genRustLaw ctx :=
+  fun cu h => SchemaLang.Emit.GenCtx.checkedItems?_val ctx cu h
+
 end SchemaLang.Emit.GenRust
 
 /-- The generator emitter plugin (W6.4): `gen_<record>` fns over the
     schema universe, consumed by the root crate's `gen_generated`
-    module (feature-gated on `arbitrary`, the wire pattern). -/
+    module (feature-gated on `arbitrary`, the wire pattern).
+
+    W7.9 phase 2 sweep: the item universe is consumed through the
+    CHECKED view (`GenCtx.checkedItems?` — the single checkpoint).
+    Bytes unchanged (the fold is evidence-free — see the checked-view
+    section above for which skip reasons are WF-dead and which are
+    fragment policy); the `none` arm is the test-fixture fallback for
+    callers that never ran the check — the paths agree.
+
+    W7.9 `Emitter.law` sweep: `law` is POPULATED (`genRustLaw` — the
+    checked view's input identity, discharged by the
+    `GenCtx.checkedItems?_val` citation): the checkpoint discharges
+    well-formedness evidence, it never swaps content. The generator
+    fold itself is evidence-free (its loud-skip arms are fragment
+    POLICY, not WF partiality — no impossibility theorem to carry), so
+    the emission contract is exactly that the fold consumes the ctx's
+    universe. -/
+
 def genRustEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "gen-rust"
   style := .doubleSlash
   specSource := "Demo.lean + FeatureFlags.lean (@[schema] records; cedar-study.md Generators)"
   outputs := ["../../src/gen_generated.rs"]
-  run ctx := [
-    { path := "../../src/gen_generated.rs"
-      contents := CodegenCore.Emit.Rust.renderModule
-        (SchemaLang.Emit.GenRust.genRustItems ctx.items) }
-  ]
+  run ctx :=
+    let items := match ctx.checkedItems? with
+      | some cu => cu.val
+      | none => ctx.items
+    [
+      { path := "../../src/gen_generated.rs"
+        contents := CodegenCore.Emit.Rust.renderModule
+          (SchemaLang.Emit.GenRust.genRustItems items) }
+    ]
+  law := some SchemaLang.Emit.GenRust.genRustLaw

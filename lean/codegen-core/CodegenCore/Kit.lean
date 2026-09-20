@@ -173,6 +173,12 @@ inductive Obligation.Evidence where
   | citedProof (thm : Lean.Name)
   | decided (result : Bool)
   | generatedCheck (artifact fn : String)
+  /-- The differential sweep's reference: the ORACLE FN the row replays
+      (the WIT export; the args ride the byte-frozen manifest). The ref
+      is evidence of a SWEEP, never a proof — resolution (the ref names
+      an actual oracle row) is the gates driver's `obligation-check`,
+      the cross-package half (schema-lang cannot see the oracle's row
+      universe). -/
   | oracleRow (ref : String)
   /-- W9.3: `artifact` = the byte-tied witness file; `ref` = the
       obligation's label inside it (the certificate certifies THAT
@@ -201,5 +207,120 @@ structure Obligation (α : Type) where
   payload : α
   provenance : Lean.Name
 deriving Inhabited
+
+/-! ## The decidableNow backend — ONE implementation, many lanes
+
+The per-lane `discharge` functions repeated one byte-identical shape:
+tier-gate on `decidableNow`, run the kernel's `decide` over the lane's
+claim, fire `.decided true` on a TRUE verdict, refuse (`none`) on a
+false one (the loud gap). The backend lives HERE, once; lanes apply
+`decideEvidence` (the verdict combinator, inside multi-arm discharges)
+or `decideDischarge` (the tier-gated application) and keep their
+per-lane soundness/completeness theorem NAMES as one-line routes
+through the generic proofs — the Tests/Axioms pins keep their names,
+the proof object is shared. Core-only: the claim rides the `Decidable`
+instance the lane supplies; nothing schema-shaped crosses this line. -/
+
+/-- The verdict combinator: a decidable claim → `.decided true` on a
+    TRUE verdict, `none` on a false one (the loud gap — the backend
+    refuses, it does not fabricate evidence). -/
+def Obligation.decideEvidence (claim : Prop) [Decidable claim] :
+    Option Obligation.Evidence :=
+  match decide claim with
+  | true => some (.decided true)
+  | false => none
+
+/-- SOUNDNESS of the decidableNow backend: a `.decided true` verdict
+    means the claim HOLDS (`of_decide_eq_true`; no new trust base).
+    This is THE proof — per-lane `*_sound` theorems route through it. -/
+theorem Obligation.decideEvidence_sound {claim : Prop} [Decidable claim]
+    (h : Obligation.decideEvidence claim = some (.decided true)) : claim := by
+  unfold decideEvidence at h
+  cases hd : decide claim with
+  | true => exact of_decide_eq_true hd
+  | false =>
+      rw [hd] at h
+      simp at h
+
+/-- COMPLETENESS: a true claim fires the backend to the `.decided
+    true` evidence — the tier fires on the claims it can decide. -/
+theorem Obligation.decideEvidence_of_claim {claim : Prop} [Decidable claim]
+    (h : claim) : Obligation.decideEvidence claim = some (.decided true) := by
+  unfold decideEvidence
+  rw [decide_eq_true h]
+
+/-- The tier-GATED application: only the `decidableNow` rung is
+    served by this backend (`none` = the loud gap: a hand-set tier the
+    lane cannot serve, or a FALSE decide verdict). `claim` is the
+    lane's claim over the OBLIGATION (the lanes' `decidableClaim` defs
+    match over the payload); the `Decidable` instance is the lane's
+    decision procedure. -/
+def Obligation.decideDischarge {α : Type} (claim : Obligation α → Prop)
+    [∀ o : Obligation α, Decidable (claim o)] (o : Obligation α) :
+    Option Obligation.Evidence :=
+  match o.tier with
+  | .decidableNow => decideEvidence (claim o)
+  | .provedAtElab | .generatedCheck | .oracleSwept | .guestVerified => none
+
+/-- SOUNDNESS of the tier-gated application (the per-lane
+    `*_sound` bodies route through here). -/
+theorem Obligation.decideDischarge_sound {α : Type} (claim : Obligation α → Prop)
+    [∀ o : Obligation α, Decidable (claim o)] (o : Obligation α)
+    (ht : o.tier = .decidableNow)
+    (h : o.decideDischarge claim = some (.decided true)) : claim o := by
+  unfold decideDischarge at h
+  rw [ht] at h
+  exact decideEvidence_sound h
+
+/-- COMPLETENESS of the tier-gated application: a true claim
+    discharges to the `.decided true` evidence — the backend FIRES on
+    the claims it can decide. -/
+theorem Obligation.decideDischarge_of_claim {α : Type} (claim : Obligation α → Prop)
+    [∀ o : Obligation α, Decidable (claim o)] (o : Obligation α)
+    (ht : o.tier = .decidableNow) (hc : claim o) :
+    o.decideDischarge claim = some (.decided true) := by
+  unfold decideDischarge
+  rw [ht]
+  exact decideEvidence_of_claim hc
+
+/-! ## DisjointCommute — the shared delta/lens law (one shape, two
+    granularities)
+
+The last un-merged law family: dbsp's `DeltaSystem.disjoint_commutes`
+and the lens PATH's distinct-put commutation (`SchemaPath.put_comm`)
+are the SAME law — a delta LOCATION is a lens PATH. The shape: a
+mutation acts on state through `apply`, has ONE location, locations
+carry a disjointness relation, and write-disjoint mutations commute.
+Each granularity instantiates the class by CITING its existing theorem
+(the proofs live where the semantics live; this file adds no proof): -/
+
+/-- THE shared law: `apply (apply s m₁) m₂ = apply (apply s m₂) m₁`
+    whenever the mutations' locations are disjoint. Two consumers, each
+    citing its existing theorem as the law field:
+
+    - `Dbsp.DeltaSystem` (`Dbsp.Effects`): `L := List Loc` — a
+      mutation's location IS its static write set; `Disjoint` =
+      `LocDisjoint`; the law cites `DeltaSystem.disjoint_commutes`.
+    - `SchemaLang.SchemaPath` (`SchemaLang.Lens`): `L := P` — a
+      mutation is a path + its (dependent) value (`SchemaPath.Mut`, a
+      sigma); `Disjoint` = the class's `Distinct`; the law cites
+      `put_comm`.
+
+    The READ-neutrality companion (`SchemaPath.put_read_neutral`)
+    deliberately stays lens-side: this structure has no read surface —
+    a delta system is write-only by design (`Dbsp.Effects`' header:
+    sound in one way) — so read-neutrality has no honest instance at
+    the delta granularity. -/
+class DisjointCommute (S L Mut : Type) where
+  /-- The mutation application. -/
+  apply : S → Mut → S
+  /-- The (single) location a mutation writes. -/
+  loc : Mut → L
+  /-- Location disjointness (the side condition). -/
+  Disjoint : L → L → Prop
+  /-- THE contract: write-disjoint mutations commute. -/
+  disjoint_commutes :
+    ∀ (m₁ m₂ : Mut), Disjoint (loc m₁) (loc m₂) →
+      ∀ (s : S), apply (apply s m₁) m₂ = apply (apply s m₂) m₁
 
 end CodegenCore

@@ -4,7 +4,10 @@
 For each `@[schema]` RECORD, derive the change variant: the event-sourcing
 shape that connects schema-lang to `Dbsp.ChangeSpec` (the change-structure
 classes — patch/valid/diff/invert — D18). A table's row type gets a
-companion change type:
+companion change type. The LEAN side of this contract is the ONE shared
+change variant, `SchemaLang.EventSourced.Delta` (R1: the update lane's
+`RowDelta` is the same type at the schema row — one inductive, three
+specializations); this module emits its Rust/WIT face.
 
     record user { id: u64, ... }
       ⇒ variant user-change { insert(user), update(user), remove(u64) }
@@ -172,7 +175,14 @@ end SchemaLang
 
 open SchemaLang (Item)
 
-/-- The Rust delta emitter: all change enums + ChangeSpec impls, one file. -/
+/-- The Rust delta emitter: all change enums + ChangeSpec impls, one file.
+
+    W7.9 phase 2 sweep — SEAM-KEPT (no checked route to buy): the delta
+    fold's partiality is the closed-grammar KIND partition (non-records
+    have no change type — `Item.changeTy`'s `none`) plus `keyOf`'s
+    field-less-record rule — both reachable on WELL-FORMED input, so no
+    defensive arm dies at the checkpoint; `derivesFor`'s ref resolution
+    already consumes the same full universe the raw path has. -/
 def deltaEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "delta"
   style := .doubleSlash
@@ -192,7 +202,9 @@ def deltaEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
 
 /-- The WIT delta emitter: all change variants, one file (see the module
     header for why this is separate from `witEmitter`). Repo-root-relative
-    path like the other emitters — the forge byte-tie covers it. -/
+    path like the other emitters — the forge byte-tie covers it.
+    W7.9 phase 2 sweep: SEAM-KEPT — same reasoning as `deltaEmitter`
+    (kind-partition partiality only; nothing WF-dead to discharge). -/
 def deltaWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "delta-wit"
   style := .doubleSlash

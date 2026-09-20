@@ -47,36 +47,39 @@ namespace Dbsp.Determinism
 
 variable {Event State : Type}
 
-/-! ## The two folds -/
+/-! ## The two folds (abbrevs over core's `List.foldl`)
+
+The hand-rolled structural recursions are gone: `replay`/`chainHash` are
+`abbrev`s over `List.foldl`, so the spine laws CITE the core lemmas
+(`List.foldl_append`) instead of re-proving them by induction. -/
 
 /-- Replay: fold the events LEFT through `step`, from the initial
     state. Pure — the determinism spine's design constraint is HERE:
     `step` sees only (state, event). -/
-def replay (step : State → Event → State) : State → List Event → State
-  | s, [] => s
-  | s, e :: rest => replay step (step s e) rest
+abbrev replay (step : State → Event → State) (s : State) :
+    List Event → State :=
+  List.foldl step s
 
 /-- The chain hash: fold `combine` LEFT from the seed. The hash of
     position k covers events 0..k-1 — the ledger's tamper-evidence. -/
-def chainHash (combine : UInt64 → Event → UInt64) :
-    UInt64 → List Event → UInt64
-  | seed, [] => seed
-  | seed, e :: rest => chainHash combine (combine seed e) rest
+abbrev chainHash (combine : UInt64 → Event → UInt64) :
+    UInt64 → List Event → UInt64 :=
+  List.foldl combine
 
 @[simp] theorem replay_nil (step : State → Event → State) (s : State) :
-    replay step s [] = s := rfl
+    replay step s [] = s := List.foldl_nil
 
 @[simp] theorem replay_cons (step : State → Event → State) (s : State)
     (e : Event) (rest : List Event) :
-    replay step s (e :: rest) = replay step (step s e) rest := rfl
+    replay step s (e :: rest) = replay step (step s e) rest := List.foldl_cons
 
 @[simp] theorem chainHash_nil (combine : UInt64 → Event → UInt64)
-    (seed : UInt64) : chainHash combine seed [] = seed := rfl
+    (seed : UInt64) : chainHash combine seed [] = seed := List.foldl_nil
 
 @[simp] theorem chainHash_cons (combine : UInt64 → Event → UInt64)
     (seed : UInt64) (e : Event) (rest : List Event) :
     chainHash combine seed (e :: rest) = chainHash combine (combine seed e) rest :=
-  rfl
+  List.foldl_cons
 
 /-! ## The spine laws -/
 
@@ -86,10 +89,8 @@ def chainHash (combine : UInt64 → Event → UInt64) :
     run reached. -/
 theorem replay_append (step : State → Event → State) (s : State)
     (pre post : List Event) :
-    replay step (replay step s pre) post = replay step s (pre ++ post) := by
-  induction pre generalizing s with
-  | nil => simp
-  | cons e rest ih => simp [ih]
+    replay step (replay step s pre) post = replay step s (pre ++ post) :=
+  (List.foldl_append (f := step) (b := s) (l := pre) (l' := post)).symm
 
 /-- THE CHAIN-EXTENSION LAW: the checkpoint hash seeds the tail's
     chain — `chainHash` of the whole log is computable from the
@@ -97,10 +98,8 @@ theorem replay_append (step : State → Event → State) (s : State)
 theorem chainHash_append (combine : UInt64 → Event → UInt64) (seed : UInt64)
     (pre post : List Event) :
     chainHash combine (chainHash combine seed pre) post
-      = chainHash combine seed (pre ++ post) := by
-  induction pre generalizing seed with
-  | nil => simp
-  | cons e rest ih => simp [ih]
+      = chainHash combine seed (pre ++ post) :=
+  (List.foldl_append (f := combine) (b := seed) (l := pre) (l' := post)).symm
 
 /-- THE DETERMINISM-SPINE THEOREM: equal chains give equal hashes AND
     equal replayed states — the replayed state is a function of the

@@ -6,8 +6,16 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["crates/forge", "crates/guest-demo", "crates/steel-host", "crates/guestlang-rt", "crates/wire", "crates/splicer-mw", "crates/lean-sys-v433", "crates/lean-ffi", "crates/oracle-runner", "crates/wasm-delta"]
+members = ["crates/forge", "crates/guest-demo", "crates/guestlang-host", "crates/guestlang-rt", "crates/splicer-mw", "crates/oracle-runner", "crates/wasm-delta", "crates/workspace-alloc"]
 resolver = "2"
+
+[workspace.dependencies]
+# The global allocator policy lives in crates/workspace-alloc (the ONE
+# place that declares mimalloc + the init macro). New binary crates
+# depend on workspace-alloc (this version) and call
+# `workspace_alloc::init_global_alloc!();` in main.rs — never on
+# mimalloc directly, and never a second allocator anywhere.
+mimalloc = "0.1.52"
 
 [features]
 # W6.4: the generated value generators (src/gen_generated.rs) consume

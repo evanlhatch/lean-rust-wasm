@@ -33,7 +33,26 @@ abbrev FaultsSpec := CodegenCore.CodedRegistry FailureModeItem
 def noFaults : FaultsSpec :=
   { items := [], nameOf := (·.name), codePrefix := "E", start := 100 }
 
-/-- The guest emitter: `OrderError` + `init_guest`, from `Spec.apiFaults`. -/
+/-! ## The emission laws (the vortex lane's `vortexLaw` shape) -/
+
+/-- Both fault emitters' shared law: the allocated code table is
+    COLLISION-FREE — no two failure modes share an E-code in the
+    emitted `error!` block. `CodedRegistry` carries this in the type
+    (`codesNodup` proof field, `by decide` at the literal); this law is
+    that invariant riding the emitters. -/
+def codesNodupLaw : FaultsSpec → Prop :=
+  fun reg => (reg.codes.map (·.2)).Nodup
+
+/-- The discharge: the registry's own proof field, transported to
+    `codes` by `CodedRegistry.codes_nodup` — one citation. -/
+theorem codesNodupLaw_discharged (reg : FaultsSpec) : codesNodupLaw reg :=
+  reg.codes_nodup
+
+/-- The guest emitter: `OrderError` + `init_guest`, from `Spec.apiFaults`.
+
+    W7.9 `Emitter.law` sweep: `law` POPULATED (`codesNodupLaw` — the
+    emitted E-code table's collision-freedom), discharged by
+    `codesNodupLaw_discharged`. -/
 def guestEmitter : Emitter FaultsSpec where
   name := "faults-guest"
   style := .doubleSlash
@@ -42,8 +61,13 @@ def guestEmitter : Emitter FaultsSpec where
   run items :=
     [ { path := "../../src/faults_generated.rs"
       , contents := Rust.renderModule (Rust.faultModule "OrderError" items.codes) } ]
+  law := some codesNodupLaw
 
-/-- The host emitter: `HostFault` + `init_host`, from `Spec.hostFaults`. -/
+/-- The host emitter: `HostFault` + `init_host`, from `Spec.hostFaults`.
+
+    W7.9 `Emitter.law` sweep: `law` POPULATED (`codesNodupLaw`),
+    discharged by `codesNodupLaw_discharged` — same citation, the
+    host registry's own proof field. -/
 def hostEmitter : Emitter FaultsSpec where
   name := "faults-host"
   style := .doubleSlash
@@ -52,6 +76,7 @@ def hostEmitter : Emitter FaultsSpec where
   run items :=
     [ { path := "../../src/host_faults_generated.rs"
       , contents := Rust.renderModule (Rust.faultModule "HostFault" items.codes (guest? := false)) } ]
+  law := some codesNodupLaw
 
 /-- The emitters (order = write order). -/
 def emitters : List (Emitter FaultsSpec) := [guestEmitter, hostEmitter]
@@ -80,15 +105,28 @@ def forgeJobs : List (String × List String) :=
 def jobsCoverEmitters : Bool :=
   (emitters.flatMap (·.outputs)) == forgeJobs.flatMap (·.2)
 
+/-- Consistency: the job rows cover EXACTLY the registered emitters'
+    outputs (no emitter silently outside byte-tie). PROVED: `rfl` —
+    the same shape as `SchemaLang.Emit.Registry.jobsCoverEmitters_true`
+    (the list is literal; the coverage is a theorem, not a test
+    claim — the Tests assertion stays as the belt to the theorem's
+    braces). -/
+theorem jobsCoverEmitters_true : jobsCoverEmitters = true := rfl
+
 /-- The manifest rows for this package (forge unions rows across
     packages; brackets + header come from the writer). Paths are
-    REPO-ROOT-relative (forge joins from the root). -/
-def forgeJobsLines : List String :=
+    REPO-ROOT-relative (forge joins from the root). -/def forgeJobsLines : List String :=
   -- RAW outputs: `jobJson` roots paths itself (`CodegenCore.Emit.rootRel`) —
   -- mapping here too would root twice.
   forgeJobs.map fun (exe, outputs) =>
     SchemaLang.Emit.jobJson "faults" exe [] outputs
 
+/-- The manifest emitter's no-law note (the `Emitter.law` sweep): the
+    manifest folds `forgeJobs` — module data whose drift guard is the
+    PROVED coverage (`jobsCoverEmitters_true`, `rfl`); the coverage
+    quantifies over the registry that includes this emitter, so a law
+    here would be self-referential (the same shape as schema-lang's
+    `forgeJobsEmitter`). -/
 def forgeJobsEmitter : Emitter FaultsSpec where
   name := "forge-jobs"
   style := .hash

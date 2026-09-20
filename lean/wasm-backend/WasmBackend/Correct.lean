@@ -235,8 +235,28 @@ theorem spec_add_ok :
       = .ok s' ∧ s'.stack = [.i64 42] :=
   ⟨_, rfl, rfl⟩
 
+open Lean Elab Term Tactic in
+/-- `fuel_budget k` (plan §4, family 1) — the convergence theorems'
+    budget normalization. After `intro m`, rewrites the budget `m + k`
+    into the `m.succ^k` shape `Sem.execList`'s equation lemmas fire on
+    (they match `fuel+1`; the numeral sum `m + k` does not). Expands to
+    exactly the hand-written `rw [show m + k = m.succ….succ from rfl]`
+    — one rfl proof, the term the hand chains spelled out. Chosen over a
+    `Nat.succ_eq_add_one`/`Nat.add` simp normalization because it keeps
+    the reduction behavior identical to the pinned proofs: the goal is
+    only re-associated, never re-simplified (no risk of the normalizer
+    touching `Sem.execList`'s own numerals). -/
+elab "fuel_budget " k:num : tactic => do
+  let n := k.getNat
+  let mId : Lean.Term := mkIdent `m
+  let kT : Lean.Term := ⟨k.raw⟩
+  let mut chain : Lean.Term := mId
+  for _ in [0:n] do
+    chain ← `(term| Nat.succ $chain)
+  evalTactic (← `(tactic| rw [show $mId + $kT = $chain from rfl]))
+
 /-- THE general theorem, the TERMINATION leg (W6.9): at any budget
-    ≥ 6 the template RETURNS. (The `rw [show … from rfl]` puts the
+    ≥ 6 the template RETURNS. (The `fuel_budget 6` rw puts the
     budget in `succ`-chain form so the `Sem.execList` equations fire
     under `simp only`.) -/
 theorem tpl_add_ret_converges (x y l : Nat) (a b : UInt64) (s : Sem.State)
@@ -245,7 +265,7 @@ theorem tpl_add_ret_converges (x y l : Nat) (a b : UInt64) (s : Sem.State)
         [Sem.Instr.localget x, Sem.Instr.localget y, .i64add, .localset l, .localget l]
       = .ok s' ∧ s'.stack = [.i64 (a + b)] := by
   intro m
-  rw [show m + 6 = m.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 6
   -- one shot: simp unfolds execList/step along the 5 instructions. The
   -- machine pops the SECOND operand first (stack head = top), so i64.add
   -- computes b + a — commuted at the end.
@@ -481,8 +501,7 @@ theorem specCasesLoad_ok_converges (z o : UInt64) (lz lo : Nat)
       = .ok s'
     ∧ s'.stack = [.i64 z] := by
   intro m
-  rw [show m + 15
-      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 15
   simp [Sem.execList, Sem.step, hptr, hmem, hs, hbound, specCasesLoad,
     specCases, specCasesFrom]
 
@@ -525,8 +544,7 @@ theorem specCases_ok_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     ∧ s'.stack = [.i64 z] := by
   intro m
   subst hb
-  rw [show m + 12
-      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 12
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom]
 
 /-- THE BRANCH THEOREM, PARTIAL CORRECTNESS (primary, fuel-insensitive
@@ -558,8 +576,7 @@ theorem specCases_alt1_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     ∧ s'.stack = [.i64 o] := by
   intro m
   subst hb
-  rw [show m + 12
-      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 12
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom]
 
 /-- THE mirror leg, PARTIAL CORRECTNESS (primary, fuel-insensitive —
@@ -587,8 +604,7 @@ theorem specCases_trap_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
                       [.i64const o, .localset lo, .localget lo]])
       = .error e ∧ e = .trap := by
   intro m
-  rw [show m + 12
-      = m.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 12
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom,
     (show (0 : UInt32) ≠ b from fun hc => hb hc.symm),
     (show (1 : UInt32) ≠ b from fun hc => hb1 hc.symm)]
@@ -648,7 +664,7 @@ theorem branch_br0_entry_stack_converges (s : Sem.State)
         [.i32const 1, .if_ [.block [.i64const 7, .drop, .br 0]] []]
       = .ok s' ∧ s'.stack = [] := by
   intro m
-  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 7
   simp only [Sem.execList, Sem.step, hs]
   exact ⟨_, rfl, rfl⟩
 
@@ -978,7 +994,7 @@ theorem call_convention1_converges (c x p0 p1 : Nat) (C A : Sem.Val)
       = .ok s'
     ∧ s'.locals p0 = C ∧ s'.locals p1 = A ∧ s'.stack = [] := by
   intro m
-  rw [show m + 5 = m.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 5
   simp only [tplCallPrep1, tplPrologue1, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, hc, ha, hs]
   refine ⟨_, rfl, ?_, ?_, ?_⟩
@@ -1018,7 +1034,7 @@ theorem call_convention2_converges (c x0 x1 p0 p1 p2 : Nat)
     ∧ s'.locals p0 = C ∧ s'.locals p1 = A ∧ s'.locals p2 = B
     ∧ s'.stack = [] := by
   intro m
-  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 7
   simp only [tplCallPrep2, tplPrologue2, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, hc, h0, h1, hs]
   refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
@@ -1072,7 +1088,7 @@ theorem trampoline_convention1_converges (p : UInt32) (x q0 q1 : Nat)
       = .ok s'
     ∧ s'.locals q0 = .i32 p ∧ s'.locals q1 = A ∧ s'.stack = [] := by
   intro m
-  rw [show m + 5 = m.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 5
   simp only [tplTrampFwd1, tplPrologue1, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, ha, hs]
   refine ⟨_, rfl, ?_, ?_, ?_⟩
@@ -1107,7 +1123,7 @@ theorem trampoline_convention2_converges (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
     ∧ s'.locals q0 = .i32 p ∧ s'.locals q1 = A ∧ s'.locals q2 = B
     ∧ s'.stack = [] := by
   intro m
-  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 7
   simp only [tplTrampFwd2, tplPrologue2, List.nil_append, List.cons_append,
     Sem.execList, Sem.step, h0, h1, hs]
   refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
@@ -1253,7 +1269,7 @@ theorem call_convention2_buggy_converges (c x0 x1 p0 p1 p2 : Nat)
       = .ok s'
     ∧ s'.locals p1 = B ∧ s'.locals p2 = A := by
   intro m
-  rw [show m + 7 = m.succ.succ.succ.succ.succ.succ.succ from rfl]
+  fuel_budget 7
   -- the swapped pushes (C, then B, then A) pop TOP-first: A → p2,
   -- B → p1, C → p0 — the values land SWAPPED.
   simp only [tplCallPrep2Buggy, tplPrologue2, List.nil_append,

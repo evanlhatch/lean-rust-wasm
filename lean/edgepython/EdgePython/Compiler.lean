@@ -61,7 +61,18 @@ def exprTy (env : List (String × Ty)) : Expr → Option Ty
 
 /-- The deep checks `exprTy` can't see: call ARGS must be int-typed
     (the i64 surface) — a bool arg is a compile ERROR, not a silent
-    extend. -/
+    extend.
+
+    DELIBERATE CHOICE (the ladder audit's demo-lane judgment): this is
+    an `Option Unit` gate, not a `WellTyped` inductive with a checker↔
+    relation bridge (`SchemaLang.Wf`'s pattern). The edgepython lane is
+    demo/parity-pinned — its correctness statement is Parity.lean's
+    conformance theorems (compiled wasm == the Python model on every
+    fixture), which check these paths end-to-end; a WellTyped relation
+    here would be an uncited statement. THE NAMED UPGRADE: if the lane
+    graduates (real consumers, the `for`/strings exclusions lifted),
+    mirror `SchemaLang.Wf` — `WellTyped` inductive + `checkE_ok_iff`
+    bridge, and `collectSs`'s env threading re-quantifies through it. -/  
 def checkE (env : List (String × Ty)) : Expr → Option Unit
   | .int _ | .boolV _ | .var _ => some ()
   | .bin _ l r => do let _ ← checkE env l; let _ ← checkE env r; some ()

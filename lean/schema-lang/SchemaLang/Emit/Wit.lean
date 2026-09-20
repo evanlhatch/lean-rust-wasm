@@ -95,8 +95,9 @@ def blockBody (members : List Std.Format) : Std.Format :=
   | [] => line
   | _ => nest 2 (line ++ joinSep members line)
 
-/-- One type item as WIT text (record/variant/resource; non-type items
-    are the empty format — `worldOf` filters them out first). -/
+/-- One type item as WIT text (record/variant/resource; the `.func`
+    arm is UNREACHABLE — `worldOf` filters type items first — kept
+    explicit because `Item` is closed; it renders empty). -/
 def typeDecl : Item → Std.Format
   | .record n fields =>
       f!"record {kebab n} \{" ++ blockBody
@@ -108,7 +109,9 @@ def typeDecl : Item → Std.Format
           | some t => f!"{kebab c}({tyFmt t}),"
           | none => f!"{kebab c},") ++ line ++ f!"}"
   | .resource n => f!"resource {kebab n};"
-  | _ => ""
+  -- unreachable (the caller filters type items first); empty = the
+  -- closed-grammar totality arm, not a defensive fallback
+  | .func _ => ""
 
 /-- One function as a WIT func declaration (UNINDENTED — `worldOf`
     nests it, giving the 4-space column the goldens pin). A `future a`
@@ -134,6 +137,16 @@ def funcDecl : FuncSig → Std.Format :=
     | ret =>
         f!"{kebab s.name}: func({params}) -> {tyFmt ret};"
 
+/-- The type NAMES a func-signature list references — params + returns,
+    `Ty.tyRefs`-expanded, deduped in first-occurrence order. ONE refs
+    walk: `worldOf` (the emitter) and wasm-backend's compiled-world
+    fold (`WasmGenMain.demoTypesIfaceOf` — the same rule over the
+    structured exports) render the same refs set. -/
+def sigRefs (sigs : List FuncSig) : List String :=
+  (sigs.flatMap fun s => s.params.map (·.2) ++ [s.ret])
+    |>.flatMap Ty.tyRefs
+    |>.eraseDups
+
 /-- The world, in the wasmtron small-interfaces shape:
 
     interface <world>-types { records, variants, resources }
@@ -149,10 +162,7 @@ def worldOf (packageName worldName : String) (items : List Item) : String :=
   let funcs := items.filterMap fun it =>
     match it with | .func s => some s | _ => none
   -- types referenced by func signatures (deduped, registration order)
-  let refs :=
-    (funcs.flatMap fun s => s.params.map (·.2) ++ [s.ret])
-      |>.flatMap Ty.tyRefs
-      |>.eraseDups
+  let refs := sigRefs funcs
   let usePart : Std.Format :=
     if refs.isEmpty then ""
     else line ++ f!"  use {kebab worldName}-types.\{{joinSep (refs.map kebab) (text ", ")}};"
@@ -535,30 +545,27 @@ def Emit.Wit.witObligation (items : List Item) : CodegenCore.Obligation (List It
 
 /-- The decidableNow DISCHARGE for the WIT obligation: the kernel's
     decide over `witCheck`; `none` = the loud gap (a lossy universe
-    refuses — the lossy note as data, not silence). -/
+    refuses — the lossy note as data, not silence). (The backend is
+    the KIT's — `decideEvidence`.) -/
 def Emit.Wit.witDischarge (items : List Item) :
     Option CodegenCore.Obligation.Evidence :=
-  match decide (Emit.Wit.witCheck items = true) with
-  | true => some (.decided true)
-  | false => none
+  CodegenCore.Obligation.decideEvidence (Emit.Wit.witCheck items = true)
 
 /-- SOUNDNESS of the WIT obligation's discharge (the decidableNow
-    backend's shape): a fired `.decided true` means the check passed. -/
+    backend's shape): a fired `.decided true` means the check passed.
+    Routes through the kit's `decideEvidence_sound` — the proof object
+    is shared. -/
 theorem Emit.Wit.witDischarge_sound (items : List Item)
     (h : Emit.Wit.witDischarge items = some (.decided true)) :
-    Emit.Wit.witCheck items = true := by
-  unfold witDischarge at h
-  cases hd : decide (witCheck items = true) with
-  | true => exact of_decide_eq_true hd
-  | false => rw [hd] at h; simp at h
+    Emit.Wit.witCheck items = true :=
+  CodegenCore.Obligation.decideEvidence_sound h
 
 /-- COMPLETENESS: a passing check discharges (the tier fires on the
     claims it can decide). -/
 theorem Emit.Wit.witDischarge_of_check (items : List Item)
     (h : Emit.Wit.witCheck items = true) :
-    Emit.Wit.witDischarge items = some (.decided true) := by
-  unfold witDischarge
-  rw [decide_eq_true h]
+    Emit.Wit.witDischarge items = some (.decided true) :=
+  CodegenCore.Obligation.decideEvidence_of_claim h
 
 /-- The obligation's law: a discharged WIT obligation means the
     universe's WIT rendering is injective — soundness transported to
@@ -572,12 +579,71 @@ theorem Emit.Wit.witLaw (items : List Item)
 
 end SchemaLang
 
+/-! ## The emission law (the vortex lane's `vortexLaw` shape) -/
+
+namespace SchemaLang.Emit.Wit
+
+/-- The gateway-world emitter's law: whenever the ctx's Demo partition
+    passes `witCheck` (the lossless-fragment + surface + func-ret check
+    — the obligation's decidable payload), the partition's WIT rendering
+    is INJECTIVE — the `witLaw` obligation soundness, transported to the
+    emitter's input (`ctx.rootItems`). CONDITIONAL by design: the WIT
+    lane is seam-kept (the header note on `witEmitter`), so the law
+    states exactly what the certified driver must discharge on a
+    concrete ctx (`witDischarge` fires when the antecedent holds) and
+    stays true of every ctx. -/
+def witEmitterLaw : SchemaLang.Emit.GenCtx → Prop := fun ctx =>
+  SchemaLang.Emit.Wit.witCheck (ctx.rootItems `Demo) = true →
+    Function.Injective
+      (fun t : {t // t ∈ SchemaLang.Emit.Wit.universeTys (ctx.rootItems `Demo)} =>
+        SchemaLang.Emit.Wit.tyFmt t.val)
+
+/-- The discharge: the obligation's soundness theorem `witLaw`, cited
+    at the emitter's partition. Certified drivers hand
+    `witEmitterLaw_discharged ctx` to `Emitter.runCertified`; the
+    antecedent's discharge on a CONCRETE ctx is `witDischarge`'s job
+    (the obligation lane's decide backend). -/
+theorem witEmitterLaw_discharged (ctx : SchemaLang.Emit.GenCtx) : witEmitterLaw ctx :=
+  fun h => SchemaLang.Emit.Wit.witLaw _ h
+
+/-- The flags world's twin: the same conditional injectivity over the
+    `FeatureFlags` partition. -/
+def flagsWitLaw : SchemaLang.Emit.GenCtx → Prop := fun ctx =>
+  SchemaLang.Emit.Wit.witCheck (ctx.rootItems `FeatureFlags) = true →
+    Function.Injective
+      (fun t : {t // t ∈ SchemaLang.Emit.Wit.universeTys (ctx.rootItems `FeatureFlags)} =>
+        SchemaLang.Emit.Wit.tyFmt t.val)
+
+/-- The flags discharge: the same citation at the other partition. -/
+theorem flagsWitLaw_discharged (ctx : SchemaLang.Emit.GenCtx) : flagsWitLaw ctx :=
+  fun h => witLaw _ h
+
+end SchemaLang.Emit.Wit
+
 /-- The WIT emitter plugin. Repo-root-relative path (the `../../` prefix)
     matches the Rust/vortex emitters — the forge byte-tie checks the SAME
     file the emitter writes. The world folds the ctx's DEMO partition
     (`GenCtx.rootItems` — the driver-derived root-namespace split): with a
     second project's registry replayed, the gateway world stays exactly
-    the Demo universe (byte-identical output, same fold, same order). -/
+    the Demo universe (byte-identical output, same fold, same order).
+
+    W7.9 phase 2 sweep — SEAM-KEPT (the honest seam, not an oversight):
+    the fold consumes the ctx's root PARTITION, and a partition subset of
+    a checked universe is not itself `WellFormed` (refs may cross
+    partitions; `WellFormed`'s ref-resolution is universe-relative), so
+    no `CheckedUniverse` can type the world's input. No defensive arm
+    dies here to buy it: `worldOf` is total over the closed `Ty`/`Item`
+    grammars (async is NATIVE WIT — the field-position ban does not
+    apply), and the illegal-emission class (empty variants, mangled
+    collisions) is refused UPSTREAM by the `universeCheck` gate, not
+    defensively here.
+
+    W7.9 `Emitter.law` sweep: `law` is POPULATED (`witEmitterLaw` — the
+    obligation's injectivity, conditional on the partition's
+    `witCheck`), discharged by `witEmitterLaw_discharged` (the
+    `witLaw` obligation-soundness citation). The conditional form is
+    the honest seam: a lossy partition must stay emittable (the WIT
+    surface is total), the law pins what holds WHEN the check passes. -/
 def witEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "wit"
   style := .doubleSlash
@@ -588,6 +654,7 @@ def witEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
       contents := SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway"
         (ctx.rootItems `Demo) }
   ]
+  law := some SchemaLang.Emit.Wit.witEmitterLaw
 
 /-- The flags world's WIT emitter (the second project's wire lane): the
     FEATUREFLAGS partition of the same ctx, rendered by the SAME `worldOf`
@@ -595,7 +662,13 @@ def witEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
 driver's `GenCtx.rootPartitionOf` over the replayed registry — no
     hand-listed item names): a new `@[schema]` in FeatureFlags.lean joins
     `wit/flags.wit` without touching this emitter. Demo-only replays
-    (the test goldens) see the empty partition = the bare world. -/
+    (the test goldens) see the empty partition = the bare world.
+
+    W7.9 `Emitter.law` sweep: `law` is POPULATED (`flagsWitLaw` — the
+    same conditional injectivity over this partition), discharged by
+    `flagsWitLaw_discharged` (the `witLaw` citation). The law is
+    trivially true of a replay with no flags items (empty partition ⇒
+    `witCheck [] = true` — `rfl` — and the empty render is injective). -/
 def flagsWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "flags-wit"
   style := .doubleSlash
@@ -606,3 +679,4 @@ def flagsWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
       contents := SchemaLang.Emit.Wit.worldOf "guestlang:flags" "flags"
         (ctx.rootItems `FeatureFlags) }
   ]
+  law := some SchemaLang.Emit.Wit.flagsWitLaw

@@ -2,7 +2,7 @@
 //!
 //! The SAME compiled py.wasm (lean/edgepython → WasmBackend.Wat →
 //! wasm-tools) runs under the standalone rt (wasmi, core wasm,
-//! fuel-metered) with the SAME results the wasmtime test (steel-host's
+//! fuel-metered) with the SAME results the wasmtime test (guestlang-host's
 //! edgepython.rs) and the Lean parity theorems pin. The IR seam is
 //! frontend-neutral AND engine-agnostic: the runtime never learns what
 //! language produced the module.

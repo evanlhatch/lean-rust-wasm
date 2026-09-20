@@ -76,20 +76,28 @@ def filter (cond : DExpr) (q : Query s s) : Query s s :=
       | .error e =>
           { rel := r, errors := e :: errs }
 
+/-- ONE compile pass over the projection list: each `DExpr` is compiled
+exactly once, and the results are partitioned (input order preserved within
+each side) into the successful projections and the validation errors.
+`successes` and `failures` are projections of this fold — recompiling
+separately doubled the work and made the error order depend on which list
+was demanded first.  The partitioner is core's order-preserving
+`List.partitionMap` (no `partitionResults` helper exists in core/TestKit). -/
+def compileProjections (p : Schema) (outs : List (String × DExpr)) :
+    List (Projection p) × List String :=
+  outs.partitionMap (fun (nm, d) =>
+    match compile p d with
+    | .ok c => .inl { name := nm, dtype := c.t, nullable := c.n, expr := c.e }
+    | .error e => .inr e)
+
 /-- The *successful* projections of a `project` call (used for both the output
 schema of the step and the rel it builds, so the type and the value agree). -/
 def successes (p : Schema) (outs : List (String × DExpr)) : List (Projection p) :=
-  outs.filterMap (fun (nm, d) =>
-    match compile p d with
-    | .ok c => some { name := nm, dtype := c.t, nullable := c.n, expr := c.e }
-    | .error _ => none)
+  (compileProjections p outs).1
 
 /-- The validation errors of a `project` call (the failing projections). -/
 def failures (p : Schema) (outs : List (String × DExpr)) : List String :=
-  outs.filterMap (fun (_, d) =>
-    match compile p d with
-    | .error e => some e
-    | .ok _ => none)
+  (compileProjections p outs).2
 
 /-- `project outs` — append named columns (additive, like Substrait
 `ProjectRel`); output schema = input ++ compiled columns.  A failing
@@ -98,8 +106,8 @@ def project (outs : List (String × DExpr)) (q : Query inS p) :
     Query inS (projectOut p (successes p outs)) :=
   match q with
   | { rel := r, errors := errs } =>
-      let projs := successes p outs
-      { rel := Rel.project r projs none, errors := failures p outs ++ errs }
+      let ps := compileProjections p outs
+      { rel := Rel.project r ps.1 none, errors := ps.2 ++ errs }
 
 /-- `sort keys` — order rows by column NAME + direction; names resolve
 against the pipeline schema at step time (schema-preserving). -/

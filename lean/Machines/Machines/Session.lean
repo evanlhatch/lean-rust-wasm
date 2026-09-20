@@ -34,13 +34,13 @@ The choreography as a `Machine`, GENERIC over the payload universe `P`:
   whose payload differs at any position, fails DEFINITIONAL equality at
   ELABORATION time — a type error, not a runtime check.
 
-The instance is the gateway world's real conversation: `gatewayProto`
-(the `get-user` call + the `watch-orders` async stream) at
-`P := String` (wire names).
-
-The schema-typed consumer (`P := SchemaLang.Ty`) is
-`SchemaLang.Session` — it instantiates THIS generic layer directly
-(W4.1c landed; the string-bridge aliases are gone).
+Consumers instantiate the payload universe: the schema-typed one
+(`P := SchemaLang.Ty`) is `SchemaLang.Session` (W4.1c landed; it
+instantiates THIS generic layer directly — the string-bridge aliases
+are gone). The `P := String` demo instance (`gatewayProto` /
+`gateway_self_dual`) was deleted (2026-12 quality pass): the typed
+layer is the only live consumer, and the string script duplicated the
+wire names already pinned by `SchemaLang.Session` + `wit/gateway.wit`.
 -/
 
 module
@@ -216,21 +216,6 @@ theorem session_variant_decreases {P : Type} (p : TProtocol P) (pos : Nat)
     (l : Fin p.length) (h : pos = l.val) :
     p.length - (pos + 1) < p.length - pos :=
   pos_variant_decreases p.length pos l h
-
-/-! ## The gateway instance — the real WIT world's conversation -/
-
-/-- The gateway world's conversation (Demo.lean's funcs), payloads as
-    wire names: `get-user` — client sends u64, receives option<user>;
-    `watch-orders` — client sends order-error, receives the change
-    stream (the delta-shaped contract as choreography). -/
-def gatewayProto : TProtocol String :=
-  [ (.snd, "u64"), (.rcv, "option<user>")
-  , (.snd, "order-error"), (.rcv, "stream<user>") ]
-
-/-- The gateway choreography is self-consistent: dual(dual) is the
-    original (a peer dualized twice is the same script). -/
-theorem gateway_self_dual : tdual (tdual gatewayProto) = gatewayProto :=
-  tdual_dual gatewayProto
 
 /-! ### Peer agreement as a TYPE — the elaboration-error property
 

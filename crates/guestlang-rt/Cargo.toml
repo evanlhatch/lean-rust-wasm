@@ -9,14 +9,14 @@ scope = "standalone embeddable runtime — the wasmi half of the dual-engine sto
 
 # wasmi: pure-Rust interpreter — deterministic, fuel-metered, ~1MB.
 # CORE wasm only (the component wrapper is the wasmtime host's job).
+# (The HARD pool's serde_json IPC codec went with the pool lane cut;
+# serde_json stays as a dev-dependency — the conformance test reads the
+# oracle's diff.json manifest.)
 [dependencies]
 wasmi = "2.0"
-# The HARD pool's IPC: the worker binary's job/answer codec on
-# stdin/stdout (the subprocess boundary carries JSON, not Arcs). The
-# SAME pinned version the dev-deps already audited — no new upstream.
-serde_json = "1"
 
 [dev-dependencies]
+serde_json = "1"
 # The conformance test compares against the wasmtime run of the SAME module.
 wasmtime = { version = "47", default-features = false, features = ["cranelift"] }
 # Fuzz targets (tests/module_bytes, tests/snapshot_restore_seq):

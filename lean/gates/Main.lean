@@ -9,8 +9,11 @@
                                       monolithic whole-file mode)
     lake exe gates manifest-check   — lakefile ↔ manifest drift
     lake exe gates coverage [--write] [--strict] — the coverage matrix
+    lake exe gates obligation-check — the oracle-ref resolution gate
     lake exe gates kernel-check     — the lean4lean double-check
     lake exe gates native-policy    — the native_decide grandfathering gate
+    lake exe gates artifact-manifest [--write] — the artifacts' inventory
+    lake exe gates audit            — the static census (report-only)
     lake exe gates all [--full]     — 1–5 (+ kernel-check) in one run;
                                       --full also shells out to the
                                       Rust/wasm lane (just wasm-compile,
@@ -40,10 +43,18 @@ unsafe def runManifestCheck (_p : Parsed) : IO UInt32 := Gates.Manifest.run
 unsafe def runCoverage (p : Parsed) : IO UInt32 :=
   Gates.Coverage.run (p.hasFlag "write") (p.hasFlag "strict")
 
+unsafe def runObligationCheck (_p : Parsed) : IO UInt32 :=
+  Gates.ObligationCheck.run
+
 unsafe def runKernelCheck (p : Parsed) : IO UInt32 :=
   Gates.KernelCheck.run (p.flag? "package" |>.map (·.as! String))
 
 unsafe def runNativePolicy (p : Parsed) : IO UInt32 := Gates.NativePolicy.run (p.flag? "package" |>.map (·.as! String))
+
+unsafe def runArtifactManifest (p : Parsed) : IO UInt32 :=
+  Gates.ArtifactManifest.run (p.hasFlag "write")
+
+unsafe def runAudit (_p : Parsed) : IO UInt32 := Gates.Audit.run
 
 /-- `just <recipe>` from the repo root (the exe runs at the root — the
     single-lake layout). -/
@@ -61,6 +72,7 @@ unsafe def runAll (p : Parsed) : IO UInt32 := do
     , ("axioms",        Gates.Axioms.run false none)
     , ("manifest-check", Gates.Manifest.run)
     , ("coverage",      Gates.Coverage.run false false)
+    , ("obligation-check", Gates.ObligationCheck.run)
     , ("native-policy", Gates.NativePolicy.run none) ] do
     IO.println s!"══ gates all: {name} ══"
     let code ← step
@@ -120,6 +132,18 @@ unsafe def coverageCmd : Cmd := `[Cli|
     strict; "Fail on fully-quiet ctors (unexercised members of the closed universe)."
 ]
 
+unsafe def obligationCheckCmd : Cmd := `[Cli|
+  "obligation-check" VIA runObligationCheck; ["0.1.0"]
+  "The oracle-ref resolution gate (W9.x): every `Evidence.oracleRow` ref \
+   claimed for a registered obligation RESOLVES to an actual oracle row \
+   (the gates exe loads the replayed registries AND wasm-backend's row \
+   universe — the cross-package half of the obligation ladder's last \
+   rung; schema-lang's discharge checks only well-formedness). Also fails \
+   on a registered oracleCovered obligation with no claim (the \
+   armed-but-unfired gap) and on a mis-wired claim (oracle evidence for a \
+   non-oracle obligation)."
+]
+
 unsafe def kernelCheckCmd : Cmd := `[Cli|
   "kernel-check" VIA runKernelCheck; ["0.1.0"]
   "The lean4lean double-check: replay every gated package's modules \
@@ -152,6 +176,31 @@ unsafe def nativePolicyCmd : Cmd := `[Cli|
       OOMs). The stale-entry check is scoped to the selected package."
 ]
 
+unsafe def artifactManifestCmd : Cmd := `[Cli|
+  "artifact-manifest" VIA runArtifactManifest; ["0.1.0"]
+  "The committed artifacts' inventory: every registered emitter's outputs as \
+   one generated table (path x content hash x emitter) at \
+   notes/artifacts.manifest — the hashes are the byte-tie's own `content \
+   hash` field, rows sorted by path, no timestamps (deterministic). \
+   --write regenerates the table; the default mode diffs. Additive to \
+   gen-check, which stays the binding byte-tie."
+
+  FLAGS:
+    write; "Regenerate notes/artifacts.manifest instead of diffing it."
+]
+
+unsafe def auditCmd : Cmd := `[Cli|
+  "audit" VIA runAudit; ["0.1.0"]
+  "The static census (report-only — exit 0 on all findings; 1 only on a \
+   load failure): zero-consumer candidates per gated package (the \
+   constant-usage analysis over the loaded envs — entry points/instances \
+   allowlisted, attribute-registered and registry-replay consumers \
+   invisible, so candidates are a review queue), the per-module comment \
+   ratio, and the hand-roll citation (LintKit.UpstreamDup owns the \
+   upstream-duplicate enforcement — cited, not duplicated). Explicitly NO \
+   module-size lint."
+]
+
 unsafe def allCmd : Cmd := `[Cli|
   "all" VIA runAll; ["0.1.0"]
   "gen-check + axioms + manifest-check + coverage + native-policy in one run."
@@ -164,7 +213,7 @@ unsafe def gatesCmd : Cmd := `[Cli|
   "gates" NOOP; ["0.1.0"]
   "The Lean-side gates driver (the pipeline-as-machine row)."
 
-  SUBCOMMANDS: genCheckCmd; axiomsCmd; manifestCheckCmd; coverageCmd; kernelCheckCmd; nativePolicyCmd; allCmd
+  SUBCOMMANDS: genCheckCmd; axiomsCmd; manifestCheckCmd; coverageCmd; obligationCheckCmd; kernelCheckCmd; nativePolicyCmd; artifactManifestCmd; auditCmd; allCmd
 ]
 
 unsafe def main (args : List String) : IO UInt32 :=

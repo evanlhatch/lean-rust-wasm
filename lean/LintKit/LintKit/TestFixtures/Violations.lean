@@ -53,6 +53,14 @@ def evilIo : IO Unit := IO.println "planted"
 std level (match-only Nat is std-legal; `Nat.add` is not a match). -/
 def evilNatArith : Nat := Nat.add 40 2
 
+/-- Planted (upstreamDup): alpha-equivalent to core `Prod.swap` (non-trivial
+body — the node count clears the filter). -/
+def swapPlanted.{u, v} {α : Type u} {β : Type v} (p : α × β) : β × α := (p.snd, p.fst)
+
+/-- Planted (bareChecker): a Bool check* def with NO companion bridge
+theorem in this module. -/
+def checkNoBridge (x : Nat) : Bool := x > 0
+
 end LintKit.TestFixtures.Violations
 
 /-- Planted (packageNamespace): helper parked in a CORE namespace —

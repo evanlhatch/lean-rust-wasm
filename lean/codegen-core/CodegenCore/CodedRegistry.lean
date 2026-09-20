@@ -96,6 +96,21 @@ def denseCheck (reg : CodedRegistry α) : Bool :=
   reg.codes.zipIdx.all fun c =>
     (c.1.2.drop reg.codePrefix.length).toNat? == some (reg.start + c.2)
 
+/-- Denseness BY CONSTRUCTION, at the writer: the code allocated at
+    position `i` IS the position-derived string `s!"{pre}{start + i}"`
+    — there is no hand-set code to drift (the `allocateCodes` module
+    header's discipline, as a theorem). The string-parse roundtrip that
+    would lift this to a symbolic `denseCheck … = true` needs a decimal
+    parse lemma development (`Slice.toNat?` over `Nat.repr` digits) the
+    checker's concrete `decide` pins don't — `denseCheck` stays the
+    executable regression net over concrete registries (the faults
+    allocation checks), this lemma the production fact. -/
+theorem allocateCodes_code_eq {α : Type} (pre : String) (start : Nat)
+    (items : List α) (i : Nat) (h : i < items.length) :
+    (allocateCodes pre start items)[i]'(by simp [allocateCodes]; exact h)
+      = (items[i], s!"{pre}{start + i}") := by
+  simp [allocateCodes, List.getElem_map, List.getElem_zipIdx]
+
 /-- Positions ↔ members: name uniqueness makes the position map
     injective, membership total. The `[BEq α]` is for `idxOf` (the
     inverse's lookup). -/

@@ -52,6 +52,7 @@ notes/w5-4-module-migration.md).
 import Lean
 import LintKit
 import Gates.Packages
+import Gates.Common
 
 open Lean
 
@@ -241,36 +242,20 @@ unsafe def run (write : Bool) (pkgName : Option String := none) : IO UInt32 := d
   -- closure) + the sysroot; the per-package prepend happens per import.
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
-  if let some name := pkgName then
-    match gatedPackages.find? (·.dir == name) with
-    | some pkg => return ← runOne base pkg write
-    | none =>
-      IO.eprintln s!"axioms: unknown --package '{name}' — gated: \
-        {String.intercalate ", " (gatedPackages.map (·.dir)).toList}"
-      return 1
+  let some pkgs ← Driver.selectPackages "axioms" pkgName | return 1
+  -- sharded: exactly one package → its section of the committed report
+  if let #[pkg] := pkgs then
+    return ← runOne base pkg write
   -- no `--package`: the whole-file report (bootstrap / `gates all`).
   let mut reports : Array PkgReport := #[]
   let mut failed := false
-  for pkg in gatedPackages do
+  for pkg in pkgs do
     let r ← analyzePkg base pkg
     reports := reports.push r
     if ← printReport r then failed := true
   let text := render reports
-  if write then
-    IO.FS.writeFile reportPath (text ++ "\n")
-    IO.println s!"wrote {reportPath}"
-  else
-    if ← reportPath.pathExists then
-      let committed ← IO.FS.readFile reportPath
-      if committed != text ++ "\n" then
-        IO.println s!"axioms: report DRIFTED from {reportPath} — \
-          the axiom surface changed; run `lake exe gates axioms --write` and commit"
-        failed := true
-    else
-      IO.println s!"axioms: {reportPath} absent — run `lake exe gates axioms --write` and commit"
-      failed := true
-  if failed then return 1
-  IO.println "axioms: clean — every decl's cone inside the allowlist, report in sync"
-  return 0
+  Driver.reportGate "axioms" "report" "the axiom surface changed"
+    reportPath text write failed
+    "axioms: clean — every decl's cone inside the allowlist, report in sync"
 
 end Gates.Axioms

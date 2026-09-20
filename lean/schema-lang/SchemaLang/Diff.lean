@@ -117,4 +117,21 @@ def backwardCompatible (old new : List Item) : Bool :=
   let d := diff old new
   d.all fun c => match c with | .added _ => true | _ => false
 
+/-- The pointwise reading of `backwardCompatible`'s fold. -/
+theorem Change.added_of_true {c : Change} :
+    (match c with | .added _ => true | _ => false) = true ↔ ∃ n, c = .added n := by
+  cases c <;> simp
+
+/-- THE BRIDGE: `backwardCompatible` is the clean-verdict reading of the
+    diff — true iff EVERY finding is an addition, i.e. iff the breaking
+    subset is empty (`Migration.breakingOf`/`verdictOf`'s `.clean` rung:
+    one authority — the `diff` change list — two readings). -/
+theorem backwardCompatible_iff {old new : List Item} :
+    backwardCompatible old new = true ↔
+      ∀ c ∈ diff old new, ∃ n, c = .added n := by
+  simp only [backwardCompatible, List.all_eq_true]
+  constructor
+  · intro h c hc; exact Change.added_of_true.mp (h c hc)
+  · intro h c hc; exact Change.added_of_true.mpr (h c hc)
+
 end SchemaLang

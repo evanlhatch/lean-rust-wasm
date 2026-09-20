@@ -13,7 +13,7 @@ wit-parser must resolve, not the lossy Lean `Ty`), and lets the Rust
 sweep (`wit_fixture_sweep.rs`) assert `parse (emit u) ≅ manifest u`.
 
 Byte-tie: same law as every emitter — the fixtures under
-`crates/steel-host/tests/fixtures/wit_sweep/` are committed, additive,
+`crates/guestlang-host/tests/fixtures/wit_sweep/` are committed, additive,
 never hand-edited; drift fails `just gen-check`.
 
 Deliberate exclusions: NO `.ty` named refs in the SEEDED corpus (a ref
@@ -383,7 +383,7 @@ def sweepManifestJson : String :=
 /-! ## The emitters -/
 
 def sweepManifestOutput : String :=
-  "../../crates/steel-host/tests/fixtures/wit_sweep/manifest.json"
+  "../../crates/guestlang-host/tests/fixtures/wit_sweep/manifest.json"
 
 /-- The sweep's output FILE NAMES, LITERAL. The kernel's decide over
     `jobsCoverEmitters_true` must normalize every emitter's `outputs`
@@ -400,18 +400,31 @@ def sweepFixtureFiles : List String :=
   , "corner-kebab-near", "corner-min-variant" ]
 
 /-- One emitter outputting ALL sweep WIT files (one writer, many files —
-    the outputs list is the one-writer claim). -/
+    the outputs list is the one-writer claim).
+
+    W7.9 `Emitter.law` sweep — NO law, and why: the sweep corpus
+    DELIBERATELY straddles the lossy corners (`corner-mapset`,
+    `corner-tensor-async`, the kebab near-collisions) — the WIT
+    injectivity law (`SchemaLang.Emit.Wit.witLaw`) is FALSE of these
+    fixtures BY DESIGN (they pin the corners it excludes), so stating
+    it here would be the lie the zero-sorry discipline forbids. The
+    corners' contract is the wit-parser roundtrip + the goldens, not a
+    theorem. -/
 def sweepFixtureEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "wit-sweep-fixtures"
   style := .doubleSlash
   specSource := "SchemaLang.Emit.WitSweep (seeded sweep fixtures)"
   outputs := sweepFixtureFiles.map fun n =>
-    "../../crates/steel-host/tests/fixtures/wit_sweep/" ++ n ++ ".wit"
+    "../../crates/guestlang-host/tests/fixtures/wit_sweep/" ++ n ++ ".wit"
   run _ctx :=
     sweepFixtures.map fun (n, items) =>
-      { path := "../../crates/steel-host/tests/fixtures/wit_sweep/" ++ n ++ ".wit"
+      { path := "../../crates/guestlang-host/tests/fixtures/wit_sweep/" ++ n ++ ".wit"
       , contents := SchemaLang.Emit.Wit.worldOf ("demo:" ++ n) n items }
 
+/-- The sweep MANIFEST emitter. W7.9 `Emitter.law` sweep — NO law: it
+    folds the sweep fixture registry (module data — test-vector name/
+    type lists), the same reason as `WitFixture.manifestEmitter`; the
+    bytes are the byte-tie's own. -/
 def sweepManifestEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "wit-sweep-manifest"
   style := .doubleSlash

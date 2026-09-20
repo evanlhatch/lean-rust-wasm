@@ -909,28 +909,95 @@ def defaultTVal (elemDefault : Value t) : (dims : List Nat) → TVal t dims
             exact absurd hop (by simp)
           exact hFalse.elim
 
-def defaultValue : (t : Ty) → CodecClosed t → Value t
-  | .tensor dims t, h' =>
-      .tensor (defaultTVal (defaultValue t (tensorClosed h')) dims)
-  | .bool, _ => .bool false
-  | .u8, _ => .u8 0
-  | .u16, _ => .u16 0
-  | .u32, _ => .u32 0
-  | .u64, _ => .u64 0
-  | .i8, _ => .i8 0
-  | .i16, _ => .i16 0
-  | .i32, _ => .i32 0
-  | .i64, _ => .i64 0
-  | .f32, h => nomatch h
-  | .f64, h => nomatch h
-  | .string, _ => .string ""
-  | .bytes, _ => .bytes []
-  | .option _, _ => .none
-  | .result ok _, h => .ok (defaultValue ok (resultOkClosed h))
-  | .list _, _ => .list .nil
-  | .map _ _, _ => .map .nil
-  | .set _, _ => .set .nil
-  | .future t, h => .future (defaultValue t (futureClosed h))
-  | .stream _, _ => .stream .nil
+-- (plain comment: doc comments are ModuleDocs-extracted, byte-tied.
+-- The CONSOLIDATION: the default/zero value per `Ty` lived in FOUR
+-- match tables (`defaultValue` here, `Validate.defaultValue?`,
+-- `Emit.Rust.rustLiteral?`, the `genVal` fallback) — now the `DefaultVal`
+-- instances below are the ONE table; the other three consume it.
+-- Composite ctors compose by construction, mirroring what the old
+-- tables spelled out per arm: option → none, list/map/set/stream →
+-- empty, result → ok default, future → default, tensor → the
+-- shape-filled default (`defaultTVal`).)
+
+-- The coverage: every `Ty` ctor except `.ty` — `Value` has no
+-- constructor indexed by `.ty` (named refs are resolved before values
+-- exist), so no instance is even statable. The honest gap.
+-- `f32`/`f64` DO get instances (the zero): they sit outside
+-- `CodecClosed` (no round-trip proof — the module's own exclusion
+-- note), but that is a codec-admission fact, not a default gap.
+class DefaultVal (t : Ty) where
+  default : Value t
+
+instance : DefaultVal .bool := ⟨.bool false⟩
+instance : DefaultVal .u8 := ⟨.u8 0⟩
+instance : DefaultVal .u16 := ⟨.u16 0⟩
+instance : DefaultVal .u32 := ⟨.u32 0⟩
+instance : DefaultVal .u64 := ⟨.u64 0⟩
+instance : DefaultVal .i8 := ⟨.i8 0⟩
+instance : DefaultVal .i16 := ⟨.i16 0⟩
+instance : DefaultVal .i32 := ⟨.i32 0⟩
+instance : DefaultVal .i64 := ⟨.i64 0⟩
+instance : DefaultVal .f32 := ⟨.f32 0⟩
+instance : DefaultVal .f64 := ⟨.f64 0⟩
+instance : DefaultVal .string := ⟨.string ""⟩
+instance : DefaultVal .bytes := ⟨.bytes []⟩
+-- the composites: each is the old table's arm, once (the inner
+-- instance is REQUIRED for result/future/tensor — composition by
+-- construction; the rest are inner-independent like the old arms)
+instance {t : Ty} : DefaultVal (.option t) := ⟨.none⟩
+instance {t : Ty} : DefaultVal (.list t) := ⟨.list .nil⟩
+instance {k : KeyTy} {v : Ty} : DefaultVal (.map k v) := ⟨.map .nil⟩
+instance {k : KeyTy} : DefaultVal (.set k) := ⟨.set .nil⟩
+instance {t : Ty} : DefaultVal (.stream t) := ⟨.stream .nil⟩
+instance {ok err : Ty} [DefaultVal ok] : DefaultVal (.result ok err) :=
+  ⟨.ok (DefaultVal.default (t := ok))⟩
+instance {t : Ty} [DefaultVal t] : DefaultVal (.future t) :=
+  ⟨.future (DefaultVal.default (t := t))⟩
+instance {t : Ty} {dims : List Nat} [DefaultVal t] :
+    DefaultVal (.tensor dims t) :=
+  ⟨.tensor (defaultTVal (DefaultVal.default (t := t)) dims)⟩
+
+-- The composition pin: instance search composes through nested ctors
+-- at elaboration time (a vacuous or mis-composed instance table fails
+-- these kernel-checked rfl pins).
+example : (DefaultVal.default (t := .option (.list .u64))) = .none := rfl
+example : (DefaultVal.default (t := .result .u64 .bool)) = .ok (.u64 0) := rfl
+
+-- The bridge: instance search cannot run on a VARIABLE `t` (the
+-- fuel-0/tensor-fallback arms of `Gen.genVal` bind `t` as a pattern
+-- variable), so the `CodecClosed` witness drives the lookup — each arm
+-- re-fires the canonical instance on the refined ctor; the VALUES
+-- live once, in the instances above. Total by construction: floats
+-- have no `CodecClosed` case (the old `nomatch` arms) and `.ty` none.
+def closedDefault : (t : Ty) → CodecClosed t → DefaultVal t
+  | .bool, _ => inferInstanceAs (DefaultVal .bool)
+  | .u8, _ => inferInstanceAs (DefaultVal .u8)
+  | .u16, _ => inferInstanceAs (DefaultVal .u16)
+  | .u32, _ => inferInstanceAs (DefaultVal .u32)
+  | .u64, _ => inferInstanceAs (DefaultVal .u64)
+  | .i8, _ => inferInstanceAs (DefaultVal .i8)
+  | .i16, _ => inferInstanceAs (DefaultVal .i16)
+  | .i32, _ => inferInstanceAs (DefaultVal .i32)
+  | .i64, _ => inferInstanceAs (DefaultVal .i64)
+  | .string, _ => inferInstanceAs (DefaultVal .string)
+  | .bytes, _ => inferInstanceAs (DefaultVal .bytes)
+  | .option t, .option _ => inferInstanceAs (DefaultVal (.option t))
+  | .result ok _, .result hok _ => ⟨.ok (closedDefault ok hok).default⟩
+  | .list t, .list _ => inferInstanceAs (DefaultVal (.list t))
+  | .map k v, .map _ => inferInstanceAs (DefaultVal (.map k v))
+  | .set k, .set => inferInstanceAs (DefaultVal (.set k))
+  | .tensor dims t, .tensor h' =>
+      ⟨.tensor (defaultTVal (closedDefault t h').default dims)⟩
+  | .future t, .future h' => ⟨.future (closedDefault t h').default⟩
+  | .stream t, .stream _ => inferInstanceAs (DefaultVal (.stream t))
+
+-- (the generator/shrinker base case — the same signature, now the
+-- bridge into the class; the tensor default FILLS the shape with the
+-- element's default, via the tensor instance)
+def defaultValue (t : Ty) (_h : CodecClosed t) : Value t :=
+  (closedDefault t _h).default
+
+-- the bridge pin: the old table's leaf values are the instances'
+example : defaultValue .u8 CodecClosed.u8 = .u8 0 := rfl
 
 end SchemaLang

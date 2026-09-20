@@ -74,6 +74,35 @@ machine! door where
 example : door.step? ⟨false, true⟩ .unlock = some ⟨false, false⟩ := by
   rw [← doorTableStep?_eq_step? _ _ (by simp [doorStates])]; rfl
 
+-- ── The entourage unexpanders (pp-only — `Machines.Dsl.entourageUnexp`):
+-- the generated names RENDER as the machine's possessive phrase, since the
+-- author wrote `machine! door … where …`. The guillemets are the printer's
+-- own escaping of the display abbreviation — the honesty mark (these are
+-- NOT re-typeable names, and the render doesn't pretend otherwise).
+
+/-- info: «door's states» : List Door -/
+#guard_msgs in
+#check (doorStates : List Door)
+
+/-- info: «door's table» door.Label.unlock { isOpen := false, locked := true } : Option Door -/
+#guard_msgs in
+#check (doorTableStep? .unlock ⟨false, true⟩ : Option Door)
+
+/-- info: «door's table = step?» : ∀ (e : door.Label), ∀ s ∈ «door's states», «door's table» e s = door.step? s e -/
+#guard_msgs in
+#check (doorTableStep?_eq_step? : ∀ (e : door.Label) (s : Door),
+  s ∈ doorStates → doorTableStep? e s = door.step? s e)
+
+/-- error: Type mismatch
+  «door's transitions»
+has type
+  List (door.Label × Door × Door)
+but is expected to have type
+  List Bool
+-/
+#guard_msgs in
+example : List Bool := doorTrans
+
 def dslSmoke : CheckResult := do
   -- run a valid sequence: unlock, open, close, lock — ends locked-and-closed
   _ ← match door.run ⟨false, true⟩ [.unlock, .open_, .close, .lock] with
@@ -138,6 +167,18 @@ def conformanceControl : CheckResult :=
   match Machines.Testing.guardCoverage broken broken.labels [0, 1, 2] broken.labels_complete with
   | .error _ => .ok ()
   | .ok () => .error "dead event not caught — the battery is vacuous"
+
+-- THE CARDINALITY GATE the old positional grammar baked into the parser
+-- (State first, exactly once) — now an elaboration error with the same
+-- force. (The clause-KEYWORD typo surface — `Statez:`, `eventz:` — is
+-- NOT upgradable here: a term-led clause swallows an unknown word by
+-- juxtaposition, so machine! carries no catch-all. See the limit note
+-- on the clause kit in Machines.Dsl.)
+/-- error: machine!: missing `State:` clause — the machine's state type -/
+#guard_msgs in
+machine! noState where
+  Inv: fun _ => True
+  event: tick guard: (fun _ => true) action: (fun s _ => s)
 
 end DslTest
 
@@ -475,48 +516,10 @@ def linearSmoke : CheckResult := do
       if fin != 16 then .error s!"doubler incremental final {fin} ≠ 16"
       if base + Δ != fin then .error s!"doubler chain {base}+{Δ} ≠ {fin}"
 
-/-- The doubler's incremental agreement as a CORPUS: for a grid of
-    (start, delta) pairs and four trace shapes, the incremental
-    theorem's equation EXECUTES identically on both sides — the
-    patched batch run vs the base run corrected by the delta chain.
-    (The theorem is proved; this pins the numerals — the concrete
-    Int folding — of both sides over a wide spread.) -/
-def doublerAgreementChecks : CheckResult := do
-  let t0 : List doubler.Label := []
-  let t1 : List doubler.Label := [.double]
-  let t2 : List doubler.Label := [.double, .double]
-  let t3 : List doubler.Label := [.double, .double, .double]
-  let traces := [t0, t1, t2, t3]
-  let mut ok := true
-  let mut msg := ""
-  for s0 in [-3, -1, 0, 2, 5] do
-    for δ in [-2, 0, 1, 3] do
-      for tr in traces do
-        let batch := doubler.runState (patch s0 δ) tr
-        let incr := (doubler.runState s0 tr).map
-          (fun fin => patch fin (doubler.deltaChain δ tr))
-        if batch != incr then
-          ok := false
-          msg := s!"doubler disagreement s₀={s0} δ={δ} trace={tr.length}: {batch} vs {incr}"
-  if ok then .ok () else .error msg
-
-/-- The NEGATIVE control: the same equation with the delta chain
-    SABOTAGED (×3's chain instead of ×2's) must disagree somewhere on
-    the corpus — a var-var identity transform would pass vacuously. -/
-def doublerSabotage : CheckResult := do
-  let s0 := 2; let δ := 1
-  let tr : List doubler.Label := [.double, .double]
-  let batch := doubler.runState (patch s0 δ) tr
-  let wrong := (doubler.runState s0 tr).map
-    (fun fin => patch fin (doubler.deltaChain (δ * 2) tr))
-  if batch == wrong then
-    .ok ()
-  else
-    .error "control: the sabotaged chain did not diverge — this exact row cannot distinguish" 
-
-def doublerAgreement : DetSpec :=
-  ⟨"doubler incremental agreement", doublerAgreementChecks, doublerSabotage,
-   "δ*2 chain substituted for the ×2 transform"⟩
+-- The doubler's incremental-agreement sweep retired as a pair with its
+-- sabotage control (T5): `incremental_run_equiv` — applied as
+-- `doublerIncremental` above — proves the equation for ALL (start, delta,
+-- trace) triples; `linearSmoke` pins the concrete numerics.
 
 end LinearTest
 
@@ -666,66 +669,31 @@ end SimTest
 
 /-! ## Session types — the WIT conversation choreography (Machines.Session) -/
 
-namespace SessTest
-
-open Machines.Session
-
-/-- The gateway conversation's choreography facts, EXECUTED (the theorems
-    `tdual_dual`/`tdual_payload_mirror`/`session_mid_deadlockFree` are
-    proved for ALL protocols; these check the INSTANCE behaves). -/
-def sessionChecks : CheckResult := do
-  -- tdual is an involution on the gateway script
-  _ ← assertEq "gateway self-dual" (tdual (tdual gatewayProto)) gatewayProto
-  -- tdual preserves length (the lockstep precondition)
-  _ ← assertEq "tdual length" (tdual gatewayProto).length gatewayProto.length
-  -- tdual flips every direction, keeps every payload
-  -- tdual.s directions = flip of the original's (ONE flip — the test's
-  -- first draft double-flipped and correctly failed)
-  _ ← assertEq "tdual flips" (List.map (fun s => s.1) (tdual gatewayProto))
-      (List.map (fun s => s.1.flip) gatewayProto)
-  -- the scripts disagree pairwise in direction (the duality content)
-  let opposed := List.all
-    (List.zip (List.map (fun s => s.1) gatewayProto)
-      (List.map (fun s => s.1) (tdual gatewayProto)))
-    (fun p => p.1 != p.2)
-  _ ← assert opposed "tdual peers oppose every step"
-  -- mid-protocol deadlock-freedom, EXECUTED (the theorem
-  -- `session_mid_deadlockFree` covers all positions; this walks the real
-  -- script): at every position i, the machine's OWN step i is enabled.
-  let midOk := (List.finRange gatewayProto.length).all (fun i =>
-    (session gatewayProto).enabled i.val i)
-  _ ← assert midOk "a mid-protocol position has its own step disabled"
-  .ok ()
-
-end SessTest
-
-/-! ## Payload-TYPED sessions — the generic layer (Machines.Session) -/
-
 namespace TypedSessTest
 
 open Machines.Session
 
 /-- Any payload universe works: the same facts hold of `Nat` payloads —
     the layer is GENERIC (the schema-lang tie instantiates
-    `P := SchemaLang.Ty`; Machines owns the mechanism). -/
+    `P := SchemaLang.Ty`; Machines owns the mechanism). The `P :=
+    String` demo instance (`gatewayProto`) was deleted — the real
+    conversation is pinned in `SchemaLang.Session` + `wit/gateway.wit`. -/
 def natProto : TProtocol Nat := [(.snd, 64), (.rcv, 7)]
 
 /-- Deriving, not stating: the peer's script is COMPUTED by the
     unifier — `instIsDualOf` fixes `theirs := tdual mine`, so the two
     sides of a conversation cannot drift apart by construction. -/
-def peerOf (mine : TProtocol String) : TProtocol String := tdual mine
+def peerOf (mine : TProtocol Nat) : TProtocol Nat := tdual mine
 
 def typedChecks : CheckResult := do
   -- the typed dual is an involution for ANY payload universe
   _ ← assertEq "tdual involution (Nat payloads)" (tdual (tdual natProto)) natProto
-  _ ← assertEq "tdual involution (gateway payloads)"
-      (tdual (tdual gatewayProto)) gatewayProto
   -- the typed dual keeps the PAYLOAD sequence (generic `tdual_types`)
-  _ ← assertEq "tdual keeps payloads" ((tdual gatewayProto).map (·.2))
-      (gatewayProto.map (·.2))
+  _ ← assertEq "tdual keeps payloads" ((tdual natProto).map (·.2))
+      (natProto.map (·.2))
   -- directions oppose pairwise (the typed lockstep condition)
   _ ← assertEq "tdual directions oppose"
-      (List.all (List.zip (gatewayProto.map (·.1)) ((tdual gatewayProto).map (·.1)))
+      (List.all (List.zip (natProto.map (·.1)) ((tdual natProto).map (·.1)))
         (fun x => x.1 != x.2)) true
   -- the session machine is payload-generic: it walks the Nat-payload
   -- script directly (mid-protocol liveness at ANY universe)
@@ -733,8 +701,8 @@ def typedChecks : CheckResult := do
     (session natProto).enabled i.val i)
   _ ← assert midOk "typed mid-protocol liveness"
   -- the agreeing peer, derived: it IS the dual
-  _ ← assertEq "derived peer is the dual" (peerOf gatewayProto)
-      (tdual gatewayProto)
+  _ ← assertEq "derived peer is the dual" (peerOf natProto)
+      (tdual natProto)
   .ok ()
 
 /-- Positive half: the hand-written dual of the gateway conversation
@@ -895,9 +863,7 @@ def main : IO UInt32 := do
     ("sync-mpsc-conformance", SyncTest.mpscConformance),
     ("sync-mpsc-conformance-control", SyncTest.mpscConformanceControl),
     ("linear-machine", LinearTest.linearSmoke)
-    , ("session", SessTest.sessionChecks)
     , ("session-typed", TypedSessTest.typedChecks)
     ] ++ SimTest.simChecks ++ FusionTest.fusionChecks)
-  if code != 0 then return code
-  TestKit.runDets [LinearTest.doublerAgreement]
+  return code
 

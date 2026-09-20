@@ -73,6 +73,7 @@ sum over a fixed account universe).
 
 module
 
+public import SchemaLang.Change
 public import SchemaLang.CodecValue
 public import SchemaLang.WitnessCheck
 public import Dbsp.ChangeSpec
@@ -85,52 +86,15 @@ namespace SchemaLang.EventSourced
 
 open Dbsp (Change ChangeInversion)
 
-/-! ## The delta variant -/
+/-! ## The delta variant + the keyed semantics (moved, R1)
 
-/-- The delta variant (the Delta.lean shape, as ONE Lean type over
-    abstract row/key): `insert`/`update` carry the full row (v1 is full
-    replacement), `remove` carries the key. Event = patch = journal
-    entry = undo unit — the canon's delta row. -/
-inductive Delta (ρ κ : Type) where
-  | insert (row : ρ)
-  | update (row : ρ)
-  | remove (key : κ)
-deriving Repr, BEq, DecidableEq
-
-/-! ## Keyed-table semantics (replay = the I operator) -/
-
-/-- Key-based upsert: replace the FIRST row whose key matches, else
-    append. (`insert` and `update` share it — v1 is full replacement,
-    the Delta.lean lowering decision.) -/
-def upsert (key : ρ → κ) [BEq κ] (row : ρ) : List ρ → List ρ
-  | [] => [row]
-  | r :: rs => if key r == key row then row :: rs else r :: upsert key row rs
-
-/-- Apply one event to the table. `remove` erases the FIRST
-    key-matching row (v1 keyed tables are key-unique by construction —
-    `insert` IS upsert, so machine-reachable states never duplicate a
-    key; on such tables erase-first = filter). -/
-def apply (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : List ρ) : List ρ :=
-  match d with
-  | .insert row | .update row => upsert key row rows
-  | .remove k => rows.eraseIdx (rows.findIdx (fun r => key r == k))
-
-/-- REPLAY — the `I` operator: fold the event list to state. The
-    materialization/snapshot-reconstruction reading of the log. -/
-def replay (key : ρ → κ) [BEq κ] (log : List (Delta ρ κ)) (init : List ρ) : List ρ :=
-  log.foldl (fun st d => apply key d st) init
-
-@[simp] theorem replay_nil (key : ρ → κ) [BEq κ] (init : List ρ) :
-    replay key [] init = init := rfl
-
-/-- THE REPLAY LAW (replay-after-append): replaying `log ++ [e]` IS one
-    more apply after replaying `log` — the fold reading of `I` of an
-    appended delta. -/
-theorem replay_snoc (key : ρ → κ) [BEq κ] (log : List (Delta ρ κ))
-    (e : Delta ρ κ) (init : List ρ) :
-    replay key (log ++ [e]) init = apply key e (replay key log init) := by
-  simp [replay, List.foldl_append]
-
+The delta variant `Delta` and the keyed-table semantics (`upsert`,
+`apply`, `replay` + the `replay_snoc` law) live in
+`SchemaLang.Change` (R1: ONE shared change variant at the lightest
+point of the import graph — the constraint-14 rule keeps THIS
+mathlib-carrying module out of the update lane's closure). Same
+full names, same laws — this module (and every specialization)
+re-exports them through its import. -/
 /-! ## The witnessed delta (the ChangeInversion row) -/
 
 /-- The witnessed delta the journal records per event: the position,
@@ -259,64 +223,6 @@ def witnessOf (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : List ρ) : WD
       then ⟨rows.findIdx (fun r => key r == k),
             some rows[rows.findIdx (fun r => key r == k)], none⟩
       else ⟨rows.length, none, none⟩
-
-/-- Upsert at a found key IS `set` at the found position. -/
-theorem upsert_eq_set (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
-    (h : rows.findIdx (fun r => key r == key row) < rows.length) :
-    upsert key row rows = rows.set (rows.findIdx (fun r => key r == key row)) row := by
-  induction rows with
-  | nil => simp at h
-  | cons r rs ih =>
-    cases hr : (key r == key row) with
-    | true =>
-      have h0 : (r :: rs).findIdx (fun r' => key r' == key row) = 0 := by
-        rw [List.findIdx_cons]
-        simp [hr]
-      rw [h0]
-      show (if key r == key row then row :: rs else r :: upsert key row rs) = row :: rs
-      rw [if_pos hr]
-    | false =>
-      have hs : (r :: rs).findIdx (fun r' => key r' == key row) =
-          rs.findIdx (fun r' => key r' == key row) + 1 := by
-        rw [List.findIdx_cons]
-        simp [hr]
-      rw [hs] at h ⊢
-      have h' : rs.findIdx (fun r' => key r' == key row) < rs.length := by
-        have hlen : (r :: rs).length = rs.length + 1 := rfl
-        omega
-      have hih := ih h'
-      show (if key r == key row then row :: rs else r :: upsert key row rs) =
-        (r :: rs).set (rs.findIdx (fun r' => key r' == key row) + 1) row
-      rw [if_neg (by simp [hr]), hih, List.set_cons_succ]
-
-/-- Upsert at an absent key IS append. -/
-theorem upsert_eq_append (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
-    (h : rows.findIdx (fun r => key r == key row) = rows.length) :
-    upsert key row rows = rows ++ [row] := by
-  induction rows with
-  | nil => rfl
-  | cons r rs ih =>
-    cases hr : (key r == key row) with
-    | true =>
-      have h0 : (r :: rs).findIdx (fun r' => key r' == key row) = 0 := by
-        rw [List.findIdx_cons]
-        simp [hr]
-      rw [h0] at h
-      simp at h  -- 0 = (r :: rs).length: contradiction
-    | false =>
-      have hs : (r :: rs).findIdx (fun r' => key r' == key row) =
-          rs.findIdx (fun r' => key r' == key row) + 1 := by
-        rw [List.findIdx_cons]
-        simp [hr]
-      rw [hs] at h
-      have h' : rs.findIdx (fun r' => key r' == key row) = rs.length := by
-        have hlen : (r :: rs).length = rs.length + 1 := rfl
-        omega
-      have hih := ih h'
-      show (if key r == key row then row :: rs else r :: upsert key row rs) =
-        (r :: rs) ++ [row]
-      rw [if_neg (by simp [hr]), hih]
-      rfl
 
 /-- Firing an event IS patching the table by the recorded delta — the
     `RewindableMachine.action_is_patch` obligation, discharged once

@@ -1,6 +1,12 @@
 //! oracle-runner — the differential oracle's host-side driver + debug loop
 //! (W6.3 phase 2).
 //!
+//! ALLOCATOR: mimalloc as the global allocator (wasmtime's own
+//! recommendation for hosts replaying many small allocations — the
+//! differential loop's shape). The wasm GUEST (guest-demo) is NOT touched:
+//! mimalloc-sys has no wasm32 build, and the guest's allocation is the
+//! spliced runtime.wat allocator's territory anyway.
+//!
 //! WHAT IT IS: the oracle manifest (lean/wasm-backend/target/diff.json —
 //! Lean's own evals, the semantics authority) replayed against the emitted
 //! component, with the comparison pushed INTO the oracle's terms: a mismatch
@@ -25,23 +31,65 @@
 //!       `lake exe oracle schema-surface` — consumers hash).
 //!
 //! The CompareMode/Outcome/verdict/classify code MIRRORS Oracle.lean
-//! arm-for-arm (the same discipline as steel-host's wasm_diff.rs phase-1
+//! arm-for-arm (the same discipline as guestlang-host's wasm_diff.rs phase-1
 //! mirror; Tests/Main.lean pins the Lean arms). The ser forms (ser_val)
 //! MUST match Lean's `resultOf` byte-for-byte.
 //!
 //! Provenance: the replay machinery (the flat-arg conventions, the stream
-//! drain) is lifted from steel-host/tests/wasm_diff.rs — kept honest by
+//! drain) is lifted from guestlang-host/tests/wasm_diff.rs — kept honest by
 //! both sides replaying the SAME byte-frozen manifest against the SAME
 //! component. Skipped: the sabotage control (wasm_diff owns it).
+
+// error! emits Error::provide — nightly-only (same gate as the root crate).
+#![feature(error_generic_member_access)]
+
+// The workspace's ONE global-allocator policy (crates/workspace-alloc) —
+// wasmtime's recommended host allocator; see the ALLOCATOR note above.
+workspace_alloc::init_global_alloc!();
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use fast_observe::exn::Fault;
 use sha2::{Digest, Sha256};
-use steel_host::bindings::GatewayUser;
-use steel_host::{CapabilitySet, ComponentRuntime, HostState, SteelEngine};
+use guestlang_host::bindings::GatewayUser;
+use guestlang_host::{CapabilitySet, ComponentRuntime, HostState, HostEngine};
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Source, StreamConsumer, StreamResult, Val};
+
+// The driver's fault domain for its INPUT: the user-supplied oracle
+// manifest (diff.json — `--manifest P` is arbitrary user input) and its
+// rows' flat-arg conventions. O-space codes — the Lean faults registry
+// owns E1xx; no collision. The replay machinery's own errors are NOT
+// this type: they are wasmtime faults (guestlang-host's HostFault via
+// HostResult) and a row's call error is an ORACLE OUTCOME (a trap
+// identity), not a driver fault.
+fast_observe::error! {
+    /// An oracle-driver input fault: the manifest or a row is malformed.
+    #[derive(Debug)]
+    pub enum OracleFault {
+        /// The oracle manifest (diff.json) is unreadable, malformed, or
+        /// vacuous.
+        #[error("oracle manifest: {detail}")]
+        #[code = "O101", category = Content, advice = "regenerate diff.json (`just gen`); the manifest is the Lean authority's output"]
+        Manifest {
+            detail: String,
+        },
+
+        /// A manifest row's arg strings don't fit the flat-arg
+        /// conventions (missing arg / non-numeric payload).
+        #[error("oracle manifest row: {detail}")]
+        #[code = "O102", category = Content, advice = "the row's args must match the manifest schema (fn/args/expected strings)"]
+        RowArgs {
+            detail: String,
+        },
+    }
+}
+
+/// The driver's fallible INPUT flow: fast-observe faults over
+/// [`OracleFault`]. (main keeps its `Box<dyn Error>` Termination — the
+/// debug loop's exit-code contract stays 1.)
+type OracleResult<T> = fast_observe::Result<T, OracleFault>;
 
 // ── the Oracle.lean mirror (CompareMode/Outcome/verdict) ─────────────
 
@@ -191,6 +239,9 @@ fn verdict(mode: CompareMode, expected: &Outcome, observed: &Outcome) -> Option<
 }
 
 fn json_str(s: &str) -> String {
+    // DELIBERATE INVARIANT (audit class (a)): serde_json's string
+    // serialization is infallible by construction (no pending failure
+    // state) — the expect documents that, never fires.
     serde_json::to_string(s).expect("string serializes")
 }
 
@@ -227,16 +278,47 @@ fn verdict_json(v: Option<&Divergence>, schema_surface: &str) -> String {
 // ── the schema surface (derived from ANY manifest, first-occurrence
 //    order — the same string `Oracle.schemaSurface` renders) ──────────
 
-fn manifest_surface(rows: &[serde_json::Value]) -> String {
+/// One manifest row's string field — a missing/mistyped field is a
+/// Manifest fault naming the row (was an index-panic on the expect).
+fn row_str<'a>(row: &'a serde_json::Value, i: usize, key: &str) -> OracleResult<&'a str> {
+    Ok(row[key]
+        .as_str()
+        .ok_or_else(|| {
+            OracleFault::Manifest(Manifest {
+                detail: format!("row {i}: missing `{key}` string"),
+            })
+        })?)
+}
+
+/// One manifest row's array field — same fault discipline as `row_str`.
+fn row_arr<'a>(
+    row: &'a serde_json::Value,
+    i: usize,
+    key: &str,
+) -> OracleResult<&'a Vec<serde_json::Value>> {
+    Ok(row[key]
+        .as_array()
+        .ok_or_else(|| {
+            OracleFault::Manifest(Manifest {
+                detail: format!("row {i}: missing `{key}` array"),
+            })
+        })?)
+}
+
+fn manifest_surface(rows: &[serde_json::Value]) -> OracleResult<String> {
     let mut seen: Vec<(String, usize)> = Vec::new();
-    for row in rows {
-        let f = row["fn"].as_str().expect("fn").to_string();
-        let n = row["args"].as_array().expect("args").len();
+    for (i, row) in rows.iter().enumerate() {
+        let f = row_str(row, i, "fn")?.to_string();
+        let n = row_arr(row, i, "args")?.len();
         if !seen.iter().any(|(g, _)| *g == f) {
             seen.push((f, n));
         }
     }
-    seen.iter().map(|(f, n)| format!("{f}/{n}")).collect::<Vec<_>>().join(",")
+    Ok(seen
+        .iter()
+        .map(|(f, n)| format!("{f}/{n}"))
+        .collect::<Vec<_>>()
+        .join(","))
 }
 
 fn schema_hash(surface: &str) -> String {
@@ -281,50 +363,124 @@ fn ser_val(v: &Val) -> String {
 
 // ── the flat-arg conventions (lifted from wasm_diff.rs) ──────────────
 
+/// One flat arg → u64 (the oracle's boundary rows are u64-range); a
+/// short or non-numeric arg is a RowArgs fault, not a panic (was
+/// `.expect("user id")` etc. on user-supplied manifest data).
+fn arg_u64(strs: &[&str], idx: usize, what: &str) -> OracleResult<u64> {
+    let s = strs.get(idx).ok_or_else(|| {
+        OracleFault::RowArgs(RowArgs {
+            detail: format!("missing arg #{idx} ({what}) — row too short"),
+        })
+    })?;
+    s.parse::<u64>().map_err(|e| {
+        OracleFault::RowArgs(RowArgs {
+            detail: format!("arg #{idx} ({what}): `{s}` does not parse as u64: {e}"),
+        })
+        .into()
+    })
+}
+
+/// One flat arg → f64 (the variant payload's f64 slot). Same discipline.
+fn arg_f64(strs: &[&str], idx: usize, what: &str) -> OracleResult<f64> {
+    let s = strs.get(idx).ok_or_else(|| {
+        OracleFault::RowArgs(RowArgs {
+            detail: format!("missing arg #{idx} ({what}) — row too short"),
+        })
+    })?;
+    s.parse::<f64>().map_err(|e| {
+        OracleFault::RowArgs(RowArgs {
+            detail: format!("arg #{idx} ({what}): `{s}` does not parse as f64: {e}"),
+        })
+        .into()
+    })
+}
+
 /// The record-ARG convention: a record-valued param's row args = the
 /// FIELD VALUES FLAT (id, name, email, tags comma-joined).
-fn user_record(strs: &[&str]) -> Val {
-    Val::Record(vec![
-        ("id".into(), Val::U64(strs[0].parse::<u64>().expect("user id"))),
-        ("name".into(), Val::String(strs[1].to_string())),
-        ("email".into(), Val::String(strs[2].to_string())),
+fn user_record(strs: &[&str]) -> OracleResult<Val> {
+    Ok(Val::Record(vec![
+        ("id".into(), Val::U64(arg_u64(strs, 0, "user id")?)),
+        (
+            "name".into(),
+            Val::String(
+                strs.get(1)
+                    .ok_or_else(|| {
+                        OracleFault::RowArgs(RowArgs {
+                            detail: "missing arg #1 (name) — row too short".into(),
+                        })
+                    })?
+                    .to_string(),
+            ),
+        ),
+        (
+            "email".into(),
+            Val::String(
+                strs.get(2)
+                    .ok_or_else(|| {
+                        OracleFault::RowArgs(RowArgs {
+                            detail: "missing arg #2 (email) — row too short".into(),
+                        })
+                    })?
+                    .to_string(),
+            ),
+        ),
         (
             "tags".into(),
-            Val::List(strs[3].split(',').map(|t| Val::String(t.to_string())).collect()),
+            Val::List(
+                strs.get(3)
+                    .ok_or_else(|| {
+                        OracleFault::RowArgs(RowArgs {
+                            detail: "missing arg #3 (tags) — row too short".into(),
+                        })
+                    })?
+                    .split(',')
+                    .map(|t| Val::String(t.to_string()))
+                    .collect(),
+            ),
         ),
-    ])
+    ]))
 }
 
 /// The VARIANT-ARG convention: [discr, payload] — the canonical-ABI
 /// flat form (discr = the WIT case order; the payload rides the joined
 /// i64 slot — u64 raw, f64 bits).
-fn order_error_variant(strs: &[&str]) -> Val {
-    match strs[0] {
-        "0" => Val::Variant("empty-cart".into(), None),
-        "1" => Val::Variant(
+fn order_error_variant(strs: &[&str]) -> OracleResult<Val> {
+    Ok(match strs.first().copied() {
+        Some("0") => Val::Variant("empty-cart".into(), None),
+        Some("1") => Val::Variant(
             "invalid-item".into(),
-            Some(Box::new(Val::U64(strs[1].parse::<u64>().expect("invalid-item payload")))),
+            Some(Box::new(Val::U64(arg_u64(strs, 1, "invalid-item payload")?))),
         ),
-        _ => Val::Variant(
+        Some(_) => Val::Variant(
             "insufficient-funds".into(),
-            Some(Box::new(Val::Float64(
-                strs[1].parse::<f64>().expect("insufficient-funds payload"),
-            ))),
+            Some(Box::new(Val::Float64(arg_f64(
+                strs,
+                1,
+                "insufficient-funds payload",
+            )?))),
         ),
-    }
+        None => {
+            return Err(OracleFault::RowArgs(RowArgs {
+                detail: "missing arg #0 (order-error discr) — row too short".into(),
+            })
+            .into())
+        }
+    })
 }
 
-fn build_args(f: &str, strs: &[&str]) -> Vec<Val> {
+fn build_args(f: &str, strs: &[&str]) -> OracleResult<Vec<Val>> {
     if f == "user-valid" || f == "user-complete" {
-        vec![user_record(strs)]
+        Ok(vec![user_record(strs)?])
     } else if f == "order-error-valid" {
-        vec![order_error_variant(strs)]
+        Ok(vec![order_error_variant(strs)?])
     } else {
         strs.iter()
             .enumerate()
-            .map(|(i, a)| match (f, i, *a) {
-                ("pick", 0, "0" | "1") => Val::Bool(*a == "1"),
-                (_, _, s) => Val::U64(s.parse::<u64>().expect("u64 arg")),
+            .map(|(i, a)| -> OracleResult<Val> {
+                match (f, i, *a) {
+                    ("pick", 0, "0" | "1") => Ok(Val::Bool(*a == "1")),
+                    (_, _, _) => Ok(Val::U64(arg_u64(strs, i, "u64 arg")?)),
+                }
             })
             .collect()
     }
@@ -359,6 +515,10 @@ where
             return Poll::Pending;
         }
         let render = &self.render;
+        // DELIBERATE INVARIANT (audit class (a)): lock poisoning requires
+        // a panic while HOLDING this lock — the section only drains into
+        // the Vec (render is infallible string formatting), so the
+        // poisoned state is unreachable.
         self.out.lock().unwrap().extend(buf.drain(..).map(move |t| render(&t)));
         Poll::Ready(Ok(StreamResult::Completed))
     }
@@ -430,24 +590,44 @@ struct Row {
     expected: String,
 }
 
-fn load_manifest(path: &std::path::Path) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+fn load_manifest(path: &std::path::Path) -> OracleResult<Vec<Row>> {
+    // The io/serde errors ride the tree as wrapped originals AND in the
+    // detail (the diagnostic carries the phase + cause).
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        let detail = format!("read: {e}");
+        Fault::new(e).wrap(OracleFault::Manifest(Manifest { detail }))
+    })?;
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| {
+        let detail = format!("parse: {e}");
+        Fault::new(e).wrap(OracleFault::Manifest(Manifest { detail }))
+    })?;
     if rows.len() < 100 {
-        return Err(format!("oracle manifest has only {} rows — vacuous", rows.len()).into());
-    }
-    Ok(rows
-        .iter()
-        .map(|r| Row {
-            f: r["fn"].as_str().expect("fn").to_string(),
-            args: r["args"]
-                .as_array()
-                .expect("args")
-                .iter()
-                .map(|a| a.as_str().expect("arg str").to_string())
-                .collect(),
-            expected: r["expected"].as_str().expect("expected").to_string(),
+        return Err(OracleFault::Manifest(Manifest {
+            detail: format!("only {} rows — vacuous", rows.len()),
         })
-        .collect())
+        .into());
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    for (i, r) in rows.iter().enumerate() {
+        let args = row_arr(r, i, "args")?
+            .iter()
+            .map(|a| {
+                a.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        OracleFault::Manifest(Manifest {
+                            detail: format!("row {i}: non-string `args` element"),
+                        })
+                    })
+            })
+            .collect::<core::result::Result<Vec<String>, OracleFault>>()?;
+        out.push(Row {
+            f: row_str(r, i, "fn")?.to_string(),
+            args,
+            expected: row_str(r, i, "expected")?.to_string(),
+        });
+    }
+    Ok(out)
 }
 
 /// Replay ONE row against the instantiated component. The outcome is
@@ -461,6 +641,9 @@ async fn replay_row(
         // the STREAM rows: the call + the drain in ONE event loop (a
         // post-call drain never gets polled — the loop already exited).
         let out = Arc::new(Mutex::new(Vec::new()));
+        // DELIBERATE INVARIANT (audit class (a)): replay_row runs only
+        // after `rt.instantiate` (probe/explain) — a missing instance is
+        // a driver bug, not an input condition.
         let instance = rt.instance().expect("instance").clone();
         let is_counts = f == "watch-counts";
         let fname = f.to_string();
@@ -468,12 +651,28 @@ async fn replay_row(
         let sink = out.clone();
         rt.store_mut()
             .run_concurrent(async move |accessor| {
-                let f = accessor.with(|access| instance.get_func(access, &fname).expect("export"));
+                // The export's existence is DATA-driven (the row's fn
+                // must exist on the component) — a named error, not a
+                // panic (was `.expect("export")`).
+                let f = accessor
+                    .with(|access| instance.get_func(access, &fname))
+                    .ok_or_else(|| {
+                        wasmtime::Error::msg(format!(
+                            "oracle replay: export `{fname}` missing on the component"
+                        ))
+                    })?;
                 let mut results = [if is_counts { Val::U64(0) } else { Val::List(vec![]) }];
                 f.call_concurrent(accessor, &args, &mut results).await?;
                 let any = match results[0].clone() {
                     Val::Stream(a) => a,
-                    other => panic!("{fname}: not a stream: {other:?}"),
+                    other => {
+                        // The row's result type isn't the stream the
+                        // drain expects — named error, not a panic
+                        // (was `panic!("{fname}: not a stream")`).
+                        return Err(wasmtime::Error::msg(format!(
+                            "{fname}: not a stream: {other:?}"
+                        )));
+                    }
                 };
                 if is_counts {
                     let reader = any.try_into_stream_reader::<u64>()?;
@@ -485,6 +684,9 @@ async fn replay_row(
                 Ok::<(), wasmtime::Error>(())
             })
             .await??;
+        // DELIBERATE INVARIANT (audit class (a)): poisoning requires a
+        // panic while holding this lock — only the infallible render
+        // runs inside; see DrainCommon::poll_consume.
         let items = out.lock().unwrap();
         Ok(Outcome::value(format!(
             "({})",
@@ -555,7 +757,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "schema-surface" => {
             let rows: Vec<serde_json::Value> =
                 serde_json::from_str(&std::fs::read_to_string(&cli.manifest)?)?;
-            let surface = manifest_surface(&rows);
+            let surface = manifest_surface(&rows)?;
             println!("{surface}");
             println!("sha256: {}", schema_hash(&surface));
             Ok(())
@@ -571,9 +773,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let rows_json: Vec<serde_json::Value> =
                 serde_json::from_str(&std::fs::read_to_string(&cli.manifest)?)?;
-            let surface = manifest_surface(&rows_json);
+            let surface = manifest_surface(&rows_json)?;
             let rows = load_manifest(&cli.manifest)?;
-            let engine = SteelEngine::new()?;
+            let engine = HostEngine::new()?;
             let component =
                 engine.load_component_bytes(&std::fs::read(&cli.component)?)?;
             let mut rt = ComponentRuntime::new(engine, CapabilitySet::NONE).await?;
@@ -581,7 +783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut failures = 0usize;
             for row in &rows {
                 let strs: Vec<&str> = row.args.iter().map(String::as_str).collect();
-                let args = build_args(&row.f, &strs);
+                let args = build_args(&row.f, &strs)?;
                 let expected = Outcome::value(row.expected.clone());
                 let got = replay_row(&mut rt, &row.f, &args).await?;
                 if compare_as == "rows" {
@@ -618,7 +820,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let id = cli.rest.first().ok_or(USAGE)?;
             let rows_json: Vec<serde_json::Value> =
                 serde_json::from_str(&std::fs::read_to_string(&cli.manifest)?)?;
-            let surface = manifest_surface(&rows_json);
+            let surface = manifest_surface(&rows_json)?;
             let rows = load_manifest(&cli.manifest)?;
             let (idx, row) = match id.parse::<usize>() {
                 Ok(i) => {
@@ -635,13 +837,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or(format!("no row {id}"))?
                 }
             };
-            let engine = SteelEngine::new()?;
+            let engine = HostEngine::new()?;
             let component =
                 engine.load_component_bytes(&std::fs::read(&cli.component)?)?;
             let mut rt = ComponentRuntime::new(engine, CapabilitySet::NONE).await?;
             rt.instantiate(&component).await?;
             let strs: Vec<&str> = row.args.iter().map(String::as_str).collect();
-            let args = build_args(&row.f, &strs);
+            let args = build_args(&row.f, &strs)?;
             let expected = Outcome::value(row.expected.clone());
             let got = replay_row(&mut rt, &row.f, &args).await?;
             let v = verdict(CompareMode::Full, &expected, &got);
@@ -770,6 +972,9 @@ mod tests {
                 {"fn":"double","args":["4"],"expected":"8"}]"#,
         )
         .expect("rows");
-        assert_eq!(manifest_surface(&rows), "double/1,user-valid/4");
+        assert_eq!(
+            manifest_surface(&rows).expect("valid manifest rows"),
+            "double/1,user-valid/4"
+        );
     }
 }

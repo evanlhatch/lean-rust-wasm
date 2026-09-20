@@ -25,6 +25,16 @@ Allowlist mechanisms:
 * option `linter.guestlang.packageNamespace.extraPrefixes` (comma-separated,
   set by the driver) for whole extra prefixes.
 
+Structural exemptions (no per-site opt-out exists at the decl's source):
+* `@[derived]` (LintKit.Basic) — generated output, stamped by the emitting
+  command (the per-consumer `set_option … false` ritual is dead);
+* `linter.`-rooted decls — option declarations live at TOP LEVEL by Lean's
+  own registration contract (`builtin_env_linter` checks `env.contains <raw
+  option name>` at attribute time), so their root is not drift; the 16
+  verbatim per-option nolint copies this replaced.
+* `Lean.Parser.Category.*` — a syntax category cannot live in a library
+  namespace (Lean's constraint; the machineClause lesson).
+
 The options are declared at top level (see LintKit.Basic's header note).
 -/
 module
@@ -35,28 +45,18 @@ public meta section
 
 open Lean Meta Linter EnvLinter
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
-register_option linter.guestlang.packageNamespace : Bool := {
-  defValue := true
-  descr := "flag declarations whose name lacks their package's namespace prefix"
-}
-
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.packageNamespace.extraPrefixes : String := {
   defValue := ""
   descr := "comma-separated extra allowed namespace prefixes for \
     linter.guestlang.packageNamespace (set by the lint driver)"
 }
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
 register_option linter.guestlang.packageNamespace.strict : Bool := {
   defValue := false
   descr := "strict mode: require EVERY declaration in a table-root module to \
     carry the package prefix (the original rule; default is the \
     foreign-namespace rule)"
 }
-
-initialize Linter.addEnvLinterOption linter.guestlang.packageNamespace
 
 namespace LintKit
 
@@ -103,10 +103,29 @@ def foreignRoots : List Name :=
 meta def packageNamespaceTest (decl : Name) : MetaM (Option MessageData) := do
   if ← skipDecl decl then return none
   let env ← getEnv
+  -- GENERATED output: the emitting command stamps `@[derived]` — the
+  -- structural exemption. A generated decl has no honest source site for a
+  -- per-site opt-out (the schema_update instances park in SchemaLang by
+  -- the framework's construction); the per-consumer `set_option … false`
+  -- ritual this replaces is dead.
+  if hasDerived env decl then return none
+  -- OPTION declarations: `register_option` must sit at TOP LEVEL (the
+  -- `builtin_env_linter` registration checks `env.contains <raw option
+  -- name>` at attribute time), so an option decl's root IS `linter` —
+  -- Lean's own option-registration namespace, not drift. (The per-option
+  -- `@[nolint]` copies this replaces were 16 verbatim strings.)
+  if decl.getRoot == `linter then return none
   -- Syntax kinds (`macro`/`syntax`/`elab` declarations) are named by Lean's
   -- own convention (`tacticFoo_`, ...) — outside the package prefix by
   -- design, not by drift.
   if Parser.isValidSyntaxNodeKind env decl then return none
+  -- Syntax CATEGORIES (`declare_syntax_cat`) are named
+  -- `Lean.Parser.Category.<name>` BY LEAN ITSELF — a category cannot live
+  -- in a library namespace, so this is Lean's constraint, not namespace
+  -- drift. (The per-site nolint can't carry this: elaborating the attr
+  -- needs the linter registered in THAT file's env, which mathlib-side
+  -- packages don't import — the machineClause lesson, 2026-09-19.)
+  if (`Lean.Parser.Category).isPrefixOf decl then return none
   let some mod ← findModuleOf? decl | return none
   if linter.guestlang.packageNamespace.strict.get (← getOptions) then
     let some expected := packagePrefixes.lookup mod.getRoot | return none
@@ -152,5 +171,8 @@ meta def packageNamespaceLinter : EnvLinter where
 
 end LintKit
 
-@[builtin_env_linter linter.guestlang.packageNamespace]
-meta def LintKit.packageNamespaceLinter.reg : EnvLinter := LintKit.packageNamespaceLinter
+-- the main switch registered via `register_guestlang_linter` (LintKit.Basic):
+-- option + snapshot hookup + the stock-`lake lint` mount, one command.
+register_guestlang_linter linter.guestlang.packageNamespace
+  LintKit.packageNamespaceLinter
+  "flag declarations whose name lacks their package's namespace prefix"

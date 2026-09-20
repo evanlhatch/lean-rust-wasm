@@ -24,18 +24,9 @@ public meta section
 
 open Lean Meta Linter EnvLinter
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
-register_option linter.guestlang.axiomAllowlist : Bool := {
-  defValue := true
-  descr := "flag declarations depending on axioms outside the allowlist \
-    (propext, Classical.choice, Quot.sound, disclosed native_decide trust base)"
-}
-
--- Feed the option into v4.33's per-declaration snapshot machinery so
--- `set_option linter.guestlang.axiomAllowlist false in <decl>` opts out
--- exactly where written (recorded at `addDecl` for modules importing
--- LintKit, replayed by the runner and by `lake lint --builtin-lint`).
-initialize Linter.addEnvLinterOption linter.guestlang.axiomAllowlist
+-- Feed the option into v4.33's per-declaration snapshot machinery and mount
+-- the stock-`lake lint` linter via `register_guestlang_linter` (LintKit.Basic,
+-- the one-liner registration): option + hookup + mount, exact name + default.
 
 namespace LintKit
 
@@ -76,5 +67,6 @@ meta def axiomAllowlistLinter : EnvLinter where
 
 end LintKit
 
-@[builtin_env_linter linter.guestlang.axiomAllowlist]
-meta def LintKit.axiomAllowlistLinter.reg : EnvLinter := LintKit.axiomAllowlistLinter
+register_guestlang_linter linter.guestlang.axiomAllowlist LintKit.axiomAllowlistLinter
+  "flag declarations depending on axioms outside the allowlist \
+    (propext, Classical.choice, Quot.sound, disclosed native_decide trust base)"

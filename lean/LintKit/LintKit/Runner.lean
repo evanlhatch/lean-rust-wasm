@@ -24,6 +24,9 @@ public import LintKit.RecursiveSimpEqns
 public import LintKit.DupDefBodies
 public import LintKit.PackageNamespace
 public import LintKit.TextLints
+public import LintKit.UpstreamDup
+public import LintKit.BareChecker
+public import LintKit.CodecLints
 
 public meta section
 
@@ -77,7 +80,15 @@ meta def guestlangLinters : Array (NamedEnvLinter × Lean.Option Bool) := #[
   ({ toEnvLinter := GuestBan.guestBanLinter
      optName := `linter.guestlang.guestBan
      declName := ``LintKit.GuestBan.guestBanLinter },
-   linter.guestlang.guestBan)
+   linter.guestlang.guestBan),
+  ({ toEnvLinter := upstreamDupLinter
+     optName := `linter.guestlang.upstreamDup
+     declName := ``LintKit.upstreamDupLinter },
+   linter.guestlang.upstreamDup),
+  ({ toEnvLinter := bareCheckerLinter
+     optName := `linter.guestlang.bareChecker
+     declName := ``LintKit.bareCheckerLinter },
+   linter.guestlang.bareChecker)
 ]
 
 /-- Per-declaration enablement (the runner's replacement for core's
@@ -176,7 +187,9 @@ def runTextLintsOnModules (env : Environment) (roots : Array Name)
       missing := missing.push m
       continue
     let content ← IO.FS.readFile file
-    for f in runTextLints file.toString content do
+    for f in runTextLints file.toString content
+        ++ checkUnregisteredRoundtrip file.toString content
+        ++ checkDidyoumeanDiscipline file.toString content do
       let on := (cfg.overrides.find? f.linter).getD true
       if on then findings := findings.push f
   return (findings, missing)

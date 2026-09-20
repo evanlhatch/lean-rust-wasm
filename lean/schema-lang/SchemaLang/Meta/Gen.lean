@@ -50,9 +50,15 @@ def fieldsTerm : List Field → CommandElabM Term
   | f :: rest => do `($(← fieldTerm f) :: $(← fieldsTerm rest))
 
 /-- The `CodecClosed` witness term for a field's type, built
-    STRUCTURALLY from the registry's `Ty` value — the same shape walk
-    `tyTerm` does, one reflection level up. `f32`/`f64`/`.ty` have no
-    constructor: the refusal IS the error (see the module header). -/
+    STRUCTURALLY from the registry's `Ty` value. NOT a `Ty` quote —
+    the Ty reifiers are `Meta.tyTerm` (Term level, the shared walker)
+    and `ToExpr Ty` (Expr level); the target here is the
+    `CodecClosed` family, whose shape DIFFERS (the map key and tensor
+    dims are DROPPED — no witness needed; `f32`/`f64`/`.ty` have no
+    constructor: the refusal IS the error, see the module header) — so
+    it cannot ride the shared quoter without changing what it builds.
+    Still its own compiler-exhaustive walk: a new `Ty` ctor fails THIS
+    match too. -/
 def ccTerm : Ty → CommandElabM Term
   | .bool => `(CodecClosed.bool) | .u8 => `(CodecClosed.u8)
   | .u16 => `(CodecClosed.u16) | .u32 => `(CodecClosed.u32)

@@ -159,6 +159,107 @@ def FieldVal.beq (a b : FieldVal) : Bool :=
 theorem FieldVal.beq_refl (a : FieldVal) : a.beq a = true := by
   simp [FieldVal.beq]
 
+/-- The executable `BEq` routing through `FieldVal.beq` (the shared
+    delta/keyed lanes compare projected values with it). NOT a
+    `LawfulBEq` — floats sit outside `CodecClosed`, so lawfulness is
+    the CONDITIONAL theorems below, not a global instance (the honest
+    form of the byte-encoding comparison). -/
+instance : BEq FieldVal := ⟨FieldVal.beq⟩
+
+/-- DISTINCT field values are beq-false — the codec-faithful direction
+    of `FieldVal.beq`. The kernel cannot EVALUATE this (the encoder's
+    `encVarNat` is wf-recursive — opaque to `whnf`, so `decide` sticks),
+    so the proof rides the round trip: beq-true would give byte-equal
+    images (lawful `BEq` on `List UInt8`), and `decode_encodeValue`
+    collapses byte-equal images to equal values. The `CodecClosed`
+    hypothesis is the codec's provable sub-universe (key types — the
+    W8.1 scalar discipline — are closed). -/
+theorem FieldVal.beq_eq_false_of_ne {a b : FieldVal} (h : a ≠ b)
+    (ha : CodecClosed a.1) : a.beq b = false := by
+  obtain ⟨ta, va⟩ := a
+  obtain ⟨tb, vb⟩ := b
+  unfold FieldVal.beq
+  by_cases hty : ta = tb
+  · subst hty
+    rw [dif_pos rfl]
+    show (encodeValue ta va == encodeValue ta vb) = false
+    cases hb : (encodeValue ta va == encodeValue ta vb) with
+    | false => rfl
+    | true =>
+        have henc : encodeValue ta va = encodeValue ta vb := beq_iff_eq.mp hb
+        have h1 := decode_encodeValue ta va ha
+        have h2 := decode_encodeValue ta vb ha
+        rw [henc] at h1
+        rw [h1] at h2
+        exact (h (by rw [Option.some.inj h2])).elim
+  · rw [dif_neg hty]
+
+/-- THE LAWFULNESS (R5): on a codec-closed key type, `FieldVal.beq` IS
+    equality — true iff the values are equal. The forward direction is
+    `beq_eq_false_of_ne`'s contrapositive (the round-trip collapse of
+    byte-equal images); the reverse is the refl pin. This is what
+    retires the update lane's hand-rolled `nodup2` family onto core
+    `List.Nodup` lemmas: pairwise beq-distinctness is plain `≠` data
+    once the byte comparison is honest. -/
+theorem FieldVal.beq_eq_true_iff_eq {a b : FieldVal} (ha : CodecClosed a.1) :
+    a.beq b = true ↔ a = b := by
+  obtain ⟨ta, va⟩ := a
+  obtain ⟨tb, vb⟩ := b
+  constructor
+  · intro h
+    unfold FieldVal.beq at h
+    by_cases hty : ta = tb
+    · subst hty
+      rw [dif_pos rfl] at h
+      have h' : (encodeValue ta va == encodeValue ta vb) = true := h
+      have henc : encodeValue ta va = encodeValue ta vb := beq_iff_eq.mp h'
+      have h1 := decode_encodeValue ta va ha
+      have h2 := decode_encodeValue ta vb ha
+      rw [henc] at h1
+      have hval : va = vb := Option.some.inj (h1.symm.trans h2)
+      subst hval
+      rfl
+    · rw [dif_neg hty] at h
+      exact Bool.noConfusion h
+  · intro h
+    rw [Sigma.mk.injEq] at h
+    obtain ⟨hty, hveq⟩ := h
+    subst hty
+    have hval : va = vb := eq_of_heq hveq
+    subst hval
+    exact FieldVal.beq_refl _
+
+/-- The symmetry the ByteArray BEq could not carry: beq-true is
+    equality, and equality is symmetric. -/
+theorem FieldVal.beq_symm {a b : FieldVal} (ha : CodecClosed a.1)
+    (hb : CodecClosed b.1) (h : a.beq b = true) : b.beq a = true :=
+  (FieldVal.beq_eq_true_iff_eq hb).mpr
+    (((FieldVal.beq_eq_true_iff_eq ha).mp h).symm)
+
+/-- The false side of the lawfulness: beq-false iff distinct (both
+    closure hypotheses — the two values may have different type
+    indices, each needing its own round-trip warranty). -/
+theorem FieldVal.beq_false_iff_ne {a b : FieldVal} (ha : CodecClosed a.1)
+    (hb : CodecClosed b.1) : a.beq b = false ↔ a ≠ b := by
+  constructor
+  · intro h hne
+    subst hne
+    rw [FieldVal.beq_refl] at h
+    exact Bool.noConfusion h
+  · intro h
+    cases hb' : a.beq b with
+    | false => rfl
+    | true => exact absurd ((FieldVal.beq_eq_true_iff_eq ha).mp hb') h
+
+/-- The both-direction pair the update lane's keyed applicator reads:
+    distinct images are beq-false BOTH ways (derived, not data — the
+    `KeyCoherent.fresh` premise's honest form). -/
+theorem FieldVal.beq_false_pair_of_ne {a b : FieldVal}
+    (ha : CodecClosed a.1) (hb : CodecClosed b.1) (h : a ≠ b) :
+    a.beq b = false ∧ b.beq a = false :=
+  ⟨FieldVal.beq_false_iff_ne ha hb |>.mpr h,
+   FieldVal.beq_false_iff_ne hb ha |>.mpr (fun he => h he.symm)⟩
+
 /-- All-distinct under `FieldVal.beq`. -/
 def FieldVal.nodup : List FieldVal → Bool
   | [] => true
@@ -671,37 +772,28 @@ instance keyClaimDecidable (o : KeyObligation) : Decidable o.decidableClaim := b
     `decidableClaim` is the evidence. `none` = the loud gap: a
     hand-set tier the lane cannot serve, a FALSE decide verdict (a
     broken declaration, a type-mismatched foreign key), a default-less
-    record — discharge refuses, it does not fabricate evidence. -/
+    record — discharge refuses, it does not fabricate evidence.
+    (The decidableNow backend is the KIT's — `decideDischarge`; this
+    definition is the lane's named application of it.) -/
 def KeyObligation.discharge (o : KeyObligation) :
     Option CodegenCore.Obligation.Evidence :=
-  match o.tier with
-  | .decidableNow =>
-      match decide o.decidableClaim with
-      | true => some (.decided true)
-      | false => none
-  | .provedAtElab | .generatedCheck | .oracleSwept | .guestVerified => none
+  CodegenCore.Obligation.decideDischarge KeyObligation.decidableClaim o
 
 /-- SOUNDNESS of the key lane's decidableNow backend: a
     `.decided true` verdict means the claim HOLDS (the kernel's
     `decide` validated the key predicate on the pinned table —
-    `of_decide_eq_true`; no new trust base). -/
+    `of_decide_eq_true`; no new trust base). Routes through the kit's
+    `decideDischarge_sound` — the proof object is shared. -/
 theorem KeyObligation.discharge_decidableNow_sound (o : KeyObligation)
     (ht : o.tier = .decidableNow)
-    (h : o.discharge = some (.decided true)) : o.decidableClaim := by
-  unfold KeyObligation.discharge at h
-  rw [ht] at h
-  cases hd : decide o.decidableClaim with
-  | true => exact of_decide_eq_true hd
-  | false =>
-      rw [hd] at h
-      simp at h
+    (h : o.discharge = some (.decided true)) : o.decidableClaim :=
+  CodegenCore.Obligation.decideDischarge_sound _ _ ht h
 
 /-- COMPLETENESS: a true claim discharges to the `.decided true`
     evidence — the backend FIRES on the claims it can decide. -/
 theorem KeyObligation.discharge_decidableNow_of_claim (o : KeyObligation)
     (ht : o.tier = .decidableNow) (h : o.decidableClaim) :
-    o.discharge = some (.decided true) := by
-  unfold KeyObligation.discharge
-  rw [ht, decide_eq_true h]
+    o.discharge = some (.decided true) :=
+  CodegenCore.Obligation.decideDischarge_of_claim _ _ ht h
 
 end SchemaLang

@@ -13,7 +13,10 @@ module
 public import Mathlib.Tactic.Linter.FlexibleLinter
 public import Mathlib.Tactic.Linter.Style
 public import CodegenCore.Kit
-public import Batteries
+-- The umbrella `public import Batteries` was deleted (W5.4 hygiene batch):
+-- the only Batteries-named entity this file uses is the `library_note`
+-- command below, so the import is targeted at its home module.
+public import Batteries.Util.LibraryNote
 
 @[expose] public section
 

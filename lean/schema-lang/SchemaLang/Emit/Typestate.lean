@@ -149,9 +149,29 @@ def typestateRust : String := renderModule typestateItems
 
 /-! ## The emitter -/
 
+/-! ## The emission law (the vortex lane's `vortexLaw` shape) -/
+
+/-- The typestate emitter's law: the module's own legality + reachability
+    pins, bundled as one `GenCtx → Prop` (the `vortexLaw` shape — both
+    theorems ctx-independent, the machine is module data). Content: no
+    emitted method can represent an illegal firing, and the emitted
+    structs are exactly the reachable states. -/
+def typestateLaw : GenCtx → Prop := fun _ =>
+  (typestateEdges.map fun (e, f, _) => orderMachineTableStep? e f).all
+      Option.isSome = true
+  ∧ typestateStates.all
+      (fun s => (s == .cart) || orderMachineTrans.any (fun (_, _, t) => t == s))
+      = true
+
+/-- The discharge: the module's own pins, one citation per conjunct. -/
+theorem typestateLaw_discharged (ctx : GenCtx) : typestateLaw ctx :=
+  ⟨typestate_edges_legal, typestate_states_reachable⟩
+
 /-- The typestate emitter: the machine's states as consuming newtypes,
     its non-reset rows as methods. Same discipline as
-    `Emit.Machine.orderMachineEmitter` — pure over the proved table. -/
+    `Emit.Machine.orderMachineEmitter` — pure over the proved table.
+    W7.9 `Emitter.law` sweep: `law` POPULATED (`typestateLaw`),
+    discharged by `typestateLaw_discharged`. -/
 def typestateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "typestate"
   style := .doubleSlash
@@ -160,5 +180,6 @@ def typestateEmitter : CodegenCore.Emit.Emitter GenCtx where
   run _ctx :=
     [{ path := "../../src/order_typestate_generated.rs"
        contents := typestateRust }]
+  law := some typestateLaw
 
 end SchemaLang.Emit.Typestate

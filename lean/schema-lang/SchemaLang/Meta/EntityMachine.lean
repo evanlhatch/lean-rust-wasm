@@ -50,7 +50,7 @@ The generated-syntax traps this file paid for (do not re-pay):
 name resolves to the ELABORATOR structure); every quotation-producing
 helper is MONADIC (a quotation's macro-scope construction needs
 `MonadQuotation`); antiquotes are PRE-BOUND to local idents; custom-
-category splices carry the KIND ascription (`$[$xs:machineEvent]*`);
+category splices carry the KIND ascription (`$[$xs:machineClause]*`);
 the machine!-generated surface's names are HYBRID — the states-clause
 entourage is STRING-concatenated (`<m>States`, `<m>Trans`,
 `<m>TableStep?` — the Dsl convention), the labels pair and the Label
@@ -78,6 +78,7 @@ public import Lean
 public import Machines.Dsl
 public meta import SchemaLang.Meta.Reflect
 public meta import SchemaLang.Meta.Keys
+public meta import SchemaLang.Meta.Derive
 public meta import SchemaLang.EntityMachine
 
 public meta section
@@ -85,15 +86,50 @@ public meta section
 namespace SchemaLang.Meta
 
 open Lean Elab Command
+-- the clause-kit category quotations + antiquotation ascriptions resolve
+-- the category BARE (the `open` — `declare_syntax_cat` registers the
+-- category under the name AS WRITTEN, un-namespaced: quotations and
+-- antiquotation ascriptions use `machineClause`, while the RULE kinds
+-- (`machineStateClause` etc.) stay namespace-qualified
+-- `Machines.Dsl.machineStateClause` — the `getKind` dispatch keys)
+
+-- The clause category (the Machines.Dsl clause-kit discipline — one
+-- named rule per clause, the low-priority unknown-clause catch-all
+-- rejecting typos with a did-you-mean at ELABORATION). Word-token
+-- discipline: `initial:`/`rewind:`/`transition:` are
+-- colon-suffixed (the `machine!` lesson — the global token table is
+-- untouched); the edge separator is the `→` punctuation (the
+-- `schema_keys` lesson — never a common word). The category parks in
+-- Lean's namespace BY DESIGN (the `updateClause` precedent).
+set_option linter.guestlang.packageNamespace false in
+declare_syntax_cat entityMachineClause
+
+attribute [nolint linter.guestlang.dupDefBodies "syntax-category bodies are identical by construction (a category carries no payload)"]
+  Lean.Parser.Category.entityMachineClause
+
+/-- `initial: <ctor>` — the lifecycle's start state (exactly one; the
+    elaborator enforces the cardinality the positional grammar baked
+    in). -/
+syntax (name := entityInitialClause) "initial:" ident : entityMachineClause
+
+/-- `rewind: <transition>` — the optional recovery edge (at most one). -/
+syntax (name := entityRewindClause) "rewind:" ident : entityMachineClause
 
 /-- One transition clause: `transition: <name> (<src> → <dst>)` — bare
     constructor names (the command emits the dotted refs). -/
-syntax entityTr := "transition:" ident " (" ident " → " ident ")"
+syntax (name := entityTransitionClause) "transition:" ident " (" ident " → " ident ")"
+  : entityMachineClause
 
-/-- THE AUTHORING SURFACE (see the module header). -/
+/-- The unknown-clause catch-all (the Machines.Dsl clause-kit
+discipline): low priority, so the named clauses win; anything else
+well-formed (`<typo>: <term>`) parses and is rejected at ELABORATION
+with a did-you-mean over the legal clauses. -/
+syntax (name := entityUnknownClause) (priority := low) ident ": " term : entityMachineClause
+
+/-- THE AUTHORING SURFACE (see the module header). The body is a
+    uniform CLAUSE LIST (the Machines.Dsl clause-kit discipline). -/
 syntax (name := schemaEntityMachine) "schema_entity_machine " ident
-  " for " ident " := " ident " : " ident "initial: " ident
-  ("rewind: " ident)? entityTr* : command
+  " for " ident " := " ident " : " ident entityMachineClause* : command
 
 /-- `.ctor` — the dotted constructor reference (term AND pattern — the
     same `dotIdent` node kind). -/
@@ -101,94 +137,54 @@ private def dotRef (id : TSyntax `ident) : Lean.Term :=
   ⟨Syntax.node .none ``Lean.Parser.Term.dotIdent
     #[mkAtom ".", id.raw]⟩
 
-/-- The KeyTy renderer (TERM syntax, `SchemaLang.`-qualified — generated
-    text must not depend on the consumer's `open`s). -/
-private def keyTyTermQ : KeyTy → CommandElabM Lean.Term
-  | .bool => `(term| SchemaLang.KeyTy.bool)
-  | .u8 => `(term| SchemaLang.KeyTy.u8)
-  | .u16 => `(term| SchemaLang.KeyTy.u16)
-  | .u32 => `(term| SchemaLang.KeyTy.u32)
-  | .u64 => `(term| SchemaLang.KeyTy.u64)
-  | .i8 => `(term| SchemaLang.KeyTy.i8)
-  | .i16 => `(term| SchemaLang.KeyTy.i16)
-  | .i32 => `(term| SchemaLang.KeyTy.i32)
-  | .i64 => `(term| SchemaLang.KeyTy.i64)
-  | .string => `(term| SchemaLang.KeyTy.string)
-
-/-- The Ty renderer — exhaustive over the closed universe: new
-    constructors fail THIS match (the compiler drives the extension,
-    the `Ty` closed-universe rule). -/
-private def tyTermQ : Ty → CommandElabM Lean.Term
-  | .bool => `(term| SchemaLang.Ty.bool)
-  | .u8 => `(term| SchemaLang.Ty.u8)
-  | .u16 => `(term| SchemaLang.Ty.u16)
-  | .u32 => `(term| SchemaLang.Ty.u32)
-  | .u64 => `(term| SchemaLang.Ty.u64)
-  | .i8 => `(term| SchemaLang.Ty.i8)
-  | .i16 => `(term| SchemaLang.Ty.i16)
-  | .i32 => `(term| SchemaLang.Ty.i32)
-  | .i64 => `(term| SchemaLang.Ty.i64)
-  | .f32 => `(term| SchemaLang.Ty.f32)
-  | .f64 => `(term| SchemaLang.Ty.f64)
-  | .string => `(term| SchemaLang.Ty.string)
-  | .bytes => `(term| SchemaLang.Ty.bytes)
-  | .option a => do
-      let a' ← tyTermQ a
-      `(term| SchemaLang.Ty.option $a')
-  | .result ok err => do
-      let ok' ← tyTermQ ok
-      let err' ← tyTermQ err
-      `(term| SchemaLang.Ty.result $ok' $err')
-  | .list a => do
-      let a' ← tyTermQ a
-      `(term| SchemaLang.Ty.list $a')
-  | .map k v => do
-      let k' ← keyTyTermQ k
-      let v' ← tyTermQ v
-      `(term| SchemaLang.Ty.map $k' $v')
-  | .set k => do
-      let k' ← keyTyTermQ k
-      `(term| SchemaLang.Ty.set $k')
-  | .future a => do
-      let a' ← tyTermQ a
-      `(term| SchemaLang.Ty.future $a')
-  | .stream a => do
-      let a' ← tyTermQ a
-      `(term| SchemaLang.Ty.stream $a')
-  | .tensor dims a => do
-      let a' ← tyTermQ a
-      let dims' := (quote dims : Lean.Term)
-      `(term| SchemaLang.Ty.tensor $dims' $a')
-  | .ty n => do
-      let n' := (quote n : Lean.Term)
-      `(term| SchemaLang.Ty.ty $n')
-
-/-- The Field renderer (the generated `fields := [...]` literal — the
-    registry snapshot, the `SchemaInvariant.fields` discipline). -/
-private def fieldTermQ (f : Field) : CommandElabM Lean.Term := do
-  let n' := (quote f.name : Lean.Term)
-  let t' ← tyTermQ f.ty
-  `(term| { name := $n', ty := $t' })
-
-/-- The did-you-mean suffix (the `Meta.Keys` message discipline). -/
+/-- The did-you-mean suffix — the Machines.Dsl clause-kit's one tree-wide
+    format (the `Meta.Keys` message discipline). The `KeyTy`/`Ty`/`Field`
+    renderers are the SHARED walkers (`Meta.keyTerm`/`Meta.tyTerm`/
+    `Meta.fieldTerm` in `Meta.Derive` — the one `Ty` reifier per level;
+    this lane no longer keeps its own). -/
 private def hintOf (s : String) (cands : List String) : String :=
-  let c := CodegenCore.didYouMean s cands
-  if c.isEmpty then "" else s!" — did you mean: {String.intercalate ", " c}?"
+  Machines.Dsl.didYouMeanHint s cands
 
 /-- The elaborator: resolve + gate + emit (the generated surface is
     listed in the module header). -/
 @[command_elab SchemaLang.Meta.schemaEntityMachine]
 def elabSchemaEntityMachine : CommandElab := fun stx => do
   -- stx = [cmd, name, " for ", recId, " := ", stateCol, " : ", stateTy,
-  --        "initial: ", initId, optRewind, transNode]
+  --        clausesNode] — the clauses arrive in SOURCE ORDER; the sweep
+  -- dispatches on the clause KIND (the Machines.Dsl clause-kit
+  -- discipline: cardinalities here, unknown clauses → did-you-mean).
   let base : TSyntax `ident := ⟨stx[1]!⟩
   let baseName := stx[1]!.getId.toString
   let recId := stx[3]!.getId
   let stateCol := stx[5]!.getId.toString
   let stateTyId : TSyntax `ident := ⟨stx[7]!⟩
-  let initState := stx[9]!.getId.toString
-  let optRw : Syntax := stx[10]!
-  let trs : Array Syntax := stx[11]!.getArgs
+  let legalClauses : List String := ["initial", "rewind", "transition"]
+  let mut initState? : Option Syntax := none
+  let mut optRw : Option Syntax := none
+  let mut trs : Array Syntax := #[]
+  for c in stx[8]!.getArgs do
+    match c.getKind with
+    | ``entityInitialClause =>
+        if initState?.isSome then
+          throwError s!"schema_entity_machine `{baseName}`: duplicate `initial:` clause — exactly one"
+        initState? := some c[1]!
+    | ``entityRewindClause =>
+        if optRw.isSome then
+          throwError s!"schema_entity_machine `{baseName}`: duplicate `rewind:` clause — at most one"
+        optRw := some c
+    | ``entityTransitionClause => trs := trs.push c
+    -- entityUnknownClause = [clauseName-ident, ":", payload-term]
+    | ``entityUnknownClause =>
+        Machines.Dsl.didYouMeanError s!"schema_entity_machine `{baseName}`"
+          (c[0]!.getId.toString) legalClauses
+    | _ => throwUnsupportedSyntax
+  let initState : String ←
+    match initState? with
+    | some i => pure i.getId.toString
+    | none =>
+        throwError s!"schema_entity_machine `{baseName}`: missing `initial:` clause — the lifecycle's start state"
+  -- entityTransitionClause = ["transition:", name, " (", src, " → ", dst, ")"]
+  let rwName? : Option String := optRw.map (fun rw => rw[1]!.getId.toString)
   -- the record: a registered `Item.record`, or did-you-mean (the
   -- `schema_keys` pattern)
   let (recordName, fields) ← resolveKeyRecord "schema_entity_machine" recId
@@ -249,8 +245,6 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
     throwError s!"schema_entity_machine `{baseName}`: no transitions — an \
       entity machine needs at least one `transition:` clause"
   -- the optional rewind edge: a DECLARED transition
-  let rwName? : Option String :=
-    if optRw.getNumArgs > 0 then some optRw[1]!.getId.toString else none
   if let some rwName := rwName? then
     unless rwName ∈ seen do
       throwError s!"schema_entity_machine `{baseName}`: rewind `{rwName}` is \
@@ -269,18 +263,22 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
     /-- The lifecycle rank: the state's CODE (declaration order) —
         W8.4 preset-generated (the rewind clause's acyclicity input). -/
     def $rankId:ident : $stateTyId:ident → Nat $[$rankAlts:matchAlt]*))
-  let rankClause : Option (TSyntax `Machines.Dsl.machineRank) ←
+  Machines.Dsl.addEntourageUnexp stx rankId.getId s!"{baseName}'s rank"
+  -- the rank clause spliced as a 0-or-1 ARRAY (the `$[$x]?` antisplice
+  -- does not parse at a `machineClause*` repetition position — only the
+  -- `*` form does; the W8.4 trap list's kind-ascription sibling)
+  let rankSplice : Array (TSyntax `machineClause) ←
     match rwName? with
-    | none => pure none
-    | some rwName =>
+    | none => pure #[]
+    | some rwName => do
         let rwId := mkIdentFrom stx rwName.toName
-        some <$> `(Machines.Dsl.machineRank|
-          rank: $rankId:ident rewind: $rwId:ident)
-  let machineEvents : Array (TSyntax `Machines.Dsl.machineEvent) ←
+        pure #[← `(machineClause|
+          rank: $rankId:ident rewind: $rwId:ident)]
+  let machineEvents : Array (TSyntax `machineClause) ←
     trData.mapM fun (tName, src, dst) => do
       let srcDot : Lean.Term := dotRef (mkIdentFrom stx src.toName)
       let dstDot : Lean.Term := dotRef (mkIdentFrom stx dst.toName)
-      `(Machines.Dsl.machineEvent|
+      `(machineClause|
           event: $(mkIdentFrom stx tName.toName):ident
             guard: (fun s => s = $srcDot)
             action: (fun _ _ => $dstDot))
@@ -290,9 +288,9 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
     machine! $base:ident where
       State: $stateTyId:ident
       Inv: fun _ => True
-      $[$rankClause]?
+      $[$rankSplice:machineClause]*
       states: [$stateDots,*]
-      $[$machineEvents:machineEvent]*))
+      $[$machineEvents:machineClause]*))
 
   -- Artifact 1b — the generated-surface handles
 
@@ -306,19 +304,23 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
   let labelTyId := mkIdentFrom stx s!"{baseName}.Label".toName
   let stTyT : Lean.Term := ⟨stateTyId.raw⟩
   let lbTyT : Lean.Term := ⟨labelTyId.raw⟩
-  let fieldTerms := (← fields.mapM fieldTermQ).toArray
+  let fieldTerms := (← fields.mapM fieldTerm).toArray
   let fieldsT ← `(term| [$fieldTerms,*])
 
   elabCommand (← `(command|
     theorem $completeId:ident :
         ∀ s : $stateTyId:ident, s ∈ $statesId:ident := by
       intro s; cases s <;> simp [$statesId:ident]))
+  Machines.Dsl.addEntourageUnexp stx completeId.getId
+    s!"{baseName}'s states complete"
   elabCommand (← `(command|
     theorem $honestId:ident :
         ∀ e ∈ $transId:ident,
           Machines.Machine.step? $base:ident e.2.1 e.1 = some e.2.2 :=
       SchemaLang.EntityMachine.trans_honest $base:ident $labelsId:ident
         $statesId:ident $transId:ident rfl))
+  Machines.Dsl.addEntourageUnexp stx honestId.getId
+    s!"{baseName}'s transitions honest"
 
   -- the LawfulBEq bridges: `deriving DecidableEq` does NOT bring
   -- `ReflBEq`/`LawfulBEq`, and the journal/replay laws' instance
@@ -345,7 +347,7 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
   -- index; the `HasCol` instance search breaks under a meta import).
 
   let statusIdx := (fields.findIdx? (·.name == stateCol)).getD 0
-  let suffixT := (← (fields.drop (statusIdx + 1)).mapM fieldTermQ).toArray
+  let suffixT := (← (fields.drop (statusIdx + 1)).mapM fieldTerm).toArray
   let pathT ← (List.range statusIdx).foldlM
     (fun p _ => `(term| SchemaLang.ColPath.there $p))
     (← `(term| SchemaLang.ColPath.here (fs := [$suffixT,*])))
@@ -366,6 +368,8 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
       /-- W8.4 preset: the transition's keyed update — the delta on the
           state column (`SchemaLang.EntityMachine.transitionUpdate`). -/
       def $updName:ident : SchemaLang.SomeUpdate2 := $updRhs))
+    Machines.Dsl.addEntourageUnexp stx updName.getId
+      s!"{baseName}'s {tName} update"
     let oblT ← `(term|
       SchemaLang.EntityMachine.transitionObligations
         $bnE $tnE $updName $fCodeE $tCodeE)
@@ -378,6 +382,8 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
     def $(mkIdentFrom stx (baseName ++ "Obligations").toName) :
         List SchemaLang.EntityMachine.EntityObligation :=
       ([$updTerms,*]).flatten))
+  Machines.Dsl.addEntourageUnexp stx (baseName ++ "Obligations").toName
+    s!"{baseName}'s obligations"
 
   -- Artifact 3 — legality, journal antijoin, replay
 
@@ -389,12 +395,16 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
     def $legalFromId:ident (init : $stTyT)
         (seq : List $lbTyT) : Bool :=
       SchemaLang.EntityMachine.legalFrom $base:ident init seq))
+  Machines.Dsl.addEntourageUnexp stx legalFromId.getId
+    s!"{baseName}'s legality"
   elabCommand (← `(command|
     def $replayId:ident (init : $stTyT) :
         List ($lbTyT × $stTyT × $stTyT) →
           Option $stTyT :=
     SchemaLang.EntityMachine.replay (S := $stTyT) (L := $lbTyT)
       (Machines.Machine.step? $base:ident) init))
+  Machines.Dsl.addEntourageUnexp stx replayId.getId
+    s!"{baseName}'s replay"
   elabCommand (← `(command|
     theorem $(mkIdentFrom stx (baseName ++ "Replay_ok").toName)
         (init : $stTyT)
@@ -407,6 +417,8 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
         (S := $stTyT) (L := $lbTyT)
         (Machines.Machine.step? $base:ident) $transId:ident $honestId:ident
         journal hlegal init hchain))
+  Machines.Dsl.addEntourageUnexp stx (baseName ++ "Replay_ok").toName
+    s!"{baseName}'s replay law"
 
   -- Artifact 4 — the typestate hook
 
@@ -428,9 +440,13 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
   elabCommand (← `(command|
     /-- W8.4 preset: the typestate's Rust struct name per state. -/
     def $stateStructId:ident : $stateTyId:ident → String $[$stateAlts:matchAlt]*))
+  Machines.Dsl.addEntourageUnexp stx stateStructId.getId
+    s!"{baseName}'s state-struct map"
   elabCommand (← `(command|
     /-- W8.4 preset: the typestate's Rust method name per event. -/
     def $eventMethodId:ident : $lbTyT → String $[$eventAlts:matchAlt]*))
+  Machines.Dsl.addEntourageUnexp stx eventMethodId.getId
+    s!"{baseName}'s event-method map"
   let rwField ←
     match rwName? with
     | some rwName => do
@@ -449,6 +465,8 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
         SchemaLang.EntityMachine.TypestateHook $base:ident :=
       SchemaLang.EntityMachine.TypestateHook.mk $rw1 $rw2
         $stateStructId $eventMethodId))
+  Machines.Dsl.addEntourageUnexp stx hookId.getId
+    s!"{baseName}'s typestate hook"
   elabCommand (← `(command|
     theorem $(mkIdentFrom stx (baseName ++ "Hook_edges_legal").toName) :
         ((SchemaLang.EntityMachine.hookEdges $transId:ident
@@ -460,12 +478,16 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
         $transId:ident $tstepId:ident
         (fun e s => $tieId:ident e s ($completeId:ident s))
         $honestId:ident))
+  Machines.Dsl.addEntourageUnexp stx (baseName ++ "Hook_edges_legal").toName
+    s!"{baseName}'s hook-edges law"
   let initDot := dotRef (mkIdentFrom stx initState.toName)
   let srcLabel := (quote s!"SchemaLang.{baseName} (W8.4 entity-machine preset)"
     : Lean.Term)
   elabCommand (← `(command|
     def $(mkIdentFrom stx (baseName ++ "TypestateRust").toName) : String :=
       SchemaLang.EntityMachine.hookRust $hookId $initDot $srcLabel))
+  Machines.Dsl.addEntourageUnexp stx (baseName ++ "TypestateRust").toName
+    s!"{baseName}'s typestate rust"
 
   -- The declaration row (the provenance data)
 
@@ -485,6 +507,8 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
     /-- W8.4 preset: the declaration row (the provenance data). -/
     def $(mkIdentFrom stx (baseName ++ "EntityDecl").toName) :
         SchemaLang.EntityMachine.EntityMachineDecl := $declRhs))
+  Machines.Dsl.addEntourageUnexp stx (baseName ++ "EntityDecl").toName
+    s!"{baseName}'s declaration row"
   pure ()
 
 end SchemaLang.Meta

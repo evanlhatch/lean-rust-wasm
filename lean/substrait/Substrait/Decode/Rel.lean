@@ -443,22 +443,12 @@ theorem replicate_indentUnit (k : Nat) :
   have unit_ofList :
       String.ofList (List.replicate Grammar.indentUnit.length ' ') = Grammar.indentUnit := by
     decide
-  have step : ∀ (pre : String) (n : Nat),
-      (List.range n).foldl (fun acc _ => acc ++ Grammar.indentUnit) pre =
-        pre ++ String.ofList (List.replicate (n * Grammar.indentUnit.length) ' ') := by
-    intro pre n
-    induction n generalizing pre with
-    | zero =>
-      simp [List.range_zero]
-    | succ n ih =>
-      rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, ih pre,
-        String.append_assoc]
-      congr 1
-      rw [Nat.succ_mul, ← List.replicate_append_replicate, String.ofList_append,
-        unit_ofList]
-  unfold Emit.Text.replicate
-  rw [step "" k]
-  simp [String.toList_ofList]
+  have unit_list :
+      Grammar.indentUnit.toList = List.replicate Grammar.indentUnit.length ' ' := by
+    rw [← String.toList_ofList (l := List.replicate Grammar.indentUnit.length ' '),
+      unit_ofList]
+  rw [Emit.Text.replicate, String.toList_join, List.flatMap_replicate, unit_list,
+    List.flatten_replicate_replicate]
 
 /-- **The indent pairing**: a line of `k` indent units followed by
     non-space content reads `indentOf = k * indentUnit.length` — the

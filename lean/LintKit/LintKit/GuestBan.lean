@@ -39,17 +39,8 @@ public meta section
 
 open Lean Meta Linter EnvLinter
 
-@[nolint linter.guestlang.packageNamespace "option declarations must be top-level: the builtin_env_linter registration checks `env.contains <raw option name>` at attribute time (see LintKit.Basic header)"]
-register_option linter.guestlang.guestBan : Bool := {
-  defValue := false
-  descr := "report declarations that would FAIL `@[guest_std]` (banned \
-    guest runtimes: IO/Task/Thunk, Nat arithmetic) — default off: a census \
-    lint, not a gate; the `@[guest]`/`@[guest_std]` attributes enforce"
-}
-
--- Feed the option into v4.33's per-declaration snapshot machinery (the
--- AxiomAllowlist pattern).
-initialize Linter.addEnvLinterOption linter.guestlang.guestBan
+-- The census-linter option: default OFF (the recursiveSimpEqns precedent),
+-- registered below via `register_guestlang_linter` (LintKit.Basic).
 
 namespace LintKit.GuestBan
 
@@ -145,5 +136,11 @@ meta def guestBanLinter : EnvLinter :=
 
 end LintKit.GuestBan
 
-@[builtin_env_linter linter.guestlang.guestBan]
-meta def LintKit.GuestBan.guestBanLinter.reg : EnvLinter := LintKit.GuestBan.guestBanLinter
+-- Census linter, default OFF (see the comment above): the
+-- `register_guestlang_linter` one-liner (LintKit.Basic) keeps the exact
+-- name + default the gates call by.
+register_guestlang_linter linter.guestlang.guestBan
+  LintKit.GuestBan.guestBanLinter default_false
+  "report declarations that would FAIL `@[guest_std]` (banned \
+    guest runtimes: IO/Task/Thunk, Nat arithmetic) — default off: a census \
+    lint, not a gate; the `@[guest]`/`@[guest_std]` attributes enforce"

@@ -255,11 +255,15 @@ theorem parseType_at_depth (t : Proto.PType) (cs : List Char) (r : Proto.PType �
 
 -- ── types: the inversion theorems ─────────────────────────────────────────
 
-/-- The parseType form: a scalar's text parses at fuel 1. -/
-theorem parseType_scalar (c : Substrait.Grammar.ScalarCtor) (rest : List Char)
-    (hrest : rest.head? ≠ some '?') :
-    parseType 1 ((Substrait.Grammar.ScalarCtor.prefix c).toList ++ rest) =
-      some (Substrait.Grammar.ScalarCtor.toPType c .required, rest) := by
+/-- The shared core of the `parseType_scalar` twins (plan §4, family 2):
+    at fuel 1, the scalar's text reduces to the `withNull` suffix match —
+    the nullability split is DEFERRED to the suffix lemma
+    (`withNull_required`/`withNull_nullable`), so the required/nullable
+    twins share this one reduction instead of duplicating the rewrite
+    ladder. -/
+private theorem parseType_scalar_withNull (c : Substrait.Grammar.ScalarCtor) (s : List Char) :
+    parseType 1 ((Substrait.Grammar.ScalarCtor.prefix c).toList ++ s) =
+      withNull (Substrait.Grammar.ScalarCtor.toPType c) s := by
   rw [show (Substrait.Grammar.ScalarCtor.prefix c) =
       Substrait.Grammar.TCtor.prefix (.scalar c) from rfl]
   unfold parseType
@@ -267,12 +271,19 @@ theorem parseType_scalar (c : Substrait.Grammar.ScalarCtor) (rest : List Char)
   -- the match on `some (.scalar c)` is constructor-headed: reduce it, then
   -- the drop peels the prefix
   show withNull (Substrait.Grammar.ScalarCtor.toPType c)
-      (((Substrait.Grammar.TCtor.prefix (.scalar c)).toList ++ rest).drop
-        (Substrait.Grammar.ScalarCtor.prefix c).length) =
-    some (Substrait.Grammar.ScalarCtor.toPType c .required, rest)
+      (List.drop (Substrait.Grammar.ScalarCtor.prefix c).length
+        ((Substrait.Grammar.TCtor.prefix (.scalar c)).toList ++ s)) =
+    withNull (Substrait.Grammar.ScalarCtor.toPType c) s
   rw [show (Substrait.Grammar.ScalarCtor.prefix c).length =
       (Substrait.Grammar.TCtor.prefix (.scalar c)).toList.length from rfl,
     List.drop_left]
+
+/-- The parseType form: a scalar's text parses at fuel 1. -/
+theorem parseType_scalar (c : Substrait.Grammar.ScalarCtor) (rest : List Char)
+    (hrest : rest.head? ≠ some '?') :
+    parseType 1 ((Substrait.Grammar.ScalarCtor.prefix c).toList ++ rest) =
+      some (Substrait.Grammar.ScalarCtor.toPType c .required, rest) := by
+  rw [parseType_scalar_withNull]
   exact withNull_required _ rest hrest
 
 /-- The `(p ++ "?")` text as a char list: the prefix, then the `?`. -/
@@ -287,17 +298,7 @@ private theorem toList_append_question (p : String) (rest : List Char) :
 theorem parseType_scalar_nullable (c : Substrait.Grammar.ScalarCtor) (rest : List Char) :
     parseType 1 ((Substrait.Grammar.ScalarCtor.prefix c).toList ++ '?' :: rest) =
       some (Substrait.Grammar.ScalarCtor.toPType c .nullable, rest) := by
-  rw [show (Substrait.Grammar.ScalarCtor.prefix c) =
-      Substrait.Grammar.TCtor.prefix (.scalar c) from rfl]
-  unfold parseType
-  rw [lexCtor_self]
-  show withNull (Substrait.Grammar.ScalarCtor.toPType c)
-      (((Substrait.Grammar.TCtor.prefix (.scalar c)).toList ++ '?' :: rest).drop
-        (Substrait.Grammar.ScalarCtor.prefix c).length) =
-    some (Substrait.Grammar.ScalarCtor.toPType c .nullable, rest)
-  rw [show (Substrait.Grammar.ScalarCtor.prefix c).length =
-      (Substrait.Grammar.TCtor.prefix (.scalar c)).toList.length from rfl,
-    List.drop_left]
+  rw [parseType_scalar_withNull]
   exact withNull_nullable _ rest
 
 /-- **Literal-name round trip** (W5.3 phase 2a): a scalar literal's type
@@ -321,26 +322,21 @@ theorem parseType_literalTypeName (lt : Proto.LiteralType)
 
 
 
+/-- **The literal-head expect**: `expect tok (tok's chars ++ rest)` — the
+    one-line form of the per-token expect twins (`>`, `, `, `:`, `.`). -/
+theorem expect_cons_tok (p : String) (cs rest : List Char)
+    (hp : p.toList = cs) : expect p (cs ++ rest) = some rest := by
+  rw [show (cs ++ rest) = p.toList ++ rest from by rw [hp]]
+  exact expect_self p rest
+
 /-- `expect ">"` on a literal `>` head. -/
-private theorem expect_gt_cons (rest : List Char) : expect ">" ('>' :: rest) = some rest := by
-  unfold expect startsWith
-  have hpre : ">".toList.isPrefixOf ('>' :: rest) = true := by rfl
-  rw [if_pos hpre]
-  rfl
+private theorem expect_gt_cons (rest : List Char) : expect ">" ('>' :: rest) = some rest :=
+  expect_cons_tok ">" ['>'] rest (by decide)
 
 /-- `expect ", "` on a literal `, ` head. -/
-private theorem expect_comma_sp (rest : List Char) : expect ", " (',' :: ' ' :: rest) = some rest := by
-  unfold expect startsWith
-  have hpre : ", ".toList.isPrefixOf (',' :: ' ' :: rest) = true := by rfl
-  rw [if_pos hpre]
-  rfl
-
-/-- `(p ++ s).toList ++ tail = p.toList ++ (s.toList ++ tail)` — the prefix
-    split the if-chain rewrites consume. -/
-private theorem toList_head_eq (p s : String) (tail : List Char) :
-    (p ++ s).toList ++ tail = p.toList ++ (s.toList ++ tail) := by
-  rw [String.toList_append]
-  rw [List.append_assoc]
+private theorem expect_comma_sp (rest : List Char) :
+    expect ", " (',' :: ' ' :: rest) = some rest :=
+  expect_cons_tok ", " [',', ' '] rest (by decide)
 
 /-- `(a ++ b ++ c).toList` split fully. -/
 theorem toList_append3 (a b c : String) :
@@ -499,7 +495,49 @@ theorem scalarT (c : Substrait.Grammar.ScalarCtor) (n : Proto.Nullability) (rest
         simp [Emit.Text.nullSuffix, Substrait.Grammar.ScalarCtor.toPType,
           Proto.PType.nullability] at hemit)
 
-/-- The decimal inversion: `decimal<P,S>` scans back (both nullabilities). -/
+/-- **The decimal scanner-composition law**: the full `decimal<P,S>` text —
+    prefix, digits, `, `, digits, `>` — reduces at fuel 1 to the
+    nullability-suffix consumer `withNull` over the ABSTRACT tail. ONE proof
+    for the required/nullable decimal twins (applied at `tail` /
+    `'?' :: tail`; the withNull arm picks the nullability). -/
+private theorem decimal_full (p s : Nat) (tail : List Char) :
+    parseType 1 (("decimal<" ++ toString p ++ "," ++ toString s ++ ">").toList ++ tail) =
+      withNull (Proto.PType.decimal p s) tail := by
+  unfold parseType
+  have hsplit : (("decimal<" ++ toString p ++ "," ++ toString s ++ ">").toList ++ tail) =
+      (Substrait.Grammar.TCtor.prefix .decimal).toList ++
+        ((toString p).toList ++ ',' :: ((toString s).toList ++ '>' :: tail)) := by
+    rw [show Substrait.Grammar.TCtor.prefix .decimal = "decimal<" from rfl]
+    rw [String.toList_append, String.toList_append, String.toList_append]
+    simp [List.append_assoc]
+  rw [hsplit, lexCtor_self]
+  have hdrop : List.drop 8 ((Substrait.Grammar.TCtor.prefix .decimal).toList ++
+      ((toString p).toList ++ ',' :: ((toString s).toList ++ '>' :: tail))) =
+      (toString p).toList ++ ',' :: ((toString s).toList ++ '>' :: tail) := by
+    simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
+  rw [hdrop]
+  simp
+  have hA : notDigitHead (',' :: ((toString s).toList ++ '>' :: tail)) :=
+    Or.inr ⟨',', (toString s).toList ++ '>' :: tail, rfl, by decide⟩
+  have hp : scanNat (Nat.toDigits 10 p ++ ',' :: (Nat.toDigits 10 s ++ '>' :: tail)) =
+      some (p, ',' :: (Nat.toDigits 10 s ++ '>' :: tail)) := by
+    simpa using (scanNat_of_toString p (',' :: ((toString s).toList ++ '>' :: tail)) hA)
+  rw [hp]
+  simp
+  rw [comma_prepend (Nat.toDigits 10 s ++ '>' :: tail)]
+  rw [expect_self "," (Nat.toDigits 10 s ++ '>' :: tail)]
+  simp
+  have hB : notDigitHead ('>' :: tail) :=
+    Or.inr ⟨'>', tail, rfl, by decide⟩
+  have hs : scanNat (Nat.toDigits 10 s ++ '>' :: tail) = some (s, '>' :: tail) := by
+    simpa using (scanNat_of_toString s ('>' :: tail) hB)
+  rw [hs]
+  simp
+  rw [gt_prepend tail]
+  rw [expect_self ">" tail]
+
+/-- The decimal inversion: `decimal<P,S>` scans back (both nullabilities;
+    the body is `decimal_full` at the abstract tail). -/
 private theorem decimalT (p s : Nat) (n : Proto.Nullability) (rest : List Char)
     (hrest : rest.head? ≠ some '?')
     (hemit : Emit.Text.typeText (.decimal p s n) = .ok b) :
@@ -510,64 +548,44 @@ private theorem decimalT (p s : Nat) (n : Proto.Nullability) (rest : List Char)
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
     simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
     have hb : b = "decimal<" ++ toString p ++ "," ++ toString s ++ ">" := hemit.symm
-    rw [hb]
-    unfold parseType
-    simp
-    have hA : notDigitHead (',' :: (Nat.toDigits 10 s ++ '>' :: rest)) := by
-      right
-      exact ⟨',', Nat.toDigits 10 s ++ '>' :: rest, rfl, by decide⟩
-    have hp : scanNat (Nat.toDigits 10 p ++ ',' :: (Nat.toDigits 10 s ++ '>' :: rest)) =
-        some (p, ',' :: (Nat.toDigits 10 s ++ '>' :: rest)) := by
-      simpa using (scanNat_of_toString p (',' :: (Nat.toDigits 10 s ++ '>' :: rest)) hA)
-    rw [hp]
-    simp
-    rw [comma_prepend (Nat.toDigits 10 s ++ '>' :: rest)]
-    rw [expect_self "," (Nat.toDigits 10 s ++ '>' :: rest)]
-    simp
-    have hB : notDigitHead ('>' :: rest) := by
-      right
-      exact ⟨'>', rest, rfl, by decide⟩
-    have hs : scanNat (Nat.toDigits 10 s ++ '>' :: rest) = some (s, '>' :: rest) := by
-      simpa using (scanNat_of_toString s ('>' :: rest) hB)
-    rw [hs]
-    simp
-    rw [gt_prepend rest]
-    rw [expect_self ">" rest]
+    rw [hb, decimal_full]
     exact withNull_required (.decimal p s) rest hrest
   | nullable =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
     simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
     have hb : b = "decimal<" ++ toString p ++ "," ++ toString s ++ ">" ++ "?" := hemit.symm
-    rw [hb]
-    unfold parseType
-    simp
-    have hA : notDigitHead (',' :: (Nat.toDigits 10 s ++ '>' :: '?' :: rest)) := by
-      right
-      exact ⟨',', Nat.toDigits 10 s ++ '>' :: '?' :: rest, rfl, by decide⟩
-    have hp : scanNat (Nat.toDigits 10 p ++ ',' :: (Nat.toDigits 10 s ++ '>' :: '?' :: rest)) =
-        some (p, ',' :: (Nat.toDigits 10 s ++ '>' :: '?' :: rest)) := by
-      simpa using (scanNat_of_toString p (',' :: (Nat.toDigits 10 s ++ '>' :: '?' :: rest)) hA)
-    rw [hp]
-    simp
-    rw [comma_prepend (Nat.toDigits 10 s ++ '>' :: '?' :: rest)]
-    rw [expect_self "," (Nat.toDigits 10 s ++ '>' :: '?' :: rest)]
-    simp
-    have hB : notDigitHead ('>' :: '?' :: rest) := by
-      right
-      exact ⟨'>', '?' :: rest, rfl, by decide⟩
-    have hs : scanNat (Nat.toDigits 10 s ++ '>' :: '?' :: rest) = some (s, '>' :: '?' :: rest) := by
-      simpa using (scanNat_of_toString s ('>' :: '?' :: rest) hB)
-    rw [hs]
-    simp
-    rw [gt_prepend ('?' :: rest)]
-    rw [expect_self ">" ('?' :: rest)]
-    simp
+    rw [hb, toList_append_question, decimal_full]
     exact withNull_nullable (.decimal p s) rest
   | unspecified =>
     simp [Emit.Text.typeText, Emit.Text.typeTextBase, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
 
+/-- **The list scanner-composition law**: `list<ES>` reduces at fuel
+    `typeDepth e + 1` to the nullability-suffix consumer over the ABSTRACT
+    tail — ONE proof for the required/nullable list twins. -/
+private theorem list_full (e : Proto.PType) (es : String) (tail : List Char)
+    (hie : parseType (typeDepth e) (es.toList ++ ('>' :: tail)) = some (e, '>' :: tail)) :
+    parseType (typeDepth e + 1) (("list<" ++ es ++ ">").toList ++ tail) =
+      withNull (Proto.PType.list e) tail := by
+  unfold parseType
+  have hcv : (("list<" ++ es ++ ">").toList ++ tail) =
+      (Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ tail) := by
+    simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
+  rw [hcv, lexCtor_self]
+  have hdrop : List.drop 5
+      ((Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ tail)) =
+      (es ++ ">").toList ++ tail := by
+    simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
+  rw [hdrop]
+  have hcomb : parseType (typeDepth e) ((es ++ ">").toList ++ tail) = some (e, '>' :: tail) := by
+    rw [String.toList_append, List.append_assoc]
+    exact hie
+  rw [hcomb]
+  dsimp
+  rw [expect_gt_cons tail]
+
 /-- The list inversion: `list<T>` scans back. The element hypothesis
-    `hie` is the master theorem restricted to `e` (depth-bounded). -/
+    `hie` is the master theorem restricted to `e` (depth-bounded); the body
+    is `list_full` at the abstract tail. -/
 private theorem listT (e : Proto.PType) (n : Proto.Nullability) (rest : List Char)
     (hrest : rest.head? ≠ some '?')
     (hie : ∀ (b' : String) (rest' : List Char), rest'.head? ≠ some '?' →
@@ -584,28 +602,7 @@ private theorem listT (e : Proto.PType) (n : Proto.Nullability) (rest : List Cha
     | ok es =>
       simp [he] at hemit
       have hb : b = "list<" ++ es ++ ">" := hemit.symm
-      rw [hb]
-      unfold parseType
-      -- the lexer folds the closed ctor table; `list<…` self-lexes
-      have hcv : (("list<" ++ es ++ ">").toList ++ rest) =
-          (Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
-      rw [hcv, lexCtor_self]
-      have hdrop : List.drop 5
-          ((Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">").toList ++ rest)) =
-          (es ++ ">").toList ++ rest := by
-        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
-      rw [hdrop]
-      have hcomb : parseType (typeDepth e) ((es ++ ">").toList ++ rest) =
-          some (e, '>' :: rest) := by
-        have h0 := hie es ('>' :: rest) (by simp) he
-        rw [String.toList_append]
-        simp [List.append_assoc]
-        exact h0
-      rw [hcomb]
-      dsimp
-      rw [expect_gt_cons rest]
-      dsimp
+      rw [hb, list_full e es rest (hie es ('>' :: rest) (by simp) he)]
       exact withNull_required (.list e) rest hrest
   | nullable =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
@@ -615,30 +612,8 @@ private theorem listT (e : Proto.PType) (n : Proto.Nullability) (rest : List Cha
     | ok es =>
       simp [he] at hemit
       have hb : b = "list<" ++ es ++ ">" ++ "?" := hemit.symm
-      rw [hb]
-      unfold parseType
-      -- the scalar table-fold skips `list<…` (conversion to the literal char
-      -- form + the param-prefix complement lemma), then the only preceding
-      -- parameterized check (`decimal<`) is skipped by prefix mismatch
-      have hcv : (("list<" ++ es ++ ">" ++ "?").toList ++ rest) =
-          (Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">" ++ "?").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
-      rw [hcv, lexCtor_self]
-      have hdrop : List.drop 5
-          ((Substrait.Grammar.TCtor.prefix .list).toList ++ ((es ++ ">" ++ "?").toList ++ rest)) =
-          (es ++ ">" ++ "?").toList ++ rest := by
-        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
-      rw [hdrop]
-      have hcomb : parseType (typeDepth e) ((es ++ ">" ++ "?").toList ++ rest) =
-          some (e, '>' :: '?' :: rest) := by
-        have h0 := hie es ('>' :: '?' :: rest) (by simp) he
-        rw [String.toList_append, String.toList_append]
-        simp [List.append_assoc]
-        exact h0
-      rw [hcomb]
-      dsimp
-      rw [expect_gt_cons ('?' :: rest)]
-      dsimp
+      rw [hb, toList_append_question,
+        list_full e es ('?' :: rest) (hie es ('>' :: '?' :: rest) (by simp) he)]
       exact withNull_nullable (.list e) rest
   | unspecified =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
@@ -647,7 +622,49 @@ private theorem listT (e : Proto.PType) (n : Proto.Nullability) (rest : List Cha
     | ok es =>
       simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
 
-/-- The map inversion: `map<K, V>` scans back (both nullabilities). -/
+/-- **The map scanner-composition law**: `map<KS, VS>` reduces at fuel
+    `typeDepth k + typeDepth v + 1` to the nullability-suffix consumer over
+    the ABSTRACT tail — ONE proof for the required/nullable map twins (the
+    key/val fuel-lifting via `parseType_mono_of_le` lives here once). -/
+private theorem map_full (k v : Proto.PType) (ks vs : String) (tail : List Char)
+    (hik : parseType (typeDepth k)
+        (ks.toList ++ (',' :: ' ' :: (vs.toList ++ ('>' :: tail)))) =
+      some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: tail))))
+    (hiv : parseType (typeDepth v) (vs.toList ++ ('>' :: tail)) = some (v, '>' :: tail)) :
+    parseType (typeDepth k + typeDepth v + 1)
+        (("map<" ++ ks ++ ", " ++ vs ++ ">").toList ++ tail) =
+      withNull (Proto.PType.map k v) tail := by
+  unfold parseType
+  have hcv : (("map<" ++ ks ++ ", " ++ vs ++ ">").toList ++ tail) =
+      (Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ tail) := by
+    simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
+  rw [hcv, lexCtor_self]
+  have hdrop : List.drop 4
+      ((Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ tail)) =
+      (ks ++ ", " ++ vs ++ ">").toList ++ tail := by
+    simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
+  rw [hdrop]
+  have hkey : parseType (typeDepth k) ((ks ++ ", " ++ vs ++ ">").toList ++ tail) =
+      some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: tail))) := by
+    rw [String.toList_append, String.toList_append, String.toList_append]
+    simp [List.append_assoc]
+    exact hik
+  have hkeyF : parseType (typeDepth k + typeDepth v) ((ks ++ ", " ++ vs ++ ">").toList ++ tail) =
+      some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: tail))) := by
+    exact parseType_mono_of_le (typeDepth k) (typeDepth v) _ _ hkey
+  rw [hkeyF]
+  dsimp
+  rw [expect_comma_sp (vs.toList ++ '>' :: tail)]
+  dsimp
+  have hvalF : parseType (typeDepth k + typeDepth v) (vs.toList ++ ('>' :: tail)) =
+      some (v, '>' :: tail) := by
+    simpa [Nat.add_comm] using (parseType_mono_of_le (typeDepth v) (typeDepth k) _ _ hiv)
+  rw [hvalF]
+  dsimp
+  rw [expect_gt_cons tail]
+
+/-- The map inversion: `map<K, V>` scans back (both nullabilities; the
+    body is `map_full` at the abstract tail). -/
 private theorem mapT (k v : Proto.PType) (n : Proto.Nullability) (rest : List Char)
     (hrest : rest.head? ≠ some '?')
     (hik : ∀ (b' : String) (rest' : List Char), rest'.head? ≠ some '?' →
@@ -669,40 +686,9 @@ private theorem mapT (k v : Proto.PType) (n : Proto.Nullability) (rest : List Ch
       | ok vs =>
         simp [he, he2] at hemit
         have hb : b = "map<" ++ ks ++ ", " ++ vs ++ ">" := hemit.symm
-        rw [hb]
-        unfold parseType
-        have hcv : (("map<" ++ ks ++ ", " ++ vs ++ ">").toList ++ rest) =
-            (Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ rest) := by
-          simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
-        rw [hcv, lexCtor_self]
-        have hdrop : List.drop 4
-            ((Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">").toList ++ rest)) =
-            (ks ++ ", " ++ vs ++ ">").toList ++ rest := by
-          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
-        rw [hdrop]
-        have hkey : parseType (typeDepth k) ((ks ++ ", " ++ vs ++ ">").toList ++ rest) =
-            some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: rest))) := by
-          have h0 := hik ks (',' :: ' ' :: (vs.toList ++ ('>' :: rest))) (by simp) he
-          rw [String.toList_append, String.toList_append, String.toList_append]
-          simp [List.append_assoc]
-          exact h0
-        have hkeyF : parseType (typeDepth k + typeDepth v) ((ks ++ ", " ++ vs ++ ">").toList ++ rest) =
-            some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: rest))) := by
-          exact parseType_mono_of_le (typeDepth k) (typeDepth v) _ _ hkey
-        rw [hkeyF]
-        dsimp
-        rw [expect_comma_sp (vs.toList ++ '>' :: rest)]
-        dsimp
-        have hval : parseType (typeDepth v) (vs.toList ++ ('>' :: rest)) =
-            some (v, '>' :: rest) := by
-          exact hiv vs ('>' :: rest) (by simp) he2
-        have hvalF : parseType (typeDepth k + typeDepth v) (vs.toList ++ ('>' :: rest)) =
-            some (v, '>' :: rest) := by
-          simpa [Nat.add_comm] using (parseType_mono_of_le (typeDepth v) (typeDepth k) _ _ hval)
-        rw [hvalF]
-        dsimp
-        rw [expect_gt_cons rest]
-        dsimp
+        rw [hb, map_full k v ks vs rest
+          (hik ks (',' :: ' ' :: (vs.toList ++ ('>' :: rest))) (by simp) he)
+          (hiv vs ('>' :: rest) (by simp) he2)]
         exact withNull_required (.map k v) rest hrest
   | nullable =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
@@ -715,40 +701,9 @@ private theorem mapT (k v : Proto.PType) (n : Proto.Nullability) (rest : List Ch
       | ok vs =>
         simp [he, he2] at hemit
         have hb : b = "map<" ++ ks ++ ", " ++ vs ++ ">" ++ "?" := hemit.symm
-        rw [hb]
-        unfold parseType
-        have hcv : (("map<" ++ ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) =
-            (Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) := by
-          simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
-        rw [hcv, lexCtor_self]
-        have hdrop : List.drop 4
-            ((Substrait.Grammar.TCtor.prefix .map).toList ++ ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest)) =
-            (ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest := by
-          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
-        rw [hdrop]
-        have hkey : parseType (typeDepth k) ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) =
-            some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: '?' :: rest))) := by
-          have h0 := hik ks (',' :: ' ' :: (vs.toList ++ ('>' :: '?' :: rest))) (by simp) he
-          rw [String.toList_append, String.toList_append, String.toList_append]
-          simp [List.append_assoc]
-          exact h0
-        have hkeyF : parseType (typeDepth k + typeDepth v) ((ks ++ ", " ++ vs ++ ">" ++ "?").toList ++ rest) =
-            some (k, ',' :: ' ' :: (vs.toList ++ ('>' :: '?' :: rest))) := by
-          exact parseType_mono_of_le (typeDepth k) (typeDepth v) _ _ hkey
-        rw [hkeyF]
-        dsimp
-        rw [expect_comma_sp (vs.toList ++ '>' :: '?' :: rest)]
-        dsimp
-        have hval : parseType (typeDepth v) (vs.toList ++ ('>' :: '?' :: rest)) =
-            some (v, '>' :: '?' :: rest) := by
-          exact hiv vs ('>' :: '?' :: rest) (by simp) he2
-        have hvalF : parseType (typeDepth k + typeDepth v) (vs.toList ++ ('>' :: '?' :: rest)) =
-            some (v, '>' :: '?' :: rest) := by
-          simpa [Nat.add_comm] using (parseType_mono_of_le (typeDepth v) (typeDepth k) _ _ hval)
-        rw [hvalF]
-        dsimp
-        rw [expect_gt_cons ('?' :: rest)]
-        dsimp
+        rw [hb, toList_append_question, map_full k v ks vs ('?' :: rest)
+          (hik ks (',' :: ' ' :: (vs.toList ++ ('>' :: '?' :: rest))) (by simp) he)
+          (hiv vs ('>' :: '?' :: rest) (by simp) he2)]
         exact withNull_nullable (.map k v) rest
   | unspecified =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
@@ -844,14 +799,10 @@ private theorem typeTextBase_nonempty (t : Proto.PType) (b0 : String)
     simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h
     intro hz
     exact (by decide : "boolean".toList ≠ []) (by simpa [h] using hz)
-  | i8 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i16 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | string n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | binary n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | i8 n | i16 n | i32 n | i64 n | fp32 n | fp64 n | string n | binary n =>
+    simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h
+    rw [h.symm]
+    decide
   | decimal p s n =>
     simp [Emit.Text.typeTextBase] at h
     rw [h.symm]
@@ -1009,13 +960,6 @@ private theorem sep_toList_head (s : String) (l : List String) (hs : s.toList �
     | nil => exact (hs hs').elim
     | cons c cs => rfl
 
-/-- The head of a nonempty append is the head of the prefix. -/
-private theorem head_append_ne (l l' : List Char) (hl : l ≠ []) :
-    (l ++ l').head? = l.head? := by
-  cases hl' : l with
-  | nil => exact (hl hl').elim
-  | cons c cs => rfl
-
 /-- The separator text is nonempty and does not start with `>`. -/
 private theorem sep_toList_ne_gt (s : String) (l : List String)
     (hs : s.toList ≠ [] ∧ s.toList.head? ≠ some '>') :
@@ -1171,15 +1115,10 @@ private theorem typeText_base_head (t : Proto.PType) (b0 : String)
   | userDefined a ps n =>
     rw [Emit.Text.typeTextBase.eq_def] at h
     simp at h
-  | bool n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i8 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i16 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | i64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp32 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | fp64 n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | string n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
-  | binary n => simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h; rw [h.symm]; decide
+  | bool n | i8 n | i16 n | i32 n | i64 n | fp32 n | fp64 n | string n | binary n =>
+    simp [Emit.Text.typeTextBase, Substrait.Grammar.ScalarCtor.prefix] at h
+    rw [h.symm]
+    decide
   | decimal p s n =>
     simp [Emit.Text.typeTextBase] at h
     rw [h.symm]
@@ -1245,7 +1184,125 @@ private theorem typeText_head (t : Proto.PType) (s : String) (h : Emit.Text.type
           have hb0gt : b0.toList.head? = some '>' := by rw [hb0h, hcd]
           exact hk.2 hb0gt
 
-/-- The struct inversion: `struct<T,…>` (and the empty `struct<>`) scans back. -/
+/-- **The struct scanner-composition law**: `struct<SEP>` reduces at fuel
+    `foldl-max + 1` to the nullability-suffix consumer over the ABSTRACT
+    tail — ONE proof for the required/nullable struct twins (the
+    `parseTypeList` inversion + the `expect ">"` fail-side argument live
+    here once). -/
+private theorem struct_full (fs : List Proto.PType) (ts : List String) (tail : List Char)
+    (he : fs.mapM Emit.Text.typeText = .ok ts)
+    (hif : ∀ (f : Proto.PType), f ∈ fs → ∀ (b' : String) (rest' : List Char), rest'.head? ≠ some '?' →
+      Emit.Text.typeText f = .ok b' → parseType (typeDepth f) (b'.toList ++ rest') = some (f, rest')) :
+    parseType (fs.foldl (fun m x => max m (typeDepth x)) 0 + 1)
+        (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ tail) =
+      withNull (Proto.PType.struct fs) tail := by
+  unfold parseType
+  have hcv : (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ tail) =
+      (Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ tail) := by
+    simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
+  rw [hcv, lexCtor_self]
+  have hdrop : List.drop 7
+      ((Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ tail)) =
+      (Emit.Text.sep ", " ts ++ ">").toList ++ tail := by
+    simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
+  rw [hdrop]
+  -- the parseTypeList lfuel counts the input length; restore the
+  -- string-append form the downstream lemmas are stated against
+  rw [show ((Substrait.Grammar.TCtor.prefix .struct).toList ++
+          ((Emit.Text.sep ", " ts ++ ">").toList ++ tail)).length =
+        (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ tail).length from by
+      simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]]
+  cases ts with
+  | nil =>
+    have hfs : fs = [] := by
+      have hl := mapM_length fs Emit.Text.typeText [] he
+      cases fs with
+      | nil => rfl
+      | cons x xs => simp at hl
+    subst fs
+    simp [Emit.Text.sep]
+    rw [gt_prepend tail]
+    rw [expect_self ">" tail]
+  | cons t ts' =>
+    cases fs with
+    | nil => simp at he
+    | cons f fs0 =>
+      rcases (mapM_cons_ok f fs0 Emit.Text.typeText (t :: ts') he) with ⟨tb, tsr, hft, hfr, hts⟩
+      have ht : t = tb := (List.cons.inj hts).1
+      have htsr : ts' = tsr := (List.cons.inj hts).2
+      rw [ht, htsr] at he
+      rw [ht, htsr]
+      have hth := typeText_head f tb hft
+      have hsn := sep_toList_ne_gt tb tsr hth
+      have hargne : ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail) ≠ [] := by
+        intro hz
+        have h2 := (List.append_eq_nil_iff.mp hz).1
+        rw [String.toList_append] at h2
+        have h3 := (List.append_eq_nil_iff.mp h2).1
+        exact hsn.1 h3
+      have harghead : ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail).head? ≠ some '>' := by
+        have hne : (Emit.Text.sep ", " (tb :: tsr)).toList ≠ [] := hsn.1
+        have hhd : (Emit.Text.sep ", " (tb :: tsr)).toList.head? ≠ some '>' := hsn.2
+        have hx : (Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail =
+            (Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ tail) := by
+          rw [String.toList_append, List.append_assoc]
+        rw [hx]
+        cases hsep : (Emit.Text.sep ", " (tb :: tsr)).toList with
+        | nil => exact absurd hsep hne
+        | cons c cs => simp_all
+      have htgt : expect ">" ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail) = none := by
+        exact expect_gt_fail_head ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail) ⟨hargne, harghead⟩
+      rw [htgt]
+      dsimp
+      have hinput : ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail) =
+          (Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ tail) := by
+        rw [String.toList_append]
+        rw [List.append_assoc]
+      rw [hinput]
+      have hinpLen : (f :: fs0).length ≤
+          ((("struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail).length) := by
+        have hm : (f :: fs0).length = (tb :: tsr).length := by
+          simpa using (mapM_length (f :: fs0) Emit.Text.typeText (tb :: tsr) he).symm
+        have hsepl := sep_len_ge (tb :: tsr) (by simp) (fun s hs => mapM_ok_mem (f :: fs0) (tb :: tsr) he s hs)
+        calc
+          (f :: fs0).length = (tb :: tsr).length := hm
+          _ ≤ (Emit.Text.sep ", " (tb :: tsr)).toList.length := hsepl
+          _ ≤ ((("struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail).length) := by
+            rw [String.toList_append, String.toList_append]
+            simp only [List.length_append]
+            have hc8 : (("struct<".toList).length) ≥ 7 := by decide
+            omega
+      have hall : ∀ x ∈ f :: fs0, typeDepth x ≤ (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 := by
+        intro x hx
+        exact typeDepth_le_foldl_max hx
+      have hafterRest : (">".toList ++ tail).head? ≠ some '?' ∧
+          (">".toList ++ tail).head? ≠ some ',' := by
+        simp
+      -- the parser's tfuel for the struct branch is the OUTER fuel =
+      -- foldl over (f :: fs0) from 0 = foldl over fs0 from (max 0 (typeDepth f))
+      have hfold : (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 =
+          fs0.foldl (fun m x => max m (typeDepth x)) (max 0 (typeDepth f)) := rfl
+      have hplt : parseTypeList ((( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail).length + 1)
+            (fs0.foldl (fun m x => max m (typeDepth x)) (max 0 (typeDepth f)))
+            ((Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ tail)) =
+          some (f :: fs0, ">".toList ++ tail) := by
+        have h := parseTypeList_invert (f :: fs0)
+          ((f :: fs0).foldl (fun m x => max m (typeDepth x)) 0)
+          (">".toList ++ tail)
+          hafterRest hall
+          (fun x hx tx htx rx hrx => hif x hx tx rx hrx htx)
+          (tb :: tsr) he (by simp)
+          ((("struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ tail).length)
+          hinpLen
+        rw [hfold] at h
+        exact h
+      rw [hplt]
+      dsimp
+      rw [gt_prepend tail]
+      rw [expect_self ">" tail]
+
+/-- The struct inversion: `struct<T,…>` (and the empty `struct<>`) scans
+    back (the body is `struct_full` at the abstract tail). -/
 private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : List Char)
     (hrest : rest.head? ≠ some '?')
     (hif : ∀ (f : Proto.PType), f ∈ fs → ∀ (b' : String) (rest' : List Char), rest'.head? ≠ some '?' →
@@ -1262,117 +1319,9 @@ private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : 
     | ok ts =>
       simp [he] at hemit
       have hb : b = "struct<" ++ Emit.Text.sep ", " ts ++ ">" := hemit.symm
-      rw [hb]
-      unfold parseType
-      have hcv : (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ rest) =
-          (Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
-      rw [hcv, lexCtor_self]
-      have hdrop : List.drop 7
-          ((Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">").toList ++ rest)) =
-          (Emit.Text.sep ", " ts ++ ">").toList ++ rest := by
-        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
-      rw [hdrop]
-      -- the parseTypeList lfuel counts the input length; restore the
-      -- string-append form the downstream lemmas are stated against
-      rw [show ((Substrait.Grammar.TCtor.prefix .struct).toList ++
-              ((Emit.Text.sep ", " ts ++ ">").toList ++ rest)).length =
-            (("struct<" ++ Emit.Text.sep ", " ts ++ ">").toList ++ rest).length from by
-          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]]
-      cases ts with
-      | nil =>
-        have hfs : fs = [] := by
-          have hl := mapM_length fs Emit.Text.typeText [] he
-          cases fs with
-          | nil => rfl
-          | cons x xs => simp at hl
-        subst fs
-        simp [Emit.Text.sep]
-        rw [gt_prepend rest]
-        rw [expect_self ">" rest]
-        simp
-        exact withNull_required (.struct []) rest hrest
-      | cons t ts' =>
-        cases fs with
-        | nil => simp at he
-        | cons f fs0 =>
-          rcases (mapM_cons_ok f fs0 Emit.Text.typeText (t :: ts') he) with ⟨tb, tsr, hft, hfr, hts⟩
-          have ht : t = tb := (List.cons.inj hts).1
-          have htsr : ts' = tsr := (List.cons.inj hts).2
-          rw [ht, htsr] at he
-          rw [ht, htsr]
-          have hth := typeText_head f tb hft
-          have hsn := sep_toList_ne_gt tb tsr hth
-          have hargne : ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest) ≠ [] := by
-            intro hz
-            -- hz : (sep ++ ">").toList ++ rest = [] → both components are []
-            have h2 := (List.append_eq_nil_iff.mp hz).1
-            -- h2 : (sep ++ ">").toList = [] → sep's toList = []
-            rw [String.toList_append] at h2
-            have h3 := (List.append_eq_nil_iff.mp h2).1
-            exact hsn.1 h3
-          have harghead : ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest).head? ≠ some '>' := by
-            -- the combined text starts with sep's head (sep is nonempty), which ≠ '>'
-            have hne : (Emit.Text.sep ", " (tb :: tsr)).toList ≠ [] := hsn.1
-            have hhd : (Emit.Text.sep ", " (tb :: tsr)).toList.head? ≠ some '>' := hsn.2
-            have hx : (Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest =
-                (Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ rest) := by
-              rw [String.toList_append, List.append_assoc]
-            rw [hx]
-            cases hsep : (Emit.Text.sep ", " (tb :: tsr)).toList with
-            | nil => exact absurd hsep hne
-            | cons c cs => simp_all
-          have htgt : expect ">" ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest) = none := by
-            exact expect_gt_fail_head ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest) ⟨hargne, harghead⟩
-          rw [htgt]
-          dsimp
-          -- parseTypeList inversion: sep text + ">" + rest
-          have hinput : ((Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest) =
-              (Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ rest) := by
-            rw [String.toList_append]
-            rw [List.append_assoc]
-          rw [hinput]
-          have hinpLen : (f :: fs0).length ≤ (( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest).length := by
-            have hm : (f :: fs0).length = (tb :: tsr).length := by
-              simpa using (mapM_length (f :: fs0) Emit.Text.typeText (tb :: tsr) he).symm
-            have hsepl := sep_len_ge (tb :: tsr) (by simp) (fun s hs => mapM_ok_mem (f :: fs0) (tb :: tsr) he s hs)
-            calc
-              (f :: fs0).length = (tb :: tsr).length := hm
-              _ ≤ (Emit.Text.sep ", " (tb :: tsr)).toList.length := hsepl
-              _ ≤ (( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest).length := by
-                rw [String.toList_append, String.toList_append]
-                simp only [List.length_append]
-                have hc8 : (("struct<".toList).length) ≥ 7 := by decide
-                omega
-          have hall : ∀ x ∈ f :: fs0, typeDepth x ≤ (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 := by
-            intro x hx
-            exact typeDepth_le_foldl_max hx
-          have hafterRest : (">".toList ++ rest).head? ≠ some '?' ∧ (">".toList ++ rest).head? ≠ some ',' := by
-            simp
-          -- the parser's tfuel for the struct branch is the OUTER fuel =
-          -- foldl over (f :: fs0) from 0 = foldl over fs0 from (max 0 (typeDepth f))
-          have hfold : (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 =
-              fs0.foldl (fun m x => max m (typeDepth x)) (max 0 (typeDepth f)) := rfl
-          have hplt : parseTypeList ((( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest).length + 1)
-                (fs0.foldl (fun m x => max m (typeDepth x)) (max 0 (typeDepth f)))
-                ((Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ rest)) =
-              some (f :: fs0, ">".toList ++ rest) := by
-            have h := parseTypeList_invert (f :: fs0)
-              ((f :: fs0).foldl (fun m x => max m (typeDepth x)) 0)
-              (">".toList ++ rest)
-              hafterRest hall
-              (fun x hx tx htx rx hrx => hif x hx tx rx hrx htx)
-              (tb :: tsr) he (by simp)
-              (("struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">").toList ++ rest).length
-              hinpLen
-            rw [hfold] at h
-            exact h
-          rw [hplt]
-          dsimp
-          rw [gt_prepend rest]
-          rw [expect_self ">" rest]
-          dsimp
-          exact withNull_required (.struct (f :: fs0)) rest hrest
+      rw [hb, struct_full fs ts rest he
+        (fun f hf b' rest' hr' he' => hif f hf b' rest' hr' he')]
+      exact withNull_required (.struct fs) rest hrest
   | nullable =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
     simp [Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
@@ -1381,123 +1330,15 @@ private theorem structT (fs : List Proto.PType) (n : Proto.Nullability) (rest : 
     | ok ts =>
       simp [he] at hemit
       have hb : b = "struct<" ++ Emit.Text.sep ", " ts ++ ">" ++ "?" := hemit.symm
-      rw [hb]
-      unfold parseType
-      have hcv : (("struct<" ++ Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest) =
-          (Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest) := by
-        simp [String.toList_append, List.append_assoc, Substrait.Grammar.TCtor.prefix]
-      rw [hcv, lexCtor_self]
-      have hdrop : List.drop 7
-          ((Substrait.Grammar.TCtor.prefix .struct).toList ++ ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest)) =
-          (Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest := by
-        simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]
-      rw [hdrop]
-      rw [show ((Substrait.Grammar.TCtor.prefix .struct).toList ++
-              ((Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest)).length =
-            (("struct<" ++ Emit.Text.sep ", " ts ++ ">" ++ "?").toList ++ rest).length from by
-          simp [Substrait.Grammar.TCtor.prefix, String.toList_append, List.append_assoc]]
-      cases ts with
-      | nil =>
-        have hfs : fs = [] := by
-          have hl := mapM_length fs Emit.Text.typeText [] he
-          cases fs with
-          | nil => rfl
-          | cons x xs => simp at hl
-        subst fs
-        simp [Emit.Text.sep]
-        rw [gt_prepend ('?' :: rest)]
-        rw [expect_self ">" ('?' :: rest)]
-        simp
-        exact withNull_nullable (.struct []) rest
-      | cons t ts' =>
-        cases fs with
-        | nil => simp at he
-        | cons f fs0 =>
-          rcases (mapM_cons_ok f fs0 Emit.Text.typeText (t :: ts') he) with ⟨tb, tsr, hft, hfr, hts⟩
-          have ht : t = tb := (List.cons.inj hts).1
-          have htsr : ts' = tsr := (List.cons.inj hts).2
-          rw [ht, htsr] at he
-          rw [ht, htsr]
-          have hth := typeText_head f tb hft
-          have hsn := sep_toList_ne_gt tb tsr hth
-          have hargne : ((Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest) ≠ [] := by
-            intro hz
-            have h2 := (List.append_eq_nil_iff.mp hz).1
-            rw [String.toList_append] at h2
-            have h3 := (List.append_eq_nil_iff.mp h2).1
-            rw [String.toList_append] at h3
-            have h4 := (List.append_eq_nil_iff.mp h3).1
-            exact hsn.1 h4
-          have harghead : ((Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest).head? ≠ some '>' := by
-            have hne : (Emit.Text.sep ", " (tb :: tsr)).toList ≠ [] := hsn.1
-            have hhd : (Emit.Text.sep ", " (tb :: tsr)).toList.head? ≠ some '>' := hsn.2
-            have hx : (Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest =
-                (Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ "?".toList ++ rest) := by
-              rw [String.toList_append, String.toList_append]
-              simp [List.append_assoc]
-            rw [hx]
-            cases hsep : (Emit.Text.sep ", " (tb :: tsr)).toList with
-            | nil => exact absurd hsep hne
-            | cons c cs => simp_all
-          have htgt : expect ">" ((Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest) = none := by
-            exact expect_gt_fail_head ((Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest) ⟨hargne, harghead⟩
-          rw [htgt]
-          dsimp
-          have hinput : ((Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest) =
-              (Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ "?".toList ++ rest) := by
-            rw [String.toList_append, String.toList_append]
-            simp [List.append_assoc]
-          rw [hinput]
-          have hinpLen : (f :: fs0).length ≤ (( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest).length := by
-            have hm : (f :: fs0).length = (tb :: tsr).length := by
-              simpa using (mapM_length (f :: fs0) Emit.Text.typeText (tb :: tsr) he).symm
-            have hsepl := sep_len_ge (tb :: tsr) (by simp) (fun s hs => mapM_ok_mem (f :: fs0) (tb :: tsr) he s hs)
-            calc
-              (f :: fs0).length = (tb :: tsr).length := hm
-              _ ≤ (Emit.Text.sep ", " (tb :: tsr)).toList.length := hsepl
-              _ ≤ (( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest).length := by
-                have h1 : (("struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest).length =
-                    "struct<".toList.length + (Emit.Text.sep ", " (tb :: tsr)).toList.length +
-                    ">".toList.length + "?".toList.length + rest.length := by
-                  rw [String.toList_append, String.toList_append, String.toList_append]
-                  simp [List.length_append]
-                  omega
-                have hc8 : "struct<".toList.length ≥ 7 := by decide
-                omega
-          have hall : ∀ x ∈ f :: fs0, typeDepth x ≤ (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 := by
-            intro x hx
-            exact typeDepth_le_foldl_max hx
-          have hafterRest : (">".toList ++ "?".toList ++ rest).head? ≠ some '?' ∧
-              (">".toList ++ "?".toList ++ rest).head? ≠ some ',' := by
-            simp
-          have hfold : (f :: fs0).foldl (fun m x => max m (typeDepth x)) 0 =
-              fs0.foldl (fun m x => max m (typeDepth x)) (max 0 (typeDepth f)) := rfl
-          have hplt : parseTypeList ((( "struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest).length + 1)
-                (fs0.foldl (fun m x => max m (typeDepth x)) (max 0 (typeDepth f)))
-                ((Emit.Text.sep ", " (tb :: tsr)).toList ++ (">".toList ++ "?".toList ++ rest)) =
-              some (f :: fs0, ">".toList ++ "?".toList ++ rest) := by
-            have h := parseTypeList_invert (f :: fs0)
-              ((f :: fs0).foldl (fun m x => max m (typeDepth x)) 0)
-              (">".toList ++ "?".toList ++ rest)
-              hafterRest hall
-              (fun x hx tx htx rx hrx => hif x hx tx rx hrx htx)
-              (tb :: tsr) he (by simp)
-              (("struct<" ++ Emit.Text.sep ", " (tb :: tsr) ++ ">" ++ "?").toList ++ rest).length
-              hinpLen
-            rw [hfold] at h
-            exact h
-          rw [hplt]
-          dsimp
-          rw [gt_prepend ('?' :: rest)]
-          rw [expect_self ">" ('?' :: rest)]
-          exact withNull_nullable (.struct (f :: fs0)) rest
+      rw [hb, toList_append_question, struct_full fs ts ('?' :: rest) he
+        (fun f hf b' rest' hr' he' => hif f hf b' rest' hr' he')]
+      exact withNull_nullable (.struct fs) rest
   | unspecified =>
     rw [Emit.Text.typeText.eq_def, Emit.Text.typeTextBase.eq_def] at hemit
     cases he : fs.mapM Emit.Text.typeText with
     | error em => simp [he] at hemit
     | ok ts =>
       simp [he, Emit.Text.nullSuffix, Proto.PType.nullability] at hemit
-
 /-- The mutual `Proto.PType` recursor driven on a `PType → Prop` motive:
     the `PParam` minors are trivial (`True`), the `List PType` minor is the
     membership induction.  The shared skeleton of `parseType_typeText` and

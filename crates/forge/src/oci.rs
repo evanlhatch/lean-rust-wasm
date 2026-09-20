@@ -6,9 +6,6 @@
 //! cryptographic. The layout follows the OCI image-spec directory
 //! structure so standard tooling can inspect it.
 //!
-//! Note: xxh3 remains the framework-wide fast hash for non-OCI purposes
-//! (build-cache keys, artifact dedup) — see the xxhash-rust comment in
-//! Cargo.toml. The OCI store itself is sha256 only.
 //!
 //! ```text
 //! target/oci/
@@ -255,7 +252,7 @@ pub fn store_artifacts(
 }
 
 /// sha256 hex digest (64 lowercase hex chars, 256 bits). Public: the
-/// manifest/registry modules and tests verify against it.
+/// tests verify against it.
 pub fn sha256_hex(data: &[u8]) -> Digest {
     let hash = Sha256::digest(data);
     hash.iter().map(|b| format!("{b:02x}")).collect()

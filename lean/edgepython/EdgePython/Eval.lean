@@ -13,6 +13,18 @@ add) are outside its fragment. REPORTED to the wasm-backend lane as the
 Sem-gap; this file is the edgepython-owned evaluator in the meantime,
 scoped to EXACTLY the constructors the compiler emits + `unreach`.
 
+VERDICT (2026-12 DRY audit, M3 finding): this evaluator re-implements
+Sem's frame machine (fuel, branch stack, label walk) with ZERO proofs —
+~250 lines of unproved interpreter beside a proved one. Parity.lean
+pins parity against the PYTHON reference (`Py.pyEval`), not against
+`Sem` — the wasm-level proof would come only from the shared op table
+(extend Sem's fragment to the emitted op set, then prove
+`WEval.callModule ≡ Sem.exec` per op). UNTIL THAT REFACTOR this file
+is LOAD-BEARING: it IS the engine the parity theorems, the duel
+constants, the negative controls, and the Rust-side duel all run on —
+not deletable now. Deletion is authorized once the Sem-parity proofs
+replace these theorems 1:1.
+
 Deltas from real wasm (documented, fixture-scoped): fuel-bounded (the
 model artifact, as in Sem.lean); branch payloads carry the CURRENT
 stack (the emitted fragment only branches with an empty extra stack, so

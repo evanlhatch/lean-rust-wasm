@@ -327,7 +327,8 @@ instance prePostClaimDecidable (o : PrePostObligation) :
       refuses, the loud gap);
     - `.decidableNow`: the kernel's `decide` over `decidableClaim` —
       `.decided true` on a true claim, `none` on a false one (the loud
-      gap: the backend refuses, it does not fabricate evidence);
+      gap: the backend refuses, it does not fabricate evidence) — the
+      KIT's verdict combinator (`decideEvidence`);
     - `.oracleSwept`/`.guestVerified`: no pre/post-lane source (closed
       ctors) — `none` until a backend lands. -/
 def PrePostObligation.discharge (o : PrePostObligation) :
@@ -336,10 +337,7 @@ def PrePostObligation.discharge (o : PrePostObligation) :
   | .generatedCheck =>
       some (.generatedCheck callerBoundaryArtifact o.payload.claimName)
   | .provedAtElab => o.payload.citedProof?.map .citedProof
-  | .decidableNow =>
-      match decide o.decidableClaim with
-      | true => some (.decided true)
-      | false => none
+  | .decidableNow => CodegenCore.Obligation.decideEvidence o.decidableClaim
   | .oracleSwept | .guestVerified => none
 
 /-- SOUNDNESS of the decidableNow backend: a `.decided true` verdict
@@ -347,17 +345,14 @@ def PrePostObligation.discharge (o : PrePostObligation) :
     default-row fact — `of_decide_eq_true`; no new trust base). The
     evidence ctor's own tier is `.decidableNow` — the shape match
     already forces the rung (no mis-wiring by construction); the
-    hypothesis keeps the ladder discipline explicit. -/
+    hypothesis keeps the ladder discipline explicit. Routes through
+    the kit's `decideEvidence_sound` — the proof object is shared. -/
 theorem PrePostObligation.discharge_decidableNow_sound (o : PrePostObligation)
     (ht : o.tier = .decidableNow)
     (h : o.discharge = some (.decided true)) : o.decidableClaim := by
   unfold PrePostObligation.discharge at h
   rw [ht] at h
-  cases hd : decide o.decidableClaim with
-  | true => exact of_decide_eq_true hd
-  | false =>
-      rw [hd] at h
-      simp at h
+  exact CodegenCore.Obligation.decideEvidence_sound h
 
 /-- COMPLETENESS: a true claim discharges to the `.decided true`
     evidence — the backend FIRES on the claims it can decide. -/
@@ -365,7 +360,8 @@ theorem PrePostObligation.discharge_decidableNow_of_claim (o : PrePostObligation
     (ht : o.tier = .decidableNow) (h : o.decidableClaim) :
     o.discharge = some (.decided true) := by
   unfold PrePostObligation.discharge
-  rw [ht, decide_eq_true h]
+  rw [ht]
+  exact CodegenCore.Obligation.decideEvidence_of_claim h
 
 /-- The pre's obligation ALWAYS discharges (the caller-boundary rung's
     evidence is the check itself — the tier's `isSome` is not vacuous). -/

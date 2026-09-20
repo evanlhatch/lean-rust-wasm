@@ -7,13 +7,9 @@
 //! Resource story: fuel (deterministic instruction counting) + the
 //! pooled allocator in the guest itself. Snapshot/restore = the honest
 //! v1 memory-image contract (`Runtime` / `Snapshot` below): linear
-//! memory + fuel remaining. rkyv lands next; the worker pool (the
-//! "Monty pattern" — thread-pool + engine-level limits in v1, the
-//! subprocess mode documented as the follow-up) is `pool` below.
-
-mod pool;
-
-pub use pool::{Job, Pool, PoolError};
+//! memory + fuel remaining. rkyv lands next. (The worker pool — the
+//! "Monty pattern" thread-pool + the subprocess worker bin — was cut:
+//! no consumer; recoverable from history.)
 
 use wasmi::{Val, ValType};
 
@@ -102,7 +98,7 @@ impl Runtime {
         // trap. Sync exports never call them, so the SYNC spec subset runs
         // anywhere; an async fn traps at its first intrinsic call — the
         // honest boundary (async requires a wasi 0.3 host: wasmtime /
-        // steel-host). Generic over the module's OWN import table, so new
+        // guestlang-host). Generic over the module's OWN import table, so new
         // intrinsics need no rt change; a non-func import is a hard error.
         for import in module.imports() {
             let Some(ft) = import.ty().func() else {
@@ -116,7 +112,7 @@ impl Runtime {
                 .func_new(import.module(), import.name(), ft.clone(), |_, _, _| {
                     Err(wasmi::Error::new(
                         "guestlang-rt: async task-intrinsic called — async \
-                         requires a wasi 0.3 host (wasmtime / steel-host)",
+                         requires a wasi 0.3 host (wasmtime / guestlang-host)",
                     ))
                 })
                 .map_err(|e| RtError(format!("wasmi: {e}")))?;

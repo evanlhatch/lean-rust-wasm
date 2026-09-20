@@ -28,7 +28,7 @@ Lean (spec of record, kernel-checked)
   emitters fold items → WIT / Rust / Vortex / fault artifacts (pure)
   forge (Rust driver) writes artifacts, byte-ties (gen --check)
 WIT = the component boundary contract (canonical parser validates)
-Rust hosts (steel-host, guestlang-rt) consume generated types
+Rust hosts (guestlang-host, guestlang-rt) consume generated types
 ```
 
 Package layers (downstream may import upstream, never the reverse):

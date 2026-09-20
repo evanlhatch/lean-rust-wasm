@@ -114,7 +114,15 @@ def docsOf (items : List Item) : String :=
 
 /-- The docs emitter plugin: ONE page at the repo root's `docs/`.
     Header style `.hash` — see the module header for the choice (the
-    driver-prepended banner renders as markdown headings). -/
+    driver-prepended banner renders as markdown headings).
+
+    W7.9 `Emitter.law` sweep — NO law, and why: documentation is not a
+    correspondence surface (it renders the universe as prose — no
+    well-formedness impossibility gates its emission, and a "law" over
+    markdown text would be vacuous). The illegal-emission class it
+    could carry (an unresolved `.ty` ref rendering as prose) is the
+    universe check's job UPSTREAM, shared with every emitter. Bytes:
+    the byte-tie's own. -/
 def docsEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "docs"
   style := .hash

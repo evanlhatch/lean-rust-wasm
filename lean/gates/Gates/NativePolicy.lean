@@ -50,6 +50,7 @@ notes/w5-4-module-migration.md).
 import Lean
 import LintKit
 import Gates.Packages
+import Gates.Common
 
 open Lean
 
@@ -117,22 +118,15 @@ unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
   catch e =>
     return { dir := pkg.dir, loadError := some (toString e) }
 
-/-- The package filter for `--package` (the sharded mode: one env per
-    PROCESS — the full sweep in one process accumulates every package's
-    environment and OOMs (the axiom gate's lesson); the justfile loops).
-    The stale-entry check is scoped to the selected packages. -/
+/-- The `--package` filter lives in Gates.Driver.selectPackages (the
+    sharded mode: one env per PROCESS — the full sweep in one process
+    accumulates every package's environment and OOMs (the axiom gate's
+    lesson); the justfile loops). The stale-entry check is scoped to
+    the selected packages. -/
 unsafe def run (pkgName : Option String) : IO UInt32 := do
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
-  let pkgs := match pkgName with
-    | some d =>
-      match gatedPackages.find? (fun p : PkgSpec => p.dir == d) with
-      | some p => #[p]
-      | none => #[]
-    | none => gatedPackages
-  if pkgs.isEmpty then
-    IO.println s!"native-policy: unknown --package '{pkgName.getD ""}' — gated:       {", ".intercalate (gatedPackages.map (·.dir)).toList}"
-    return 1
+  let some pkgs ← Driver.selectPackages "native-policy" pkgName | return 1
   let mut violations : Array (String × Name × Name) := #[]
   let mut stale : Array (String × Name) :=
     grandfatheredNative.filter (fun (d, _) => pkgs.any (fun p : PkgSpec => p.dir == d))

@@ -2,7 +2,7 @@
 
 Grounded in the empirical dissection of the wit-bindgen 0.61 gateway
 component (`wasm-tools print` on the extracted core module) and the
-existing code (forge's OCI store, steel-host's ComponentRuntime, the
+existing code (forge's OCI store, guestlang-host's ComponentRuntime, the
 differential gate). The plan for each track; the ordering at the end.
 
 ---
@@ -143,7 +143,7 @@ stack (iroh) = the first adapter, not the identity of the layer. "noq"
   the secretspec (the existing pattern).
 - the TEST: two in-process endpoints (the loopback) exchange bytes.
 
-**2b. the wRPC server** (serve the steel-host's component):
+**2b. the wRPC server** (serve the guestlang-host's component):
 - `wrpc` + `wrpc-transport` + the iroh integration (`wrpc-transport-iroh`
   exists upstream? — if not, the wRPC's Invocation over the wire trait).
 - the server: bind the host's loaded component's exports to the wRPC

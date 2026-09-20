@@ -41,7 +41,11 @@ emit literal denotations. -/
 /-- `Ty` → its constructor tree as a TYPED quotation (the
     expected-type builder: the command elaborates the author's term
     against `VExpr <the record's real fields> .bool`). The `Q(Ty)`
-    ascription is sound: `ToExpr Ty` emits the literal denotation. -/
+    ascription is sound: `ToExpr Ty` emits the literal denotation.
+    This IS the instance-driven adapter (the Expr-level core is the
+    `ToExpr Ty` walk itself); the Term-level twin is
+    `SchemaLang.Meta.tyTerm` in `Meta.Derive` (pinned to agree with
+    this core by that module's drift-pin). -/
 def tyToExpr (t : Ty) : Q(Ty) :=
   toExpr t
 

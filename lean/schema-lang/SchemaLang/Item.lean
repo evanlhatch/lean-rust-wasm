@@ -167,6 +167,45 @@ def Item.specEq : Item → Item → Bool
         && a.sem == b.sem
   | a, b => a == b
 
+/- BEq laws. W5.4 hygiene probe verdict: core's `deriving instance`
+    handlers (Lean.Elab.Deriving.ReflBEq/LawfulBEq) adopt cleanly for the
+    six types whose `BEq` is the derived structural one (FuncSem, FuncSig,
+    Field, Item; KeyTy/Ty in Ty.lean). The three `declare_enum_wire` enums
+    (NullSem, Determinism, Delivery) need NO instance here: their generated
+    inductive derives `DecidableEq` only (no `BEq`), so the `BEq` in scope
+    IS the decidable-equality one — exactly the one core's own
+    `DecidableEq → LawfulBEq/ReflBEq` instances already make lawful. The
+    earlier hand-written law instances for all nine types are gone
+    (verified: core's `deriving instance LawfulBEq` FAILS on the three
+    wire enums — `simp made no progress`, one per ctor — but they are
+    covered by the DecidableEq chain, and the six real derivings build).
+    -/
+deriving instance ReflBEq for FuncSem
+deriving instance LawfulBEq for FuncSem
+deriving instance ReflBEq for FuncSig
+deriving instance LawfulBEq for FuncSig
+deriving instance ReflBEq for Field
+deriving instance LawfulBEq for Field
+deriving instance ReflBEq for Item
+deriving instance LawfulBEq for Item
+
+/-- THE LAW (the honest form — the full iff `specEq a b ↔ a = b` is
+    FALSE by design): equality implies spec equality. -/
+theorem Item.specEq_refl (a : Item) : a.specEq a = true := by
+  cases a <;> simp [Item.specEq]
+
+/-- The deliberate gap, pinned: two funcs differing ONLY in `body`
+    (registry metadata, not spec — reconstructed anonymous by the
+    snapshot round-trip) are spec-equal but NOT equal. No
+    `specEq → =` direction exists; consumers needing true equality use
+    `BEq` (`DecidableEq`). -/
+theorem Item.specEq_body_blind :
+    Item.func ⟨"f", [], .u64, {}, `a.f⟩ ≠ Item.func ⟨"f", [], .u64, {}, `a.g⟩
+    ∧ (Item.func ⟨"f", [], .u64, {}, `a.f⟩).specEq
+        (Item.func ⟨"f", [], .u64, {}, `a.g⟩) = true := by
+  refine ⟨fun h => ?_, rfl⟩
+  simp [Item.func.injEq, FuncSig.mk.injEq] at h
+
 /-- Type-position names only (what `.ty` references may resolve to). -/
 def Item.typeNames : List Item → List String :=
   fun items =>

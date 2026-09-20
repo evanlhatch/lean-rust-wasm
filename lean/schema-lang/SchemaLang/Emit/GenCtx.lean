@@ -89,6 +89,29 @@ def GenCtx.checkedItems? (ctx : GenCtx) : Option CheckedUniverse :=
     some ⟨ctx.items, universeCheck_sound h⟩
   else none
 
+/-- The checkpoint's TRANSPORT (the law-bearing emitters' citation):
+    a checked view IS the ctx's item universe — the check discharges
+    well-formedness evidence, it never selects or transforms content.
+    (The checked-view consumers' laws state their contracts over the
+    bundle; this lemma moves them to the ctx the driver replayed.) -/
+theorem GenCtx.checkedItems?_val (ctx : GenCtx) (cu : CheckedUniverse)
+    (h : ctx.checkedItems? = some cu) : cu.val = ctx.items := by
+  unfold checkedItems? at h
+  split at h
+  · exact congrArg Subtype.val (Option.some.inj h).symm
+  · exact absurd h (by simp)
+
+/- THE SINGLE CHECKPOINT (W7.9 phase 2 sweep): `checkedItems?` is the
+    ONLY `universeCheck` discharge on the emission path — every
+    item-universe emitter's `run` consumes the bundle through it
+    (`match ctx.checkedItems? with …`), no emitter re-checks. The
+    registry (`Emit.Registry.coreEmitters`) documents the routing
+    contract; the driver-restructure (a `checked` field computed once
+    in `GenCtxIO.loadGenCtx`, handed to every emitter) is the named
+    follow-up — the projection is a pure function of `ctx.items`, so
+    the two are definitionally interchangeable and the bytes are
+    unaffected either way. -/
+
 /-- Group named items by the name's ROOT namespace (`Name.getRoot`):
     order-preserving both ways — roots by first occurrence, items in
     registration order (the fold cannot drift from the registry).

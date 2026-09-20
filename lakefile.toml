@@ -14,6 +14,7 @@ defaultTargets = ["EdgePython", "EdgeGen", "EdgePythonTests", "py-gen",
   "Ledger", "LedgerFn", "LedgerES", "LedgerTests",
   "FeatureFlags", "FeatureFlagsFn", "FeatureFlagsTests",
   "Proofkit", "ProofkitTests", "QLang", "QLangTests",
+  "TextKit", "TextKitTests",
   "Substrait", "SubstraitTests",
   "Faults", "FaultsSpec", "FaultsTests", "faults-gen",
   "GuestlangStd", "GuestlangStdTests",
@@ -41,7 +42,8 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4"
 rev = "v4.33.0"
 
-# D12: gonzalgo — the axiom-provenance/dependency dump (dbsp/Machines).
+# D12: gonzalgo — vendored for the impact-gating order (gates phase 2 —
+# lean-dump/lean-impact recipes to be restored); unused until then.
 # The bundle path is root-relative (the old packages' `../../vendor` was
 # relative to THEIR dirs).
 [[require]]
@@ -51,7 +53,7 @@ rev = "7e67f77292685c0e295027b530349e3c664a2758"
 
 # schema-lang's generators-lane dep (direct, not riding mathlib's manifest).
 [[require]]
-name = "Plausible"
+name = "plausible"
 git = "https://github.com/leanprover-community/plausible"
 rev = "b7eb3304aeae834b12dda98993a37f6a41f6f0bb"
 
@@ -195,6 +197,21 @@ srcDir = "lean/qlang"
 root = "QLangTests.Main"
 
 # ── Phase 3 (cluster A): substrait, faults, std, schema-lang, wasm-backend
+
+# TextKit: the CORE-ONLY parser foundation lifted out of substrait's
+# Decode/Basic (the Parser monad, the scanners, the escape/unescape +
+# name/prefix inversion kit) + Emit.Text's four text primitives. Sits BELOW
+# substrait; substrait re-exports both surfaces under their historical
+# names (zero downstream churn). Zero imports — kernel-package discipline.
+[[lean_lib]]
+name = "TextKit"
+srcDir = "lean/TextKit"
+roots = ["TextKit"]
+
+[[lean_exe]]
+name = "TextKitTests"
+srcDir = "lean/TextKit"
+root = "TextKitTests.Main"
 
 # substrait: the typed query language + canonical text emitter
 # (text-only surface; the binary protobuf codec stays excluded).

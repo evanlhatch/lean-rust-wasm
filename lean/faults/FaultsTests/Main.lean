@@ -156,6 +156,20 @@ def emitterAuditChecks : CheckResult := do
   _ ← assertEq "run ⊆ declared outputs"
       (Faults.Emit.jobs.all fun (e, spec) =>
         (e.run spec).all fun f => e.outputs.contains f.path) true
+  -- the emission laws (the vortex lane's `vortexLaw` shape): both fault
+  -- emitters carry the CodedRegistry's code-collision-freedom as law,
+  -- discharged by the `codes_nodup` citation; the certified lane
+  -- executes (`runCertified = run` by definition)
+  _ ← assert (Faults.Emit.guestEmitter.law.isSome) "guest law populated"
+  _ ← assert (Faults.Emit.hostEmitter.law.isSome) "host law populated"
+  _ ← assertEq "guest certified run = run"
+      ((Faults.Emit.guestEmitter.runCertified Spec.apiFaults
+        (Faults.Emit.codesNodupLaw_discharged Spec.apiFaults)).map (·.contents))
+      ((Faults.Emit.guestEmitter.run Spec.apiFaults).map (·.contents))
+  _ ← assertEq "host certified run = run"
+      ((Faults.Emit.hostEmitter.runCertified Spec.hostFaults
+        (Faults.Emit.codesNodupLaw_discharged Spec.hostFaults)).map (·.contents))
+      ((Faults.Emit.hostEmitter.run Spec.hostFaults).map (·.contents))
   let rogueEmitter : CodegenCore.Emit.Emitter Faults.Emit.FaultsSpec :=
     { Faults.Emit.guestEmitter with outputs := ["../../src/elsewhere.rs"] }
   _ ← assertEq "undeclared output caught (control)"

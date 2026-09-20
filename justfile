@@ -67,7 +67,7 @@ breaking:
 
 # The snapshot-codec differential's fixtures (the fuzz-gap audit's gap
 # #2): the Lean authority's seeded (snapshot-text, expected-item-dump)
-# pairs for the Rust twin — crates/steel-host/tests/fixtures/
+# pairs for the Rust twin — crates/guestlang-host/tests/fixtures/
 # snapshot_fixtures.txt, replayed by tests/snapshot_differential.rs.
 # Byte-tie law: pinned seed, a regen is byte-identical (drift = a
 # reviewable diff; the writer refuses a universe that fails the
@@ -380,7 +380,7 @@ demo:
 	just wasm-guest-gateway
 	devenv shell --profile wasm -- bash -c \
 	  'export CC=$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc; \
-	   cargo test -p steel-host && cargo test -p lean-rust-wasm'
+	   cargo test -p guestlang-host && cargo test -p lean-rust-wasm'
 	@echo "demo: edit Lean → component → typed calls — loop closed"
 
 # ── Gates: every lean↔rust drift check in one shot ───────────────────
@@ -414,7 +414,7 @@ lean-axioms:
 	(cd lean/wasm-backend && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. build WasmBackendTests)
 	# SHARDED per package (the monolithic one-process mode peaked ~26.5GB
 	# and OOM'd this box; per-package peaks ~2-4GB — the sharding order).
-	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
+	cd lean/gates && for p in LintKit TextKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
 	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates axioms --package $p || exit 1; \
 	done
 
@@ -423,6 +423,15 @@ lean-axioms:
 # (require↔entry, rev pins, checkout HEADs). Structural + offline.
 manifest-check:
 	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates manifest-check
+
+# The artifacts' inventory (delegated to the gates exe —
+# Gates.ArtifactManifest): every registered emitter's outputs as one
+# generated table (path x content hash x emitter) at notes/artifacts.manifest
+# — the hashes are the byte-tie's own `content hash` field, rows sorted by
+# path. Additive to gen-check (the binding byte-tie). --write via the exe:
+#   cd lean/gates && lake exe gates artifact-manifest --write
+artifact-manifest:
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates artifact-manifest
 
 # The coverage matrix (delegated to the gates exe — Gates.Coverage):
 # Ty ctors x registered emitters x the oracle's replay surface; diffs the
@@ -438,7 +447,7 @@ coverage:
 # SHARDED like lean-axioms (--package, the NativePolicy filter pattern):
 # the unsharded single-process run exceeded 30 min on this box.
 kernel-check:
-	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
+	cd lean/gates && for p in LintKit TextKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
 	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates kernel-check --package $p || exit 1; \
 	done
 
@@ -451,7 +460,7 @@ native-policy:
 	set -euo pipefail
 	# SHARDED like lean-axioms (one env per process — the full sweep
 	# accumulates every package's env in one process and OOMs).
-	cd lean/gates && for p in LintKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
+	cd lean/gates && for p in LintKit TextKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
 	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates native-policy --package $p || exit 1; \
 	done
 
@@ -471,7 +480,7 @@ wasm-compile:
 	cp src/observability_generated.rs lean/wasm-backend/target/observability_generated.rs.committed
 	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" --dir ../.. build DemoFn wasm-gen oracle \
 	  && PATH="$TC:$PATH" "$TC/lake" --dir ../.. exe wasm-gen)
-	# THE OBSERVABILITY BYTE-TIE (the fast-observe seam — steel-host's
+	# THE OBSERVABILITY BYTE-TIE (the fast-observe seam — guestlang-host's
 	# hot-reload span surface): strip the 2-line GENERATED header (the
 	# wall-clock + git state vary per regen — the byte-tie only binds the
 	# CONTENT) and compare the regenerated file against the committed
@@ -491,12 +500,12 @@ wasm-compile:
 	# never go stale against the module it audits.
 	(cd lean/wasm-backend && PATH="$TC:$PATH" "$TC/lake" --dir ../.. exe oracle \
 	  | grep '^\[' > target/diff.json)
-	# The SMOKE is the DIFFERENTIAL GATE (steel-host's wasm_diff): the
+	# The SMOKE is the DIFFERENTIAL GATE (guestlang-host's wasm_diff): the
 	# oracle manifest (regenerated above — Lean's own evals) replays
 	# against the component, 160 rows + the sabotage control. The old
 	# hand-written per-fn assertions (double 21 = 42, ...) were a stale
 	# duplicate — one authority: Lean's semantics via the manifest.
-	# Component wrap: the COMPILED module as a component (steel-host loads it)
+	# Component wrap: the COMPILED module as a component (guestlang-host loads it)
 	"$WT" component embed -w demo lean/wasm-backend/demo-world.wit lean/wasm-backend/target/demo.wasm \
 	  -o lean/wasm-backend/target/demo.embedded.wasm
 	"$WT" component new lean/wasm-backend/target/demo.embedded.wasm \
@@ -587,7 +596,7 @@ splicer-mw:
 	  -o "$composed"
 	"$WT" validate "$composed"
 	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" \
-	  cargo test -p steel-host --test spliced_middleware
+	  cargo test -p guestlang-host --test spliced_middleware
 	echo "splicer-mw: middleware composed + inner routed + counter + spec spans green"
 
 # The WASMI CONFORMANCE gate (the embeddable-runtime half of the dual-
@@ -623,7 +632,7 @@ edgepython:
 	"$WT" parse lean/edgepython/target/py.wat -o lean/edgepython/target/py.wasm
 	"$WT" validate lean/edgepython/target/py.wasm
 	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" \
-	  cargo test -p steel-host --test edgepython
+	  cargo test -p guestlang-host --test edgepython
 	CC="$HOME/lean-rust-wasm/.devenv/profiles/wasm/profile/bin/cc" \
 	  cargo test -p guestlang-rt --test edgepython
 	echo "edgepython: compiled + VALID + duel green (Lean × wasmtime × wasmi)"
@@ -803,7 +812,7 @@ scaffold-test:
 # then a hash-verified revert. A gate that stays green under its
 # mutation is ceremony — the battery reports MUTATION NOT CAUGHT and
 # exits 1. Run: `just mutation-proof` (expect several minutes; the
-# oracle mutation rebuilds DemoFn + the steel-host replay).
+# oracle mutation rebuilds DemoFn + the guestlang-host replay).
 mutation-proof:
 	#!/usr/bin/env bash
 	set -uo pipefail
@@ -899,7 +908,7 @@ mutation-proof:
 	# regenerated by `lake exe oracle` — so the IMPLEMENTATION is
 	# the mutation surface; the manifest can never go stale.) Scratch
 	# note: diff.json is regenerated UNDER the mutation — rerun `just
-	# wasm-compile` clean before the next steel-host replay.
+	# wasm-compile` clean before the next guestlang-host replay.
 	echo "── (d) the oracle: strlen +1 in GuestlangStd.StrOps ──"
 	f=lean/std/GuestlangStd/StrOps.lean
 	save "$f"
@@ -912,7 +921,7 @@ mutation-proof:
 	open(p, "w").write(s.replace(old, old + " + 1"))
 	PYEOF
 	must_fail "differential duel (wasm_diff)" \
-	  devenv shell --profile wasm -- bash -c "export CC=$PCC; just wasm-compile && cargo test -p steel-host --test wasm_diff"
+	  devenv shell --profile wasm -- bash -c "export CC=$PCC; just wasm-compile && cargo test -p guestlang-host --test wasm_diff"
 	unmutate "$f"
 	# wasm-compile's regen rewrote the observability surface's volatile
 	# header (wall-clock) — restore the committed bytes.

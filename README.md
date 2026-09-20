@@ -86,7 +86,7 @@ enforces; the allowed set is the core triple plus disclosed `native_decide`):
 
 | Claim | Where |
 |---|---|
-| The compiled wasm agrees with Lean's semantics (the duel: 440-row manifest, Lean evals → JSON → replay under wasmtime + wasmi; sabotaged rows must fail) | `just wasm-compile`, `just rt-conformance`, `steel-host`'s `wasm_diff` |
+| The compiled wasm agrees with Lean's semantics (the duel: 440-row manifest, Lean evals → JSON → replay under wasmtime + wasmi; sabotaged rows must fail) | `just wasm-compile`, `just rt-conformance`, `guestlang-host`'s `wasm_diff` |
 | Every differential gate catches its own corruption (DiffSpec negative controls; a vacuous suite fails) | `lean/TestKit` — `TestKit.DiffSpec`/`PropSpec` |
 
 **CHECKED** — mechanical identity or acceptance, not semantics:
@@ -134,7 +134,7 @@ claim it.
         │ crates/wire = the transport layer between comps │
         └──────────┬───────────────────────────┬──────────┘
                    ▼                           ▼
-        wasmtime host (steel-host)   wasmi standalone rt
+        wasmtime host (guestlang-host)   wasmi standalone rt
         typed bindings, generated    (guestlang-rt): same
         faults, delta impls,         demo.wasm, same manifest
         wasi 0.3 async               — the dual-engine duel:
@@ -149,7 +149,7 @@ Rust crates (`crates/`):
 | Crate | What |
 |---|---|
 | `forge` | codegen orchestrator: drives lake emitters, byte-tie, OCI store, component linking |
-| `steel-host` | the wasmtime host: typed bindings from the generated WIT, delta tests, the differential gate |
+| `guestlang-host` | the wasmtime host: typed bindings from the generated WIT, delta tests, the differential gate |
 | `guestlang-rt` | the standalone embeddable runtime (wasmi): deterministic profile enforced at load |
 | `guest-demo` | the demo guest component (the template's dogfood target) |
 | `splicer-mw` | the first real middleware: an in-wasm counter interposer composed via wac |

@@ -95,6 +95,9 @@ module
 
 public import Lean
 public import SchemaLang.Field
+-- the `DefaultVal` class (the one default table — `defaultValue?` is
+-- its coverage enumeration)
+public import SchemaLang.CodecValue
 public import CodegenCore.GuestGate
 public import LintKit
 
@@ -128,29 +131,43 @@ inductive RowVals : List Field → Type where
 
 
 
+-- (plain comment: the consolidation — the values below are the
+-- `DefaultVal` instances' (`SchemaLang.CodecValue`), re-fired per arm:
+-- instance search cannot run on a variable `t`, so this table is the
+-- COVERAGE ENUMERATION for the Option, not a second encoding of the
+-- values. `none` = no literal: `.ty` refs have no `Value` ctor (the
+-- class's gap); a NONZERO-dims tensor HAS an instance (the shape-filled
+-- default) but no self-contained literal for the emitted test rows —
+-- an emit-domain exclusion, not a coverage gap.)
 /-- The default value per Ty (`none` = no literal: `.ty` refs have no
     `Value` ctor — a record with such a field gets no emitted test). -/
 def defaultValue? : (t : Ty) → Option (Value t)
-  | .bool => some (.bool false)
-  | .u8 => some (.u8 0) | .u16 => some (.u16 0)
-  | .u32 => some (.u32 0) | .u64 => some (.u64 0)
-  | .i8 => some (.i8 0) | .i16 => some (.i16 0)
-  | .i32 => some (.i32 0) | .i64 => some (.i64 0)
-  | .f32 => some (.f32 0) | .f64 => some (.f64 0)
-  | .string => some (.string "")
-  | .bytes => some (.bytes [])
-  | .option _ => some .none
-  | .list _ => some (.list .nil)
-  | .map _ _ => some (.map .nil)   -- the empty association list
-  | .set _ => some (.set .nil)     -- the empty element list
+  | .bool => some DefaultVal.default
+  | .u8 => some DefaultVal.default | .u16 => some DefaultVal.default
+  | .u32 => some DefaultVal.default | .u64 => some DefaultVal.default
+  | .i8 => some DefaultVal.default | .i16 => some DefaultVal.default
+  | .i32 => some DefaultVal.default | .i64 => some DefaultVal.default
+  | .f32 => some DefaultVal.default | .f64 => some DefaultVal.default
+  | .string => some DefaultVal.default
+  | .bytes => some DefaultVal.default
+  | .option _ => some DefaultVal.default
+  | .list _ => some DefaultVal.default
+  | .map _ _ => some DefaultVal.default   -- the empty association list
+  | .set _ => some DefaultVal.default     -- the empty element list
   -- the zero-dims default only: `TVal.scalar` IS the 0-dim shape; a
   -- nonzero-dims tensor needs per-element literals (none available)
   | .tensor [] a => do let v ← defaultValue? a; some (Value.tensor (TVal.scalar v))
   | .tensor (_ :: _) _ => none
   | .result ok _ => do let v ← defaultValue? ok; some (.ok v)
   | .future a => do let v ← defaultValue? a; some (.future v)
-  | .stream _ => some (.stream .nil)
+  | .stream _ => some DefaultVal.default
   | .ty _ => none
+
+-- the pin: the Option wrapper preserves the consumers' None arm
+-- (composition fires through the instance for the nested ctor)
+example : defaultValue? (.option (.list .u64)) = some .none := rfl
+example : defaultValue? .u8 = some (.u8 0) := rfl
+example : defaultValue? (.tensor [1] .u8) = none := rfl
 
 /-- The all-default row for a field list (`none` = a field without a
     literal default). -/

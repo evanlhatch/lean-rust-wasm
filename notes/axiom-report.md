@@ -8,27 +8,27 @@ from the kernel's CollectAxioms; the allowlist (propext, Classical.choice,
 Quot.sound, disclosed _native.native_decide./_native.bv_decide. trust bases)
 is LintKit.AxiomAllowlist's, consumed via LintKit.runLintersOnDecls.
 
-## LintKit — 306 decls checked
+## LintKit — 416 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## TestKit — 174 decls checked
+## TestKit — 173 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## Machines — 1291 decls checked
+## Machines — 1317 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## codegen-core — 851 decls checked
+## codegen-core — 886 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## substrait — 7657 decls checked
+## substrait — 7521 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -43,17 +43,17 @@ violations: none
 axioms used: Proofkit.u64add_assoc._native.bv_decide.ax_1_5, Quot.sound, Classical.choice, propext
 violations: none
 
-## schema-lang — 10237 decls checked
+## schema-lang — 10640 decls checked
 
 axioms used: Quot.sound, Classical.choice, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalIncr_denote_tick3._native.native_decide.ax_1_1, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalCkt_denote_tick3._native.native_decide.ax_1_1, propext
 violations: none
 
-## faults — 145 decls checked
+## faults — 153 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## dbsp — 773 decls checked
+## dbsp — 761 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -63,7 +63,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## ledger — 241 decls checked
+## ledger — 249 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -73,7 +73,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## wasm-backend — 2248 decls checked
+## wasm-backend — 2433 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -84,6 +84,11 @@ axioms used: Quot.sound, EdgePython.Parity.parity_double_21._native.native_decid
 violations: none
 
 ## gates — 331 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+## TextKit — 132 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none

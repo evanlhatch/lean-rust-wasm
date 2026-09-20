@@ -37,10 +37,13 @@ structure Renderings (S E : Type) where
 
 /-- The Rust event enum item: one variant per DISTINCT event in the
     table (the table, not the Label type, is the emission source — the
-    theorem ties them). -/
-def eventEnumItem {S E : Type} [BEq E] (r : Renderings S E) (eventEnum : String)
+    theorem ties them). `eventDecl` is the DECLARATION rendering (the
+    variant spelling); it may differ from `r.event`, the match-arm
+    use-site spelling (the pipeline qualifies its arms and keeps the
+    enum bare — no event glob). -/
+def eventEnumItem {S E : Type} [BEq E] (eventDecl : E → String) (eventEnum : String)
     (trans : List (E × S × S)) : CodegenCore.Emit.Rust.Item :=
-  Item.enum eventEnum [] ((trans.map (·.1)).eraseDups.map r.event)
+  Item.enum eventEnum [] ((trans.map (·.1)).eraseDups.map eventDecl)
 
 /-- The `match` arms, folded from a PROVED trans table: one arm per
     row, EXCEPT — when a wildcard event (e.g. `reset`) sends every
@@ -71,14 +74,28 @@ def matchArms {S E : Type} [BEq S] [BEq E] [Inhabited S] (r : Renderings S E)
 
 /-- The full generated module: the state/event enums + the `step` fn
     folded from the proved table + the replay assertions (the happy
-    path + the terminal rejections — the Rust-side drift guards). -/
+    path + the terminal rejections — the Rust-side drift guards).
+
+    The DERIVED core is shared (both machines): the state enum (from
+    `concrete`), the event enum (the table's distinct events, via
+    `eventDecl`), the `matchArms` fold, the step signature, and the
+    happy/reject assertion derivation. The per-machine SHAPE around it
+    differs (the pipeline's stage machine carries the structural
+    `Failed` variant, qualifies its event arms, and docs the step fn;
+    the order machine globs both enums) — so every divergent chunk is
+    a PARAMETER. Byte-tie: both call sites reproduce their committed
+    goldens exactly (the pipeline consolidation). -/
 def moduleRust {S E : Type} [BEq S] [BEq E] [Inhabited S] (r : Renderings S E)
-    (specSource : String)
+    (eventDecl : E → String)
+    (header : List CodegenCore.Emit.Rust.Item)
     (stateEnum eventEnum : String)
     (trans : List (E × S × S)) (wildcard : Option E)
     (concrete : List S)
+    (preStep stepDoc inStep : List CodegenCore.Emit.Rust.Item)
     (happy : List (E × S × S))
-    (rejects : List (String × S × E)) : String :=
+    (rejects : List (String × S × E))
+    (assertsFn : String)
+    (assertsDoc extraAsserts : List CodegenCore.Emit.Rust.Item) : String :=
   let arms := matchArms r trans wildcard concrete
   let happyAsserts := happy.map fun (e, f, t) =>
     Item.raw s!"    assert_eq!(step({r.state f}, {r.event e}), Some({r.state t}));"
@@ -86,33 +103,29 @@ def moduleRust {S E : Type} [BEq S] [BEq E] [Inhabited S] (r : Renderings S E)
     [ Item.raw s!"    // {why}"
     , Item.raw s!"    assert_eq!(step({r.state f}, {r.event e}), None);" ]
   renderModule
-    ([ Item.comment s!"GENERATED from {specSource} — the lifecycle machine."
-     , Item.comment "Agreement with the Lean machine is a THEOREM there"
-     , Item.comment "(orderMachineTableStep?_eq_step?); do not edit — regenerate."
-     , Item.raw ""
-     , Item.raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
-     , Item.enum stateEnum [] (concrete.map r.state)
-     , Item.raw ""
-     , Item.raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
-     , eventEnumItem r eventEnum trans
-     , Item.raw ""
-     , Item.raw s!"use {stateEnum}::*;"
-     , Item.raw s!"use {eventEnum}::*;"
-     , Item.raw ""
-     , Item.raw s!"pub fn step(s: {stateEnum}, e: {eventEnum}) -> Option<{stateEnum}> \{"
-     , Item.raw "    match (s, e) {"
-     ]
+    (header
+    ++ [ Item.raw ""
+       , Item.raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
+       , Item.enum stateEnum [] (concrete.map r.state)
+       , Item.raw ""
+       , Item.raw "#[derive(Clone, Copy, Debug, PartialEq, Eq)]"
+       , eventEnumItem eventDecl eventEnum trans
+       , Item.raw "" ]
+    ++ preStep
+    ++ stepDoc
+    ++ [ Item.raw s!"pub fn step(s: {stateEnum}, e: {eventEnum}) -> Option<{stateEnum}> \{" ]
+    ++ inStep
+    ++ [ Item.raw "    match (s, e) {" ]
     ++ (arms.map Item.raw)
     ++ [ Item.raw "        _ => None,"
        , Item.raw "    }"
        , Item.raw "}"
-       , Item.raw ""
-       , Item.raw "/// The proved trace: happy path + terminal rejections"
-       , Item.raw "/// (the Lean theorems' executable counterparts)."
-       , Item.raw "pub fn trace_assertions() {"
-       ]
+       , Item.raw "" ]
+    ++ assertsDoc
+    ++ [ Item.raw s!"pub fn {assertsFn}() \{" ]
     ++ happyAsserts
     ++ rejectAsserts.flatten
+    ++ extraAsserts
     ++ [ Item.raw "}" ])
 
 /-- The Rust renderings of the order lifecycle. -/
@@ -128,17 +141,47 @@ def orderRenderings : Renderings OrderStatus orderMachine.Label where
     | .cancel => "Cancel" | .reset => "Reset"
 
 def orderMachineRust : String :=
-  moduleRust orderRenderings
-    "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
+  moduleRust orderRenderings orderRenderings.event
+    [ Item.comment "GENERATED from SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?) — the lifecycle machine."
+    , Item.comment "Agreement with the Lean machine is a THEOREM there"
+    , Item.comment "(orderMachineTableStep?_eq_step?); do not edit — regenerate." ]
     "OrderStatus" "OrderEvent"
     orderMachineTrans (some .reset) orderMachineStates
+    [ Item.raw "use OrderStatus::*;"
+    , Item.raw "use OrderEvent::*;"
+    , Item.raw "" ]
+    []  -- stepDoc: the order machine's step fn is undocumented (as committed)
+    []  -- inStep: the use globs sit above the fn (preStep)
     [ (.place, .cart, .placed)
     , (.ship, .placed, .shipped)
     , (.deliver, .shipped, .delivered) ]
     [ ("a delivered order is terminal (terminal_only_reset)", .delivered, .ship)
     , ("a cancelled order cannot be re-placed (terminal_only_reset)", .cancelled, .place)
     , ("out-of-order firing is rejected (reject_ship_before_place)", .cart, .ship) ]
+    "trace_assertions"
+    [ Item.raw "/// The proved trace: happy path + terminal rejections"
+    , Item.raw "/// (the Lean theorems' executable counterparts)." ]
+    []  -- extraAsserts: the order trace IS the happy/rejects derivation
 
+/-! ## The emission law (the vortex lane's `vortexLaw` shape) -/
+
+/-- The order-machine emitter's law: the table the Rust folds IS the
+    machine's `step?` over the enumerated state space — the
+    `orderMachineTableStep?_eq_step?` agreement riding the emitter
+    (the `circuitLaw` precedent: ctx-independent, the machine is
+    module data and `run` ignores the ctx). -/
+def orderMachineLaw : GenCtx → Prop := fun _ =>
+  ∀ (e : orderMachine.Label) (s : OrderStatus), s ∈ orderMachineStates →
+    orderMachineTableStep? e s = Machines.Machine.step? orderMachine s e
+
+/-- The discharge: the machine!-generated agreement theorem, cited. -/
+theorem orderMachineLaw_discharged (ctx : GenCtx) : orderMachineLaw ctx :=
+  fun _ _ hs => orderMachineTableStep?_eq_step? _ _ hs
+
+/-- The order-machine emitter's well-formedness note (the
+    `Emitter.law` sweep): the law IS populated (`orderMachineLaw`) —
+    no defensive arm to justify: the fold is total over the proved
+    table, and the bytes are the byte-tie's own. -/
 def orderMachineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "order-machine"
   style := .doubleSlash
@@ -147,6 +190,7 @@ def orderMachineEmitter : CodegenCore.Emit.Emitter GenCtx where
   run _ctx :=
     [{ path := "../../src/order_machine_generated.rs"
        contents := orderMachineRust }]
+  law := some orderMachineLaw
 
 end SchemaLang.Emit.Machine
 

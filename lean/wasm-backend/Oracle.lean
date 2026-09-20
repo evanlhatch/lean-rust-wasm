@@ -113,6 +113,27 @@ custom sections, and an embedded string is a claim that can drift
 from the real exports). The canonical string below is the contract;
 the hash stays consumer-side (sha256 of the string).
 
+R2 (the registry fold — resultOf's derived lane), BYTES UNCHANGED:
+the finding was that `resultOf` hand-mirrored every demo fn while
+`FuncSig.body` (6.5.1's declaring-constant field) sat unused — the
+drift class: a new schema fn needs an oracle arm added by hand. The
+repair: the SCALAR-sig arms are DERIVED at elaboration time by the
+`derive_oracle_arms` command (a fold over `SchemaLang.Meta
+.registeredItems` — one eval per func item whose Tys are in the
+derivable surface: u64/bool params, u64/bool/string rets; the arm
+CALLS the registered body — the registry row carries the WHAT, the
+evaluation stays Lean's). The win pin: `scratchTriple` (registered
+HERE, no arm written) resolves through the derived arm — the #guard
+below the fold fails the build if the derivation breaks. The rows
+whose semantics is NOT registry data stay hand-listed in
+`resultOfHand` (each entry names why: the ser forms, the flat
+record/variant conventions, the byte-row decode lane). `schemaSigs`
+stays hand-listed too: the scratch fn must not join the SURFACE (the
+Tests pin its length 16). VERIFIED: the emitted manifest is
+byte-identical to the pre-fold one (sha256
+8e15118eb4204c7db74e4101403b6a64a1473b9c7d3480893db79657e8278918
+before AND after — the header's documented hash).
+
 W9.6 unblocking (item 2) — `streq` intrinsic, ROWS UNCHANGED: the
 backend gained the `String.decEq` lowering (`$string_eq` — one
 `GuestlangStd.Intrinsic` ctor + the runtime.wat primitive + the oracle
@@ -138,6 +159,8 @@ import DemoFn
 import GuestlangStd
 import SchemaLang.Witness
 import SchemaLang.WitnessCheck
+import SchemaLang.Meta.Reflect -- the schema registry (the R2 fold reads it at elaboration)
+import CodegenCore -- Emit.kebab: the WIT export naming the fold keys the arms by
 import Plausible
 import TestKit
 import LintKit.PackageNamespace
@@ -593,19 +616,160 @@ def witnessBatch : ProbeBatch :=
 def rowUniverse : List Probe :=
   ((preGenBatches ++ [genBatch 130 0xBEA57, witnessBatch]).flatMap (·.probes))
 
-/-- The expected-result fold (Lean's semantics is the authority). "?" is
-    unreachable for well-formed rows — `resolve` guards fn/arity first. -/
-def resultOf (fn : String) (args : List String) : String :=
+/- ── R2: THE REGISTRY FOLD (resultOf's derived lane) ─────────────────
+   The finding: resultOf hand-mirrored every demo fn while FuncSig.body
+   (the registry's declaring-constant field, 6.5.1 — auto-filled by
+   `@[schema_fn]`) sat unused. The repair: the SCALAR-sig arms are
+   DERIVED from the registry at elaboration time (the fold below — the
+   `derive_oracle_arms` command over `SchemaLang.Meta.registeredItems`),
+   so a new
+   `@[schema_fn]` demo fn joins the oracle with ZERO second site. The
+   honest division of labor: the registry row carries the WHAT (name,
+   Tys, the declaring constant), the evaluation stays Lean's own (the
+   generated arms CALL the declared constants — no re-implementation).
+   The rows whose semantics is NOT registry data stay hand-listed in
+   `resultOfHand` (each with the why). The generated rows' bytes are
+   pinned identical by the manifest diff (the byte-tie). -/
+
+/-- The derived arms' flat-arg readers — the per-Ty parse the
+    canonical-ABI adapter mirrors (the Layout/flatTyOf lane's oracle
+    side). Byte-exact with the old hand parse (`s.toNat!.toUInt64` /
+    `s == "1"`). -/
+def u64Arg (args : List String) (i : Nat) : UInt64 :=
+  (args.getD i "").toNat!.toUInt64
+
+/-- See `u64Arg` (the bool convention: "1" = true — the ser form). -/
+def boolArg (args : List String) (i : Nat) : Bool :=
+  args.getD i "" == "1"
+
+/-- THE WIN-PIN FIXTURE (R2): a scratch demo fn registered HERE — not in
+    DemoFn — and NO resultOf arm was written for it. Its arm exists only
+    because the registry fold derived it; the #guard after `resultOf`
+    pins the derived verdict (build red = the derivation broke). -/
+@[schema_fn]
+def scratchTriple (x : UInt64) : UInt64 := x * 3 + 1
+
+open Lean in
+/-- One application step for the fold's arg chain (`foldl` helper). The
+    splice rides `Unhygienic.run` — v4.33's antiquot quotations are
+    monadic-only, and these run in PURE defs. -/
+def armAppSplice (acc : Term) (t : Term) : Term :=
+  Unhygienic.run `($acc $t)
+
+open Lean in
+/-- The fold's cons step (pure, like `armAppSplice`). -/
+def armConsSplice (e acc : Term) : Term :=
+  Unhygienic.run `($e :: $acc)
+
+open Lean in
+/-- The lambda wrap (the arity guard lives in the body — see the fold). -/
+def armLamOf (body : Term) : Term :=
+  Unhygienic.run `(fun (args : List String) => $body)
+
+open Lean in
+/-- The arm ENTRY (the WIT name keyed pair). -/
+def armEntryOf (wit : String) (lam : Term) : Term :=
+  Unhygienic.run `(($(quote wit), $lam))
+
+open Lean in
+/-- The per-ret render (the value → ser form; u64/bool/string — the
+    derivable surface; byte-exact with the old hand arms). -/
+def armRenderOf : SchemaLang.Ty → Term → Term
+  | .u64, app => Unhygienic.run `(toString ($app))
+  | .bool, app => Unhygienic.run `((if $app then "1" else "0"))
+  | .string, app => app
+  | _, _ => Unhygienic.run `((String.mk []))
+
+open Lean in
+/-- The arg-reader term per param Ty (the flat position `i`). -/
+def armArgOf : SchemaLang.Ty → Nat → Term
+  | .u64, i => Unhygienic.run `(u64Arg args $(quote i))
+  | .bool, i => Unhygienic.run `(boolArg args $(quote i))
+  | _, _ => Unhygienic.run `((String.mk []))
+
+open Lean in
+/-- The arity guard: the hand match's exact-arity patterns (drift → "?"). -/
+def armGuardOf (n : Nat) (body : Term) : Term :=
+  Unhygienic.run `(if args.length == $(quote n) then $body else "?")
+
+open Lean in
+/-- An ident with NO macro scope — the generated def must land at the
+    ROOT name (`oracleArms`), not a hygienic alias (a quotation ident
+    inside `elabCommand` is macro-scoped and would be invisible to the
+    file's later commands). -/
+def unscopedIdent (n : Name) : Term :=
+  { raw := Syntax.ident SourceInfo.none ⟨n.toString, 0, ⟨n.toString.length⟩⟩ n [] : Term }
+
+open Lean in
+/-- The generated def's `declId` (the raw ident as a decl-id node). -/
+def unscopedDeclId (n : Name) : TSyntax `Lean.Parser.Command.declId :=
+  { raw := Syntax.node .none `Lean.Parser.Command.declId #[unscopedIdent n] }
+
+open Lean Elab Command in
+/-- The fold: the registry's func items → the derived `oracleArms` def
+    (one eval per fn, keyed by the WIT export name — the SAME naming the
+    world fold uses, `Emit.kebab body.getString!`). A fn joins iff every
+    param Ty and the ret Ty are in the derivable surface (u64/bool
+    params; u64/bool/string rets) — anything else (record/variant
+    params, option/stream/bytes results) has no derivable arg/ser form
+    and stays in `resultOfHand`. The arm's arity guard mirrors the old
+    hand match's exact-arity patterns (drift → "?"). -/
+def oracleArmsCmd : CommandElabM Unit := do
+  let mut entries : Array Term := #[]
+  for (_ln, item) in SchemaLang.Meta.registeredItems (← getEnv) do
+    if let .func sig := item then
+      if sig.body.isAnonymous then continue -- snapshot round trip: body reconstructed anonymous
+      let wit := CodegenCore.Emit.kebab sig.body.getString!
+      let mut argTerms : Array Term := #[]
+      let mut derivable := true
+      for i in [0:sig.params.length] do
+        let ty := (sig.params[i]!).2
+        match ty with
+        | .u64   => argTerms := argTerms.push (armArgOf .u64 i)
+        | .bool  => argTerms := argTerms.push (armArgOf .bool i)
+        | _      => derivable := false
+      if !derivable then continue
+      let base : Term := mkIdent sig.body
+      let app := argTerms.foldl armAppSplice base
+      match sig.ret with
+      | .u64 | .bool | .string =>
+        entries := entries.push (armEntryOf wit (armLamOf (armGuardOf sig.params.length (armRenderOf sig.ret app))))
+      | _ => pure ()
+  let listT : Term := entries.foldr armConsSplice (mkIdent `List.nil)
+  elabCommand (← `(def $(unscopedDeclId `oracleArms) : List (String × (List String → String)) := $(listT)))
+
+open Lean Elab Command in
+/-- The command wrapper: elaborating `derive_oracle_arms` re-runs the
+    fold in the CURRENT environment (so a Tests module that registers
+    scratch fns first can re-derive its own table). -/
+syntax (name := deriveOracleArms) "derive_oracle_arms" : command
+
+open Lean Elab Command in
+@[command_elab deriveOracleArms]
+def elabDeriveOracleArms : CommandElab := fun _stx => oracleArmsCmd
+
+derive_oracle_arms
+
+-- The HAND-LISTED remainder (R2): the rows whose semantics is NOT in
+-- the registry. Each entry names why it cannot ride the fold:
+--  - `get-user`/`watch-users`: the result ser form — the "some({...})"/
+--    "(...)" renders are the HOST's convention (ser_val's forms), not
+--    registry data (the sig's ret `option<user>`/`stream<user>` carries
+--    no rendering).
+--  - `watch-counts`: same ser-form reason (the stream's collected list;
+--    the row pins the impl's [42, 43] through the host's render).
+--  - `user-valid`/`user-complete`: the flat-RECORD arg convention — the
+--    args are the record's FIELD VALUES flat (the wasm_diff arg-builder
+--    reconstructs Val::Record from them), a wire convention the sig's
+--    single `User` param does not carry. (`user-complete` also folds the
+--    tags gate OUTSIDE the VExpr — GuestlangStd's listLenU64 body.)
+--  - `order-error-valid`: the flat-VARIANT arg convention ([discr,
+--    payload], the f64-payload unread) + the bool ser form.
+--  - `verify-witness`: the byte-row convention (comma-joined decimal u8s)
+--    + the decode lane (`decWitness?` at the artifact's own fuel over the
+--    v1 empty certification context — DemoFn.verifyWitness's exact shape).
+def resultOfHand (fn : String) (args : List String) : String :=
   match fn, args with
-  | "double", [a] => toString (double a.toNat!.toUInt64)
-  | "is-big", [a] => if isBig a.toNat!.toUInt64 then "1" else "0"
-  | "adder", [a, b] => toString (adder a.toNat!.toUInt64 b.toNat!.toUInt64)
-  | "double-area", [a] => toString (doubleArea a.toNat!.toUInt64)
-  | "run-paps", [a] => toString (runPaps a.toNat!.toUInt64)
-  | "total", [a, b, c] => toString (total a.toNat!.toUInt64 b.toNat!.toUInt64 c.toNat!.toUInt64)
-  | "pick", [b, a, x] => toString (pick (b == "1") a.toNat!.toUInt64 x.toNat!.toUInt64)
-  | "str-len-demo", [a] => toString (GuestImpl.strLenDemo a.toNat!.toUInt64)
-  | "greet", [a] => GuestImpl.greet a.toNat!.toUInt64
   | "get-user", [a] => match GuestImpl.getUser a.toNat!.toUInt64 with
     | none => "none"
     | some u =>
@@ -651,6 +815,21 @@ def resultOf (fn : String) (args : List String) : String :=
     let ser := String.intercalate "," parts
     s!"({ser})"
   | _, _ => "?"
+
+/-- The expected-result fold (Lean's semantics is the authority). "?" is
+    unreachable for well-formed rows — `resolve` guards fn/arity first.
+    R2: the DERIVED lane (the registry fold's `oracleArms`) answers
+    first; the hand match (`resultOfHand`) is only the SER-FORM
+    remainder. -/
+def resultOf (fn : String) (args : List String) : String :=
+  match (oracleArms.find? fun (g, _) => g == fn) with
+  | some (_, eval) => eval args
+  | none => resultOfHand fn args
+
+-- THE WIN PIN (R2): `scratchTriple` was registered with NO oracle-arm
+-- edit — its verdict resolves through the DERIVED arm. Build red = the
+-- derivation broke.
+#guard (resultOf "scratch-triple" ["5"] == "16")
 
 /-- W6.3 phase 2: the schema surface the oracle compares against — the
     demo world's replayed-export signature table (export name × the

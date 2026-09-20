@@ -69,6 +69,17 @@ def FailureModeItem.diagnose (known : List String) (m : FailureModeItem) :
   m.payload.flatMap fun (fname, t) =>
     (t.check known).map fun d => s!"`{m.name}` payload `{fname}`: {d}"
 
+/-- The faults-local bridge, composed (the `universeWellFormed_iff`
+    family's transport — the Wf lane's `tyCheck_eq_nil_iff` applied
+    pointwise over the payload): the Bool projection's `true` means
+    every payload type's references resolve against `known`. -/
+theorem FailureModeItem.wellFormed_iff {known : List String}
+    (m : FailureModeItem) :
+    m.wellFormed known = true ↔
+      ∀ (f : String × Ty), f ∈ m.payload → SchemaLang.TyRefsOk known f.2 := by
+  simp only [FailureModeItem.wellFormed, List.all_eq_true, List.isEmpty_iff,
+    SchemaLang.tyCheck_eq_nil_iff]
+
 /-- The universe check: every mode well formed. Name uniqueness is the
     `DataRegistry.nodup` proof field — subsumed by the framework (W7.4),
     no longer a Bool check here. -/
@@ -113,6 +124,20 @@ unsafe def registerFaultItem
     (ext : SimplePersistentEnvExtension (Name × FailureModeItem) (List (Name × FailureModeItem)))
     (attr : Name) (decl : Name) : CoreM Unit := do
   let item ← evalConst FailureModeItem decl
+  -- The category-drift gate: `.unsupported` has no fast-observe rendering
+  -- (fast-observe's `ErrorCategory` is Content/Invariant/Transient/Fatal and
+  -- its `Policy` has no degrade action), so a spec carrying it would reach
+  -- rustc as `ErrorCategory::Unsupported` and fail the CONSUMER'S build —
+  -- rejected here, at registration, where the spec author is looking.
+  -- Mapping it to an expressible category is a deliberate decision
+  -- (see Faults.Category), not emitter sleight of hand.
+  if item.category == Category.unsupported then
+    throwError
+      s!"`{attr}`: failure-mode `{item.name}` has category `.unsupported` — \
+         fast-observe's `ErrorCategory` has no Unsupported variant (and no \
+         degrade `Policy`), so this cannot be emitted; the spec would fail \
+         rustc in the consumer. Pick an expressible category, or first map \
+         `.unsupported` in `Category.rustName` (see Faults.Category's header)."
   if let some (other, _) :=
       (ext.getState (← getEnv)).find? (fun (_, it) => it.name == item.name) then
     throwError

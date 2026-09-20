@@ -42,6 +42,11 @@ public import Mathlib.Algebra.Order.Ring.Int
 public import Mathlib.Tactic.Ring
 public import Dbsp.ChangeSpec
 
+-- The shared delta/lens law shape (`DisjointCommute`): the instance
+-- below cites it. Kit is core-only — no mathlib leak (W5.4 constraint
+-- 14), so the public import is safe for dbsp's downstream.
+public import CodegenCore.Kit
+
 -- W5.4 module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
@@ -73,6 +78,19 @@ class DeltaSystem (S Loc Mut : Type) extends Change S Mut where
       ∀ (s : S), Change.patch (Change.patch s m₂) m₁ = Change.patch (Change.patch s m₁) m₂
 
 variable {S Loc Mut : Type} {sys : DeltaSystem S Loc Mut}
+
+/-- THE unification (the lens/delta law family, one shape): a delta
+    system IS a `CodegenCore.DisjointCommute` at `L := List Loc` — a
+    mutation's location IS its static write set, `Disjoint` =
+    `LocDisjoint`, and the law field CITES `disjoint_commutes` (the
+    `.symm` aligns the two shapes' side order; no re-proof). -/
+instance instDisjointCommuteOfDeltaSystem {S Loc Mut : Type}
+    [sys : DeltaSystem S Loc Mut] :
+    CodegenCore.DisjointCommute S (List Loc) Mut where
+  apply := sys.patch
+  loc := sys.writesOf
+  Disjoint := LocDisjoint
+  disjoint_commutes m₁ m₂ hd s := (sys.disjoint_commutes m₁ m₂ hd s).symm
 
 /-! ### Derived laws -/
 

@@ -37,6 +37,10 @@ The lanes (each names the error constructor it rules out):
    items)).isOk`) is DEFERRED: it needs a `String.splitOn`/`List.span`
    lemma surface over `Char` runs that the imported libraries do not
    carry (the format's line/keyword reasoning, not a schema fact).
+   Cost verdict: two landing attempts failed on the string-lemma surface
+   (2026-09-22); the PropSpec sweep + the Lean↔Rust differential carry
+   the executable evidence; the law stays deferred until the lemma
+   surface exists upstream.
 6. VARIANT ACCESS — `VRow.isName` guards `CasePath.payloadOf` (`none` =
    the fired tag is not this arm; the evaluator's 0-analog). The check
    is exact UNDER unique case names (`payloadOf_isSome_of_isName`);

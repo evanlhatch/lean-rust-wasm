@@ -46,29 +46,21 @@ open Dbsp
 
 /-! ## The Dbsp.ChangeSpec shape, IMPORTED (the dependency landed)
 
-The change-structure classes were re-declared here while Machines did
-not depend on dbsp; the dependency direction now allows the import, so
-the copies are gone. `Change`/`Difference`/`ChangeInversion`/`Noc`/
-`LawfulNoChange` + the `AddCommGroup` `groupSelf` instances all live in
-`Dbsp.ChangeSpec`; this module keeps the MACHINES-side aliases
-(`patch`/`patch_zero`) and the rest of the linearity story. -/
+The change-structure classes live in `Dbsp.ChangeSpec`;
+`Change`/`Difference`/`ChangeInversion`/`Noc`/`LawfulNoChange` + the
+`AddCommGroup` `groupSelf` instances all live there, and its laws
+(`group_rollback`, `correct_noc`) are CITED, not restated here. This
+module keeps the machines-side alias `patch` and the rest of the
+linearity story. -/
 
 section
 variable {α : Type} [AddCommGroup α]
 
 /-- Patch a state by a delta: addition in the group. The `Change.patch`
-    of the Dbsp spec shape — the machines-side alias. -/
+    of the Dbsp spec shape — the machines-side alias (its laws are
+    Dbsp.ChangeSpec's: `group_rollback` for rollback,
+    `LawfulNoChange.correct_noc` for the zero patch). -/
 def patch (s δ : α) : α := Change.patch s δ
-
-theorem patch_zero (s : α) : patch s 0 = s := by
-  change s + 0 = s
-  exact add_zero s
-
-/-- Rollback of a group delta restores the value (the Dbsp revert law,
-    restated through the local alias). -/
-theorem group_rollback (t Δt : α) : patch (patch t Δt) (-Δt) = t := by
-  change Change.patch (Change.patch t Δt) (-Δt) = t
-  exact Dbsp.group_rollback (α := α) t Δt
 
 end
 
@@ -219,7 +211,8 @@ theorem incremental_run_equiv (m : Machine) [AddCommGroup m.State] [LinearMachin
 theorem runState_zero_chain (m : Machine) [AddCommGroup m.State] [LinearMachine m]
     (s₀ : m.State) (trace : List m.Label) :
     m.runState (patch s₀ 0) trace = m.runState s₀ trace := by
-  rw [patch_zero]
+  have h0 : patch s₀ 0 = s₀ := Dbsp.LawfulNoChange.correct_noc s₀
+  rw [h0]
 
 end Machines
 

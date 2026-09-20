@@ -199,7 +199,13 @@ def internalsPage : String := capturedInternalsPage
     `run` ignores the ctx — the page was captured at build time (see the
     capture point above); the emitter discipline's purity is preserved
     trivially. Registered in `SchemaLang.Emit.Registry.coreEmitters`, so
-    the forge-jobs manifest (and its byte-tie) pick it up by derivation. -/
+    the forge-jobs manifest (and its byte-tie) pick it up by derivation.
+
+    W7.9 `Emitter.law` sweep — NO law, and why: the page's content is
+    Lean's OWN module docstrings replayed through the environment (the
+    capture elaborates-or-THROWS — the failure mode is loud at build
+    time, not an emitted-artifact risk), so there is no spec→artifact
+    correspondence left to state by emission time. -/
 def internalsEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "internals-docs"
   style := .hash

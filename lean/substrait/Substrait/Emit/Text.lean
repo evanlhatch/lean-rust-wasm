@@ -34,6 +34,7 @@ module
 
 public import Substrait.Proto.Plan
 public import Substrait.Grammar
+public import TextKit
 
 @[expose] public section
 
@@ -43,37 +44,25 @@ namespace Substrait.Emit.Text
 
 /-! ## Primitive formatting -/
 
+-- The four generic text primitives (`isIdentChar`, `isIdentifier`,
+-- `escape`, `name`) LIVE in `TextKit.Basic` now (core-only, lifted with
+-- the parser-inversion kit that is proved over them). This module
+-- re-exports them under the historical `Emit.Text.*` names — every
+-- reference (emitter sites, decoder proofs, the byte surface) names the
+-- SAME constant, not a copy.
+export TextKit (isIdentChar isIdentifier escape name)
+
+
 /-- Repeat a string `n` times (core has no `String.replicate` — checked
-    the 4.33 toolchain's Init/Data/String: only `List.replicate` exists). -/
+    the 4.33 toolchain's Init/Data/String: only `List.replicate` exists;
+    spelled `String.join (List.replicate n s)`). -/
 def replicate (s : String) (n : Nat) : String :=
-  (List.range n).foldl (fun acc _ => acc ++ s) ""
+  String.join (List.replicate n s)
 
 /-- Right-align a nat in a field of width `n` (textify's `{anchor:3}`). -/
 def rightJustify (n : Nat) (x : Nat) : String :=
   let s := toString x
   if s.length ≥ n then s else replicate " " (n - s.length) ++ s
-
-/-- Is `c` a plain ASCII graphic-identifier character? -/
-def isIdentChar (c : Char) : Bool :=
-  c.isAlpha || c.isDigit || c == '_'
-
-/-- Is `s` a valid bare identifier (ASCII letter first, alnum/underscore after)? -/
-def isIdentifier (s : String) : Bool :=
-  match s.toList with
-  | [] => false
-  | c :: rest => c.isAlpha && rest.all isIdentChar
-
-/-- Escape a string for quoted identifiers and string literals (textify `escaped`). -/
-def escape (s : String) : String :=
-  s.toList.foldl (fun acc c =>
-    acc ++ match c with
-    | '\n' => "\\n" | '\t' => "\\t" | '\r' => "\\r"
-    | '\\' => "\\\\" | '"' => "\\\"" | '\'' => "\\'"
-    | c => toString c) ""
-
-/-- `Name` — bare when an identifier, else double-quoted. -/
-def name (n : String) : String :=
-  if isIdentifier n then n else "\"" ++ escape n ++ "\""
 
 /-- Join a list with a separator.  `abbrev` (reducible): proofs rewrite through
     to core `String.intercalate` lemmas directly. -/

@@ -9,6 +9,7 @@ public import CodegenCore.Emit.Core
 public import CodegenCore.Emit.Certified
 public import CodegenCore.Emit.Rust
 public import CodegenCore.AttrKit
+public import CodegenCore.GenKit
 public import CodegenCore.GuestGate
 public import CodegenCore.Kit
 public import CodegenCore.RoundTrip

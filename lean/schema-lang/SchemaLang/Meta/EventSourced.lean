@@ -28,11 +28,11 @@ Generated (for a record `R` with key field `k` of native type `K`):
 
 | decl | what |
 |---|---|
-| `R.esFields` | the field-list snapshot (the registry read, `abbrev`) |
+| `R.esFields` | alias of `R.fields` (the row-iso lane's field-list snapshot, `Meta.RowIso`) |
 | `R.esFieldsClosed` | the `FieldsClosed` witness (the codec's hypothesis) |
 | `R.esKey` | the key projection (declared key wins, else first field — `Item.keyOfWith`) |
-| `R.esToRow` / `R.esOfRow` | native ↔ `RowVals` bridges |
-| `R.esOfRow_esToRow` | the bridge round trip (proved) |
+| `R.esToRow` / `R.esOfRow` | aliases of `R.toRow` / `R.ofRow` — the `@[row_bridge]` Iso's fields (ONE bridge, both lanes; external names unchanged) |
+| `R.esOfRow_esToRow` | the bridge round trip (cites `R.ofRow_toRow` — no re-derivation) |
 | `R.Event` | THE DELTA VARIANT — `EventSourced.Delta R K` |
 | `R.replay` | replay = the I operator (fold the log to state) |
 | `R.replay_snoc` | LAW: replay-after-append = one more apply (cites `EventSourced.replay_snoc`) |
@@ -79,6 +79,7 @@ public import CodegenCore.AttrKit
 public import SchemaLang.EventSourced
 public import SchemaLang.Trace
 public import SchemaLang.Meta.Keys
+public meta import SchemaLang.Meta.RowIso
 public meta import SchemaLang.Delta
 public meta import SchemaLang.Keys
 
@@ -88,53 +89,9 @@ namespace SchemaLang.Meta
 
 open Lean
 
-/-- The v1 fragment entry: the schema type, its native Lean type, its
-    `Ty`/`Value`/`CodecClosed` constructors, and the core's unbox
-    projection (the key codec's decode half). -/
-meta structure EsFrag where
-  ty : Ty
-  leanTy : Name
-  tyCtor : Name
-  valueCtor : Name
-  ccCtor : Name
-  unboxFn : Name
-
-/-- The v1 event-sourcing fragment: the flat scalars whose `Value`
-    constructor carries the NATIVE Lean type verbatim (boxing is
-    wrapper-only, both directions) and whose wire round trip is proved
-    (`CodecClosed`). Everything else — floats, bytes, option/list/
-    result/tensor/future/stream, `.ty` refs — is a loud elaboration
-    error naming the field (the CodecValue doctrine, extended). -/
-meta def esFragment : List EsFrag :=
-  [ ⟨.bool, ``Bool, ``SchemaLang.Ty.bool, ``SchemaLang.Value.bool,
-     ``SchemaLang.CodecClosed.bool, ``SchemaLang.EventSourced.unboxBool⟩
-  , ⟨.u8, ``UInt8, ``SchemaLang.Ty.u8, ``SchemaLang.Value.u8,
-     ``SchemaLang.CodecClosed.u8, ``SchemaLang.EventSourced.unboxU8⟩
-  , ⟨.u16, ``UInt16, ``SchemaLang.Ty.u16, ``SchemaLang.Value.u16,
-     ``SchemaLang.CodecClosed.u16, ``SchemaLang.EventSourced.unboxU16⟩
-  , ⟨.u32, ``UInt32, ``SchemaLang.Ty.u32, ``SchemaLang.Value.u32,
-     ``SchemaLang.CodecClosed.u32, ``SchemaLang.EventSourced.unboxU32⟩
-  , ⟨.u64, ``UInt64, ``SchemaLang.Ty.u64, ``SchemaLang.Value.u64,
-     ``SchemaLang.CodecClosed.u64, ``SchemaLang.EventSourced.unboxU64⟩
-  , ⟨.i8, ``Int8, ``SchemaLang.Ty.i8, ``SchemaLang.Value.i8,
-     ``SchemaLang.CodecClosed.i8, ``SchemaLang.EventSourced.unboxI8⟩
-  , ⟨.i16, ``Int16, ``SchemaLang.Ty.i16, ``SchemaLang.Value.i16,
-     ``SchemaLang.CodecClosed.i16, ``SchemaLang.EventSourced.unboxI16⟩
-  , ⟨.i32, ``Int32, ``SchemaLang.Ty.i32, ``SchemaLang.Value.i32,
-     ``SchemaLang.CodecClosed.i32, ``SchemaLang.EventSourced.unboxI32⟩
-  , ⟨.i64, ``Int64, ``SchemaLang.Ty.i64, ``SchemaLang.Value.i64,
-     ``SchemaLang.CodecClosed.i64, ``SchemaLang.EventSourced.unboxI64⟩
-  , ⟨.string, ``String, ``SchemaLang.Ty.string, ``SchemaLang.Value.string,
-     ``SchemaLang.CodecClosed.string, ``SchemaLang.EventSourced.unboxString⟩
-  ]
-
-/-- Fragment lookup (the gate calls this only after the membership
-    check). -/
-meta def esFragOf (t : Ty) : CoreM EsFrag := do
-  match esFragment.find? (fun f => f.ty == t) with
-  | some f => pure f
-  | none => throwError s!"event_sourced: internal: `{repr t}` passed the fragment gate but has no entry"
-
+-- the v1 fragment entry is `BridgeFrag` (Meta.RowIso) now — the SAME
+-- table the row-iso lane consumes (one fragment, two lanes); the
+-- `EsFrag` name is retired
 /-- The provenance registry: record declaration ↦ the declarations the
     attribute minted for it. Append-only, replayed from oleans at
     import (the `CodegenCore.mkRegistryExt` semantics). -/
@@ -146,84 +103,24 @@ initialize eventSourcedExt :
 meta def eventSourcedDecls (env : Environment) : List (Name × List Name) :=
   eventSourcedExt.getState env
 
-/-- The generated-declaration kinds: theorems are kernel-checked; defs
-    are compiled (the journal/machine consumers evaluate them);
-    `abbrev`s additionally reduce at elaboration (the dot-notation and
-    instance-search discipline). -/
-meta inductive EsGenKind where
-  | thm | dfn | abbr
-
-/-- Elaborate one generated declaration (type + value SYNTAX) and add
-    it to the environment, with its provenance doc string. -/
-meta def elabGen (record short : Name) (doc : String)
-    (tyStx valStx : Syntax) (kind : EsGenKind) : CoreM Unit := do
-  let name := record ++ short
-  Lean.Meta.MetaM.run' <| Elab.Term.TermElabM.run' do
-    let ty ← Elab.Term.elabTerm tyStx none
-    Elab.Term.synthesizeSyntheticMVarsNoPostponing
-    let ty ← instantiateMVars ty
-    let val ← Elab.Term.elabTerm valStx (some ty)
-    Elab.Term.synthesizeSyntheticMVarsNoPostponing
-    let val ← instantiateMVars val
-    if ty.hasExprMVar || val.hasExprMVar then
-      throwError s!"event_sourced: internal: unresolved metavariables in `{name}`"
-    match kind with
-    | .thm =>
-      Lean.addDecl (Declaration.thmDecl {
-        name, levelParams := [], type := ty, value := val })
-    | .dfn | .abbr =>
-      Lean.addAndCompile (Declaration.defnDecl {
-        name, levelParams := [], type := ty, value := val
-        , hints := match kind with | .abbr => .abbrev | _ => .opaque
-        , safety := .safe })
-      -- the `abbrev` hint in the declaration alone does not reach
-      -- instance search (addDecl'd defs miss the reducibility attr
-      -- table — the generated `R.Event` must unfold there)
-      match kind with
-      | .abbr => Lean.setReducibleAttribute name
-      | _ => pure ()
-  Lean.addDocStringCore name doc
-
+-- the generated-declaration kinds + the elaborator (`GenKind`/
+-- `elabGen`) live in `Meta.RowIso` now — one copy, shared with the
+-- row-iso lane; the shapes are unchanged
 /-! ## The term builders (CoreM; the `Meta.Derive`/`Meta.Gen` builders
     are CommandElabM-typed and cannot ride an attribute handler — the
-    shapes are theirs, the monad is the difference) -/
-
-/-- One field → its `Field` literal term. -/
-meta def esFieldTerm (f : Field) : CoreM Term := do
-  let frag ← esFragOf f.ty
-  `(⟨$(quote f.name), $(mkIdent frag.tyCtor)⟩)
+    shapes are theirs, the monad is the difference. The row-bridge
+    builders — field literal, toRow cons-chain, ofRow nested match —
+    live in `Meta.RowIso` now; only the `FieldsClosed` witness is
+    event-sourcing-specific.) -/
 
 /-- The `FieldsClosed` witness term: `cons` per field over `nil`
     (Trace's inductive family; flat fragment = no recursion). -/
 meta def esFieldsClosedTerm : List Field → CoreM Term
   | [] => `(SchemaLang.FieldsClosed.nil)
   | f :: fs => do
-      let frag ← esFragOf f.ty
+      let frag ← bridgeFragOf f.ty
       let rest ← esFieldsClosedTerm fs
       `(SchemaLang.FieldsClosed.cons $(mkIdent frag.ccCtor) $rest)
-
-/-- The `.cons`-chain row literal over the record's projections,
-    boxing each per its schema type. -/
-meta def esToRowTerm (record : Name) (r : Ident) : List Field → CoreM Term
-  | [] => `(.nil)
-  | f :: fs => do
-      let frag ← esFragOf f.ty
-      let rest ← esToRowTerm record r fs
-      let proj := mkIdent (record ++ Name.mkSimple f.name)
-      `(.cons ($(mkIdent frag.valueCtor) ($proj $r)) $rest)
-
-/-- The nested-match row destructor: one `.cons` level per field, a
-    final `.nil`, the record rebuilt from the unboxed payloads. -/
-meta partial def esOfRowGo : (rest : List Field) → (src : Ident) →
-    (i : Nat) → (acc : Array Term) → CoreM Term
-  | [], src, _, acc => `(match $src:term with | .nil => ⟨$[$acc],*⟩)
-  | f :: fs, src, i, acc => do
-      let frag ← esFragOf f.ty
-      let v := mkIdent (Name.mkSimple s!"v{i}")
-      let tail := mkIdent (Name.mkSimple s!"t{i}")
-      let body ← esOfRowGo fs tail (i + 1)
-        (acc.push (← `($(mkIdent frag.unboxFn) $v)))
-      `(match $src:term with | .cons $v $tail => $body)
 
 /-- The attribute handler: read the registry, gate the fragment,
     assemble the lane. -/
@@ -244,13 +141,17 @@ meta def eventSourcedAdd (decl : Name) : CoreM Unit := do
         `schema_keys` declaration names the key field)"
 
   for f in fields do
-    unless (esFragment.any (fun fr => fr.ty == f.ty)) do
+    unless (bridgeFragment.any (fun fr => fr.ty == f.ty)) do
       throwError s!"@[event_sourced] `{decl}`: field `{f.name}` has type \
         {repr f.ty}, outside the v1 event-sourcing fragment \
         (flat scalars: Bool/UInt8–UInt64/Int8–Int64/String) — the journal \
         codec needs the codec-closed round trip and the native↔row boxing \
         needs a one-level `Value` ctor"
-  let keyFrag ← esFragOf keyF.ty
+  -- the row bridge (the shared record↔row Iso — `Meta.RowIso`; the
+  -- fragment IS this fragment, and esToRow/esOfRow become its
+  -- aliases; idempotent, so `@[row_bridge]` composes in any order)
+  rowBridgeAdd decl
+  let keyFrag ← bridgeFragOf keyF.ty
   let R := mkIdent decl
   let keyTy := mkIdent keyFrag.leanTy
   let keyTyCtor := mkIdent keyFrag.tyCtor
@@ -261,30 +162,32 @@ meta def eventSourcedAdd (decl : Name) : CoreM Unit := do
   let doc (what : String) : String :=
     s!"{what} (generated by `@[event_sourced]` on `{decl}` — the event-log row, W5.1)"
   let gen (short : Name) (what : String)
-      (tyStx valStx : Syntax) (kind : EsGenKind) : CoreM Unit :=
+      (tyStx valStx : Syntax) (kind : GenKind) : CoreM Unit :=
     elabGen decl short (doc what) tyStx valStx kind
-  -- the schema snapshot + the closure witness
-  let fieldTerms ← fields.mapM esFieldTerm
-  gen `esFields "The field-list snapshot (the registry read)."
-    (← `(List SchemaLang.Field)) (← `([$fieldTerms.toArray,*])) .abbr
+  -- the schema snapshot (ALIAS of the row-iso lane's `fields`) + the
+  -- closure witness
+  gen `esFields "Alias of `R.fields` (the row-iso lane's field-list snapshot — `Meta.RowIso`)."
+    (← `(List SchemaLang.Field)) (← `($(id `fields))) .abbr
   gen `esFieldsClosed "The codec-closure witness (the row codec's hypothesis)."
     (← `(SchemaLang.FieldsClosed $(id `esFields)))
     (← esFieldsClosedTerm fields) .dfn
   -- the key projection
   gen `esKey "The key projection (the declared key when present, else the first field — `Item.keyOfWith` at the registry)."
     (← `($R → $keyTy)) (← `(fun r => $(mkIdent (decl ++ Name.mkSimple keyF.name)):ident r)) .abbr
-  -- the native ↔ row bridges + their round trip
+  -- the native ↔ row bridges: ALIASES of the row-iso lane's fields
+  -- (`Meta.RowIso` — one bridge, both lanes; the external names
+  -- unchanged: ledger's `Account.esToRow` consumers)
   let rId : Ident := ⟨← `(r)⟩
-  gen `esToRow "Native → row (the journal codec's encode half rides it)."
+  gen `esToRow "Alias of `R.toRow` (the `@[row_bridge]` Iso's forward field — the journal codec's encode half rides it)."
     (← `($R → SchemaLang.RowVals $(id `esFields)))
-    (← `(fun $rId:ident => $(← esToRowTerm decl rId fields))) .abbr
+    (← `(fun $rId:ident => $(id `toRow) $rId)) .abbr
   let rowId : Ident := ⟨← `(row)⟩
-  gen `esOfRow "Row → native (one `.cons` level per field, unboxed)."
+  gen `esOfRow "Alias of `R.ofRow` (the `@[row_bridge]` Iso's inverse field — one `.cons` level per field, unboxed)."
     (← `(SchemaLang.RowVals $(id `esFields) → $R))
-    (← `(fun $rowId:ident => $(← esOfRowGo fields rowId 0 #[]))) .abbr
-  gen `esOfRow_esToRow "The bridge round trip."
+    (← `(fun $rowId:ident => $(id `ofRow) $rowId)) .abbr
+  gen `esOfRow_esToRow "The bridge round trip (cites `R.ofRow_toRow` — no re-derivation)."
     (← `(∀ (r : $R), $(id `esOfRow) ($(id `esToRow) r) = r))
-    (← `(by intro r; cases r; rfl)) .thm
+    (← `(fun r => $(id `ofRow_toRow) r)) .thm
   -- (a) the delta variant + (c) replay + its law
   gen `Event "THE DELTA VARIANT (`EventSourced.Delta` — the Delta.lean shape: insert/update carry the full row, remove the key)."
     (← `(Type)) (← `(SchemaLang.EventSourced.Delta $R $keyTy)) .abbr
@@ -388,7 +291,8 @@ meta def eventSourcedAdd (decl : Name) : CoreM Unit := do
     (← `(fun l s h => Machines.RewindableMachine.revert_left $(id `esMachine) l s h)) .thm
   -- provenance: the (record, generated) row
   let generated : List Name :=
-    [ `esFields, `esFieldsClosed, `esKey, `esToRow, `esOfRow
+    [ `fields, `toRow, `ofRow, `toRow_ofRow, `ofRow_toRow, `rowIso
+    , `esFields, `esFieldsClosed, `esKey, `esToRow, `esOfRow
     , `esOfRow_esToRow, `Event, `replay, `replay_snoc
     , `esEncode, `esDecode?, `esRow_roundtrip
     , `esEncodeKey, `esDecodeKey?, `esKey_roundtrip
