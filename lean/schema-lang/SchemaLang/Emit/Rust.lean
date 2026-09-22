@@ -523,9 +523,13 @@ end SchemaLang.Emit.Rust
     `future`/`stream` arms are unrepresentable (`tyRustNA`'s `nomatch`
     — the raw `tyRust`'s silent unwrap cannot fire); the bytes are the
     raw path's own (`schemaItemsChecked_eq` + the byte-tie gate). The
-    `none` arm is the pre-evidence fallback for callers that never ran
-    the check (test fixtures over synthetic universes) — the paths
-    agree, so either way the output is identical.
+    checked-path sweep: the `none` arm is GONE — the emitter is TOTAL
+    over the checked view (an uncheckable ctx emits nothing, loud via
+    the EMPTY artifact). The raw folds (`schemaItems`/`tyRust`/
+    `recordItem`/`variantItem`) and the `*_eq` coincidence theorems
+    STAY: the raw folds are external test/seam surfaces (Tests over
+    synthetic universes, Faults/Delta's `tyRust`), and the `*_eq` laws
+    pin the checked fold to the raw one's bytes.
 
     W7.3 phase 2: `law` is POPULATED (`rustLaw` — the field/payload
     async-freedom as the emission contract), discharged by
@@ -539,7 +543,7 @@ def rustEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   run ctx :=
     let items := match ctx.checkedItems? with
       | some cu => SchemaLang.Emit.Rust.schemaItemsChecked cu
-      | none => SchemaLang.Emit.Rust.schemaItems ctx.items
+      | none => []
     [
       { path := "../../generated/rust/schema_generated.rs"
         contents := CodegenCore.Emit.Rust.renderModule items }

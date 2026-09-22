@@ -312,4 +312,54 @@ def emitterAuditRules : List TestKit.GateKit.AuditRule :=
   , { name := "no-unsafe", pattern := "unsafe "
     , why := "generated code stays in the safe subset" } ]
 
+/-! ## The certified driver lane (the `Emitter.runCertified` wiring) -/
+
+/-- The certified driver view of the registry: EVERY emitter, already
+    RUN, each through its certified lane. The law-carrying emitters
+    run via `Emitter.runCertified` with their DISCHARGED law
+    (`<law>Law_discharged ctx` — the artifact is unemittable without
+    the certificate); emitters without a law run plainly. The
+    discharge sites are the CONCRETE emitter constants (an opaque
+    `Emitter` variable cannot discharge its `Cert` — the law field
+    does not reduce; the pairing here is the reduction). The emitted
+    BYTES are identical either way (`runCertified` = `run`,
+    certificate in hand); the certification is the artifact's
+    well-formedness evidence, not a content switch. ORDER = the
+    registry's own (`coreEmitters` append-order — the drivers' write
+    order). A law added to some emitter MUST join this list at the
+    concrete site (the driver-coverage discipline: an uncertified run
+    in production is a silent downgrade — and the empty `_ => e.run`
+    fallback is only the no-law cases). -/
+def certifiedJobs (ctx : GenCtx) :
+    List (CodegenCore.Emit.Emitter GenCtx × List CodegenCore.Emit.GeneratedFile) :=
+  [ (witEmitter, witEmitter.runCertified ctx (SchemaLang.Emit.Wit.witEmitterLaw_discharged ctx))
+  , (flagsWitEmitter, flagsWitEmitter.runCertified ctx (SchemaLang.Emit.Wit.flagsWitLaw_discharged ctx))
+  , (rustEmitter, rustEmitter.runCertified ctx (SchemaLang.Emit.Rust.rustLaw_discharged ctx))
+  , (genRustEmitter, genRustEmitter.runCertified ctx (SchemaLang.Emit.GenRust.genRustLaw_discharged ctx))
+  , (SchemaLang.Vortex.Emit.vortexEmitter,
+     SchemaLang.Vortex.Emit.vortexEmitter.runCertified ctx (SchemaLang.Vortex.Emit.vortexLaw_discharged ctx))
+  , (SchemaLang.Vortex.Emit.extVortexEmitter, SchemaLang.Vortex.Emit.extVortexEmitter.run ctx)
+  , (deltaEmitter, deltaEmitter.run ctx)
+  , (deltaWitEmitter, deltaWitEmitter.run ctx)
+  , (changeSpecEmitter, changeSpecEmitter.run ctx)
+  , (SchemaLang.Emit.Invariant.invariantEmitter, SchemaLang.Emit.Invariant.invariantEmitter.run ctx)
+  , (SchemaLang.Emit.Update.updateEmitter, SchemaLang.Emit.Update.updateEmitter.run ctx)
+  , (SchemaLang.Emit.Typestate.typestateEmitter,
+     SchemaLang.Emit.Typestate.typestateEmitter.runCertified ctx (SchemaLang.Emit.Typestate.typestateLaw_discharged ctx))
+  , (SchemaLang.Emit.Machine.orderMachineEmitter,
+     SchemaLang.Emit.Machine.orderMachineEmitter.runCertified ctx (SchemaLang.Emit.Machine.orderMachineLaw_discharged ctx))
+  , (SchemaLang.Emit.Circuit.circuitEmitter,
+     SchemaLang.Emit.Circuit.circuitEmitter.runCertified ctx (SchemaLang.Emit.Circuit.circuitLaw_discharged ctx))
+  , (SchemaLang.Emit.Witness.witnessEmitter,
+     SchemaLang.Emit.Witness.witnessEmitter.runCertified ctx (SchemaLang.Emit.Witness.witnessLaw_discharged ctx))
+  , (pipelineEmitter, pipelineEmitter.runCertified ctx (pipelineLaw_discharged ctx))
+  , (WitFixture.fixtureEmitter, WitFixture.fixtureEmitter.run ctx)
+  , (WitFixture.manifestEmitter, WitFixture.manifestEmitter.run ctx)
+  , (WitSweep.sweepFixtureEmitter, WitSweep.sweepFixtureEmitter.run ctx)
+  , (WitSweep.sweepManifestEmitter, WitSweep.sweepManifestEmitter.run ctx)
+  , (SchemaLang.Docs.docsEmitter, SchemaLang.Docs.docsEmitter.run ctx)
+  , (SchemaLang.ModuleDocs.internalsEmitter, SchemaLang.ModuleDocs.internalsEmitter.run ctx)
+  , (forgeJobsEmitter, forgeJobsEmitter.run ctx)
+  ]
+
 end SchemaLang.Emit

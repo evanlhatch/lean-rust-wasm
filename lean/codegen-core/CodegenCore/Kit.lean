@@ -168,7 +168,17 @@ instance : ToString Obligation.Tier := ⟨Obligation.Tier.render⟩
 
 /-- The discharge's EVIDENCE: which backend artifact carries it — a
     cited kernel theorem, a decide result, a generated check fn (at an
-    artifact path), an oracle row reference. -/
+    artifact path), an oracle row reference.
+
+    THE PROVED-TIER CITATION'S RESOLUTION (the evidence-language tie,
+    C7): `.citedProof thm` claims `thm` is a citable certificate — the
+    exact claim `Dbsp.Certs.#check_cert` verifies (`@[cert]`-registered
+    + a theorem + the required shape). The environment lives at
+    elaboration, so the shared resolution gate lives in Dbsp.Certs
+    (`certGate`, consumed by `#check_cert` and by
+    `Dbsp.Certs.citedProofResolves`, the data-level check over this
+    evidence — an obligation whose citedProof fails the gate is
+    mis-wired, checkable as data before emission). -/
 inductive Obligation.Evidence where
   | citedProof (thm : Lean.Name)
   | decided (result : Bool)
@@ -295,16 +305,20 @@ Each granularity instantiates the class by CITING its existing theorem
 (the proofs live where the semantics live; this file adds no proof): -/
 
 /-- THE shared law: `apply (apply s m₁) m₂ = apply (apply s m₂) m₁`
-    whenever the mutations' locations are disjoint. Two consumers, each
-    citing its existing theorem as the law field:
+    whenever the mutations' locations are disjoint. Two consumers,
+    each citing its existing theorem as the law field:
 
-    - `Dbsp.DeltaSystem` (`Dbsp.Effects`): `L := List Loc` — a
-      mutation's location IS its static write set; `Disjoint` =
-      `LocDisjoint`; the law cites `DeltaSystem.disjoint_commutes`.
+    - `Dbsp.DeltaSystem` (`Dbsp.Effects`, B3): DELTA EXTENDS the class
+      at `L := List Loc` — a mutation's location IS its static write
+      set; `Disjoint` = `LocDisjoint`; the law field is inherited and
+      each DeltaSystem instance fills it (cascadeSystem cites
+      `Update2.apply2_comm`, the schema-lang tick's law).
     - `SchemaLang.SchemaPath` (`SchemaLang.Lens`): `L := P` — a
       mutation is a path + its (dependent) value (`SchemaPath.Mut`, a
       sigma); `Disjoint` = the class's `Distinct`; the law cites
-      `put_comm`.
+      `put_comm` (via `instDisjointCommuteOfSchemaPath` — the class's
+      OTHER instance; the lens keeps its bridge because the path's
+      `Distinct` relation is lens-side data).
 
     The READ-neutrality companion (`SchemaPath.put_read_neutral`)
     deliberately stays lens-side: this structure has no read surface —

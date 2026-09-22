@@ -1,66 +1,36 @@
 /-
-# SchemaLang.Update — the update concept (SPEC-core §3, demoted to v1)
+# SchemaLang.Update — the row-level law module (v2's substrate)
 
-An update is the ONLY action concept: a NAMED, TOTAL, order-free batch
-transformation of one table's rows. The flatland demotion:
+v1→v2 (the owner's canon row, 2026): `SchemaLang.Update2` is THE row
+— a business rule / batch update is a `schema_update` on the v2
+surface (multi-SET / INSERT / DELETE, keyed, six kernel-checked laws).
+The v1 update surface (`UpdateItem`/`SomeUpdate`/`cascade2`/the
+`UpdatePure`/`NonInterfering` class pair) was DELETE-AND-SUPERSEDED:
+the cascade's composition laws now live at the v2 application
+semantics (TickCascade cites `Update2.apply2_comm` through its
+`Dbsp.DeltaSystem` instance), the authoring surface registers the v2
+row for EVERY `schema_update` (`Meta.Register.Updates`), the emitter
+consumes `update2ItemExt` (`Emit.GenCtx.updates2`), and the trace
+oracle's batches ride `SomeUpdate2` (Trace.lean).
 
-- **The guard is part of the body** — a `VExpr .bool` over the table's
-  fields; a row the guard refuses is untouched. There is no separate
-  gate/trigger/rate machinery (SPEC §6's dissolution table).
-- **The write is one column assignment** — the value expression is a
-  `VExpr` of the WRITTEN COLUMN'S OWN TYPE (the GADT index: a string
-  column cannot take a u64 expression — elaboration rejects it).
-- **Reads are DERIVED, never declared** (SPEC §3): `readsOf` folds both
-  expressions for their `.col` references. Nothing here is hand-listed.
-- **Batch semantics** (SPEC law 1): `applyRow` consults only the
-  ORIGINAL row — guard and value both read pre-update state; no
-  cascade WITHIN an update. Cascade is across updates, at the tick.
-- **The two-channel duality, pinned at the row level** (SPEC §4):
-  `ColPath.set_commute_same` = later-wins (overwrite channels are NOT
-  group elements — revert needs the old value); `ColPath.set_commute_disjoint`
-  = disjoint-column updates commute in either order (the order-free
-  composition law). Both are kernel-checked THERE, not asserted.
+What remains here — the ROW LAYER, consumed by Update2:
+- `VExpr.reads` — the DERIVED reads fold (the only folds' seed).
+- `ColPath.set` — the structural write (the overwrite channel).
+- The two-channel duality, pinned (SPEC §4): `set_commute_same`
+  (later-wins) and `set_commute_disjoint` (disjoint columns commute
+  in either order) — both kernel-checked HERE, consumed by Update2's
+  `applySets_perm`.
+- The reads-congruence family (write-locality + the raw/checked
+  evaluators' neutrality): `get_set_neutral`,
+  `evalV_set_neutral`, `evalRaw_set_neutral` — Update2's
+  `evalV_applySets`/`validates_applySets`/`RowTmpl.eval_*` consume
+  them. Moved from TickCascade at W8.3 (TickCascade drags
+  Dbsp.Effects; Update2 stays mathlib-free).
 
-The enforcement ladder hook: `selfReading` — the DERIVED linearity
-classification. An update whose value expression reads the written
-column is nonlinear (its journal needs the old value); one that doesn't
-is linear (delta-only). This is the flatland "old_values capture policy
-is COMPUTED" — the derivation the review's "armed but unfired"
-determinism machinery anticipated.
-
-Execution substrate: `RowVals`/`ColPath`/`VExpr` (SchemaLang.Validate) —
-the same row model the validators execute over, so the oracle reading
-and the compiled reading share one semantics.
-
-## DEMOTED — v2 is the row (canon). NO NEW USERS.
-
-The owner's v1→v2 deprecation: v2 (`SchemaLang.Update2`) is THE row — a
-business rule / batch update is a `schema_update` on the v2 surface
-(multi-SET / INSERT / DELETE, keyed, six kernel-checked laws).
-Everything that could migrate HAS: the cascade's composition laws now
-live at the v2 application semantics (TickCascade cites
-`Update2.apply2_comm` through its `Dbsp.DeltaSystem` instance), and the
-authoring surface registers the v2 row for EVERY `schema_update`.
-This module remains ONLY for the named consumers below — do not add
-more:
-- THE EMISSION REGISTRY (`updateItemExt` → `Emit.GenCtx.updates` →
-  `Emit.Update`): the byte-tie pins `updates_generated.rs` to these
-  rows. A v1 row is the singleton-SET image of the same registration's
-  v2 row (the command builds both from one elaboration) — emission is
-  byte-identical either way; switching the emitter to
-  `update2ItemExt` is the named follow-up (needs `Emit.GenCtx` + the
-  gates' `registeredUpdates` fold moved together, then a byte-tie
-  re-verification).
-- THE ROW-LEVEL LAW LAYER (`VExpr.reads`, `ColPath.set`, the
-  duality + reads-congruence theorems): Update2 consumes these — they
-  live here until the row layer gets its own module.
-- THE TRACE ORACLE's batch type (`Trace.Scenario.ticks : List (List
-  SomeUpdate)`) and the downstream suites still constructing v1 items
-  (proofkit, feature-flags) — out of the migration wave's scope.
-- `UpdateItem.cascade2` + the class pair (`UpdatePure` /
-  `NonInterfering`): kept compiling for those same downstream suites;
-  the v2 surface's pure lock (`Update2Pure`) and compat pack
-  (`Update2Compat`) supersede them for all new code.
+Also still here (kept compiling, per the migration wave's scope): the
+tick STAGE machine (`TickState` + `machine! tick` — SPEC §7, v1, the
+four phases as a machine). It pins the stage discipline the emitter's
+row-transform half compiles; it has no external consumers.
 -/
 
 module
@@ -87,130 +57,6 @@ def VExpr.reads {fs : List Field} : {t : Ty} → VExpr fs t → List String
   | _, .strlen e => e.reads
   | _, .not e => e.reads
 
-/-! ## The update item -/
-
-/-- One update over table `fs`, writing field `f`. Indexed by BOTH —
-    the value expression's type is the written column's type by
-    construction. The write PATH rides (data, resolved by the
-    registration command's `HasCol` instance search at elaboration —
-    a write to a column NOT on the table has no instance and fails to
-    elaborate; `Validate.lean`'s doctrine). -/
-structure UpdateItem (fs : List Field) (f : Field) where
-  /-- The update's name (load-bearing: provenance in the journal). -/
-  name : String
-  /-- The guard: rows failing it are untouched (part of the body —
-      not a separate concept). -/
-  guard : VExpr fs .bool
-  /-- The new value for the written column. -/
-  value : VExpr fs f.ty
-  /-- The structural write path (the elaboration-checked extraction
-      route — data, not a dictionary). -/
-  writePath : ColPath f.name f.ty fs
-  /-- The volatile func references, as the registration's scan STORED
-      them (`volatileSchemaFns` in `SchemaLang.Meta.Reflect` — the ONLY
-      legitimate writer of this field; like `reads`, never hand-listed
-      in spec data). The scan is the registration's first-line gate: a
-      nonempty scan FAILS elaboration, so a registered row always
-      carries `[]` — the field is the scan's decided fact, and
-      `UpdatePure.volatileFree` reads it. Hand-constructed items (test
-      mirrors, the registry default) default `[]` — pure by data. -/
-  volatileRefs : List String := []
-
-/-- The DERIVED read set (guard + value, deduped, registration order). -/
-def UpdateItem.reads {fs : List Field} {f : Field} (u : UpdateItem fs f) :
-    List String :=
-  (u.guard.reads ++ u.value.reads).eraseDups
-
-/-- The DERIVED write set (one column — the written field). -/
-def UpdateItem.writes {fs : List Field} {f : Field} (_u : UpdateItem fs f) :
-    List String :=
-  [f.name]
-
-/-- The DERIVED linearity classification: does the value expression
-    read the written column? `false` = linear (delta-only — the journal
-    needs no old value); `true` = nonlinear (overwrite: the journal
-    carries S0). COMPUTED, not declared — the capture policy's input. -/
-def UpdateItem.selfReading {fs : List Field} {f : Field}
-    (u : UpdateItem fs f) : Bool :=
-  u.value.reads.contains f.name
-
-/-! ## The law classes — the COMPOSABLE purity/non-interference locks
-
-Flatland TOOLKIT 4.1 doctrine: instance search IS proof assembly. The
-registration's syntactic scan (`volatileSchemaFns`) stays the FIRST
-line of defense — a `volatile` fn in a `schema_update` term fails at
-the command. The classes are the COMPOSITION-level lock: `schema_update`
-EMITS the `UpdatePure` instance at registration (the scan's decided
-fact, discharged `rfl` against the stored `volatileRefs` — if the gate
-ever stored a nonempty scan, the emitted proof FAILS to elaborate), and
-consumers (`cascade2`) take legality as INSTANCE BINDERS — a composite
-assembled from a volatile or interfering part is UNCONSTRUCTIBLE, no
-re-scan at the firing site.
-
-Scope (v1, honest): updates compose only through the CASCADE, so the
-composition laws live at the cascade level — `cascade2`'s instance
-binders ARE the `Pure g → Pure f → Pure (g ∘ f)` shape (legality of the
-composite = the conjunction of the steps' instances, assembled by
-search), and `NonInterfering.symm` is the pair-level composition law.
--/
-
-/-- THE PURE LOCK: the update's terms reference only pure (non-volatile)
-schema fns. The registration command constructs the instance (the scan
-runs there); hand-written instances are `⟨rfl⟩` against the stored
-data. -/
-class UpdatePure (fs : List Field) (f : Field)
-    (u : UpdateItem fs f) : Prop where
-  /-- The stored volatile-ref set is empty (the scan's decided fact). -/
-  volatileFree : u.volatileRefs = [] := by decide
-
-/-- The REGISTRATION-ROUTE constructor: an item built by `mk` whose
-    `volatileRefs` slot is literally `[]` is pure — the `rfl` reduces
-    on the ctor with the binders still abstract. The `schema_update`
-    command Qq-quotes this as the emitted instance's proof (W2.1): a
-    statically elaborated proof can only discharge against a NAMED
-    lemma — a raw `⟨rfl⟩` inside a quotation sees opaque antiquotes
-    and cannot reduce. -/
-theorem UpdatePure.emptyScan {fs : List Field} {f : Field} {n : String}
-    {g : VExpr fs .bool} {v : VExpr fs f.ty} {p : ColPath f.name f.ty fs} :
-    UpdatePure fs f (UpdateItem.mk n g v p []) :=
-  ⟨rfl⟩
-
-/-- THE NON-INTERFERENCE LOCK — literally `cascade_two_commute`'s
-hypothesis set as ONE class: neither update's TERMS (guard or value)
-read the other's written column, and the write columns differ. Every
-fact rides the DERIVED reads (never hand-listed); concrete updates
-discharge at construction via the slot's autoParam default (TOOLKIT
-4.2's ladder, the `decide` rung — decidable membership over the derived
-lists; the full ladder lives in `Proofkit.Ladder`). -/
-class NonInterfering (fs : List Field) (f₁ f₂ : Field)
-    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂) : Prop where
-  /-- The four non-membership facts + the distinct write columns. -/
-  noOverlap :
-    f₂.name ∉ u₁.guard.reads ∧ f₂.name ∉ u₁.value.reads
-      ∧ f₁.name ∉ u₂.guard.reads ∧ f₁.name ∉ u₂.value.reads
-      ∧ f₁.name ≠ f₂.name := by decide
-
-/-- The class → `cascade_two_commute`'s hypotheses: the class IS the
-hypothesis set — the extraction is the identity (the derived reads earn
-the composition: no hand-listing, no re-derivation). -/
-theorem NonInterfering.cascadeHyps {fs : List Field} {f₁ f₂ : Field}
-    {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
-    (h : NonInterfering fs f₁ f₂ u₁ u₂) :
-    f₂.name ∉ u₁.guard.reads ∧ f₂.name ∉ u₁.value.reads
-      ∧ f₁.name ∉ u₂.guard.reads ∧ f₁.name ∉ u₂.value.reads
-      ∧ f₁.name ≠ f₂.name :=
-  h.noOverlap
-
-/-- Composition (pair level): non-interference is symmetric — the SAME
-five facts, permuted (no new data, pure rearrangement). -/
-instance NonInterfering.symm {fs : List Field} {f₁ f₂ : Field}
-    {u₁ : UpdateItem fs f₁} {u₂ : UpdateItem fs f₂}
-    [h : NonInterfering fs f₁ f₂ u₁ u₂] :
-    NonInterfering fs f₂ f₁ u₂ u₁ where
-  noOverlap :=
-    ⟨h.noOverlap.2.2.1, h.noOverlap.2.2.2.1, h.noOverlap.1, h.noOverlap.2.1,
-      Ne.symm h.noOverlap.2.2.2.2⟩
-
 /-! ## The write: `ColPath.set` -/
 
 /-- Set the path's field to `v` — the structural write. Both the
@@ -221,51 +67,12 @@ def ColPath.set {n : String} {t : Ty} : {fs : List Field} →
   | _, .here, .cons _ vs, v => .cons v vs
   | _, .there p, .cons w vs, v => .cons w (p.set vs v)
 
-/-- The row-level semantics: guard first (on the ORIGINAL row), then
-    the value (ALSO from the original row — batch: no intra-update
-    cascade), then the write. A refused row passes through untouched. -/
-def UpdateItem.applyRow {fs : List Field} {f : Field}
-    (u : UpdateItem fs f) (row : RowVals fs) : RowVals fs :=
-  if validates u.guard row then
-    u.writePath.set row (evalV u.value row)
-  else row
-
-/-- The batch semantics: TOTAL, order-free over the table (each row is
-    independent — v1 updates read no other row; the map IS the
-    order-freedom, structurally). -/
-def UpdateItem.apply {fs : List Field} {f : Field}
-    (u : UpdateItem fs f) (rows : List (RowVals fs)) : List (RowVals fs) :=
-  rows.map u.applyRow
-
-/-- THE FIRING SITE (the consumer the classes were built for): the
-two-update cascade step, legality-locked. The instances are not
-decorations — a cascade step assembled from a VOLATILE update or an
-INTERFERING pair has no instance and CANNOT be constructed (instance
-search fails; the syntactic scan's composition-level upgrade). The
-instance binders are the composite purity law: legality of the whole =
-the conjunction of the steps' instances, assembled by search. -/
-def UpdateItem.cascade2 {fs : List Field} {f₁ f₂ : Field}
-    (u₁ : UpdateItem fs f₁) (u₂ : UpdateItem fs f₂)
-    [_hP₁ : UpdatePure fs f₁ u₁] [_hP₂ : UpdatePure fs f₂ u₂]
-    [_hNI : NonInterfering fs f₁ f₂ u₁ u₂]
-    (rows : List (RowVals fs)) : List (RowVals fs) :=
-  (rows.map u₂.applyRow).map u₁.applyRow
-
--- The composite's ORDER-FREEDOM (the law over the locked composite):
--- `cascade_two_commute` recovered STRUCTURALLY — its four
--- non-interference hypotheses come from the class field alone, via
--- `cascadeHyps` (the swap needs only the `symm` composition instance).
--- Stated in `Tests` — `cascade_two_commute` lives in `TickCascade`,
--- which imports THIS module (a theorem here would be an import cycle);
--- the Tests pin is the composition-level witness until the law moves
--- next to its consumer.
-
 /-! ## The two-channel duality, pinned (SPEC §4) -/
 
 /-- LATER-WINS (the overwrite channel): two writes to the SAME column
     compose by overwriting — the second survives. NOT a group (revert
     needs the old value — the journal carries S0 for self-reading
-    updates, the `selfReading` policy). -/
+    updates). -/
 theorem ColPath.set_commute_same {n : String} {t : Ty} : ∀ {fs : List Field}
     (p : ColPath n t fs) (row : RowVals fs) (v w : Value t),
     p.set (p.set row v) w = p.set row w := by
@@ -309,9 +116,10 @@ theorem ColPath.set_commute_disjoint {n₁ n₂ : String} {t₁ t₂ : Ty} :
 
 -- the row-level write-locality + reads-congruence lemmas live at the
 -- ROW layer (they mention no cascade); TickCascade's composition laws
--- and Update2's v2 laws both consume them through this module. The move
--- keeps Update2 mathlib-free (TickCascade drags Dbsp.Effects; the
--- feature-flags `Flag` collision lesson). Names unchanged.
+-- and Update2's v2 laws both consume them through this module. Names
+-- unchanged. The `selfReading`/linearity derivation lives on the v2
+-- surface now (`Update2Item`'s SET clauses: a clause whose value reads
+-- its own column is nonlinear).
 
 /-! ## The reads-membership simp family -/
 
@@ -462,58 +270,6 @@ theorem VExpr.evalRaw_set_neutral {fs : List Field} {n₁ : String} {t₁ : Ty} 
       simp only [evalRaw]
       rw [ih p₁ he row v]
 
-
-/-! ## The registered-update wrapper -/
-
-/-- The registered-update wrapper: the table's fields + the written
-    field + the update (the GADT indices ride the existentials — the
-    registry is a plain list of these). -/
-structure SomeUpdate where
-  fields : List Field
-  field : Field
-  update : UpdateItem fields field
-
--- W6.13 OPACITY DISCIPLINE (the schema-lang portion) — cedar's
--- proof-stability pattern: representation projections proofs should
--- never unfold are sealed so consumers go through the lemma interfaces.
--- The minimal safe step, `@[irreducible]` where NO consumer unfolds:
---
--- MARKED irreducible:
--- - `Validate.guardCastApply` — the cast-kit combinator; consumers are
---   the three registry eliminators below (compiled execution only) plus
---   its OWN lemma interface (`guardCastApply_self`/`_of_ne`, now
---   `simp only`-unfolded). No proof unfolds the raw `dite`.
--- - `SomeUpdate.applyRow` (below), `SomeUpdate.applyBatch` (Trace.lean),
---   `InvariantItem.checkOn` (Invariant.lean) — the existential wrappers'
---   eliminators; consumers are runtime asserts (irreducibility is an
---   elaborator hint — compiled code reduces regardless).
---
--- LEFT TRANSPARENT, with reason:
--- - `RowVals.cast` — its own interface lemmas (`cast_rfl` by `rfl`, the
---   `@[simp] cast_eq_cast` bridge to elaborator-inserted `▸`) must see
---   through it; sealing it breaks the bridge it names.
--- - `UpdateItem.applyRow`/`apply` — the cascade composition proofs
---   (Tests' `cascade_two_commute` pin, TickCascade) `simp [...]`-unfold
---   them BY DESIGN; their unfold set IS the proof interface.
--- - The structure projections (`SomeUpdate.fields/.field/.update`,
---   `SchemaInvariant.fields/.expr`, `InvariantItem.inv`) — per-projection
---   opacity needs the module system (`private`), the W5.4 step; the
---   emitters (Emit.Update/Emit.Invariant) are legitimate representation
---   consumers.
--- - `tickRows`/`tickTrace`/`runScenario` (Trace.lean) — the ORACLE;
---   replay consumers evaluate it and no lemma interface exists to hide
---   it behind yet.
-
-/-- Execute against a row whose field list CLAIMS to be the update's —
-    `guardCastApply` (Validate's cast kit, W3.6): the data equality
-    carries the proof, the update's `applyRow` runs on the cast row,
-    the result casts back; a foreign row passes through untouched.
-    `@[irreducible]` (W6.13 — see the block above). -/
-@[irreducible]
-def SomeUpdate.applyRow (u : SomeUpdate) {fs : List Field}
-    (row : RowVals fs) : RowVals fs :=
-  guardCastApply row u.update.applyRow row
-
 /-! ## The tick — the four phases as a machine (SPEC §7, v1) -/
 
 /-- The tick's phases: settle (external deltas + lifecycle) → cascade
@@ -535,13 +291,6 @@ def TickState.rank : TickState → Nat
   | .idle => 0 | .settled => 1 | .cascaded => 2
   | .resolved => 3 | .committed => 4 | .stale => 0
 
--- W7.3 phase 2: the `states:` clause is REMOVED — its generated
--- entourage (`tickStates`, `tickTrans`, `tickTableStep?` +
--- `tickTableStep?_eq_step?`, the `DecidablePred tick.Inv` instance) had
--- ZERO consumers (review finding, verified: no conformance battery
--- sweeps tick — unlike pipeline/orderMachine — and no emitter folds
--- its table). The machine itself (labels, the `rank:` theorems) is
--- untouched.
 machine! tick where
   State: TickState
   Inv: fun s => s ≠ .stale
@@ -569,4 +318,3 @@ theorem tick_happy : tick.run .idle [.settle, .cascade, .resolve, .commit]
   rfl
 
 end SchemaLang
-

@@ -324,8 +324,11 @@ end SchemaLang.Emit.GenRust
     CHECKED view (`GenCtx.checkedItems?` — the single checkpoint).
     Bytes unchanged (the fold is evidence-free — see the checked-view
     section above for which skip reasons are WF-dead and which are
-    fragment policy); the `none` arm is the test-fixture fallback for
-    callers that never ran the check — the paths agree.
+    fragment policy); the checked-path sweep: the `none` arm is GONE —
+    an uncheckable ctx emits nothing (loud via the empty artifact).
+    The raw folds STAY: the generator's loud-skip machinery is FRAGMENT
+    policy (its exclusions fire on well-formed input), not a WF
+    partiality the evidence could discharge.
 
     W7.9 `Emitter.law` sweep: `law` is POPULATED (`genRustLaw` — the
     checked view's input identity, discharged by the
@@ -344,7 +347,7 @@ def genRustEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   run ctx :=
     let items := match ctx.checkedItems? with
       | some cu => cu.val
-      | none => ctx.items
+      | none => []
     [
       { path := "../../generated/rust/gen_generated.rs"
         contents := CodegenCore.Emit.Rust.renderModule

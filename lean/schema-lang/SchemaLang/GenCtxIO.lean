@@ -6,7 +6,7 @@ The two-environment replay + `GenCtx` build that was byte-duplicated in
 admitted the copy). ONE copy here; both drivers consume.
 
 LEGACY (non-module) file BY DESIGN: it calls the meta env-extension
-accessors (`registeredItems`/`registeredInvariants`/`registeredUpdates`)
+accessors (`registeredItems`/`registeredInvariants`/`registeredUpdates2`)
 from IO code — constraint 12 of notes/w5-4-module-migration.md (drivers
 touching meta env extensions stay legacy); a module-hosted version would
 also trip constraint 7's meta checker at the seam between the meta
@@ -46,6 +46,6 @@ unsafe def loadGenCtx : IO GenCtx := do
   pure { items := named.map (·.2)
        , roots := groupByRoot named
        , invariants := registeredInvariants demoEnv ++ registeredInvariants flagsEnv
-       , updates := registeredUpdates demoEnv ++ registeredUpdates flagsEnv }
+       , updates2 := registeredUpdates2 demoEnv ++ registeredUpdates2 flagsEnv }
 
 end SchemaLang.Emit

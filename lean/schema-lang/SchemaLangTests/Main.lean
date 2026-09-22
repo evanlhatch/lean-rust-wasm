@@ -399,7 +399,7 @@ unsafe def loadDemoCtx : IO SchemaLang.Emit.GenCtx := do
   pure { items := (registeredItems env).map (·.2)
        , roots := SchemaLang.Emit.rootPartitionOf env (registeredItems env)
        , invariants := registeredInvariants env
-       , updates := registeredUpdates env }
+       , updates2 := registeredUpdates2 env }
 
 /-- Run every registry emitter over the CURRENT reflected Demo registry
     and byte-compare each output (header prepended, matching `schema-gen`'s
@@ -2055,12 +2055,12 @@ def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
   -- the lane runs over the EXT-REPLAYED rows (the v2 contract — the
   -- committed mirror is gone)
   let files := SchemaLang.Emit.Invariant.invariantEmitter.run
-    { items := [], invariants := invs, updates := [] }
+    { items := [], invariants := invs, updates2 := [] }
   _ ← assertEq "invariant path" (files.head?.map (·.path))
     (some "../../generated/rust/invariants_generated.rs")
   _ ← assertEq "invariant deterministic" (files.map (·.contents))
     ((SchemaLang.Emit.Invariant.invariantEmitter.run
-        { items := [], invariants := invs, updates := [] }).map (·.contents))
+        { items := [], invariants := invs, updates2 := [] }).map (·.contents))
   let out := files.head?.map (·.contents) |>.getD ""
   _ ← assert (out.contains "pub fn check_id_positive(v: &User) -> bool")
     "check fn emitted (snake — Rust identifiers cannot carry kebab)"
@@ -2353,33 +2353,46 @@ def updRowId (row : RowVals updUserFields) : UInt64 :=
 def updRowEmail (row : RowVals updUserFields) : String :=
   match evalV (.colOf "email") row with | .string s => s | _ => ""
 
+/-- THE V2 SELF-READING CLASSIFICATION (the v1 `UpdateItem.selfReading`
+    for the singleton-SET fragment, derived on the v2 surface): a SET
+    clause whose VALUE reads the column it writes is nonlinear (its
+    journal needs the old value — S0). COMPUTED, never hand-listed. -/
+def updSelfReading {fs : List Field} (u : Update2Item fs) : Bool :=
+  u.sets.any (fun c => c.value.reads.contains c.field.name)
+
+/-- The v2 singleton-SET row write (the v1 `applyRow`'s v2 image): the
+    guard decides on the ORIGINAL row, the SET fold writes through the
+    singleton clause's path. -/
+def updApplyRow {fs : List Field} (u : Update2Item fs) (r : RowVals fs) : RowVals fs :=
+  if validates u.guard r then applySets u.sets r else r
+
 -- The registration pins: row data + the DERIVED reads/writes/
 -- selfReading (EXACT lists) + the emitter's rows (registry-read).
 open Lean Elab Command in
 run_cmd do
-  let ups := SchemaLang.Meta.registeredUpdates (← getEnv)
+  let ups := SchemaLang.Meta.registeredUpdates2 (← getEnv)
   unless ups.length == 3 do
     throwError s!"expected 3 registered updates, got {ups.length}"
-  let fetch (n : String) : CommandElabM SchemaLang.SomeUpdate :=
+  let fetch (n : String) : CommandElabM SchemaLang.SomeUpdate2 :=
     match ups.find? (·.update.name == n) with
     | some u => pure u
     | none => throwError s!"update `{n}` not registered"
   let rid ← fetch "reset_id"
   unless rid.update.reads == ["id"] do
     throwError s!"updResetId: reads not derived (got {rid.update.reads})"
-  unless rid.update.writes == ["id"] do throwError "updResetId: wrong writes"
-  unless rid.update.selfReading == false do
+  unless rid.update.setNames == ["id"] do throwError "updResetId: wrong writes"
+  unless updSelfReading rid.update == false do
     throwError "updResetId: misclassified as self-reading"
   let echo ← fetch "echo_email"
   unless echo.update.reads == ["name"] do
     throwError s!"updEchoEmail: reads not derived (got {echo.update.reads})"
-  unless echo.update.writes == ["email"] do throwError "updEchoEmail: wrong writes"
-  unless echo.update.selfReading == false do
+  unless echo.update.setNames == ["email"] do throwError "updEchoEmail: wrong writes"
+  unless updSelfReading echo.update == false do
     throwError "updEchoEmail: misclassified as self-reading"
   let sb ← fetch "self_bump"
   unless sb.update.reads == ["id"] do
     throwError s!"updSelfBump: reads not derived (got {sb.update.reads})"
-  unless sb.update.selfReading == true do
+  unless updSelfReading sb.update == true do
     throwError "updSelfBump: the self-reading classification missed"
   -- the emitter's rows ARE the registry now (the v2 contract — the
   -- two sides converged; the committed mirror is gone). The remaining
@@ -2387,7 +2400,7 @@ run_cmd do
   -- resolves every row's record ref.
   let em := SchemaLang.Emit.Update.ctxRows
     { items := (SchemaLang.Meta.registeredItems (← getEnv)).map (·.2)
-    , invariants := [], updates := ups }
+    , invariants := [], updates2 := ups }
   unless (em.map (fun u => u.u.update.name)) == (ups.map (·.update.name)) do
     throwError "Emit.Update.ctxRows: names out of sync with the registry"
   unless (em.map (·.recName)) == ["User", "User", "User"] do
@@ -2454,7 +2467,7 @@ schema_update updVolatileGuard for User id := VExpr.lit 0
 -- now — after the emitter-sync pin), the volatile updates did NOT.
 open Lean Elab Command in
 run_cmd do
-  let ups := SchemaLang.Meta.registeredUpdates (← getEnv)
+  let ups := SchemaLang.Meta.registeredUpdates2 (← getEnv)
   unless ups.length == 4 do
     throwError s!"expected 4 registered updates (3 sync-pinned + updPureCall), got {ups.length}"
   unless ups.any (·.update.name == "updPureCall") do
@@ -2464,19 +2477,17 @@ run_cmd do
   if ups.any (·.update.name == "updVolatileGuard") then
     throwError "updVolatileGuard: the volatile update REGISTERED — the gate did not fire"
 
-/-! ### The composable law classes: `UpdatePure` / `NonInterfering` (v1, demoted)
+/-! ### The composable law class: `Update2Pure` (the v1→v2 migration)
 
-The second layer: the registration's scan emits an `UpdatePure`
+The second layer: the registration's scan emits an `Update2Pure`
 INSTANCE per registered update (its proof is `rfl` against the STORED
-`volatileRefs` — the scan's decided fact), and the v1 consumers
-(`UpdateItem.cascade2`) take legality as instance binders — a composite
-assembled from a volatile or interfering part is UNCONSTRUCTIBLE.
-v1→v2: the v2 surface's lock is `Update2Pure` + the `Update2Compat`
-pack (Update2Sweep below pins those); these v1 pins stay because the
-emitter's registry rows and the downstream suites still construct the
-v1 surface. Pins here: the emitted instances' presence and the
-class-level negative (no instance can exist for a dirty update); the
-composite-law pins migrated to the v2 cascade (next section).
+`volatileRefs` — the scan's decided fact); the v2 composition lock is
+the `Update2Compat` pack over the DERIVED reads (Update2Sweep below
+pins those). The v1 `UpdatePure`/`NonInterfering` class pair died with
+the v1 surface (the migration); the registration now emits only
+`instUpdate2Pure.*`. Pins here: the emitted instances' presence and
+the class-level negative (no instance can exist for a dirty update);
+the composite-law pins live at the v2 cascade (next section).
 -/
 
 -- the registration-emitted instances: Demo's three + the pure-fn probe
@@ -2484,24 +2495,24 @@ open Lean Elab Command in
 run_cmd do
   let env ← getEnv
   for n in ["reset_id", "echo_email", "self_bump", "updPureCall"] do
-    let base := ((`SchemaLang).str "instUpdatePure").str n
+    let base := ((`SchemaLang).str "instUpdate2Pure").str n
     unless env.contains base do
-      throwError s!"instUpdatePure_{n}: the registration-emitted "
-        ++ "UpdatePure instance is missing"
+      throwError s!"instUpdate2Pure_{n}: the registration-emitted "
+        ++ "Update2Pure instance is missing"
 
-#check @UpdatePure
-#check @NonInterfering
+#check @Update2Pure
 
--- THE CLASS-LEVEL NEGATIVE: a hand-built update whose STORED
+-- THE CLASS-LEVEL NEGATIVE: a hand-built v2 update whose STORED
 -- volatile-ref set is nonempty (the shape the scan would have stored
--- had the gate not failed it) admits NO `UpdatePure` instance — any
+-- had the gate not failed it) admits NO `Update2Pure` instance — any
 -- one would contradict the data. The registration never produces this
 -- shape (the scan fires first); this pins the lock's non-vacuity.
-def updDirty : UpdateItem updUserFields ⟨"id", .u64⟩ :=
-  { name := "dirty", guard := .eq (.lit 0) (.lit 0), value := .lit 0
-  , writePath := .here, volatileRefs := ["clock"] }
+def updDirty : Update2Item updUserFields :=
+  { name := "dirty", record := "User", guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"id", .u64⟩, path := .here, value := .lit 0 }]
+  , volatileRefs := ["clock"] }
 
-example : ¬ UpdatePure updUserFields ⟨"id", .u64⟩ updDirty := by
+example : ¬ Update2Pure updUserFields updDirty := by
   intro h
   have hf := h.volatileFree
   simp [updDirty] at hf
@@ -2590,35 +2601,42 @@ example :
 
 /-- The hand mirrors of the registered updates (the runtime pins
     evaluate THESE — the same data the command registered; the run_cmd
-    above pins the mirror). -/
-def updResetIdMirror : UpdateItem updUserFields ⟨"id", .u64⟩ :=
-  { name := "reset-id", guard := .gt (.colOf "id") (.lit 100)
-  , value := .lit 0, writePath := .here }
+    above pins the mirror). v2 surface: each mirror is the singleton-SET
+    `Update2Item` image of the v1 item (the migration's row shape). -/
+def updResetIdMirror : Update2Item updUserFields :=
+  { name := "reset-id", record := "User"
+  , guard := .gt (.colOf "id") (.lit 100)
+  , sets := [{ field := ⟨"id", .u64⟩, path := .here, value := .lit 0 }] }
 
-def updEchoEmailMirror : UpdateItem updUserFields ⟨"email", .string⟩ :=
-  { name := "echo-email", guard := .gt (.strlen (.colOf "name")) (.lit 3)
-  , value := .colOf "name", writePath := .there (.there .here) }
+def updEchoEmailMirror : Update2Item updUserFields :=
+  { name := "echo-email", record := "User"
+  , guard := .gt (.strlen (.colOf "name")) (.lit 3)
+  , sets := [{ field := ⟨"email", .string⟩
+             , path := .there (.there .here), value := .colOf "name" }] }
 
-def updSelfBumpMirror : UpdateItem updUserFields ⟨"id", .u64⟩ :=
-  { name := "self-bump", guard := .eq (.lit 0) (.lit 0)
-  , value := .colOf "id", writePath := .here }
+def updSelfBumpMirror : Update2Item updUserFields :=
+  { name := "self-bump", record := "User"
+  , guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"id", .u64⟩, path := .here
+             , value := .colOf "id" }] }
 
 def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
-  -- the DERIVED read/write sets + the linearity classification
+  -- the DERIVED read/write sets + the linearity classification (v2)
   _ ← assertEq "reset-id: reads derived" updResetIdMirror.reads ["id"]
-  _ ← assertEq "reset-id: writes derived" updResetIdMirror.writes ["id"]
-  _ ← assertEq "reset-id: linear" updResetIdMirror.selfReading false
+  _ ← assertEq "reset-id: writes derived" updResetIdMirror.setNames ["id"]
+  _ ← assertEq "reset-id: linear" (updSelfReading updResetIdMirror) false
   _ ← assertEq "echo-email: reads derived" updEchoEmailMirror.reads ["name"]
-  _ ← assertEq "echo-email: writes derived" updEchoEmailMirror.writes ["email"]
-  _ ← assertEq "echo-email: linear" updEchoEmailMirror.selfReading false
+  _ ← assertEq "echo-email: writes derived" updEchoEmailMirror.setNames ["email"]
+  _ ← assertEq "echo-email: linear" (updSelfReading updEchoEmailMirror) false
   _ ← assertEq "self-bump: reads derived" updSelfBumpMirror.reads ["id"]
-  _ ← assertEq "self-bump: SELF-READING" updSelfBumpMirror.selfReading true
-  -- applyRow semantics on demo rows: a GUARDED row changes
+  _ ← assertEq "self-bump: SELF-READING" (updSelfReading updSelfBumpMirror) true
+  -- applyRow semantics on demo rows: a GUARDED row changes (the v2
+  -- singleton-SET write, `updApplyRow` = guard + `applySets`)
   _ ← assertEq "reset-id: guarded row (id=150) resets"
-    (updRowId (updResetIdMirror.applyRow (invRow 150 "abcd"))) 0
+    (updRowId (updApplyRow updResetIdMirror (invRow 150 "abcd"))) 0
   -- ... a REFUSED row passes through untouched
   _ ← assertEq "reset-id: refused row (id=50) unchanged"
-    (updRowId (updResetIdMirror.applyRow (invRow 50 "abcd"))) 50
+    (updRowId (updApplyRow updResetIdMirror (invRow 50 "abcd"))) 50
   -- the GUARD reads the ORIGINAL row: on [150, 50], the 150-row's guard
   -- saw 150 (> 100) BEFORE the write → [0, 50]. A guard re-read after
   -- the write would see 0 ≤ 100 and leave [150, 50].
@@ -2629,21 +2647,22 @@ def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   -- read pre-write (7 → 7); a post-write read would differ once the
   -- write landed first
   _ ← assertEq "self-bump: value reads the original row"
-    (updRowId (updSelfBumpMirror.applyRow (invRow 7 "x"))) 7
+    (updRowId (updApplyRow updSelfBumpMirror (invRow 7 "x"))) 7
   -- the string write: the guarded row's email BECOMES the row's name
   _ ← assertEq "echo-email: guarded row copies name into email"
-    (updRowEmail (updEchoEmailMirror.applyRow (invRow 5 "abcd"))) "abcd"
+    (updRowEmail (updApplyRow updEchoEmailMirror (invRow 5 "abcd"))) "abcd"
   _ ← assertEq "echo-email: refused row keeps its email"
-    (updRowEmail (updEchoEmailMirror.applyRow (invRow 5 "ab"))) "e"
-  -- the SomeUpdate cast discipline: a row whose field list MATCHES the
-  -- registered fields executes; a foreign row refuses (passes through)
-  let su : SomeUpdate :=
-    { fields := updUserFields, field := ⟨"id", .u64⟩, update := updResetIdMirror }
-  _ ← assertEq "SomeUpdate.applyRow: matching row executes"
-    (updRowId (su.applyRow (invRow 150 "abcd"))) 0
+    (updRowEmail (updApplyRow updEchoEmailMirror (invRow 5 "ab"))) "e"
+  -- the SomeUpdate2 cast discipline: a table whose field list MATCHES
+  -- the registered fields executes; a foreign table refuses (passes
+  -- through) — `SomeUpdate2.apply`'s guarded cast
+  let su : SomeUpdate2 :=
+    { fields := updUserFields, update := updResetIdMirror }
+  _ ← assertEq "SomeUpdate2.apply: matching table executes"
+    ((su.apply [invRow 150 "abcd"]).map updRowId) [0]
   _ ← assert
-    (match su.applyRow RowVals.nil with | .nil => true)
-    "SomeUpdate.applyRow: foreign row passes through"
+    (match su.apply [RowVals.nil] with | [_] => true | _ => false)
+    "SomeUpdate2.apply: a foreign table passes through"
   -- the emitter: declared path + determinism (the emitter discipline);
   -- the lane runs over the EXT-REPLAYED rows (the v2 contract)
   let files := SchemaLang.Emit.Update.updateEmitter.run ctx
@@ -2671,17 +2690,15 @@ def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
 /-! ## Trace (SPEC-core §11): the scenario/trace spec item -/
 
 /-- The scenario's batches ride the registered demo updates' SHAPE —
-    the SAME `UpdateItem`s the update lane registered (the mirrors),
-    wrapped as `SomeUpdate` rows over the User fields. -/
-def trResetId : SomeUpdate :=
-  { fields := updUserFields, field := ⟨"id", .u64⟩
-  , update := updResetIdMirror }
-def trEchoEmail : SomeUpdate :=
-  { fields := updUserFields, field := ⟨"email", .string⟩
-  , update := updEchoEmailMirror }
-def trSelfBump : SomeUpdate :=
-  { fields := updUserFields, field := ⟨"id", .u64⟩
-  , update := updSelfBumpMirror }
+    the SAME `Update2Item`s the update lane registered (the mirrors),
+    wrapped as `SomeUpdate2` rows over the User fields (the v1→v2
+    migration: the trace batches moved to the v2 wrapper). -/
+def trResetId : SomeUpdate2 :=
+  { fields := updUserFields, update := updResetIdMirror }
+def trEchoEmail : SomeUpdate2 :=
+  { fields := updUserFields, update := updEchoEmailMirror }
+def trSelfBump : SomeUpdate2 :=
+  { fields := updUserFields, update := updSelfBumpMirror }
 
 /-- The scenario: User, 2 rows, 3 ticks (reset-id → echo-email →
     self-bump). Rows reuse the update lane's `invRow` (id, name, "e",
@@ -4832,9 +4849,10 @@ order, expressions read the guarded row — the INSERT-SELECT reading),
 DELETE (`-`). Insert/delete need the record's DECLARED key (W8.2 —
 resolved from the keys registry at elaboration; a keyless record is an
 elaboration error). The key column is not writable (a key change is a
-delete + insert). The v1 surface (one SET clause, no insert/delete)
-ALSO registers the v1 row — `updateItemExt` stays the emitters' source
-(the byte-tie holds; the v1 count pins above re-assert it).
+delete + insert). The v1 surface (one SET clause, no insert/delete) was the pre-
+migration registry's row — the migration merged the registries:
+`update2ItemExt` is the ONE source the emitter consumes (the byte-tie
+holds; the v1-shaped subset re-asserted below).
 
 The laws (SchemaLang.Update2, all kernel-checked):
 - `applySets_perm` — clause-order freedom (distinct names),
@@ -4861,6 +4879,21 @@ structure Upd2Entry where
   age : UInt64
 
 schema_keys for Upd2Entry := primary id
+
+-- C6 (the derive's default-row lane): the registered Upd2Entry's
+-- fields AND its all-default row, DERIVED at elaboration (a hand
+-- mirror could drift — the `defaultRowTerm` fold cannot). The pin
+-- below asserts the derived abbrev reduces to the hand row shape.
+derive_schema_fields upd2DerivedFields upd2DerivedRow from Upd2Entry
+  withDefault upd2DerivedDefault
+
+-- the derived default row reduces to the hand-built all-default row
+-- (zeroes/empties: id 0, email "", age 0) — the `defaultRow?`
+-- discipline at literal level
+example : upd2DerivedDefault
+    = .cons (.u64 0) (.cons (.string "") (.cons (.u64 0) .nil)) := rfl
+
+example : upd2DerivedFields.length = 3 := rfl
 
 -- the v2 registrations (the positive lane)
 
@@ -4946,10 +4979,10 @@ run_cmd do
   unless (ups.map (·.update.key?)) == [none, none, none, none,
       some "id", some "id", some "id", some "id"] do
     throwError "v2 registry: the declared-key adoption is wrong"
-  -- the v1 registry (the emitters' source): EXACTLY the v1-shaped four
-  let ups1 := SchemaLang.Meta.registeredUpdates (← getEnv)
-  unless ups1.length == 4 do
-    throwError s!"v1 registry drifted: expected 4 rows, got {ups1.length}"
+  -- the v1→v2 migration: the ONE registry is `update2ItemExt`; the
+  -- emitter consumes it via `GenCtx.updates2` (the v1 registry and
+  -- its `registeredUpdates` accessor were DELETED — the v1-shaped
+  -- four are the v2 rows' singleton-SET subset, byte-tie-pinned)
   -- the registration-emitted `Update2Pure` instances exist
   for n in ["reset_id", "upd2Promote", "upd2Rekey"] do
     let base := ((`SchemaLang).str "instUpdate2Pure").str n

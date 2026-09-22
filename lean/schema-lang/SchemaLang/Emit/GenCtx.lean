@@ -14,11 +14,13 @@ project's FULL registry state, all three lanes in one value:
 - `items` — the boundary universe (`schemaItemExt`), replayed from the
   spec module's oleans by the driver,
 - `invariants` — the `schema_invariant` registry (`invariantItemExt`),
-- `updates` — the `schema_update` registry (`updateItemExt`).
+- `updates2` — the v2 `schema_update` registry (`update2ItemExt`; the
+  v1→v2 migration — the emitter and the trace batches ride the v2
+  wrapper now).
 
 Emitters that consume only the item universe read `ctx.items` (or are
 built with `GenCtx.itemsOnly`); the invariant/update emitters read
-`ctx.invariants`/`ctx.updates`. Adding a lane = one field here + the
+`ctx.invariants`/`ctx.updates2`. Adding a lane = one field here + the
 emitters that consume it — the registry (`Emitter GenCtx`) and the
 driver need no further shaping.
 
@@ -41,6 +43,7 @@ public import CodegenCore
 public import SchemaLang.Item
 public import SchemaLang.Invariant
 public import SchemaLang.Update
+public import SchemaLang.Update2
 public import SchemaLang.Wf
 
 @[expose] public section
@@ -57,8 +60,9 @@ structure GenCtx where
   items : List Item
   /-- The registered invariants (the `schema_invariant` registry). -/
   invariants : List InvariantItem
-  /-- The registered updates (the `schema_update` registry). -/
-  updates : List SomeUpdate
+  /-- The registered updates (the v2 `schema_update` registry —
+      `update2ItemExt`; the v1→v2 migration). -/
+  updates2 : List SomeUpdate2
   /-- The root-namespace partition of `items`: one (root, its items)
       entry per declaring module, roots in first-occurrence order, items
       in registration order. Empty = a provenance-free ctx (the v2
@@ -68,7 +72,7 @@ structure GenCtx where
 /-- The items-only ctx: emitters/checks that consume the item universe
     and ignore the invariant/update lanes. -/
 def GenCtx.itemsOnly (items : List Item) : GenCtx :=
-  { items := items, invariants := [], updates := [] }
+  { items := items, invariants := [], updates2 := [] }
 
 /-- The CHECKED view of the item universe (W7.9 phase 2). DESIGN
     CHOICE (the order offered the alternative of the DRIVER computing

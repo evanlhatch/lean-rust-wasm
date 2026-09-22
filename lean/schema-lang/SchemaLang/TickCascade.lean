@@ -54,9 +54,13 @@ namespace SchemaLang
 
 /-! ## The cascade IS a DeltaSystem (W4.3, at the no-insert v2 fragment)
 
-`Dbsp.Effects.DeltaSystem` (which extends `Change S Mut`) at: state =
-the table's rows, locations = column names, mutations = no-insert v2
-updates. The static influence of an update is its DERIVED reads plus
+`Dbsp.Effects.DeltaSystem` (which extends the shared law family's
+`CodegenCore.DisjointCommute` — the SAME disjoint-commutes shape
+`SchemaLang.Lens`'s put_comm instantiates via
+`SchemaLang.instDisjointCommuteOfSchemaPath`, the class's OTHER
+instance, whose law field cites `put_comm`; Lens.lean stays the site
+of that instance) at: state = the table's rows, locations = column
+names, mutations = no-insert v2 updates. The static influence of an update is its DERIVED reads plus
 its SET columns — write sets ALONE cannot certify commutation, because
 `Update2Item.apply` READS the row: a guard, set value, or insert
 template reading the other update's written column breaks
@@ -96,9 +100,20 @@ set_option warn.classDefReducibility false in
     unpacked into the `Update2Compat` premise pack, never re-proved. -/
 def cascadeSystem (fs : List Field) :
     Dbsp.DeltaSystem (List (RowVals fs)) String (NoInsert fs) where
-  patch rows u := u.1.apply rows
+  -- the DISJOINTCOMMUTE parent fields (B3: the extends shape — a
+  -- mutation's location IS its static influence list, DISJOINTNESS is
+  -- write-set disjointness, and the ONE contract is `disjoint_commutes`)
+  apply rows u := u.1.apply rows
+  loc u := cascadeInfluence u.1
+  Disjoint := Dbsp.LocDisjoint
+  -- the DELTA-system fields (valid + writesOf + the relation's symmetry)
   valid _ _ := True
-  writesOf := fun u => cascadeInfluence u.1
+  writesOf u := cascadeInfluence u.1
+  disjoint_symm := by
+    intro l₁ l₂ hd
+    -- `change` reduces the inherited `Disjoint` off the pending record
+    change Dbsp.LocDisjoint l₁ l₂ at hd
+    exact Dbsp.LocDisjoint.symm hd
   disjoint_commutes := by
     intro u₁ u₂ hd rows
     have h : List.Disjoint (u₁.1.reads ++ u₁.1.setNames)
@@ -122,7 +137,10 @@ def cascadeSystem (fs : List Field) :
           rw [u₁.2] at hsome; simp at hsome
         insertSep₂₁ := fun hsome => by
           rw [u₂.2] at hsome; simp at hsome }
-    exact apply2_comm compat u₁.2 u₂.2
+    -- the inherited law: Disjoint (loc m₁) (loc m₂) →
+    -- apply (apply s m₁) m₂ = apply (apply s m₂) m₁; apply2_comm
+    -- proves the reverse orientation — the cited law, `.symm`d
+    exact (apply2_comm compat u₁.2 u₂.2).symm
 
 /-- The class-vocabulary restatement: influence-disjoint no-insert v2
     updates commute — `disjoint_commutes` read off the instance. Thin

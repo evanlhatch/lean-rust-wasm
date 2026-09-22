@@ -1,5 +1,5 @@
 /-
-# SchemaLang.Trace — the scenario/trace spec item (SPEC-core §11, v1)
+# SchemaLang.Trace — the scenario/trace spec item (SPEC-core §11, v2)
 
 ONE artifact, four uses: a SCENARIO = {schema, init world, input batches
 per tick}; a TRACE = the per-tick observations; conformance = TABLE
@@ -7,14 +7,19 @@ EQUALITY (sorted compare, order-independent). Lean's semantics is THE
 ORACLE — `runScenario` is the authority every consumer replays against.
 
 Ownership: this module owns the scenario/trace lane. `SchemaLang.Update`
-(the tick machine + the update batch), `SchemaLang.Validate` (RowVals),
-`SchemaLang.CodecValue` (the value codec) are read-only dependencies.
+(the tick stage machine + the row-law layer), `SchemaLang.Update2` (the
+batch surface — `SomeUpdate2`, the v1→v2 migration's wrapper for the
+scenario batches), `SchemaLang.Validate` (RowVals), `SchemaLang.CodecValue`
+(the value codec) are read-only dependencies.
 
-v1 scope (deliberate, documented):
+v2 (the v1→v2 migration): the batch type moved from `List SomeUpdate`
+to `List SomeUpdate2` — the v2 wrapper (`fields` + `Update2Item`), whose
+table-level execute (`SomeUpdate2.apply`) replaces v1's
+`SomeUpdate.applyRow`-batch casting. Scope (deliberate, documented):
 - ONE table per scenario (`fields` + rows over it). A batch may still
-  carry ANY `SomeUpdate` (the existential rides), but the v1 oracle
+  carry ANY `SomeUpdate2` (the existential rides), but the oracle
   treats an update whose field list mismatches the scenario's as a
-  no-op (the guarded-cast discipline — `SomeUpdate.applyRow`'s rule).
+  no-op (the guarded-cast discipline — `SomeUpdate2.apply`'s rule).
 - The wire codec covers the OBSERVATION half: the fields' row data
   (init + every tick's state). It is schema-out-of-band (the field
   list is the decoder's argument, like a table name) and restricted to
@@ -22,10 +27,14 @@ v1 scope (deliberate, documented):
   `.ty` refs are outside, the CodecValue doctrine). The UPDATE batches
   (procedures: `VExpr`/`ColPath`) have NO wire form here — they are
   compiled artifacts riding the emitter lane, not observations.
-- `TableEq` sorts by the row's canonical wire key (`rowKey` = the
-  concatenated `encodeValue` bytes) — the rows' ORDER is not
-  observable; the byte key is injective on the codec-closed universe
-  (the round-trip theorem: equal bytes decode equal).
+- `TableEq` sorts by the row's canonical wire key (`rowKey` =
+  `canonKey`: the concatenated `encodeValue` bytes) — the rows' ORDER
+  is not observable; the byte key is injective on the codec-closed
+  universe (the round-trip theorem: equal bytes decode equal).
+- C8 (best-effort): vs `Machines.Machine.run`/`Dbsp.Stream` re-typing
+  — NOT done (the oracle stays a pure fold over the batch list; a
+  machine-shaped tick would need a step type the scenario does not
+  carry — left mechanical, see the task report).
 
 GADT note: rows ride `RowVals` directly (no nested `List (Value t)`
 inside a GADT — the VList lesson applies unchanged).
@@ -34,6 +43,7 @@ inside a GADT — the VList lesson applies unchanged).
 module
 
 public import SchemaLang.Update
+public import SchemaLang.Update2
 public import SchemaLang.CodecValue
 
 @[expose] public section
@@ -44,7 +54,9 @@ namespace SchemaLang
 
 /-- The reified scenario: the table's fields, the initial world, and
     one update-batch per tick. The batches are the INPUTS; everything
-    else is the oracle's business. -/
+    else is the oracle's business. The batches ride the v2 wrapper
+    (`SomeUpdate2` — the v1→v2 migration); the field-list mismatch
+    rule is `SomeUpdate2.apply`'s guarded cast. -/
 structure Scenario where
   /-- The table's fields (the schema, in registration order). -/
   fields : List Field
@@ -52,31 +64,21 @@ structure Scenario where
   init : List (RowVals fields)
   /-- The input updates: one batch per tick (`ticks[k]` runs over tick
       k's state). -/
-  ticks : List (List SomeUpdate)
-
-/-- A batch update applied to a whole row list whose field list CLAIMS
-    to be the update's — `guardCastApply` (Validate's cast kit, W3.6)
-    at `F = G = List ∘ RowVals`: data equality carries the proof, the
-    update's `apply` runs on the cast rows, the result casts back; a
-    foreign row list refuses, pass-through.
-    `@[irreducible]` (W6.13 — the audit block at `Update.SomeUpdate`). -/
-@[irreducible]
-def SomeUpdate.applyBatch (u : SomeUpdate) {fs : List Field}
-    (rows : List (RowVals fs)) : List (RowVals fs) :=
-  guardCastApply (F := fun fs => List (RowVals fs)) (G := fun fs => List (RowVals fs))
-    rows u.update.apply rows
+  ticks : List (List SomeUpdate2)
 
 /-- One tick: the batch folds over the rows in registration order
     (v1's acyclic single-pass cascade — TickCascade's substrate). First
-    arg is the BATCH (a `List SomeUpdate`) — deliberately NOT a
-    `Scenario`-namespaced def, so no dot-notation confusion. -/
-def tickRows (batch : List SomeUpdate) {fs : List Field}
+    arg is the BATCH (a `List SomeUpdate2`) — deliberately NOT a
+    `Scenario`-namespaced def, so no dot-notation confusion. Each
+    update executes through `SomeUpdate2.apply` (the guarded cast: a
+    matching table runs, a foreign one passes through). -/
+def tickRows (batch : List SomeUpdate2) {fs : List Field}
     (rows : List (RowVals fs)) : List (RowVals fs) :=
-  batch.foldl (fun acc u => u.applyBatch acc) rows
+  batch.foldl (fun acc u => SomeUpdate2.apply u acc) rows
 
 /-- The per-tick states AFTER tick 0: `tickTrace batches rows` = the
     states following each batch in `batches`, threaded. -/
-def tickTrace (batches : List (List SomeUpdate)) {fs : List Field}
+def tickTrace (batches : List (List SomeUpdate2)) {fs : List Field}
     (rows : List (RowVals fs)) : List (List (RowVals fs)) :=
   match batches with
   | [] => []
@@ -113,12 +115,20 @@ def sortKeys : List (List UInt8) → List (List UInt8)
   | [] => []
   | x :: xs => insertKey x (sortKeys xs)
 
-/-- A row's canonical key: its fields' encoded values, concatenated in
-    schema order (the wire form — injective on the codec-closed
-    universe by the round-trip theorem). -/
-def rowKey : (fs : List Field) → RowVals fs → List UInt8
+/-! ## CanonKey — the row's canonical wire key (C3) -/
+
+/-- A row's canonical key (C3): its fields' encoded values,
+    concatenated in schema order — the wire form, injective on the
+    codec-closed universe by the round-trip theorem. The fold over
+    the field spine; `rowKey` routes through it (one authority). -/
+def canonKey : (fs : List Field) → RowVals fs → List UInt8
   | [], .nil => []
-  | f :: fs, .cons v vs => encodeValue f.ty v ++ rowKey fs vs
+  | f :: fs, .cons v vs => encodeValue f.ty v ++ canonKey fs vs
+
+/-- A row's canonical key (the historic name; routes through
+    `canonKey` — same bytes, one definition). -/
+def rowKey (fs : List Field) (row : RowVals fs) : List UInt8 :=
+  canonKey fs row
 
 /-- THE CONFORMANCE RELATION: sorted-compare of the rows' canonical
     keys — ORDER-INDEPENDENT (the rows' order is not observable). The

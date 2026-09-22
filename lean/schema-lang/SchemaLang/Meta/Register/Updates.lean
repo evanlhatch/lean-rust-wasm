@@ -37,18 +37,16 @@ open Qq
 
 /-! ## Updates — `schema_update <name> for <Record> set <col> := <value> where <guard>`
 
-The update registry is a SEPARATE extension (`updateItemExt`) over
-`SomeUpdate` (SchemaLang.Update — imported above, NOT moved: the core is
-owned elsewhere; importing keeps one definition). `Item` is the closed
-boundary universe and cannot carry the `VExpr` family — the same reason
-invariants got their own extension.
+The update registry is a SEPARATE extension (`update2ItemExt`) over
+`SomeUpdate2` (SchemaLang.Update2 — imported above, NOT moved: the core
+is owned elsewhere; importing keeps one definition). `Item` is the
+closed boundary universe and cannot carry the `VExpr` family — the same
+reason invariants got their own extension.
 
-DEPRECATED (the v1→v2 demotion): the v2 registry (`update2ItemExt`
-below) is THE row — every `schema_update` registers there. This v1
-extension remains ONLY as the byte-tied EMITTERS' source (a v1-shaped
-command ALSO registers here — the singleton-SET image of the same
-elaboration); the emitter's switch to `update2ItemExt` is the named
-follow-up. No new consumers.
+V2 (the v1→v2 demotion): the v2 registry (`update2ItemExt`) is THE
+row — every `schema_update` registers there and the emitter consumes
+IT (the byte-tie; `Emit.GenCtx.updates2`). The v1 registry and its
+surface were DELETED (the migration) — only the v2 rows exist.
 
 The `where` clause is REQUIRED: `VExpr .bool` has no literal-true node,
 so there is no honest default — an unconditional update is written
@@ -69,38 +67,12 @@ Gates at elaboration (the invariant lane's pattern):
   extracting its `.col` constructor path (data, the `ColPath` doctrine).
 -/
 
-/-- The registry-state inhabitant (the `InvariantItem` default's
-    pattern): SOME GADT shape must witness the type; the empty-schema
-    shape is unreachable for a `ColPath`, so the witness is the
-    one-field u64 schema. No registered row takes this shape. Defined
-    BEFORE the extension (the `mkRegistryExt` seed). -/
-instance : Inhabited SomeUpdate :=
-  ⟨{ fields := [{ name := "", ty := .u64 }]
-   , field := { name := "", ty := .u64 }
-   , update := { name := "", guard := .gt (.lit 0) (.lit 0)
-               , value := .lit 0, writePath := .here } }⟩
-
-/-- The update registry: append-only, replayed from oleans at import
-    (the `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
-    because `Item` cannot carry the VExpr family). -/
-initialize updateItemExt :
-    SimplePersistentEnvExtension SomeUpdate (List SomeUpdate) ←
-  CodegenCore.mkRegistryExt `updateItemExt
-
-/-- The registered update rows (the emission entry point). -/
-def registeredUpdates (env : Environment) : List SomeUpdate :=
-  updateItemExt.getState env
-
-/-- Registered update names (dup detection). -/
-def registeredUpdateNames (env : Environment) : List String :=
-  (registeredUpdates env).map (fun u => u.update.name)
-
-/-- The v2 update registry (W8.3): append-only, replayed from oleans
-    at import. SEPARATE from `updateItemExt` — the v1 registry stays
-    the EMITTERS' source (the byte-tie holds by construction: no
-    emitter reads this one); every `schema_update` registers HERE,
-    and v1-shaped ones (exactly one set clause, no insert/delete)
-    ALSO register there. -/
+/-- The v2 update registry (W8.3; the v1→v2 migration — the ONE
+    update registry): append-only, replayed from oleans at import (the
+    `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
+    because `Item` cannot carry the VExpr family). Every `schema_update`
+    registers HERE — the emitter and the trace batches' source; the
+    v1 registry was DELETED with the v1 surface. -/
 initialize update2ItemExt :
     SimplePersistentEnvExtension SomeUpdate2 (List SomeUpdate2) ←
   CodegenCore.mkRegistryExt `update2ItemExt
@@ -158,8 +130,6 @@ where
 --                           row (the INSERT-SELECT reading); the
 --                           record's DECLARED key is required (W8.2)
 --   `-`                     DELETE the guarded rows (keyed)
--- v1 is the singleton-SET case: it ALSO registers the v1 row
--- (`updateItemExt` — the emitters' source; the byte-tie holds).
 
 -- The clause syntax category parks in Lean's namespace BY DESIGN
 -- because declare_syntax_cat cannot live in a library namespace (the
@@ -306,11 +276,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
     if seen.contains colId then
       throwError s!"schema_update `{uname}`: duplicate set column `{colId}` — the multi-write's columns must be distinct (the clause order is unobservable under that premise)"
     seen := seen.push colId
-  -- the dup-name gates (each registry's own names — a v1-shaped row
-  -- lands in BOTH)
-  let isV1Shape := setStxs.size == 1 && insertTerms.isNone && !deleteFlag
-  if isV1Shape && (registeredUpdateNames env).contains uname then
-    throwError s!"schema_update `{uname}`: duplicate update name"
+  -- the dup-name gate (the ONE registry's names)
   if (registeredUpdate2Names env).contains uname then
     throwError s!"schema_update `{uname}`: duplicate update name"
   -- the DECLARED KEY (W8.2): insert/delete updates need it (the
@@ -334,7 +300,7 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
   -- fields, evaluate the GADT values, resolve the write paths (the
   -- `VExpr.colOf` route per clause), evaluate the insert template —
   -- all data by the time it registers
-  let (row2, inst2Name, inst2Ty, inst2Val, row1?) ← liftTermElabM do
+  let (row2, inst2Name, inst2Ty, inst2Val) ← liftTermElabM do
     let fsList := fieldsToExpr fields
     let expectedFs : Q(Type) := q(List Field)
     let fsVal : List Field ← Meta.evalExpr (List Field) expectedFs fsList
@@ -468,48 +434,22 @@ unsafe def elabSchemaUpdate : CommandElab := fun (stx : Syntax) => do
       update2PureInstPfQ fsList (toExpr uname) (toExpr recordName) g setsQ keyQ insQ delQ
     -- THE COMPOSABLE LOCK (the second layer — the scan above stays
     -- the first): the scan's decided fact is discharged as a PROOF.
-    -- The command EMITS the `Update2Pure` instance (and, for
-    -- v1-shaped updates, the v1 `UpdatePure` one); its proof is `rfl`
+    -- The command EMITS the `Update2Pure` instance; its proof is `rfl`
     -- against the STORED `volatileRefs` data — if the gate ever stored
     -- a nonempty scan, this `rfl` FAILS to elaborate (the proof checks
     -- the gate). The instance assembly is fully typed (Qq): the
     -- elaborated terms are passed to the typed-quotation helpers with
     -- their CHECKED types (the `VExpr`/`ColPath` gates above) — the
     -- `Q(_)` casts are `implicit_reducible` defeq, sound by the gates.
-    let row1? ←
-      if isV1Shape then
-        match setVals.toList with
-        | [c0] =>
-            pure (some ({ fields := fsVal, field := c0.field
-                        , update := { name := uname, guard := guardVal
-                                    , value := c0.value, writePath := c0.path
-                                    , volatileRefs := volatileHits } : SomeUpdate },
-              ((`SchemaLang).str "instUpdatePure").str uname,
-              updatePureInstTyQ fsList (fieldToExpr c0.field) (toExpr uname) g
-                valueExprs[0]! pathExprs[0]!,
-              updatePureInstPfQ fsList (fieldToExpr c0.field) (toExpr uname) g
-                valueExprs[0]! pathExprs[0]!))
-        | _ => pure none
-      else pure none
     pure ({ fields := fsVal, update := item2 : SomeUpdate2 },
-      ((`SchemaLang).str "instUpdate2Pure").str uname, inst2Ty, inst2Pf,
-      row1?)
+      ((`SchemaLang).str "instUpdate2Pure").str uname, inst2Ty, inst2Pf)
   modifyEnv fun env =>
     update2ItemExt.addEntry env row2
-  if let some (row1, inst1Name, inst1Ty, inst1Val) := row1? then
-    modifyEnv fun env =>
-      updateItemExt.addEntry env row1
-    liftTermElabM do
-      Lean.addDecl (Declaration.defnDecl {
-        name := inst1Name, levelParams := [], type := inst1Ty
-        , value := inst1Val, hints := Lean.ReducibilityHints.abbrev
-        , safety := Lean.DefinitionSafety.safe })
-      Lean.Meta.addInstance inst1Name .global 1000
   -- the instance: a def with the instance attribute (4.33's `Declaration`
   -- has no `instanceDecl` constructor — the `instance` command's own
   -- route is defn + addInstance)
   -- KNOWN FALSE POSITIVE: `warn.classDefReducibility` flags these
-  -- (`instUpdatePure.*`/`instUpdate2Pure.*` — Demo/Tests) as
+  -- (`instUpdate2Pure.*` — Demo/Tests) as
   -- "semireducible" EVEN THOUGH the hints ARE `.abbrev` — the linter
   -- reads only attribute-site declarations, not the addDecl route.
   -- Accepted (documented), NOT silenced: `set_option ... false` would

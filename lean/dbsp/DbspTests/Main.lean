@@ -148,14 +148,15 @@ def determinismWitness : CheckResult := Id.run do
     return .error "tamper undetected"
   .ok ()
 
-/-! ## Effects — the DeltaSystem IS a `CodegenCore.DisjointCommute`
+/-! ## Effects — the DeltaSystem EXTENDS `CodegenCore.DisjointCommute`
 
-The delta/lens unification: `DeltaSystem` instantiates
-`CodegenCore.DisjointCommute` (a mutation's location = its write set,
-`LocDisjoint` = the disjointness, the law CITES `disjoint_commutes`).
-The concrete point-write system below pins the instance on a fixture;
-the negative control pins the hypothesis (an OVERLAP breaks the
-commutation — it is load-bearing, not vacuous). -/
+The delta/lens unification (B3): `DeltaSystem` is a CLASS whose parent
+is `CodegenCore.DisjointCommute` at `L := List Loc` — a mutation's
+location = its write set, `Disjoint` = `LocDisjoint`, and every
+instance fills the inherited law field. The concrete point-write
+system below pins the instance on a fixture; the negative control
+pins the hypothesis (an OVERLAP breaks the commutation — it is
+load-bearing, not vacuous). -/
 
 /-- Point writes on a location→value map: state = `Nat → Int`, a
     mutation is `(loc, value)`, the write set is the singleton. (The
@@ -169,9 +170,19 @@ instance ptChange : Change (Nat → Int) (Nat × Int) where
 
 /-- The concrete delta system (the fixture). -/
 instance ptSystem : DeltaSystem (Nat → Int) Nat (Nat × Int) where
-  patch := ptPatch
+  -- the DisjointCommute parent fields (the extends shape: location +
+  -- disjointness + the inherited law)
+  apply := ptPatch
+  loc m := [m.1]
+  Disjoint := LocDisjoint
+  -- the DeltaSystem fields (valid + writesOf + the relation's symmetry)
   valid _ _ := True
   writesOf m := [m.1]
+  disjoint_symm := by
+    intro l₁ l₂ hd
+    -- `change` reduces the inherited `Disjoint` off the pending record
+    change Dbsp.LocDisjoint l₁ l₂ at hd
+    exact Dbsp.LocDisjoint.symm hd
   disjoint_commutes := by
     intro m₁ m₂ hd s
     have hne : m₁.1 ≠ m₂.1 := fun h =>

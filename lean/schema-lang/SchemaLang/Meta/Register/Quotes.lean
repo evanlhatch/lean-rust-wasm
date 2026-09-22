@@ -4,6 +4,14 @@
 Extracted from `SchemaLang.Meta.Reflect` (pure code motion — every
 declaration keeps its exact statement and name): the binder-discipline
 `Q(_)` builders shared by the invariant and update commands.
+
+v1→v2 (the migration): the v1 `UpdatePure`/`UpdateItem` quotation
+helpers (`updatePureInstTyQ`/`updatePureInstPfQ`) were DELETED with
+the v1 surface (Qq quotations resolve their constants at definition
+time — a quotation naming a deleted constant fails to compile, so the
+dead helpers had to go, not just go uncalled). The v2 pure-lock
+helpers live with the command (`Meta.Register.Updates`'s
+`update2PureInstTyQ`/`update2PureInstPfQ`).
 -/
 module
 
@@ -84,31 +92,6 @@ def vexprTyQ (fsList : Q(List Field)) (t : Q(Ty)) : Q(Type) :=
 /-- `ColPath <name> <ty> <fields>` as a type quotation. -/
 def colPathTyQ (fsList : Q(List Field)) (n : Q(String)) (t : Q(Ty)) : Q(Type) :=
   q(ColPath $n $t $fsList)
-
-/-- The `UpdatePure` instance TYPE for a registered update, as a typed
-    quotation. The projections `($fQ).ty`/`($fQ).name` (not separate
-    antiquotes) keep the quotation elaborator's indices SHARED with the
-    `fQ` binder — opaque per-piece antiquotes would not unify against
-    `UpdateItem.mk`'s signature. -/
-def updatePureInstTyQ (fsList : Q(List Field)) (fQ : Q(Field))
-    (unameQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
-    (e : Q(VExpr $fsList ($fQ).ty))
-    (path : Q(ColPath ($fQ).name ($fQ).ty $fsList)) : Q(Prop) :=
-  q(UpdatePure $fsList $fQ
-    (UpdateItem.mk (fs := $fsList) (f := $fQ) $unameQ $g $e $path []))
-
-/-- The instance PROOF: `UpdatePure.emptyScan`'s `rfl` reduces on the
-    literal `[]` scan result with the binders still abstract (a raw
-    `⟨rfl⟩` inside a quotation sees opaque antiquotes and cannot
-    reduce — the named lemma is the Qq-compatible discharge). -/
-def updatePureInstPfQ (fsList : Q(List Field)) (fQ : Q(Field))
-    (unameQ : Q(String)) (g : Q(VExpr $fsList Ty.bool))
-    (e : Q(VExpr $fsList ($fQ).ty))
-    (path : Q(ColPath ($fQ).name ($fQ).ty $fsList)) :
-    Q(UpdatePure $fsList $fQ
-      (UpdateItem.mk (fs := $fsList) (f := $fQ) $unameQ $g $e $path [])) :=
-  q(UpdatePure.emptyScan)
-
 
 end SchemaLang.Meta
 

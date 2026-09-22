@@ -242,6 +242,53 @@ def recordRowTerm (declName listHelper : Name) (u : Ident) :
       let v ← fieldValueTerm listHelper access f.ty
       `(.cons $v $(← recordRowTerm declName listHelper u rest))
 
+/-! ## The default-value literals (C6 — the default-row lane) -/
+
+/-- The default `Value t` literal term (the `defaultValue?` table's
+    term-level mirror — a self-contained literal per `Ty`; the same
+    exclusions the table states: `.ty` refs (no `Value` ctor) and
+    NONZERO-dims tensors (no per-element literals) have NO literal —
+    the command fails loudly on a record carrying them. Fully
+    `SchemaLang.`-qualified: generated text must not depend on the
+    consumer's `open`s (the EntityMachine rule). -/
+def defaultValueTerm : (t : Ty) → CommandElabM Term
+  | .bool => `(SchemaLang.Value.bool false)
+  | .u8 => `(SchemaLang.Value.u8 0)
+  | .u16 => `(SchemaLang.Value.u16 0)
+  | .u32 => `(SchemaLang.Value.u32 0)
+  | .u64 => `(SchemaLang.Value.u64 0)
+  | .i8 => `(SchemaLang.Value.i8 0)
+  | .i16 => `(SchemaLang.Value.i16 0)
+  | .i32 => `(SchemaLang.Value.i32 0)
+  | .i64 => `(SchemaLang.Value.i64 0)
+  | .f32 => `(SchemaLang.Value.f32 0)
+  | .f64 => `(SchemaLang.Value.f64 0)
+  | .string => `(SchemaLang.Value.string "")
+  | .bytes => `(SchemaLang.Value.bytes [])
+  | .option _ => `(SchemaLang.Value.none)
+  | .list _ => `(SchemaLang.Value.list .nil)
+  | .map _ _ => `(SchemaLang.Value.map .nil)
+  | .set _ => `(SchemaLang.Value.set .nil)
+  | .stream _ => `(SchemaLang.Value.stream .nil)
+  | .result ok _err => do `(SchemaLang.Value.ok $(← defaultValueTerm ok))
+  | .future a => do `(SchemaLang.Value.future $(← defaultValueTerm a))
+  | .tensor [] a => do
+      `(SchemaLang.Value.tensor (SchemaLang.TVal.scalar $(← defaultValueTerm a)))
+  | .tensor (_ :: _) _ =>
+      throwError "derive_schema_fields: a tensor field with nonzero dims has no         literal default — the emitters' exclusion, mirrored (add a default arm         before deriving)"
+  | .ty n =>
+      throwError s!"derive_schema_fields: a `.ty {n}` ref field has no `Value`         constructor — the default-row lane cannot derive it"
+
+/-- The all-default row literal: one `Value.cons` per field, in schema
+    order (`defaultValueTerm` per field — the 
+    `defaultValue?`/`defaultRow?` discipline, at literal level). -/
+def defaultRowTerm : (fs : List Field) → CommandElabM Term
+  | [] => `(SchemaLang.RowVals.nil)
+  | f :: fs => do
+      let v ← defaultValueTerm f.ty
+      let rest ← defaultRowTerm fs
+      `(SchemaLang.RowVals.cons $(v) $(rest))
+
 /-! ## The derivations (commands) -/
 
 /-- `derive_variant_cases targetName from InductiveName` — define
@@ -275,6 +322,12 @@ def deriveVariantCasesImpl : CommandElab := fun stx => do
        SchemaLang.VList .string` (std's guest-marked `toVList` — the
        compiled lane's authority, so the derived body can ride it);
        without a `using`, the command emits `builderName.toVList`.
+    4. (C6) `withDefault <name>` emits `abbrev <name> :
+       SchemaLang.RowVals <fieldsName>` — the record's ALL-DEFAULT row
+       (the obligation/keys lane's pinned-table discipline), DERIVED
+       from the `defaultValueTerm` fold (a hand mirror could drift).
+       A field without a literal default (`.ty` ref, nonzero-dims
+       tensor) is an elaboration error HERE, loudly.
 
     Wrong-kind or unregistered names are elaboration errors
     (did-you-mean included): the field/row mirror cannot drift because
@@ -283,7 +336,8 @@ def deriveVariantCasesImpl : CommandElab := fun stx => do
     is artifact-visible (the wasm manifest folds the registry in
     marking order). -/
 syntax (name := deriveSchemaFields)
-  "derive_schema_fields " ident ident " from " ident (" using " ident)? : command
+  "derive_schema_fields " ident ident " from " ident (" using " ident)?
+    (" withDefault " ident)? : command
 
 @[command_elab deriveSchemaFields]
 def deriveSchemaFieldsImpl : CommandElab := fun stx => do
@@ -292,6 +346,8 @@ def deriveSchemaFieldsImpl : CommandElab := fun stx => do
   let declName := stx[4].getId
   let using? : Option Name :=
     if stx[5].isNone then none else some stx[5][1].getId
+  let defaultRowName? : Option Name :=
+    if stx[6].isNone then none else some stx[6][1].getId
   match registeredRecord? (← getEnv) declName with
   | .error msg => throwError msg
   | .ok fields => do
@@ -308,6 +364,16 @@ def deriveSchemaFieldsImpl : CommandElab := fun stx => do
     let row ← recordRowTerm declName listHelper u fields
     elabCommand (← `(def $(mkIdent builderName) ($u : $(mkIdent declName)) :
         SchemaLang.RowVals $(mkIdent fieldsName) := $row))
+    -- C6 (the default-row discipline): an optional `withDefault <name>`
+    -- emits the record's ALL-DEFAULT row as an abbreviation — the
+    -- obligation/keys lane's pinned-table shape, DERIVED (a hand
+    -- mirror could drift; the `defaultRowTerm` fold cannot). A field
+    -- without a literal default (`.ty` ref, nonzero-dims tensor) is
+    -- an elaboration error HERE, loudly.
+    if let some defRowName := defaultRowName? then
+      let defRow ← defaultRowTerm fields
+      elabCommand (← `(abbrev $(mkIdent defRowName) :
+          SchemaLang.RowVals $(mkIdent fieldsName) := $defRow))
 
 /-- `derive_schema_type_names targetName` — define `targetName : List
     String` from the registry's type-position items (records +

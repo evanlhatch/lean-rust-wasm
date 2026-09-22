@@ -46,36 +46,40 @@ def flagRollout (row : RowVals flagFields) : UInt64 :=
 def flagKey (row : RowVals flagFields) : String :=
   match evalV (.colOf "key") row with | .string s => s | _ => ""
 
-/-! ## The registered updates' hand mirrors -/
+/-! ## The registered updates' hand mirrors (v2 — the v1→v2 migration) -/
 
 /-- The rollout clamp (the `rolloutClamp` mirror): any row over 100
-    lands at exactly 100 — the guard reads the ORIGINAL row. -/
-def flagClamp : UpdateItem flagFields ⟨"rollout", .u64⟩ :=
-  { name := "rollout-clamp", guard := .gt (.colOf "rollout") (.lit 100)
-  , value := .lit 100, writePath := .there (.there (.there .here)) }
+    lands at exactly 100 — the guard reads the ORIGINAL row. The v2
+    surface: a `Update2Item` with the singleton SET clause. -/
+def flagClamp : Update2Item flagFields :=
+  { name := "rollout-clamp", record := "Flag"
+  , guard := .gt (.colOf "rollout") (.lit 100)
+  , sets := [{ field := ⟨"rollout", .u64⟩
+             , path := .there (.there (.there .here)), value := .lit 100 }] }
 
 /-- The key echo (the `keyEcho` mirror): a self-reading write on the
     key column — the nonlinear row (the journal carries S0). -/
-def flagKeyEcho : UpdateItem flagFields ⟨"key", .string⟩ :=
-  { name := "key-echo", guard := .gt (.strlen (.colOf "key")) (.lit 0)
-  , value := .colOf "key", writePath := .there .here }
+def flagKeyEcho : Update2Item flagFields :=
+  { name := "key-echo", record := "Flag"
+  , guard := .gt (.strlen (.colOf "key")) (.lit 0)
+  , sets := [{ field := ⟨"key", .string⟩
+             , path := .there .here, value := .colOf "key" }] }
 
 /-! ## The 50-tick deterministic sweep (LCG — no Plausible dependency) -/
 
 /-- `n` update batches from seed `s`: per tick, the LCG's residue mod 3
     chooses the batch shape (clamp-only / clamp+echo / echo-only — the
-    sweep exercises guarded-fire, the boundary row, and the echo). -/
-def flagBatches : Nat → UInt64 → List (List SomeUpdate)
+    sweep exercises guarded-fire, the boundary row, and the echo). The
+    batches ride the v2 wrapper (`SomeUpdate2`). -/
+def flagBatches : Nat → UInt64 → List (List SomeUpdate2)
   | 0, _ => []
   | n + 1, s =>
       let s1 := TestKit.lcg s
       let s2 := TestKit.lcg s1
-      let suClamp : SomeUpdate :=
-        { fields := flagFields, field := ⟨"rollout", .u64⟩
-        , update := flagClamp }
-      let suEcho : SomeUpdate :=
-        { fields := flagFields, field := ⟨"key", .string⟩
-        , update := flagKeyEcho }
+      let suClamp : SomeUpdate2 :=
+        { fields := flagFields, update := flagClamp }
+      let suEcho : SomeUpdate2 :=
+        { fields := flagFields, update := flagKeyEcho }
       let batch :=
         match s1 % 3 with
         | 0 => [suClamp]

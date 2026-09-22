@@ -103,8 +103,8 @@ def checkOne (emitterName : String) (f : GeneratedFile) : IO Result := do
 unsafe def run : IO UInt32 := do
   let ctx ← Gates.loadGenCtx
   let mut results : Array Result := #[]
-  for e in SchemaLang.Emit.emitters do
-    for f in e.run ctx do
+  for (e, files) in SchemaLang.Emit.certifiedJobs ctx do
+    for f in files do
       results := results.push (← checkOne s!"schema-lang/{e.name}" f)
   for (e, spec) in Faults.Emit.jobs do
     for f in e.run spec do

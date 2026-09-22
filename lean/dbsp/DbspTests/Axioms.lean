@@ -42,9 +42,11 @@ import Dbsp
 #print axioms Dbsp.applySeq_swap_at
 #print axioms Dbsp.applySeq_bubble_prefix
 
--- the delta/lens unification: the DeltaSystem→DisjointCommute
--- instance (its law field CITES disjoint_commutes — no new trust base)
-#print axioms Dbsp.instDisjointCommuteOfDeltaSystem
+-- the delta/lens unification: DeltaSystem EXTENDS the
+-- DisjointCommute class (B3 — the auto projection below carries the
+-- extends; the instance sites, not a bridge, fill the law field with
+-- their own semantics — no new trust base)
+#print axioms Dbsp.DeltaSystem.toDisjointCommute
 
 -- §4.3 readings (Dbsp.Subsystems)
 #print axioms Dbsp.journal_complete

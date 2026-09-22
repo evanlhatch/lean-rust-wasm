@@ -10,41 +10,50 @@ Run: `lake build ProofkitTests && .lake/build/bin/ProofkitTests`
 -/
 import Proofkit
 import SchemaLang.Update
+import SchemaLang.Update2
 import TestKit
 
 open Proofkit SchemaLang TestKit
 
 /-! ## The ladder (TOOLKIT 4.2) -/
 
-/-- The Update PO slots, demonstrated: BOTH class fields omitted — the
-    autoParam defaults (`by decide`, the ladder's first rung) discharge
-    over the derived reads. No hand proofs at the instance sites. -/
+/-- The Update PO slots, demonstrated at v2 (the v1→v2 migration):
+    the v2 pure lock `Update2Pure` — the autoParam default (`by
+    decide`, the ladder's first rung) discharges over the stored
+    `volatileRefs`. The update surface is `Update2Item` (the v2 row:
+    the singleton SET clause replacing v1's single-column item); the
+    composition runs through `Update2Item.apply` (the cascade's
+    row-fold), no legality binders needed at execution. -/
 abbrev poFields : List Field :=
   [{ name := "id", ty := .u64 }, { name := "count", ty := .u64 }]
 
-def updReset : UpdateItem poFields ⟨"id", .u64⟩ :=
-  { name := "po-reset", guard := .eq (.lit 0) (.lit 0), value := .lit 0
-  , writePath := .here }
+def updReset : Update2Item poFields :=
+  { name := "po-reset", record := ""
+  , guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"id", .u64⟩, path := .here, value := .lit 0 }] }
 
-def updBump : UpdateItem poFields ⟨"count", .u64⟩ :=
-  { name := "po-bump", guard := .eq (.lit 0) (.lit 0), value := .lit 1
-  , writePath := .there .here }
+def updBump : Update2Item poFields :=
+  { name := "po-bump", record := ""
+  , guard := .eq (.lit 0) (.lit 0)
+  , sets := [{ field := ⟨"count", .u64⟩
+             , path := .there .here, value := .lit 1 }] }
 
--- THE PAYLOAD: legality assembles by instance search, zero hand proofs.
-instance : UpdatePure poFields ⟨"id", .u64⟩ updReset := {}
-instance : UpdatePure poFields ⟨"count", .u64⟩ updBump := {}
-instance : NonInterfering poFields ⟨"id", .u64⟩ ⟨"count", .u64⟩
-    updReset updBump := {}
+-- THE PAYLOAD: the v2 pure lock assembles by instance search, zero
+-- hand proofs (the `volatileRefs := []` default discharges `rfl`).
+instance : Update2Pure poFields updReset := {}
+instance : Update2Pure poFields updBump := {}
 
 def ladderChecks : CheckResult := do
   -- the autoParam'd slot was discharged at construction
   _ ← assertEq "boundedSeven.n" boundedSeven.n 7
   -- the locked composite RUNS: the reset+bump cascade over id=1,count=2
   -- yields id=0 (the reset), count=1 (the bump) — read back via the
-  -- ColPath getters (RowVals is a GADT: no BEq to lean on)
+  -- ColPath getters (RowVals is a GADT: no BEq to lean on). The v1
+  -- `cascade2`'s order (bump then reset, `cascade2 υ₁ υ₂` applies
+  -- υ₂ first) is the v2 fold's application order: reset after bump.
   let row : RowVals poFields :=
     .cons (.u64 1) (.cons (.u64 2) .nil)
-  let out := UpdateItem.cascade2 updReset updBump [row]
+  let out := updReset.apply (updBump.apply [row])
   let u64Of : Value .u64 → UInt64 | .u64 n => n
   _ ← assertEq "cascade resets id"
     (out.map (fun r => u64Of (ColPath.get .here r))) [0]

@@ -39,6 +39,19 @@ unsafe def runGen (_args : List String) : IO UInt32 := do
   -- The generation metadata: ONE assembly (the clock + git), shared by
   -- every artifact this run writes. The emitters stay pure.
   let gm ← CodegenCore.Emit.genMeta ctx.items.length 0
-  runEmitters "schema-lang" (emitters.map (λ e => (e, ctx)))
+  -- THE CERTIFIED LANE: every law-carrying emitter runs through
+  -- `Emitter.runCertified` with its discharged law (the artifact's
+  -- well-formedness evidence — `runCertified` = `run`, the bytes are
+  -- unchanged); the run wrapper is the DISCHARGE, not a content
+  -- switch (`SchemaLang.Emit.certifiedRun` dispatches per emitter).
+  -- THE CERTIFIED LANE: every law-carrying emitter runs through
+  -- `Emitter.runCertified` with its discharged law (the artifact's
+  -- well-formedness evidence — `runCertified` = `run`, the bytes are
+  -- unchanged); `certifiedJobs` pairs each emitter with its certified
+  -- run (the concrete-site discharges), the wrapper hands runEmitters
+  -- a `run` that IS that result (no re-dispatch at write time).
+  runEmitters "schema-lang"
+    ((SchemaLang.Emit.certifiedJobs ctx).map
+      (λ (e, files) => ({ e with run := fun _ => files }, ctx)))
     (λ _ f => pure { gm with contentHash := f.contents.hash })
   return 0

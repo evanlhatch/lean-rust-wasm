@@ -943,12 +943,22 @@ def resolve (fn : String) (args : List String) : Except String String :=
   | none => .ok o.payload
   | some _ => .error o.payload
 
-/-- One manifest row as JSON (values via Lean.Json for escaping; the
-    skeleton keeps the byte format — `mkObj` sorts keys, forbidden). -/
+/-- One manifest row as JSON, routed through the SHARED Emit builders
+    (`CodegenCore.Emit.Json.obj` + `jsonStr`) — the oracle's private
+    `Lean.Json` escaper is retired HERE. The two escapers agree on the
+    manifest's leaves byte-for-byte (fn names, decimal args, rendered
+    payloads — no quotes, backslashes, or control chars), so the
+    escaping change is INVISIBLE. THE ARGS JOIN IS FROZEN (`","`, no
+    space): `Json.arr` renders elements with `", "`, which would add a
+    byte after every one of the manifest's 669 arg-joins — the byte-tie
+    forbids that, so the args array keeps its frozen join over
+    `jsonStr`-rendered elements (deviation from the arr routing,
+    measured and rejected: full-arr routing drifts 669 bytes). -/
 def jsonRow (fn : String) (args : List String) (expected : String) : String :=
-  "{" ++ "\"fn\": " ++ (Lean.Json.str fn).compress ++ ", \"args\": [" ++
-    String.intercalate "," (args.map fun a => (Lean.Json.str a).compress) ++
-    "], \"expected\": " ++ (Lean.Json.str expected).compress ++ "}"
+  CodegenCore.Emit.Json.obj
+    [ ("fn", CodegenCore.Emit.jsonStr fn)
+    , ("args", "[" ++ String.intercalate "," (args.map CodegenCore.Emit.jsonStr) ++ "]")
+    , ("expected", CodegenCore.Emit.jsonStr expected) ]
 
 -- ── W6.3 phase 2: verdicts, not rows ───────────────────────────────
 -- The comparison's answer is a JUDGMENT: pass, or the first-divergence
