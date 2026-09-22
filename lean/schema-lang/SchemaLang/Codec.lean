@@ -26,6 +26,10 @@ The rest of the module is the binary combinator layer (refactor-guide
 - `encEnvelope`/`decEnvelope?`: the versioned-envelope convention
   (version + fingerprint as the first wire fields, payload length-
   prefixed), with the round-trip and wrong-version rejection proved.
+- `LawfulCodec`: the SAME append-form law surface re-shaped once as a
+  TYPE CLASS (`enc`/`dec`/`roundtrip`) — the instances are the existing
+  append-form theorems restated as instance fields (nothing re-proved),
+  so instance search and the theorem surface are one law system.
 
 Decode is PARTIAL at the combinator level (`Option`) — malformed bytes
 decode to `none`. `decVarNat` itself is total (empty input decodes to
@@ -409,6 +413,117 @@ def decString? (bs : List UInt8) : Option (String × List UInt8) :=
   simp [encString, decString?,
     decList_encList_append encChar decChar? (fun c r => decChar_encChar_append c r),
     String.ofList_toList]
+
+/-! ## LawfulCodec: the law-carrying codec class (additive)
+
+The append-form law surface above is re-shaped once here as a TYPE
+CLASS. The instances below are the EXISTING append-form theorems
+restated as instance fields — each cites the theorem it was proved as
+(the rule: cite, don't re-prove). The class is ADDITIVE: the
+combinators and theorems above remain the law surface of record; the
+instances are an instance-search-able reading of the SAME laws.
+
+Instance coverage notes (the deliberate shape):
+- The atoms: Bool, UInt8, Nat (varint), UInt64, Char, String, Bytes.
+- The composites compose the element/half laws: Option, Prod, List.
+  The tagged-sum instance (`Sum`) lives in SchemaLang.CodecValue (the
+  `encSum`/`decSum?` combinators' home).
+- `List UInt8` (bytes) is registered BEFORE the generic `List α` so
+  the byte-string codec (`encBytes`/`decBytes?`) wins that head. On
+  `List UInt8` the two codecs are EXTENSIONALLY the same wire
+  (`encU8 = singleton`, so `encList encU8` flattens to the raw bytes)
+  — the overlap is behavior-innocuous, but the byte-string reading is
+  the honest one, hence the order.
+- The membership-restricted laws (below) stay hypothesis-shaped (the
+  element law holds only for list MEMBERS) — instance-shaped they have
+  no honest home, so the class does not cover recursive wires.
+-/
+
+/-- The law-carrying codec class: an append-form
+    `decode (encode a ++ rest) = some (a, rest)` round trip, stated on
+    the codec pair itself — the class-shaped twin of the combinator
+    laws above. -/
+class LawfulCodec (α : Type) where
+  enc : α → List UInt8
+  dec : List UInt8 → Option (α × List UInt8)
+  /-- THE LAW: decode (encode a ++ rest) returns the value and the
+      untouched remainder. -/
+  roundtrip : ∀ (a : α) (rest : List UInt8), dec (enc a ++ rest) = some (a, rest)
+
+/-- Bool: `encodeBool`/`decBool?` — the `decBool_encodeBool_append`
+    law. -/
+instance lawfulCodecBool : LawfulCodec Bool where
+  enc := encodeBool
+  dec := decBool?
+  roundtrip := decBool_encodeBool_append
+
+/-- UInt8: `encodeU8`/`decU8?` — the `decU8_encodeU8_append` law. -/
+instance lawfulCodecU8 : LawfulCodec UInt8 where
+  enc := encodeU8
+  dec := decU8?
+  roundtrip := decU8_encodeU8_append
+
+/-- Nat: the LEB128 varint `encVarNat`/`decNat?` — the
+    `decNat_encVarNat_append` law. -/
+instance lawfulCodecNat : LawfulCodec Nat where
+  enc := encVarNat
+  dec := decNat?
+  roundtrip := decNat_encVarNat_append
+
+/-- UInt64: `encU64`/`decU64?` — the `decU64_encU64_append` law. -/
+instance lawfulCodecU64 : LawfulCodec UInt64 where
+  enc := encU64
+  dec := decU64?
+  roundtrip := decU64_encU64_append
+
+/-- Char: `encChar`/`decChar?` — the `decChar_encChar_append` law. -/
+instance lawfulCodecChar : LawfulCodec Char where
+  enc := encChar
+  dec := decChar?
+  roundtrip := decChar_encChar_append
+
+/-- String: `encString`/`decString?` — the
+    `decString_encString_append` law. -/
+instance lawfulCodecString : LawfulCodec String where
+  enc := encString
+  dec := decString?
+  roundtrip := decString_encString_append
+
+/-- Bytes (`List UInt8`): `encBytes`/`decBytes?` — the
+    `decBytes_encBytes_append` law. Registered BEFORE the generic
+    `List` instance so byte-strings win the `List UInt8` head (the
+    two wires coincide on `List UInt8` — the section note). -/
+instance lawfulCodecBytes : LawfulCodec (List UInt8) where
+  enc := encBytes
+  dec := decBytes?
+  roundtrip := decBytes_encBytes_append
+
+/-- Option: `encOpt`/`decOpt?` — composes the element law
+    (`decOpt_encOpt_append`). -/
+instance lawfulCodecOption [LawfulCodec α] : LawfulCodec (Option α) where
+  enc := encOpt (LawfulCodec.enc (α := α))
+  dec := decOpt? (LawfulCodec.dec (α := α))
+  roundtrip := decOpt_encOpt_append (LawfulCodec.enc (α := α))
+    (LawfulCodec.dec (α := α)) (LawfulCodec.roundtrip (α := α))
+
+/-- Prod: `encProd`/`decProd?` — composes the two halves' laws
+    (`decProd_encProd_append`). -/
+instance lawfulCodecProd [LawfulCodec α] [LawfulCodec β] : LawfulCodec (α × β) where
+  enc := encProd (LawfulCodec.enc (α := α)) (LawfulCodec.enc (α := β))
+  dec := decProd? (LawfulCodec.dec (α := α)) (LawfulCodec.dec (α := β))
+  roundtrip := decProd_encProd_append (LawfulCodec.enc (α := α))
+    (LawfulCodec.enc (α := β)) (LawfulCodec.dec (α := α))
+    (LawfulCodec.dec (α := β)) (LawfulCodec.roundtrip (α := α))
+    (LawfulCodec.roundtrip (α := β))
+
+/-- List: `encList`/`decList?` — composes the element law
+    (`decList_encList_append`). `List UInt8` resolves to the Bytes
+    instance above (registered first). -/
+instance lawfulCodecList [LawfulCodec α] : LawfulCodec (List α) where
+  enc := encList (LawfulCodec.enc (α := α))
+  dec := decList? (LawfulCodec.dec (α := α))
+  roundtrip := decList_encList_append (LawfulCodec.enc (α := α))
+    (LawfulCodec.dec (α := α)) (LawfulCodec.roundtrip (α := α))
 
 /-! ## Membership-restricted element laws (W9.1)
 

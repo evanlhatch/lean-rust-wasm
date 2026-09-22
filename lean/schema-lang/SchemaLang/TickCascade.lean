@@ -150,8 +150,15 @@ theorem cascade_disj_commutes {fs : List Field} (u₁ u₂ : Update2Item fs)
     (h₁ : u₁.insert? = none) (h₂ : u₂.insert? = none)
     (hd : Dbsp.LocDisjoint (cascadeInfluence u₁) (cascadeInfluence u₂))
     (rows : List (RowVals fs)) :
-    u₁.apply (u₂.apply rows) = u₂.apply (u₁.apply rows) :=
-  (cascadeSystem fs).disjoint_commutes ⟨u₁, h₁⟩ ⟨u₂, h₂⟩ hd rows
+    u₁.apply (u₂.apply rows) = u₂.apply (u₁.apply rows) := by
+  -- the inherited law's conclusion reduces through the class
+  -- projections (`DisjointCommute.apply`) — `change` normalizes BOTH
+  -- sides to the raw `Update2Item.apply` spine, then the law's
+  -- orientation (apply (apply s m₁) m₂ = … m₂ m₁) is flipped to the
+  -- theorem's (u₁ then u₂ — the cascade's registration-order reading)
+  change Update2Item.apply u₁ (Update2Item.apply u₂ rows)
+      = Update2Item.apply u₂ (Update2Item.apply u₁ rows)
+  exact ((cascadeSystem fs).disjoint_commutes ⟨u₁, h₁⟩ ⟨u₂, h₂⟩ hd rows).symm
 
 /-- N-update order-freedom: a pairwise influence-disjoint batch of
     no-insert v2 updates computes the same final table under ANY

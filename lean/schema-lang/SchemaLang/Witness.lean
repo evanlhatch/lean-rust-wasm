@@ -543,6 +543,43 @@ theorem decWProp_encWProp_append (p : WProp) (rest : List UInt8) :
         (encWBoolExpr inv ++ rest)]
       simp [decWBoolExpr_encWBoolExpr_append]
 
+/-! ## The witness family as `LawfulCodec` instances (additive)
+
+The round-trip theorems above, re-stated once as `Codec.LawfulCodec`
+instances (the class lives in SchemaLang.Codec — qualified here, this
+module's namespace is `SchemaLang.Witness`). Entry-point decoders only
+— `decWBoolExpr?`/`decWProof?` ALREADY carry the depth cap's
+sufficiency (fuel = bytes + 1, the `*_depth_le_length_enc` lemmas), so
+their append laws are honest whole-value laws. `Witness` itself has NO
+instance: its wire is the versioned envelope + a trailing-garbage
+reject (not append-form) — `decWitness?_encWitness` below still rides
+the class through the payload's four fields. -/
+
+instance lawfulCodecWU64 : Codec.LawfulCodec WU64 where
+  enc := encWU64
+  dec := decWU64?
+  roundtrip := decWU64_encWU64_append
+
+instance lawfulCodecWStep : Codec.LawfulCodec WStep where
+  enc := encWStep
+  dec := decWStep?
+  roundtrip := decWStep_encWStep_append
+
+instance lawfulCodecWBoolExpr : Codec.LawfulCodec WBoolExpr where
+  enc := encWBoolExpr
+  dec := decWBoolExpr?
+  roundtrip := decWBoolExpr_encWBoolExpr_append
+
+instance lawfulCodecWProof : Codec.LawfulCodec WProof where
+  enc := encWProof
+  dec := decWProof?
+  roundtrip := decWProof_encWProof_append
+
+instance lawfulCodecWProp : Codec.LawfulCodec WProp where
+  enc := encWProp
+  dec := decWProp?
+  roundtrip := decWProp_encWProp_append
+
 /-! ## The witness wire (design §1: envelope + label + claim + proof + fuel) -/
 
 /-- The witness encoding (design §1, modulo the header's two stated
@@ -574,14 +611,34 @@ def decWitness? (expectedVersion : Nat) (bs : List UInt8) : Option Witness := do
   let env ← Codec.decEnvelope? expectedVersion bs
   decWitnessPayload? env.payload
 
+/-- The fuel field's unit round trip, in the concrete combinator shape
+    the payload decode demands: `decNat?` on a bare varint (the
+    envelope-bounded payload ends exactly there — the class law at
+    `rest = []` read through `append_nil`). -/
+private theorem decVarNat_roundtrip_nil (n : Nat) :
+    Codec.decNat? (Codec.encVarNat n) = some (n, []) := by
+  rw [← List.append_nil (Codec.encVarNat n)]
+  exact Codec.LawfulCodec.roundtrip (α := Nat) n []
+
 /-- THE WITNESS ROUND TRIP (design §1's assembled law): every field's
     append-form lemma composed once. -/
 theorem decWitness?_encWitness (version fingerprint : Nat) (w : Witness) :
     decWitness? version (encWitness version fingerprint w) = some w := by
   obtain ⟨label, claim, proof, fuel⟩ := w
   simp [encWitness, decWitness?, decWitnessPayload?, Codec.decEnvelope_encEnvelope,
-    List.append_assoc, Codec.decString_encString_append, decWProp_encWProp_append,
-    decWProof_encWProof_append, Codec.decNat?, Codec.decVarNat_encVarNat]
+    List.append_assoc,
+    show ∀ (s : String) (r : List UInt8),
+        Codec.decString? (Codec.encString s ++ r) = some (s, r) from
+      Codec.LawfulCodec.roundtrip (α := String),
+    show ∀ (p : WProp) (r : List UInt8),
+        decWProp? (encWProp p ++ r) = some (p, r) from
+      Codec.LawfulCodec.roundtrip (α := WProp),
+    show ∀ (p : WProof) (r : List UInt8),
+        decWProof? (encWProof p ++ r) = some (p, r) from
+      Codec.LawfulCodec.roundtrip (α := WProof),
+    show ∀ (n : Nat),
+        Codec.decNat? (Codec.encVarNat n) = some (n, []) from
+      decVarNat_roundtrip_nil]
 
 /-- THE ASSEMBLED CODEC (design §1): `Kit.PartialIso (List UInt8)
     Witness` at a caller-supplied envelope pair — the RoundTripSpec
