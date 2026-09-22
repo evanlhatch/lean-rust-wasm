@@ -17,7 +17,11 @@ THE FRAGMENT vs REAL WEBASSEMBLY (the honesty ledger):
   `binop?` emits for `UInt64.add` — the straight-line template's
   arithmetic), i32.eq (the cases lane added it: the branch comparison
   `goAlts` emits on the scalar scrutinee — the branch template's
-  condition), drop,
+  condition), i64.sub/i64.mul (the M3 edgepython slice — the ops the
+  EdgePython frontend's compiler emits for `-`/`*`), i64.lt_u (the
+  UNSIGNED compare — the `_u` in `i64.lt_u`, the EdgePython `<`),
+  i64.eq (the EdgePython `==`), i32.eqz (the `while` condition's
+  inversion — `i32.eqz; br_if` exits the loop), drop,
   br/br_if with STRUCTURED targets (block/loop/if frames), if/else,
   unreachable, and a one-byte bounded store AND load (`i32store8` /
   `i32load8u offset` — the load added by the tag-read lane: the
@@ -162,7 +166,20 @@ inductive Instr where
   | localset (n : Nat)
   | i32add
   | i64add
+  /-- The edgepython-extension slice (M3, 2026-12): the ops the
+      EdgePython frontend's compiler emits beyond the original
+      fragment — `i64.sub`/`i64.mul` (the arithmetic), `i64.lt_u` /
+      `i64.eq` (the comparisons, the i32 boolean result), `i32.eqz`
+      (the `while` condition's inversion). Their step arms are the
+      semantics the `SemOp` table rows delegate to (see
+      WasmBackend/SemOp.lean); the old edgepython evaluator's per-op
+      arms (EdgePython.Eval) were deleted in the same work. -/
+  | i64sub
+  | i64mul
+  | i64ltu
+  | i64eq
   | i32eq
+  | i32eqz
   | drop
   | br (n : Nat)
   | brif (n : Nat)
@@ -199,6 +216,48 @@ def step : State → Instr → Except Err State
   | s, .i64add =>
       match s.stack with
       | .i64 a :: .i64 b :: rest => .ok { s with stack := .i64 (a + b) :: rest }
+      | _ => .error .underflow
+  | s, .i64sub =>
+      -- wasm's operand order: `i64.const 7; i64.const 2; i64.sub` =
+      -- 7 - 2 — the FIRST-pushed value is the LEFT operand. The
+      -- match follows this file's convention (`a` = the TOP = the
+      -- SECOND-pushed, `b` = the deeper = the FIRST-pushed), so the
+      -- subtraction is `b - a` — the deleted edgepython evaluator's
+      -- `.w64 b :: .w64 a :: rest => wrap64 (a - b)` is the SAME
+      -- arithmetic with the binders named the other way round.
+      match s.stack with
+      | .i64 a :: .i64 b :: rest => .ok { s with stack := .i64 (b - a) :: rest }
+      | _ => .error .underflow
+  | s, .i64mul =>
+      match s.stack with
+      | .i64 a :: .i64 b :: rest => .ok { s with stack := .i64 (a * b) :: rest }
+      | _ => .error .underflow
+  | s, .i64ltu =>
+      -- the UNSIGNED compare (the `_u` in `i64.lt_u`): UInt64's `<`
+      -- is the unsigned order — the comparison the deleted edgepython
+      -- evaluator's `u64Of` reinterpretation meant. Operand order as
+      -- in `i64sub`: `a` = the TOP, `b` = the deeper — the result is
+      -- `b < a` (pushing `x, y` asks `x < y`). Kernel NOTE (probed
+      -- 2026-12): UInt64's `<` does NOT reduce in the kernel, so no
+      -- evaluation-time VALUE guard below can use it — the ltu value
+      -- is pinned by `SemOp.opStack_i64ltu` (a symbolic theorem) and
+      -- the edgepython parity theorems (native_decide); the checker
+      -- arm + the underflow negative control stay kernel-checked.
+      match s.stack with
+      | .i64 a :: .i64 b :: rest =>
+          .ok { s with stack := .i32 (if b < a then 1 else 0) :: rest }
+      | _ => .error .underflow
+  | s, .i64eq =>
+      match s.stack with
+      | .i64 a :: .i64 b :: rest =>
+          .ok { s with stack := .i32 (if a == b then 1 else 0) :: rest }
+      | _ => .error .underflow
+  | s, .i32eqz =>
+      -- the `while` condition's inversion: 1 iff the i32 is 0 — the
+      -- convention `brif`/`if_` consume (nonzero = true).
+      match s.stack with
+      | .i32 b :: rest =>
+          .ok { s with stack := .i32 (if b == 0 then 1 else 0) :: rest }
       | _ => .error .underflow
   | s, .i32eq =>
       -- the branch comparison (`goAlts`: `tag == cidx`): 1 if equal,
@@ -373,7 +432,7 @@ theorem execList_mono :
     | cons i is =>
       -- case on the flat step FIRST: for the frame instrs `step` is
       -- `.structural` (contradicting the `ok` branch, unused in the
-      -- `error` branch); for the 13 flat instrs the last `execList`
+      -- `error` branch); for the 18 flat instrs the last `execList`
       -- arm is `step` then the tail, one fuel unit for the step.
       cases hst : step s i with
       | ok s1 =>
@@ -518,6 +577,26 @@ def checkStack (locals : Nat → Ty) : List Ty → List Instr → Except String 
       match base with
       | .i64 :: .i64 :: ts => checkStack locals (.i64 :: ts) is
       | _ => .error "operand type mismatch"
+  | base, .i64sub :: is =>
+      match base with
+      | .i64 :: .i64 :: ts => checkStack locals (.i64 :: ts) is
+      | _ => .error "operand type mismatch"
+  | base, .i64mul :: is =>
+      match base with
+      | .i64 :: .i64 :: ts => checkStack locals (.i64 :: ts) is
+      | _ => .error "operand type mismatch"
+  | base, .i64ltu :: is =>
+      match base with
+      | .i64 :: .i64 :: ts => checkStack locals (.i32 :: ts) is
+      | _ => .error "operand type mismatch"
+  | base, .i64eq :: is =>
+      match base with
+      | .i64 :: .i64 :: ts => checkStack locals (.i32 :: ts) is
+      | _ => .error "operand type mismatch"
+  | base, .i32eqz :: is =>
+      match base with
+      | .i32 :: ts => checkStack locals (.i32 :: ts) is
+      | _ => .error "operand type mismatch"
   | base, .i32eq :: is =>
       match base with
       | .i32 :: .i32 :: ts => checkStack locals (.i32 :: ts) is
@@ -594,7 +673,8 @@ local macro "err_tail" : tactic =>
 
 set_option hygiene false in
 /-- The TWO-OPERAND skeleton (the #3 cut's biggest per-case win: the
-    `i32add`/`i32eq`/`i64add` arms — pop two `V` scalars, push one; the
+    `i32add`/`i32eq`/`i64add`/`i64sub`/`i64mul`/`i64ltu`/`i64eq` arms
+    — pop two `V` scalars, push one; the
     arms differ only in the pushed VALUE). The base/stack shape is
     destructured with the WRONG ty (`W`) `simp`-refuted at each level;
     the check's tail re-derives (`hcheck'`) and the surviving-tail type
@@ -735,9 +815,9 @@ theorem loop_checkStack_inv (locals : Nat → Ty) (body is : List Instr)
     `sub_case` (the block/loop arms and part 2), `sub_case_if` (the
     `if_` arms), `err_tail` (the observable-error triples). The
     genuinely divergent arms stay hand-written: `localset` (the locals
-    update's pointwise proof), `drop`/`brif`/`i32load8u` (pop-ONE
-    shapes, each with its own discrimination), `i32store8` (pop-two
-    with NO push plus the bounds `by_cases`), and the short
+    update's pointwise proof), `drop`/`brif`/`i32load8u`/`i32eqz`
+    (pop-ONE shapes, each with its own discrimination), `i32store8`
+    (pop-two with NO push plus the bounds `by_cases`), and the short
     `i32const`/`i64const`/`localget` pushes. -/
 theorem exec_typed (locals : Nat → Ty) :
     ∀ fuel : Nat,
@@ -828,6 +908,10 @@ theorem exec_typed (locals : Nat → Ty) :
         | i32add => two_operand i64 i32 (.i32 :: ts2), (.i32 (a + b) :: vs2)
         | i32eq => two_operand i64 i32 (.i32 :: ts2), (.i32 (if a == b then 1 else 0) :: vs2)
         | i64add => two_operand i32 i64 (.i64 :: ts2), (.i64 (a + b) :: vs2)
+        | i64sub => two_operand i32 i64 (.i64 :: ts2), (.i64 (b - a) :: vs2)
+        | i64mul => two_operand i32 i64 (.i64 :: ts2), (.i64 (a * b) :: vs2)
+        | i64ltu => two_operand i32 i64 (.i32 :: ts2), (.i32 (if b < a then 1 else 0) :: vs2)
+        | i64eq => two_operand i32 i64 (.i32 :: ts2), (.i32 (if a == b then 1 else 0) :: vs2)
         | drop =>
           cases base with
           | nil => simp [checkStack] at hcheck
@@ -980,6 +1064,31 @@ theorem exec_typed (locals : Nat → Ty) :
                               hcheck' hts hloc'
                           . simp only [execList, step, if_neg hlt]
                             err_tail
+        | i32eqz =>
+          -- the pop-ONE-push-ONE shape (the `while` condition's
+          -- inversion): a mirror of `i32load8u` without the bounds
+          -- guard — the pushed VALUE is the only difference.
+          cases base with
+          | nil => simp [checkStack] at hcheck
+          | cons t1 ts1 =>
+            cases t1 with
+            | i64 => simp [checkStack] at hcheck
+            | i32 =>
+              have hcheck' : checkStack locals (.i32 :: ts1) is = .ok final := by
+                simp only [checkStack] at hcheck; exact hcheck
+              cases stk with
+              | nil => simp [stackTys] at hstack
+              | cons v1 vs1 =>
+                cases v1 with
+                | i64 _ => simp [stackTys] at hstack
+                | i32 b =>
+                  have hts : stackTys vs1 = ts1 := by
+                    simp [stackTys] at hstack
+                    exact hstack
+                  simp only [execList, step]
+                  exact ih.1 is (.i32 :: ts1) final
+                    ⟨loc, .i32 (if b == 0 then 1 else 0) :: vs1, mem, msz⟩
+                    hcheck' (by simp [stackTys, hts]) hloc'
         | i32load8u off =>
           -- mirror of i32store8 with ONE popped operand; net-zero (pop i32, push i32); VALUE irrelevant for typing.
           cases base with
@@ -1209,6 +1318,47 @@ def progLoadOff : List Instr := [.i32const 12, .i32const 7, .i32store8,
 --     never reads — the store's OOB discipline, mirrored.
 #guard (match exec initState [.i32const 100, .i32load8u 0] with
         | .error .trap => true | _ => false) = true
+
+-- 16. THE EDGEPYTHON SLICE (the M3 extension): i64.sub, i64.mul,
+--     i64.lt_u, i64.eq, i32.eqz — the ops the EdgePython frontend
+--     compiles beyond the original fragment. Positive: each computes
+--     (the value guards are kernel-checked where the operator reduces
+--     in-kernel; `i64.lt_u`'s value is NOT — see the step arm's note).
+def progSub : List Instr := [.i64const 7, .i64const 2, .i64sub]
+#guard (match checkStack localsI32 [] progSub with
+        | .ok [Ty.i64] => true | _ => false) = true
+#guard (match finalStack initState progSub with
+        | .ok [.i64 5] => true | _ => false) = true
+def progMul : List Instr := [.i64const 7, .i64const 6, .i64mul]
+#guard (match finalStack initState progMul with
+        | .ok [.i64 42] => true | _ => false) = true
+def progLtu : List Instr := [.i64const 3, .i64const 9, .i64ltu]
+#guard (match checkStack localsI32 [] progLtu with
+        | .ok [Ty.i32] => true | _ => false) = true
+def progEq : List Instr := [.i64const 9, .i64const 9, .i64eq]
+#guard (match finalStack initState progEq with
+        | .ok [.i32 1] => true | _ => false) = true
+def progEqz : List Instr := [.i32const 0, .i32eqz]
+#guard (match checkStack localsI32 [] progEqz with
+        | .ok [Ty.i32] => true | _ => false) = true
+#guard (match finalStack initState progEqz with
+        | .ok [.i32 1] => true | _ => false) = true
+
+-- 17. THE NEGATIVE CONTROLS (short stacks): each new op UNDERFLOWS
+--     dynamically and is REJECTED statically — the checker's reach
+--     grew with the fragment.
+#guard (match checkStack localsI32 [] [.i64sub] with
+        | .ok _ => false | .error _ => true) = true
+#guard (match exec initState [.i64sub] with
+        | .error .underflow => true | _ => false) = true
+#guard (match checkStack localsI32 [] [.i64ltu] with
+        | .ok _ => false | .error _ => true) = true
+#guard (match exec initState [.i64ltu] with
+        | .error .underflow => true | _ => false) = true
+#guard (match checkStack localsI32 [] [.i32eqz] with
+        | .ok _ => false | .error _ => true) = true
+#guard (match exec initState [.i32eqz] with
+        | .error .underflow => true | _ => false) = true
 
 end Tests
 

@@ -307,7 +307,7 @@ supportInterpreter = true
 name = "WasmBackend"
 srcDir = "lean/wasm-backend"
 roots = ["WasmBackend"]
-globs = ["WasmBackend", "WasmBackend.Correct", "WasmBackend.Audit", "WasmBackend.Sem"]
+globs = ["WasmBackend", "WasmBackend.Correct", "WasmBackend.Audit", "WasmBackend.Sem", "WasmBackend.SemOp"]
 
 [[lean_lib]]
 name = "WasmBackendTestsLib"

@@ -24,7 +24,7 @@ negative literals.
 import WasmBackend.Wat
 import EdgePython.Ast
 import EdgePython.Compiler
-import EdgePython.Eval
+import EdgePython.SemExec
 
 namespace EdgePython
 
@@ -64,6 +64,6 @@ def fixturesModule : Module :=
   | none => { items := [] }
 
 /-- The compiled funcs (the eval surface). -/
-def compiledFns : List Func := WEval.modFns fixturesModule
+def compiledFns : List Func := SemExec.modFns fixturesModule
 
 end EdgePython

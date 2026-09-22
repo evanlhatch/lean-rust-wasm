@@ -1,6 +1,6 @@
 import EdgePython
 import EdgePython.Parity
-import EdgePython.Eval
+import EdgePython.SemExec
 
 /- Axiom gate: the EdgePython parity theorems + compiler/eval. The
    parity computations are native_decide (DISCLOSED — the interpreter's
@@ -16,4 +16,4 @@ import EdgePython.Eval
 #print axioms EdgePython.Parity.parity_if_max_3_9
 #print axioms EdgePython.Parity.buggy_double_diverges
 #print axioms EdgePython.Compiler.compModule
-#print axioms EdgePython.WEval.callModule
+#print axioms EdgePython.SemExec.callModule

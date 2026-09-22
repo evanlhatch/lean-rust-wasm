@@ -16,10 +16,11 @@ live in `EdgePython/Parity.lean` — a lib module the axiom gate imports):
 
 import EdgePython
 import EdgePython.Compiler
-import EdgePython.Eval
+import EdgePython.SemExec
 import EdgePython.Parity
+import WasmBackend.Sem
 
-open EdgePython EdgePython.Py EdgePython.WEval WasmBackend.Wat
+open EdgePython EdgePython.Py EdgePython.SemExec WasmBackend.Wat WasmBackend.Sem
 
 /-! ## The compile succeeds — the module is real, not the empty fallback -/
 
@@ -59,6 +60,54 @@ open EdgePython EdgePython.Py EdgePython.WEval WasmBackend.Wat
 #guard Py.pyEval fixtures "adder" [40, 2] = some 42
 #guard Py.pyEval fixtures "if_max" [3, 9] = some 9
 #guard Py.pyEval fixtures "if_max" [9, 3] = some 9
+
+/-! ## THE M3 SLICE GUARDS: the translated bodies on the SHARED machine -/
+
+-- The compiled fixtures' bodies through the adapter's translator, then
+-- Sem's OWN checker (checkStack over the Sem fragment): double/adder/
+-- dec1/loop_sum are all well-typed — the translation lands INSIDE the
+-- proved machine's typed fragment. if_max is REJECTED — the KNOWN
+-- no-result-frame gap, pinned (an if branch whose body is a
+-- ret-translated localget PUSHES an i64 where the no-result if_ expects
+-- the empty net change; WEval's frame machine evaluated the same shape,
+-- Sem's checker refuses it). Every local is i64 in the fixtures, so the
+-- locals context is constant.
+def tyOfLocal (_ : Nat) : WasmBackend.Sem.Ty := .i64
+
+-- The translated body of a named fixture, `none` on a translation
+-- failure (a safety failure of the ADAPTER, not just the checker).
+def transBody (n : String) : Option (List WasmBackend.Sem.Instr) :=
+  match compiledFns.find? (fun f => f.name == n) with
+  | some f => SemExec.toSemBody [] f f.body
+  | none => none
+
+-- well-typed on the shared machine: `checkStack` ends `.ok` on each
+-- of the four flat/structured fixtures (loop_sum rides the block/loop
+-- frames; the while's `brif` needs the i32 condition the ltu+eqz
+-- leave — the i64 locals context pins the localgets).
+#guard (match transBody "double" with
+        | some b => (match checkStack tyOfLocal [] b with
+            | .ok _ => true | .error _ => false)
+        | none => false) = true
+#guard (match transBody "adder" with
+        | some b => (match checkStack tyOfLocal [] b with
+            | .ok _ => true | .error _ => false)
+        | none => false) = true
+#guard (match transBody "dec1" with
+        | some b => (match checkStack tyOfLocal [] b with
+            | .ok _ => true | .error _ => false)
+        | none => false) = true
+#guard (match transBody "loop_sum" with
+        | some b => (match checkStack tyOfLocal [] b with
+            | .ok _ => true | .error _ => false)
+        | none => false) = true
+-- if_max: the KNOWN no-result-frame gap — REJECTED, pinned (the parity
+-- theorems still hold over the executor: the branch fall-through value
+-- is where execFn reads it).
+#guard (match transBody "if_max" with
+        | some b => (match checkStack tyOfLocal [] b with
+            | .ok _ => false | .error _ => true)
+        | none => false) = true
 
 /-! ## NEGATIVE CONTROLS — the type checker rejects the out-of-subset -/
 

@@ -73,12 +73,12 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## wasm-backend — 2433 decls checked
+## wasm-backend — 2486 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## edgepython — 582 decls checked
+## edgepython — 478 decls checked
 
 axioms used: Quot.sound, EdgePython.Parity.parity_double_21._native.native_decide.ax_1_1, EdgePython.Parity.parity_double_0._native.native_decide.ax_1_1, EdgePython.Parity.swapped_dec1_diverges._native.native_decide.ax_1_1, EdgePython.Parity.wasm_if_max_9_3._native.native_decide.ax_1_1, EdgePython.Parity.parity_dec1_5._native.native_decide.ax_1_1, EdgePython.Parity.wasm_adder_40_2._native.native_decide.ax_1_1, EdgePython.Parity.parity_adder_40_2._native.native_decide.ax_1_1, EdgePython.Parity.parity_loop_sum_1._native.native_decide.ax_1_1, EdgePython.Parity.parity_if_max_3_9._native.native_decide.ax_1_1, EdgePython.Parity.wasm_loop_sum_10._native.native_decide.ax_1_1, EdgePython.Parity.wasm_if_max_3_9._native.native_decide.ax_1_1, EdgePython.Parity.parity_if_max_9_3._native.native_decide.ax_1_1, propext, EdgePython.Parity.parity_loop_sum_10._native.native_decide.ax_1_1, EdgePython.Parity.wasm_double_21._native.native_decide.ax_1_1, EdgePython.Parity.parity_loop_sum_0._native.native_decide.ax_1_1, EdgePython.Parity.buggy_double_diverges._native.native_decide.ax_1_1
 violations: none
