@@ -619,3 +619,19 @@ The demo row set is small enough that (2)-(4) land in one backend session; the d
 decision to re-verify first = (3)'s "no dictionary tails" claim — probe the LCNF of a
 minimal `@[guest_std] def probe (cs) (t : UInt32) (p : UInt64) : VCase cs .bool → Bool`
 BEFORE writing the emitter support.
+
+## Doctrine: independent twins stay hand-written; only bookkeeping is generated
+
+The differential discipline's value is INDEPENDENT implementations of the
+same semantics catching each other's bugs — hostgen's snapshot parser
+found 3 real drifts, the wasm-delta codec port caught bugs, the witness
+differential found a guest miscompile. Therefore: faithful re-
+implementations at differential boundaries (parsers, codecs, evaluators)
+are KEPT hand-written and pinned by the duel — never GENERATED from the
+Lean side, which would share the bugs across both sides and kill the
+bug-finder. What MAY be generated is the bookkeeping around them:
+comparison/serialization plumbing (the oracle verdict/compare/ser
+mirror), manifests, baselines, surface strings. Grammar-as-data
+(emit/parse as folds over one table) applies only where independence is
+not the point (substrait's semantic text, internal formats) — never at
+differential boundaries.
