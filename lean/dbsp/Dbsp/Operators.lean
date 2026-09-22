@@ -26,7 +26,7 @@ public import Dbsp.Certs
 public import Dbsp.Stream
 public import Dbsp.Tactics
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

@@ -1,5 +1,5 @@
 /-
-# CodegenCore.CodedRegistry — a DataRegistry with position-derived codes (W7.4)
+# CodegenCore.CodedRegistry — a DataRegistry with position-derived codes
 
 The CodedItem mixin: `DataRegistry` (name uniqueness IN THE TYPE) plus a
 code space (`codePrefix`, `start`) whose codes come from

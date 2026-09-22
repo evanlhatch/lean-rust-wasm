@@ -134,8 +134,8 @@ def errorTokens : List String :=
 
 /-- Deliberate exceptions: (file-suffix, reason) — see the module header.
 Ratchet down, never up. Reasons prefixed REAL are true findings, reported
-to the owner (2026-09-19 lint-gate run) and silenced only to keep the gate
-green; the fix lands with the ratchet. -/
+to the owner and silenced only to keep the gate green; the fix lands
+with the ratchet. -/
 def dymAllowance : List (String × String) := [
   ("lean/dbsp/Dbsp/Certs.lean",
    "REAL (reported 2026-09-19): `@[cert]: unknown declaration` and \

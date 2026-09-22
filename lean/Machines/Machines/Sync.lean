@@ -27,7 +27,7 @@ blocking bridge (a runtime concern), FairShare/singleflight (cold-path
 coalescing — a scheduling policy, not a contract). These are the primitives
 whose CONTRACT is load-bearing for the offload architecture.
 
-W2.3(d) follow-up: all five machines are `machine!`-assembled. mpsc and
+All five machines are `machine!`-assembled. mpsc and
 oneshot are the PAYLOAD machines — `event: send (v : α) …` binds `v` in
 the guard/action/safety bodies (the event family is label-value-indexed,
 so no Core change was needed); the hand-written `MpscEvent`/`mpscSpec`
@@ -40,7 +40,7 @@ public import Machines.Core
 public import Machines.Tactics
 public import Machines.Dsl
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/instances must reduce across module boundaries).
 @[expose] public section
 
@@ -62,7 +62,7 @@ deriving Repr, BEq, DecidableEq
 def LatchInv (cap : Nat) (s : LatchState) : Prop :=
   s.count + s.arrived = cap
 
--- The latch machine — machine!-assembled (W2.3(d)): `latch.Label` /
+-- The latch machine — machine!-assembled: `latch.Label` /
 -- `latch.spec` replace the hand-written `LatchEvent` / `latchSpec`.
 -- (plain comment: doc comments cannot precede machine!)
 machine! latch (cap : Nat) where
@@ -108,7 +108,7 @@ deriving Repr, DecidableEq
     the guard's job; the invariant is the capacity bound.) -/
 def MpscInv (s : MpscState α) : Prop := s.buf.length ≤ s.cap
 
--- The mpsc machine — the FIRST payload machine on the DSL (W2.3(d)):
+-- The mpsc machine — the FIRST payload machine on the DSL:
 -- `send (v : α)` carries the payload; `v` binds in the guard/action/safety
 -- bodies. `mpsc.Label (α : Type)` / `mpsc.spec` replace the hand-written
 -- `MpscEvent` / `mpscSpec`; no `labels` enumeration is generated (the
@@ -161,7 +161,7 @@ inductive OneshotState (α : Type) where
   | empty | sent (v : α) | received (v : α)
 deriving Repr, DecidableEq
 
--- The oneshot machine — machine!-assembled (W2.3(d)); the contract is the
+-- The oneshot machine — machine!-assembled; the contract is the
 -- state machine itself: send from empty only, recv from sent only. The
 -- invariant is `True`, so the default `machine_safety` discharge closes
 -- every PO. `oneshot.Label` / `oneshot.spec` replace the hand-written
@@ -201,7 +201,7 @@ deriving Repr, BEq, DecidableEq
 def BarrierInv (s : BarrierState) : Prop :=
   s.arrived ≤ s.parties ∧ (s.released → s.arrived = s.parties)
 
--- The barrier machine — machine!-assembled (W2.3(d)). (The `parties` count
+-- The barrier machine — machine!-assembled. (The `parties` count
 -- lives in `BarrierState`; the machine itself takes no parameter.)
 -- (plain comment: doc comments cannot precede machine!)
 machine! barrier where
@@ -245,7 +245,7 @@ deriving Repr, BEq, DecidableEq
 /-- The contract: permits never exceed capacity. -/
 def SemInv (s : SemState) : Prop := s.permits ≤ s.cap
 
--- The semaphore machine — machine!-assembled (W2.3(d)). (The `cap` lives
+-- The semaphore machine — machine!-assembled. (The `cap` lives
 -- in `SemState`; the machine itself takes no parameter.)
 -- (plain comment: doc comments cannot precede machine!)
 machine! semaphore where

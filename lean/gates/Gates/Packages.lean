@@ -4,10 +4,9 @@
 One table + the shared per-package env loader, consumed by the axiom
 report (Gates.Axioms), the kernel double-check (Gates.KernelCheck), and
 any future per-package gate — the `lean-axioms` recipe's package list
-lifted out of shell. Mirrors the old recipe's `run` lines exactly: same
-dirs, same root modules (`Tests.Main` included where the package has a
-test driver; std/ledger/feature-flags have none — review-2026-09-16 F5
-records std's gap).
+lifted out of shell. Same dirs and root modules as the old recipe's
+`run` lines (`Tests.Main` included where the package has a test driver;
+std/ledger/feature-flags have none — std's gap was recorded then).
 
 `loadPkgEnv` is the ONE import-preamble the loading gates share (the
 Axioms/NativePolicy/Audit replay, deduped).
@@ -116,20 +115,20 @@ def gatedPackages : Array PkgSpec := #[
     oleanDir := some "../../.lake/build/lib/lean",
     srcDir := some "../../lean/dbsp",
     leanPath := some "../../.lake/build/lib/lean" },
-  -- std gained its Tests (review-2026-09-16 F5's fix) after the old
+  -- std gained its Tests (a review fix) after the old
   -- recipe's package list was written; the global report covers them.
   { dir := "std",           roots := #[`GuestlangStd, `GuestlangStdTests.Main],
     oleanDir := some "../../.lake/build/lib/lean",
     srcDir := some "../../lean/std",
     leanPath := some "../../.lake/build/lib/lean" },
-  -- ABSORBED (phase 1): ledger's lakefile is dead; its modules build
+  -- ABSORBED: ledger's lakefile is dead; its modules build
   -- under the root lakefile. `dir` stays the report-section key; the
   -- paths point at the root build (notes/single-lake-migration.md §4).
   { dir := "ledger",        roots := #[`Ledger, `LedgerFn, `LedgerES],
     oleanDir := some "../../.lake/build/lib/lean",
     srcDir := some "../../lean/ledger",
     leanPath := some "../../.lake/build/lib/lean" },
-  -- ABSORBED (phase 2): feature-flags' lakefile is dead; same overrides
+  -- ABSORBED: feature-flags' lakefile is dead; same overrides
   -- shape as ledger above.
   { dir := "feature-flags", roots := #[`FeatureFlags, `FeatureFlagsFn],
     oleanDir := some "../../.lake/build/lib/lean",
@@ -146,7 +145,7 @@ def gatedPackages : Array PkgSpec := #[
     oleanDir := some "../../.lake/build/lib/lean",
     srcDir := some "../../lean/edgepython",
     leanPath := some "../../.lake/build/lib/lean" },
-  -- Self-gating verdict (2026-09-18): the gates package is EXEMPT from
+  -- Self-gating verdict: the gates package is EXEMPT from
   -- the sweeps by role — it is a host-side driver, not a proof
   -- artifact, and its import closure IS the whole tree: loading its
   -- modules in the sweep re-monoliths the memory profile (26.5GB,

@@ -2,7 +2,7 @@
 # Machines.Foundations — the correspondence-kit re-export
 
 The correspondence kit (`Iso`/`PartialIso`/`CheckedProp`)
-moved to `CodegenCore.Kit` (W1.1: the kit needs zero
+moved to `CodegenCore.Kit` (the kit needs zero
 mathlib; this package has it). Re-exported below so the `Machines.` names
 keep working for downstream. The two mathlib LINTER imports register the
 package's lint config — they serve nothing in the kit itself.
@@ -13,7 +13,7 @@ module
 public import Mathlib.Tactic.Linter.FlexibleLinter
 public import Mathlib.Tactic.Linter.Style
 public import CodegenCore.Kit
--- The umbrella `public import Batteries` was deleted (W5.4 hygiene batch):
+-- The umbrella `public import Batteries` was deleted (hygiene batch):
 -- the only Batteries-named entity this file uses is the `library_note`
 -- command below, so the import is targeted at its home module.
 public import Batteries.Util.LibraryNote
@@ -30,7 +30,7 @@ library_note machineAssemblePattern /--
 
 namespace Machines
 
-/-- W1.1 re-export: the kit's home is CodegenCore (core-only); the
+/-- The kit's home is CodegenCore (core-only); the
     `Machines.` aliases keep every existing use compiling. `abbrev` (not
     `export` — core Lean 4 has no `export` command): reducible, so instance
     search and anonymous constructors see through them (the AGENTS.md

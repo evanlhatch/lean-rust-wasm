@@ -1,13 +1,11 @@
 /-
 # Gates.GenCheck — the stripped byte-tie (`gates gen-check`)
 
-Replaces the Lean half of `just gen-check` (forge's `gen --check`),
-closing the volatile-header weakness from notes/review-2026-09-16: the
-old check byte-compared the whole file, so an innocent `just gen` (new
-wall-clock + spec-sha in the 2-line GENERATED header) dirtied the tree
-and read as drift. This gate compares what the byte-tie actually BINDS
-(CodegenCore.Emit.Core's contract: "the regen's header differs, the
-content's sha must not"):
+The stripped byte-tie: the old check byte-compared the whole file, so
+an innocent `just gen` (a new wall-clock + spec-sha in the 2-line
+GENERATED header) dirtied the tree and read as drift. This gate
+compares what the byte-tie actually BINDS (CodegenCore.Emit.Core's
+contract: "the regen's header differs, the content's sha must not"):
 
 1. the committed file's body bytes (everything after the 2-line header)
    vs the regenerated emitter output, AND
@@ -26,8 +24,8 @@ Coverage note: exactly the artifacts of the two forge jobs manifests
 keeps its own stripped byte-tie in `just wasm-compile` (different
 driver, already stripped-correct).
 
-LEGACY (non-module) file: meta env-extension access (constraint 12,
-notes/w5-4-module-migration.md).
+LEGACY (non-module) file: meta env-extension access (the module-
+migration constraint: such drivers stay legacy).
 -/
 import Gates.Common
 import Faults.Emit.Registry

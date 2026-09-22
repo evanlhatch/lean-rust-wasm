@@ -88,6 +88,7 @@ module
 public import CodegenCore
 public import SchemaLang.Emit.Invariant
 public import SchemaLang.WitnessCheck
+import TestKit.Obllane
 
 @[expose] public section
 
@@ -344,20 +345,16 @@ theorem SchemaObligation.discharge_oracleSwept_of_ref (o : SchemaObligation)
     `decideEvidence_sound` — the proof object is shared. -/
 theorem SchemaObligation.discharge_decidableNow_sound (o : SchemaObligation)
     (ht : o.tier = .decidableNow)
-    (h : o.discharge = some (.decided true)) : o.decidableClaim := by
-  unfold SchemaObligation.discharge at h
-  rw [ht] at h
-  exact CodegenCore.Obligation.decideEvidence_sound h
+    (h : o.discharge = some (.decided true)) : o.decidableClaim :=
+  TestKit.Obllane.decidableNow_sound (by simp [SchemaObligation.discharge, ht]) h
 
 /-- COMPLETENESS of the decidableNow backend: a true claim discharges
     to the `.decided true` evidence — the backend FIRES on the claims
     it can decide (the tier's `isSome` is not vacuous). -/
 theorem SchemaObligation.discharge_decidableNow_of_claim (o : SchemaObligation)
     (ht : o.tier = .decidableNow) (h : o.decidableClaim) :
-    o.discharge = some (.decided true) := by
-  unfold SchemaObligation.discharge
-  rw [ht]
-  exact CodegenCore.Obligation.decideEvidence_of_claim h
+    o.discharge = some (.decided true) :=
+  TestKit.Obllane.decidableNow_of_claim (by simp [SchemaObligation.discharge, ht]) h
 
 /-- Computed-tier obligations ALWAYS discharge: a tier computed by
     `tierOf` from the row's own citation can name its evidence; a

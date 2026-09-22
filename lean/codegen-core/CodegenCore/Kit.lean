@@ -26,8 +26,7 @@ structure PartialIso (A B : Type) where
   encode : B → A
   decode_encode : ∀ b, decode (encode b) = some b
 
-/-! ## The Iso graduations (review-2026-09-16: Iso is the load-bearing
-    correspondence type) — each constructor below landed WITH its
+/-! ## The Iso graduations (Iso is the load-bearing correspondence type) — each constructor below landed WITH its
     consumer; do not grow this section without one. -/
 
 /-- The image decoder: total on the image — a member's witness makes
@@ -45,7 +44,7 @@ def PartialIso.decodeImage (p : PartialIso A B)
     `to_inv` transports `decode_encode`, and `inv_to` upgrades it —
     re-encoding the decode of a canonical encoding reproduces the bytes
     exactly (the direction the one-ended law alone cannot give). First
-    consumer: `SchemaLang.Witness` (W9.1's `witnessIso`). -/
+    consumer: `SchemaLang.Witness`'s `witnessIso`. -/
 def PartialIso.toImageIso (p : PartialIso A B) :
     Iso {a : A // ∃ b, p.encode b = a} B where
   to := p.decodeImage
@@ -88,10 +87,9 @@ def nodupNamesIso {names : List String} (hnd : names.Nodup) :
 
 /-- The completeness half of a `CheckedProp`, as DATA. `missing` is the
     loud, greppable declaration "this gate is one-directional — the checker
-    may reject valid inputs". (The `Option (complete proof)` shape was the
-    first design; `Option : Type → Type` cannot carry a Prop without a
-    `PLift` wrapper, and that noise at every construction site is worse
-    than a two-constructor inductive.) -/
+    may reject valid inputs". (An `Option (complete proof)` cannot carry a
+    Prop without a `PLift` wrapper — the noise at every construction site
+    is worse than a two-constructor inductive.) -/
 inductive CheckedProp.Completeness {α : Type} (P : α → Prop) (check : α → Bool) : Type where
   | missing : Completeness P check
   | proved : (∀ a, P a → check a = true) → Completeness P check
@@ -133,10 +131,7 @@ end CheckedProp
 The Strata pattern: obligations are RECORDED as data; pluggable
 backends discharge them. The tier is a BACKEND ASSIGNMENT, not a
 property of the fact (lean-doctrine: kernel proof / decide / generated
-runtime check / oracle sweep). Replaces: hand-wired per-lane checks,
-"armed but unfired" registrations (an obligation whose discharge is
-`none` is the gap, as data), ad-hoc diag renderings. Deliberately OUT
-(phase 1): assumptions (no consumer yet). Core-only: `Name`/`String`
+runtime check / oracle sweep). Deliberately OUT: assumptions (no consumer yet). Core-only: `Name`/`String`
 are prelude types — nothing schema-shaped crosses this line. -/
 
 /-- The discharge tier: WHICH backend discharges the obligation.
@@ -144,8 +139,8 @@ are prelude types — nothing schema-shaped crosses this line. -/
     (`boundaryCheck`/`proved`/`oracleCovered` → `generatedCheck`/
     `provedAtElab`/`oracleSwept`), adds the `decidableNow` rung the
     doctrine row names (a decide/grind discharge at elaboration or CI),
-    and adds the `guestVerified` rung (W9.3,
-    notes/design-guest-verified.md §3): a guest-checked witness — the
+    and adds the `guestVerified` rung (notes/design-guest-verified.md
+    §3): a guest-checked witness — the
     host ships a serialized certificate, the guest re-checks it at the
     point of use. -/
 inductive Obligation.Tier where
@@ -190,7 +185,7 @@ inductive Obligation.Evidence where
       the cross-package half (schema-lang cannot see the oracle's row
       universe). -/
   | oracleRow (ref : String)
-  /-- W9.3: `artifact` = the byte-tied witness file; `ref` = the
+  /-- `artifact` = the byte-tied witness file; `ref` = the
       obligation's label inside it (the certificate certifies THAT
       obligation). -/
   | guestWitness (artifact ref : String)

@@ -1,5 +1,9 @@
 /- TestKit — the shared test harness (harness, golden, PropSpec, DetSpec,
-   DiffSpec, GateKit) + the shared deterministic LCG. -/
+   DiffSpec, GateKit) + the shared deterministic LCG + the two lane kits
+   (WfKit: `wf_split` — the rung-bridge discharge; Obllane: the
+   obligation-lane builders). Obllane routes through CodegenCore's
+   obligation backend (itself core-only) — the "core + LSpec only"
+   discipline holds (no mathlib). -/
 module
 
 public import Lean
@@ -10,6 +14,8 @@ public import TestKit.PropSpec
 public import TestKit.DetSpec
 public import TestKit.DiffSpec
 public import TestKit.GateKit
+public import TestKit.WfKit
+public import TestKit.Obllane
 
 @[expose] public section
 

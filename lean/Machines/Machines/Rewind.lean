@@ -7,7 +7,7 @@ overlay is one instance."
 The shape: a rewindable machine's events carry a Δ witness (what the
 journal records) over a `Dbsp.ChangeInversion` change structure —
 `revert` IS `patch ∘ invert`, and the one-step revert law IS
-`correct_invert` (W4.2: the hand-carried `revert`/`revert_left` fields
+`correct_invert` (the hand-carried `revert`/`revert_left` fields
 are gone; the structure instead witnesses that firing an event IS
 patching by the recorded delta, `action_is_patch`, and that recorded
 deltas are valid, `deltaOf_valid`). `runLogged` records the deltas
@@ -37,7 +37,7 @@ public import Dbsp.ChangeSpec
 -- additive meta import — constraint 7).
 public meta import Machines.Tactics
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/instances must reduce across module boundaries).
 @[expose] public section
 

@@ -46,11 +46,11 @@ public import Mathlib.Tactic.Ring
 public import Dbsp.ChangeSpec
 
 -- The shared delta/lens law shape (`DisjointCommute`): the instance
--- below cites it. Kit is core-only — no mathlib leak (W5.4 constraint
--- 14), so the public import is safe for dbsp's downstream.
+-- below cites it. Kit is core-only — no mathlib leak (the module-migration
+-- constraint), so the public import is safe for dbsp's downstream.
 public import CodegenCore.Kit
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

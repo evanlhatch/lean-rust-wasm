@@ -1,7 +1,7 @@
 /-
 # Gates.ObligationCheck — the oracle-ref resolution gate (`gates obligation-check`)
 
-The obligation ladder's LAST rung, armed AND fired (W9.x): schema-lang's
+The obligation ladder's LAST rung, armed AND fired: schema-lang's
 `SchemaObligation.discharge` discharges an `oracleSwept` obligation on a
 WELL-FORMED row reference (non-empty, naming the payload's record — the
 lightest honest check available THERE: schema-lang cannot see the
@@ -52,7 +52,7 @@ at a missing fn failed check 1. All four teeth FIRE; the committed
 state (no claims, canary resolving) is green.
 
 LEGACY (non-module) file: meta env-extension access via Gates.Common
-(constraint 12, notes/w5-4-module-migration.md).
+(the module-migration constraint: such drivers stay legacy).
 -/
 import Gates.Common
 import SchemaLang
@@ -61,7 +61,7 @@ import Oracle
 namespace Gates.ObligationCheck
 
 /-- The canary: a ref the oracle's row universe MUST resolve (the
-    `verify-witness` rows are committed spec data — the W9.6 witness
+    `verify-witness` rows are committed spec data — the witness
     fixtures). Non-vacuity control: if this ever fails, the resolution
     surface is broken and the gate says so LOUDLY, even with no
     claims to audit. -/

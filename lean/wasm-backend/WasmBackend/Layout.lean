@@ -1,18 +1,15 @@
 /-
-WasmBackend.Layout — the canonical-ABI FLAT record layout, as functions
-the adapters emit FROM (notes/seam-contract.md seam #5).
+WasmBackend.Layout — the canonical-ABI FLAT record layout, as
+functions the adapters emit FROM.
 
-The adapters lower the guest's records to the canonical ABI's memory
-encoding: the fields in WIT order, each at its aligned offset — a u64/
-i64/f64 field is 8-wide and 8-aligned; every other scalar is 4-wide and
-4-aligned; a string/list/option field is a (ptr, len) PAIR (two 4-wide
-halves; the pair = 8 bytes). THE BUG THIS CLOSES: the adapters' offsets
-were hand numbers, and the hand numbers were wrong twice — listUser
-stored every field at +0/+4 (the id clobbered by the name pointer), and
-the element layout only surfaced when a record crossed a STREAM
-(watch-users' decoded tags = the length pair read as bytes). The
-offsets in the emitted WAT are now THIS module's functions' outputs:
-the same numbers the theorems talk about.
+The fields sit in WIT order, each at its aligned offset: a u64/i64/f64
+field is 8-wide and 8-aligned; every other scalar 4-wide and 4-aligned;
+a string/list/option field is a (ptr, len) PAIR (two 4-wide halves, 8
+bytes). The emitted offsets are now THIS module's functions' outputs —
+the same numbers the theorems talk about. TRAP CLOSED: the adapters'
+offsets were hand numbers, wrong twice — listUser stored every field at
++0/+4 (the id clobbered by the name pointer), and the layout only
+surfaced when a record crossed a STREAM (watch-users).
 
 Theorems (the layout's soundness):
 * `width_pos` — every field is at least 1 byte wide (the round-up's
@@ -46,8 +43,8 @@ namespace WasmBackend.Layout
 def width : Ty → Nat
   | .u64 | .i64 | .f64 => 8
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
-      -- map/set: the (ptr, len) pair of their wire list form (W8.1 —
-      -- deliberate arm, the `list` precedent)
+      -- map/set: the (ptr, len) pair of their wire list form
+      -- (deliberate; the `list` precedent)
       | .stream _ | .tensor _ _ | .map _ _ | .set _ | .ty _ => 8
   | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 | .f32 => 4
 
@@ -121,7 +118,6 @@ theorem go_pairwise : ∀ (ts : List Ty) (off : Nat), (go ts off).Pairwise (· <
       have h3 := width_pos t
       omega
 
-/-- The offsets are strictly increasing. -/
 theorem offsets_sorted (ts : List Ty) : (offsets ts).Pairwise (· < ·) := go_pairwise ts 0
 
 /-! ## The concrete pins — the demo's user record
@@ -142,7 +138,6 @@ theorem user_offsets : offsets userTys = [0, 8, 16, 24] := rfl
 /-- The user record's size = 32 bytes = the stream item stride. -/
 theorem user_size : size userTys = 32 := rfl
 
-/-- A scalar-only record packs from 0 with no padding. -/
 theorem u64_offsets : offsets [.u64] = [0] := rfl
 
 end WasmBackend.Layout

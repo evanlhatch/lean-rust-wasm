@@ -350,7 +350,7 @@ def elabSchemaEntityMachine : CommandElab := fun stx => do
   let suffixT := (← (fields.drop (statusIdx + 1)).mapM fieldTerm).toArray
   let pathT ← (List.range statusIdx).foldlM
     (fun p _ => `(term| SchemaLang.ColPath.there $p))
-    (← `(term| SchemaLang.ColPath.here (fs := [$suffixT,*])))
+    (← `(term| SchemaLang.ColPath.here (cs := [$suffixT,*])))
   let updOblTs : Array Lean.Term ← trData.mapM fun (tName, src, dst) => do
     let fCode ← codeOf src
     let tCode ← codeOf dst

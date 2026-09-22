@@ -1,5 +1,5 @@
 /-
-LintKit.DeclCheck — the shared DECLARATION-CHECK shape (W7.13; canon row
+LintKit.DeclCheck — the shared DECLARATION-CHECK shape (canon row
 "an elaboration gate = a decl-check mounted as attribute-gate or lint").
 
 ONE check = `Name → Environment → List DeclDiag`. TWO mounts:

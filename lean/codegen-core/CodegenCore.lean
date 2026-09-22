@@ -12,6 +12,7 @@ public import CodegenCore.AttrKit
 public import CodegenCore.GenKit
 public import CodegenCore.GuestGate
 public import CodegenCore.Kit
+public import CodegenCore.MemberKit
 public import CodegenCore.RoundTrip
 public import CodegenCore.Validation
 

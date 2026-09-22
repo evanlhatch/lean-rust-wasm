@@ -44,6 +44,7 @@ public import SchemaLang.Vortex.Emit
 public import SchemaLang.Vortex.ExtDType
 public import SchemaLang.Docs
 public import SchemaLang.ModuleDocs
+public import SchemaLang.OracleMirror -- the oracle-mirror emitter (the comparison BOOKKEEPING's generator — registered below)
 
 @[expose] public section
 
@@ -232,6 +233,7 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
   , WitSweep.sweepManifestEmitter
   , SchemaLang.Docs.docsEmitter
   , SchemaLang.ModuleDocs.internalsEmitter
+  , SchemaLang.OracleMirror.oracleMirrorEmitter
   ]
 
 /-- The manifest's OWN output path — the one output no core emitter
@@ -359,6 +361,13 @@ def certifiedJobs (ctx : GenCtx) :
   , (WitSweep.sweepManifestEmitter, WitSweep.sweepManifestEmitter.run ctx)
   , (SchemaLang.Docs.docsEmitter, SchemaLang.Docs.docsEmitter.run ctx)
   , (SchemaLang.ModuleDocs.internalsEmitter, SchemaLang.ModuleDocs.internalsEmitter.run ctx)
+  -- the oracle-mirror emitter (SchemaLang.OracleMirror — the comparison
+  -- BOOKKEEPING's generator): NO law, and the reason is the bookkeeping's
+  -- shape — the mirror's agreement with the oracle's definitions is
+  -- #guard-pinned on the WASM-BACKEND side (Oracle.lean sweeps
+  -- compareTableRows/classifyRows/display tables against its own
+  -- definitions), not a law over the ctx. The run is ctx-independent.
+  , (SchemaLang.OracleMirror.oracleMirrorEmitter, SchemaLang.OracleMirror.oracleMirrorEmitter.run ctx)
   , (forgeJobsEmitter, forgeJobsEmitter.run ctx)
   ]
 

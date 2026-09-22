@@ -63,6 +63,7 @@ module
 public import SchemaLang.Validate
 public import SchemaLang.Update2
 public import CodegenCore
+import TestKit.Obllane
 
 @[expose] public section
 
@@ -349,19 +350,15 @@ def PrePostObligation.discharge (o : PrePostObligation) :
     the kit's `decideEvidence_sound` — the proof object is shared. -/
 theorem PrePostObligation.discharge_decidableNow_sound (o : PrePostObligation)
     (ht : o.tier = .decidableNow)
-    (h : o.discharge = some (.decided true)) : o.decidableClaim := by
-  unfold PrePostObligation.discharge at h
-  rw [ht] at h
-  exact CodegenCore.Obligation.decideEvidence_sound h
+    (h : o.discharge = some (.decided true)) : o.decidableClaim :=
+  TestKit.Obllane.decidableNow_sound (by simp [PrePostObligation.discharge, ht]) h
 
 /-- COMPLETENESS: a true claim discharges to the `.decided true`
     evidence — the backend FIRES on the claims it can decide. -/
 theorem PrePostObligation.discharge_decidableNow_of_claim (o : PrePostObligation)
     (ht : o.tier = .decidableNow) (h : o.decidableClaim) :
-    o.discharge = some (.decided true) := by
-  unfold PrePostObligation.discharge
-  rw [ht]
-  exact CodegenCore.Obligation.decideEvidence_of_claim h
+    o.discharge = some (.decided true) :=
+  TestKit.Obllane.decidableNow_of_claim (by simp [PrePostObligation.discharge, ht]) h
 
 /-- The pre's obligation ALWAYS discharges (the caller-boundary rung's
     evidence is the check itself — the tier's `isSome` is not vacuous). -/

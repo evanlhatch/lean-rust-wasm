@@ -36,8 +36,8 @@ run):
     verifying it builds under the v4.33.0 RELEASE toolchain with
     batteries v4.33.0 (the root require in gates' lakefile overrides
     lean4lean's rc2 batteries pin; lean4lean itself is NOT patched).
-(d) BLIND SPOTS — what a green run does NOT prove (the PolyFun axiom
-    sweep's honest-gaps list, mirrored per polyfun-study.md item 2):
+(d) BLIND SPOTS — what a green run does NOT prove (the honest-gaps
+    list):
     1. `example`s — they create no constants, so NO env-based sweep sees
        them (this gate replays the env's constants; the axiom census
        walks the same constants): a sorry inside an `example` is caught
@@ -53,8 +53,8 @@ run):
     Pair this gate with `just gates`' other lanes; a green kernel sweep
     means exactly the checked surface, never more.
 
-Mechanics (first-sweep lessons, 2026-09-17 — the full sweep's findings
-were all harness/resource artifacts, ZERO kernel disagreements; see
+Mechanics (first-sweep lessons — the full sweep's findings were all
+harness/resource artifacts, ZERO kernel disagreements; see
 notes/divergences.md):
 
 * The lean4lean exe builds on demand
@@ -72,8 +72,8 @@ notes/divergences.md):
 * IMPORT-ONLY ROOT AGGREGATES ARE SKIPPED, with the precondition checked
   in code (`sourceHasDecls` — a root that gains declarations is NOT
   skipped). Rationale: non-fresh lean4lean checks only the target
-  module's OWN declarations; the W5.4 roots are `module` + `public
-  import` only, so checking one checks zero declarations — while the
+  module's OWN declarations; the module-migration roots are `module` +
+  `public import` only, so checking one checks zero declarations — while the
   import replay still loads the package's FULL closure. Observed: the
   `Dbsp` and `SchemaLang` root replays peaked at 20–22GB RSS and were
   SIGTERM-killed by earlyoom (this host: 29GB, earlyoom's 20% line);
@@ -95,7 +95,7 @@ Pure Lean core + Gates.Packages (+ Gates.Common's shared driver tails).
 -/
 import Lean
 import Gates.Packages
-import Gates.Common  -- the shared driver tails (R4); transitively pulls
+import Gates.Common  -- the shared driver tails; transitively pulls
                      -- schema-lang oleans — import-graph only, the exe
                      -- loads the whole tree anyway
 
@@ -149,9 +149,9 @@ def modulesOf (libDir : System.FilePath) : IO (Array Name) := do
       | some s => s.toString | none => rel
     String.intercalate "." (stem.splitOn "/") |>.toName
 
-/-- Column-0 declaration openers. Root aggregates after the W5.4 module
-    migration are `module` + `public import` lines inside a `/- -/`
-    header-comment — none of these at column 0. -/
+/-- Column-0 declaration openers. The module-migration root aggregates
+    are `module` + `public import` lines inside a `/- -/` header-comment
+    — none of these at column 0. -/
 def declOpeners : Array String := #[
   "@[", "def ", "theorem ", "instance", "abbrev ", "inductive ",
   "structure ", "class ", "opaque ", "axiom ", "example", "initialize",

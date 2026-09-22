@@ -124,7 +124,7 @@ meta def packageNamespaceTest (decl : Name) : MetaM (Option MessageData) := do
   -- in a library namespace, so this is Lean's constraint, not namespace
   -- drift. (The per-site nolint can't carry this: elaborating the attr
   -- needs the linter registered in THAT file's env, which mathlib-side
-  -- packages don't import — the machineClause lesson, 2026-09-19.)
+  -- packages don't import — the machineClause lesson.)
   if (`Lean.Parser.Category).isPrefixOf decl then return none
   let some mod ← findModuleOf? decl | return none
   if linter.guestlang.packageNamespace.strict.get (← getOptions) then

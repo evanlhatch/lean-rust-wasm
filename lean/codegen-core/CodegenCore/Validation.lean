@@ -8,8 +8,8 @@ accumulate (the continuation needs the value the error path lacks).
 Ownership: the one copy of the accumulating-fold pattern. Exclusion: no
 `Monad`, no `Alternative` (both would lie about accumulation).
 
-Known conversion sites for the next wave (W7.18 ships the type + laws +
-tests only; converting these is follow-up work):
+Known conversion sites (the type + laws + tests shipped; converting
+these is follow-up work):
 - `SchemaLang.Meta.Reflect.checkStruct` / `checkInductive`
   (schema-lang Meta/Reflect.lean:145/192) — hand folds collecting diag
   lists per structure field / inductive ctor.

@@ -15,8 +15,16 @@
    a good gate (positive + 2 context-naming corruptions) passes; an
    IDENTITY corruption (gate vacuous), a context-poor rejection, and an
    empty corruption list are each flagged as gate failures.
+9. MutSpec: the mutation battery over a Wf-lane-style checker — the base
+   is accepted and every mutant of the four families (swap Ty / rename /
+   drop case / dangling .ty ref) is refused; the seeded generative lane
+   (`MutSpec.runGen` via runGenPure) and the raw-LCG lane prove pinned-
+   seed determinism; the runner's own failure modes (refusalsExpected=0,
+   zero-mutant grammar, count drift, a surviving mutant, a refused base)
+   are each flagged — a passing negative is louder than a failure.
 -/
 import TestKit
+import TestKit.MutSpec
 import Plausible
 
 open TestKit Plausible
@@ -142,8 +150,320 @@ def diffNoContext : DiffSpec := ⟨"context-poor rejection demo (must fail)",
 def diffEmpty : DiffSpec := ⟨"corruption-free demo (must fail)",
   foldColumn cleanColumn, []⟩
 
+-- ── MutSpec: the mutation battery over a Wf-lane-style checker ──────
+--
+-- F1 (the shift-left endpoint): the mutation battery proves the CHECKER
+-- bites — a known-good base must be accepted, and EVERY mutant of a
+-- whole family must be refused. The lane is the schema-lang Wf gate
+-- (`universeCheck`, SchemaLang/Item.lean + Wf.lean). TestKit's own cone
+-- is import-banned from SchemaLang (LintKit importBan row for
+-- `lean/TestKit/`), so this demo runs the discipline against a faithful
+-- SELF-CONTAINED miniature of that lane: the same gates (refs resolve,
+-- name + mangled-name uniqueness, no empty variants, no inline ref-
+-- cycles, legal identifiers) over the same item shape (type items with
+-- fields/cases and `.ty` references). The real checker is a ONE-LINE
+-- drop-in at the schema-lang site:
+--
+--   check := fun items => (SchemaLang.universeCheck items).isEmpty
+--
+-- with `base`/`mutate` reassigned to `List SchemaLang.Item`; MutSpec is
+-- parameterized over α, so nothing in the discipline changes.
+
+/- The miniature schema type: a scalar, the boxed position (`list`), or a
+   NAME reference into the universe. -/
+inductive MiniTy where
+  | u64 | string
+  | list (a : MiniTy)
+  | ty (n : String)
+deriving Repr, BEq, Inhabited
+
+/-- One record field: name + type. -/
+structure MiniField where
+  name : String
+  ty : MiniTy
+deriving Repr, BEq, Inhabited
+
+/-- A variant case: name + optional payload type (the Wf lane's
+    `String × Option Ty` shape). -/
+abbrev MiniCase := String × Option MiniTy
+
+/-- The miniature item universe (records + variants — the shapes the four
+    mutant families splice). -/
+inductive MiniItem where
+  | record (name : String) (fields : List MiniField)
+  | variant (name : String) (cases : List MiniCase)
+deriving Repr, BEq, Inhabited
+
+/-- The identifying name of an item. -/
+def MiniItem.name : MiniItem → String
+  | .record n _ => n
+  | .variant n _ => n
+
+/-- Type-position names only (what `.ty` references may resolve to — the
+    `Item.typeNames` mirror). -/
+def MiniItem.typeNames : List MiniItem → List String :=
+  fun items => items.filterMap fun it =>
+    match it with
+    | .record n _ => some n
+    | .variant n _ => some n
+
+/-! ## The miniature of the Wf lane's gates -/
+
+/-- `.ty` references resolve against the universe's type names (the
+    `Ty.check` unknownRef mirror; `list` recurses, `ty` resolves). -/
+def miniTyGood (known : List String) : MiniTy → Bool
+  | .u64 | .string => true
+  | .list a => miniTyGood known a
+  | .ty n => known.contains n
+
+/-- Every field ty / case payload ty resolves. -/
+def miniRefsResolve (items : List MiniItem) : Bool :=
+  let known := MiniItem.typeNames items
+  items.all fun it =>
+    match it with
+    | .record _ fields => fields.all fun f => miniTyGood known f.ty
+    | .variant _ cases => cases.all fun (_, p) =>
+        match p with | none => true | some t => miniTyGood known t
+
+/-- Item names are unique (the dup-scan mirror). -/
+def miniNamesUnique (items : List MiniItem) : Bool :=
+  (items.map MiniItem.name).Nodup
+
+/-- A NON-INJECTIVE mangling, like the Wf lane's kebab ("a_b" and "a-b"
+    collide) — the post-mangle uniqueness gate needs it. -/
+def miniMangle (s : String) : String :=
+  s.replace "_" "-"
+
+/-- The MANGLED names are unique too (the `mangleCollDiags` mirror). -/
+def miniMangleUnique (items : List MiniItem) : Bool :=
+  (items.map (miniMangle ∘ MiniItem.name)).Nodup
+
+/-- A variant must have at least one case (the emptyVariant mirror). -/
+def miniVariantsNonempty (items : List MiniItem) : Bool :=
+  items.all fun it =>
+    match it with
+    | .record _ _ => true
+    | .variant _ cases => cases ≠ []
+
+/-- A few WIT/Rust reserved words, miniaturized (the `checkSchemaIdent`
+    mirror — a field/case named `type` would emit invalid WIT). -/
+def miniReserved : List String :=
+  ["type", "list", "u64", "record", "variant"]
+
+/-- Field and case identifiers avoid the reserved set. -/
+def miniIdentsLegal (items : List MiniItem) : Bool :=
+  items.all fun it =>
+    match it with
+    | .record _ fields => fields.all fun f => !miniReserved.contains f.name
+    | .variant _ cases => cases.all fun (c, _) => !miniReserved.contains c
+
+/-- The inline (non-boxed) ref edges (the `Ty.inlineRefs` mirror: `list`
+    is THE boxed position — cycles behind it are finite-size; a direct
+    `.ty` embed is inline). -/
+def miniInlineSucc (items : List MiniItem) (n : String) : List String :=
+  match items.find? (fun it => it.name == n) with
+  | some (.record _ fields) => fields.filterMap fun f =>
+      match f.ty with | .ty m => some m | _ => none
+  | some (.variant _ cases) => (cases.filterMap (·.2)).filterMap fun t =>
+      match t with | .ty m => some m | _ => none
+  | none => []
+
+/-- Reachability in ≤ `fuel` inline steps (the `inlineReaches?` mirror). -/
+def miniReaches (items : List MiniItem) (root : String) : Nat → String → Bool
+  | 0, m => m == root
+  | k + 1, m =>
+      m == root || (miniInlineSucc items m).any (miniReaches items root k)
+
+/-- No type item sits on an inline ref-cycle (the W8.13 `InlineAcyclic`
+    mirror, at the same `items.length + 1` fuel bound). -/
+def miniInlineAcyclic (items : List MiniItem) : Bool :=
+  (MiniItem.typeNames items).all fun n =>
+    !(miniInlineSucc items n).any (miniReaches items n (items.length + 1))
+
+/-- THE MINIATURE `universeCheck`: `.isEmpty`-equivalent conjunction of
+    all five gates. -/
+def miniUniverseCheck (items : List MiniItem) : Bool :=
+  miniRefsResolve items && miniNamesUnique items && miniMangleUnique items
+    && miniVariantsNonempty items && miniIdentsLegal items
+    && miniInlineAcyclic items
+
+/-- The known-good base universe: two records + one variant; `order.owner`
+    references `user` (resolves), everything unique, no cycles. -/
+def baseUniverse : List MiniItem :=
+  [ .record "user"  [ { name := "id", ty := .u64 }
+                     , { name := "email", ty := .string } ]
+  , .record "order" [ { name := "owner", ty := .ty "user" }
+                     , { name := "tag", ty := .list .string } ]
+  , .variant "status" [ ("open", none), ("closed", some .string) ] ]
+
+/-! ## The four mutant families (each splice hits exactly one gate) -/
+
+/-- Set record `rec`'s field `fld`'s ty to `t`. -/
+def setMiniFieldTy (rec fld : String) (t : MiniTy) (items : List MiniItem) :
+    List MiniItem :=
+  items.map fun it =>
+    match it with
+    | .record n fs =>
+        if n == rec then .record n (fs.map fun f =>
+          if f.name == fld then { f with ty := t } else f) else it
+    | it => it
+
+/-- Rename record `rec`'s field `fld` to `to`. -/
+def renameMiniField (rec fld to : String) (items : List MiniItem) :
+    List MiniItem :=
+  items.map fun it =>
+    match it with
+    | .record n fs =>
+        if n == rec then .record n (fs.map fun f =>
+          if f.name == fld then { f with name := to } else f) else it
+    | it => it
+
+/-- Empty variant `v` (drop ALL its cases — a zero-case variant). -/
+def emptyMiniVariant (v : String) (items : List MiniItem) : List MiniItem :=
+  items.map fun it =>
+    match it with
+    | .variant n _ => if n == v then .variant v [] else it
+    | it => it
+
+/-- The four splices: 1 swap a field's Ty → an inline self-cycle (the
+    W8.13 gate); 2 rename a field → a reserved word (the ident gate);
+    3 drop a case → a zero-case variant (the empty-variant gate); 4 point
+    a `.ty` ref at nothing → unresolvable (the refs gate). Each refuses by
+    exactly ONE rule — a surviving splice would mean that rule is dead. -/
+def defaultSplices : List (List MiniItem → List MiniItem) :=
+  [ setMiniFieldTy "order" "owner" (.ty "order")
+  , renameMiniField "user" "email" "type"
+  , emptyMiniVariant "status"
+  , setMiniFieldTy "order" "owner" (.ty "ghost") ]
+
+/-- The deterministic mutant grammar: one mutant (a whole universe) per
+    family — `mutate : α → List α` with `α = List MiniItem`. -/
+def mutateItem (items : List MiniItem) : List (List MiniItem) :=
+  defaultSplices.map (· items)
+
+/-- The positive battery: base accepted, all four mutants refused. -/
+def wfBattery : MutSpec (List MiniItem) :=
+  { name := "universeCheck-bites: the four mutant families"
+  , base := baseUniverse
+  , mutate := mutateItem
+  , check := miniUniverseCheck
+  , refusalsExpected := 4 }
+
+/-- Map a seeded plan of family indices onto concrete mutants (the
+    generative lane's materializer). -/
+def planMutants (plan : List Nat) (items : List MiniItem) :
+    List (List MiniItem) :=
+  plan.map fun i => (defaultSplices.getD i (fun x => x)) items
+
+/-- The generative battery: the mutant SET is a `Plausible.Gen` — a
+    permutation of the four families, drawn by the seeded runner
+    (`MutSpec.runGen` → `TestKit.runGenPure`: pinned seed AND size). The
+    grammar itself is seeded — same seed, same battery. -/
+def generativeBattery : MutSpec (List MiniItem) :=
+  { name := "universeCheck-bites: seeded generative draw (4 plans)"
+  , base := baseUniverse
+  , mutate := fun _ => []   -- replaced by the drawn set (runGen)
+  , check := miniUniverseCheck
+  , refusalsExpected := 4 }
+
+/-- One draw: a seeded permutation of the four splice families. -/
+def genMutantSet : Plausible.Gen (List (List MiniItem)) := do
+  let ⟨plan, _⟩ ← Plausible.Gen.permutationOf [0, 1, 2, 3]
+  pure (planMutants plan baseUniverse)
+
+/-- The pinned-seed law, verified: two draws with the same seed/size are
+    the same battery (the snapshot-fixture byte-tie habit). -/
+def genDrawDeterminism : CheckResult :=
+  match TestKit.runGenPure genMutantSet 7 20, TestKit.runGenPure genMutantSet 7 20 with
+  | .error e1, .error e2 =>
+      if e1 == e2 then .ok () else .error "pinned seed drifted: the two failures differ"
+  | .ok a, .ok b =>
+      if a == b then .ok () else .error "pinned seed drifted: the two draws differ"
+  | _, _ => .error "pinned seed drifted: draw outcomes differ"
+
+/-- The grammar ITSELF seeded by the raw `TestKit.lcg` stream (no
+    Plausible — the pure lane): family i = the i-th LCG iterate mod 4. -/
+def lcgPlan (seed : UInt64) : Nat → List Nat
+  | 0 => []
+  | k + 1 =>
+      let s := lcg seed
+      (s.toNat % 4) :: lcgPlan s k
+
+/-- The raw-LCG battery: the same four families, the plan seeded directly
+    by `TestKit.lcg` with a pinned seed. -/
+def lcgBattery (seed : UInt64) : MutSpec (List MiniItem) :=
+  { name := s!"universeCheck-bites: raw-LCG plan (seed {seed})"
+  , base := baseUniverse
+  , mutate := fun items => planMutants (lcgPlan seed 4) items
+  , check := miniUniverseCheck
+  , refusalsExpected := 4 }
+
+/-! ## The discipline's own failure modes (the negative demos — each of
+    these MUST be flagged; a passing negative is louder than a failure) -/
+
+/-- refusalsExpected = 0: no declared teeth. -/
+def vacuityZeroSpec : MutSpec (List MiniItem) :=
+  { name := "demo: refusalsExpected = 0"
+  , base := baseUniverse, mutate := mutateItem
+  , check := miniUniverseCheck, refusalsExpected := 0 }
+
+/-- A grammar that produces zero mutants: proves nothing. -/
+def vacuityEmptySpec : MutSpec (List MiniItem) :=
+  { name := "demo: zero-mutant grammar"
+  , base := baseUniverse, mutate := fun _ => []
+  , check := miniUniverseCheck, refusalsExpected := 2 }
+
+/-- The grammar silently shrank (3 of 4 mutants): drift. -/
+def driftSpec : MutSpec (List MiniItem) :=
+  { name := "demo: mutant-count drift"
+  , base := baseUniverse
+  , mutate := fun _ => mutateItem baseUniverse |>.take 3
+  , check := miniUniverseCheck, refusalsExpected := 4 }
+
+/-- Drop ONE case of `status` (not all): still legal — a survivor proves
+    the checker doesn't bite, so the battery must FAIL it. -/
+def dropOneStatusCase (items : List MiniItem) : List MiniItem :=
+  items.map fun it =>
+    match it with
+    | .variant "status" _ => .variant "status" [("closed", some .string)]
+    | it => it
+
+def survivorSpec : MutSpec (List MiniItem) :=
+  { name := "demo: a surviving mutant (1-case drop is legal)"
+  , base := baseUniverse
+  , mutate := fun _ => [dropOneStatusCase baseUniverse]
+  , check := miniUniverseCheck, refusalsExpected := 1 }
+
+/-- The base itself is a mutant (dangling ref): the positive guard. -/
+def positiveFailSpec : MutSpec (List MiniItem) :=
+  { name := "demo: base refused by the checker"
+  , base := setMiniFieldTy "order" "owner" (.ty "ghost") baseUniverse
+  , mutate := mutateItem
+  , check := miniUniverseCheck, refusalsExpected := 4 }
+
+/-- The battery rows: positives must pass, negatives must be REFUSED by
+    the runner (a passing negative = vacuity = a loud failure). -/
+def mutSpecRows : List (String × CheckResult) :=
+  [ ("battery: four families refused"              , wfBattery.run)
+  , ("battery: generative draw refused (seed 7)"   , MutSpec.runGen generativeBattery genMutantSet 7 20)
+  , ("battery: raw-LCG plan refused (seed 42)"     , (lcgBattery 42).run)
+  , ("seed pins the generative battery"            , genDrawDeterminism)
+  , ("negative: refusalsExpected=0 must be VACUOUS",
+      expectErrorContaining ["VACUOUS"] vacuityZeroSpec.run)
+  , ("negative: zero-mutant grammar must be VACUOUS",
+      expectErrorContaining ["VACUOUS"] vacuityEmptySpec.run)
+  , ("negative: count drift must be flagged"       ,
+      expectErrorContaining ["GRAMMAR DRIFT"] driftSpec.run)
+  , ("negative: a surviving mutant must be flagged",
+      expectErrorContaining ["SURVIVED"] survivorSpec.run)
+  , ("negative: a refused base must be a failure"  ,
+      expectErrorContaining ["POSITIVE FAILED"] positiveFailSpec.run) ]
+
 def main : IO UInt32 := do
   let mut failures := 0
+  -- MutSpec: the mutation battery over the Wf-lane-style checker
+  let mutSpecCode ← TestKit.mainOfChecks "MutSpec" mutSpecRows
+  if mutSpecCode != 0 then failures := failures + 1
   -- harness suite
   let code ← TestKit.mainOfSuites [("harness", suiteOf harnessChecks)]
   if code != 0 then failures := failures + 1

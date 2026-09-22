@@ -27,7 +27,7 @@ Contents:
    instance is NOT named separately: it is exactly
    `(ZSet.equiJoin_bilinear π1 π2).toPartialDerivSpec` (an earlier
    `equiJoinDerivSpec` def — zero consumers, one application — was
-   deleted, 2026-12 quality pass).
+   deleted, quality pass).
 
 Deliberately not adopted from autoinc: `ChangeMonad`/`MonadRollback` (we
 are pure; rollback is `ChangeInversion` + the overlay's segment rewind),
@@ -39,7 +39,7 @@ module
 
 public import Dbsp.Relational
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

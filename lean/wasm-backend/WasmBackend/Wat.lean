@@ -1,30 +1,28 @@
 /-!
 # WasmBackend.Wat — the typed WAT AST + renderer
 
-The doctrine: WAT is never string-interpolated for STRUCTURE. The emitter
-builds `Instr`/`Func`/`Module` values; this module renders them. The
-offsets in the emitted instructions are structured FIELDS (Nat), fed
-from `WasmBackend.Layout.offsets` (the proved canonical-ABI layout) —
-the two hand-number clobber bugs this month lived in string literals.
+The doctrine: WAT is never string-interpolated for STRUCTURE. The
+emitter builds `Instr`/`Func`/`Module` values; this module renders
+them. Offsets are structured FIELDS (Nat) fed from the PROVED
+`WasmBackend.Layout.offsets` — the two hand-number clobber bugs lived
+in string literals.
 
-TYPED MODULE: the escape hatch `Instr.raw (s : String)` renders `s` as
-one verbatim WAT line. Every emission site is typed today (zero
-`Instr.raw` since the raw→typed migration; `Instr.raw` is banned by
-Audit.lean); the escape hatch remains only for the module-ITEM splice
-marker (`Wat.Item.raw "  ;;RUNTIME-SPLICE"` — WasmGenMain replaces its
-exact bytes with runtime.wat). The ledger of what stays raw is owned by
-WasmBackend.lean's header.
+TYPED MODULE: `Instr.raw (s : String)` renders one verbatim WAT line —
+the escape hatch, banned by Audit.lean (zero emission sites); it
+remains only for the module-ITEM splice marker (`Wat.Item.raw "
+;;RUNTIME-SPLICE"` — WasmGenMain replaces its exact bytes with
+runtime.wat). The ledger of what stays raw is owned by WasmBackend.lean's
+header.
 
-Rendering: `Std.Format` (the doctrine — never string interpolation for
-structure). NO `group`/`fill` is used, so every `Format.line` is a HARD
-break: the output is strictly line-oriented, 2 spaces per nesting level.
-WAT semantics = the parse, not the bytes: the folded/nested layout the
+Rendering: `Std.Format`. NO `group`/`fill` is used, so every
+`Format.line` is a HARD break: strictly line-oriented, 2 spaces per
+nesting level. WAT semantics = the parse, not the bytes: the layout the
 renderer produces may differ cosmetically from older goldens.
 
-Constructor-name map (Lean keywords force renames):
-`ret` = `return`, `unreach` = `unreachable`, `if_` = `if`.
-Local references: a bare digit string is an INDEX (`local.get 3` in
-cabi_realloc); anything else is an id (`local.get $x`).
+Constructor-name map (Lean keywords force renames): `ret` = `return`,
+`unreach` = `unreachable`, `if_` = `if`. Local references: a bare digit
+string is an INDEX (`local.get 3` in cabi_realloc); anything else is an
+id (`local.get $x`).
 
 Ownership: wasm-backend. Imports nothing but Init (no Lean dep) —
 `WasmBackend.Layout` is consumed by the ADAPTERS (WasmBackend.lean),
@@ -161,9 +159,8 @@ def instrW : Instr → Format
             | [] => Format.nil
             | _ => Format.line ++ text "else" ++ Format.nest 2 (Format.line ++ instrsW elseI))
         ++ Format.line ++ text "end"
-  -- every FLAT form = `lineOf`'s text (the two renderings were
-  -- byte-identical arms; the structural forms are matched above and
-  -- `lineOf`'s «structured» placeholder never renders)
+  -- every FLAT form = `lineOf`'s text (the structural forms are
+  -- matched above; `lineOf`'s «structured» placeholder never renders)
   | i => text (lineOf i)
 
 def instrsW : List Instr → Format

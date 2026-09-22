@@ -2,13 +2,11 @@ import WasmBackend.Wat
 import WasmBackend.Layout
 
 /-!
-# WasmBackend.Audit — the emitted-WAT store-shape audit (seam #6)
+# WasmBackend.Audit — the emitted-WAT store-shape audit
 
-The seam-contract #6 promotion: "the walk's region-disjointness check =
-the 6.5.3 recipe applied to the backend's own output". This module is
-the Lean-side STATIC check over the backend's emitted instruction
-lists. Every memory store's ADDRESS is checked twice, for two
-independent properties:
+This module is the Lean-side STATIC check over the backend's emitted
+instruction lists. Each memory store's ADDRESS is checked twice, for
+two independent properties:
 
 1. PROVENANCE — the pointer is trackable (the vouch for the POINTER);
 2. RANGE — the store's `(offset, width)` fits the region's KNOWN
@@ -27,8 +25,8 @@ VALUE it was last set from:
 * `localRef`  — `local.get n` (resolved through the env at USE time)
 * `loaded v`  — a memory load from abstract address `v` (the
   pointer-copy chain: the load of a KNOWN object's field)
-* `plus a b`  — pointer arithmetic; tracked ONLY in the shape
-  (known base, const offset) — the `dst + 16` idiom
+* `plus a b`  — pointer arithmetic; tracked ONLY as (known base,
+  const offset) — the `dst + 16` idiom
 * `opaque`    — anything unmodeled (non-alloc calls, mul-based
   addresses, values left by structured forms, unbound locals)
 
@@ -46,9 +44,8 @@ silent pass.
 ## The RANGE lane: the store's (offset, width) vs the region's extent
 
 Each store's byte range `[addr + offset, addr + offset + width)` (the
-width from `widthOf`: 4 for `i32.store`, 8 for `i64.store`, 1 for the
-`store8`s) is checked against the region the address resolves to
-(`regionOf`):
+width from `widthOf`) is checked against the region the address
+resolves to (`regionOf`):
 
 * `.static base` — an ABSOLUTE const base (the return-area idiom).
   The caller supplies the registry `statics : List (Nat × Nat)` — the
@@ -108,8 +105,8 @@ region's bound).
   traversal (structured forms do not consume an index).
 
 Ownership: wasm-backend's audit lane (NOT Sem/Correct — the
-translation-correctness lane owns those). Imports `Wat` + `Layout`
-(the PROVED record extents the range lane checks against).
+correctness lane owns those). Imports `Wat` + `Layout` (the PROVED
+record extents the range lane checks against).
 -/
 
 namespace WasmBackend.Wat.Audit

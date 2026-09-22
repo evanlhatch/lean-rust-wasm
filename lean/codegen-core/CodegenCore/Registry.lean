@@ -118,7 +118,7 @@ theorem allocateCodes_length {α : Type} (pre : String) (start : Nat)
     (allocateCodes pre start items).length = items.length := by
   simp [allocateCodes]
 
-/-! ## Ctor-kind derivation (the diag-kind pattern, W7.4)
+/-! ## Ctor-kind derivation (the diag-kind pattern)
 
 A registry of diagnostic kinds keyed by an inductive's constructors was
 historically TWO hand mirrors: the constructor-name list (the allocation

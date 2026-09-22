@@ -99,6 +99,7 @@ public import SchemaLang.Item
 -- its coverage enumeration)
 public import SchemaLang.CodecValue
 public import CodegenCore.GuestGate
+public import CodegenCore.MemberKit
 public import LintKit
 
 @[expose] public section
@@ -180,15 +181,23 @@ def defaultRow? : (fs : List Field) → Option (RowVals fs)
 
 /-! ## The field path — the resolution's RUNTIME half -/
 
-/-- `ColPath n t fs` — the CONSTRUCTOR path from a schema's head to the
-    field `n : t`: `here` = the head field IS `⟨n, t⟩` (the list index
-    says so — the value needs no cast); `there` = it lives deeper. Pure
-    data: the wasm backend emits the walk as ordinary tag cases, no
-    closure, no dictionary. -/
-inductive ColPath (n : String) (t : Ty) : List Field → Type where
-  | here : ColPath n t (({ name := n, ty := t }) :: fs)
-  | there : {f : Field} → {fs : List Field} → ColPath n t fs →
-      ColPath n t (f :: fs)
+-- (The `ColPath`-shape doc, formerly a `/-`-doc on the hand-written
+-- inductive, rides here as comment lines — the inductive is generated
+-- below. Shape, unabridged: `ColPath n t fs` is the CONSTRUCTOR path
+-- from a schema's head to the field `n : t`: `here` = the head field
+-- IS `⟨n, t⟩` (the list index says so — no cast); `there` = deeper.
+-- Pure data: the backend emits the walk as ordinary tag cases.)
+-- W8 (C1 — the indexed member-class family): the three class/path/
+-- instance triples are GENERATED — the `declare_member_class` command
+-- (CodegenCore.MemberKit). Each call emits the path inductive + the
+-- class + the head/tail instances AT the call site, in this namespace,
+-- with these exact element shapes (the docs beside each call state the
+-- replaced hand-shape's semantics).
+declare_member_class HasCol (List Field) ColPath here there where
+  member_index := (n : String) (t : Ty)
+  member_head  := ({name := n, ty := t})
+  member_tail  := {f : Field}
+  member_field := path
 
 /-- Walk the path: the field's value, out of the schema-aligned row.
     `@[guest_std]`: the compiled field extraction (the guest-mark
@@ -278,37 +287,27 @@ theorem guardCastApply_of_ne {F G : List Field → Sort v} {fs gs : List Field}
   simp only [guardCastApply]  -- the irreducible-safe unfold (W6.13)
   rw [dif_neg hne]
 
-/-! ## The field resolution's ELABORATION half -/
+-- ## The field resolution's ELABORATION half (GENERATED — the
+-- `declare_member_class HasCol` call above)
+--
 
-/-- `HasCol` — `HasField`'s companion: the SAME two-parameter-class
-    idiom (the name binds in TWO positions — the record's head field AND
-    the query — so a misspelled name finds no instance and fails at
-    elaboration), but the class carries the extraction PATH: head
-    instance answers `here`; the step instance prepends `there`. The
-    instance is elaboration-time only — the path (data) is what runs. -/
-class HasCol (fs : List Field) (name : String) (t : outParam Ty) where
-  /-- The structural path to the field. -/
-  path : ColPath name t fs
+-- The `HasCol` idiom, stated once (the generated decls carry these
+-- exact shapes): the name binds in TWO positions — the record's head
+-- field AND the query — so a misspelled name finds no instance and
+-- fails at elaboration. The class carries the extraction PATH
+-- (`h.path` : `ColPath n t fs`); the head instance (`hasColHead`,
+-- `priority := 100` — same-name shadowing resolves to the FIRST
+-- field) answers `here`; `hasColTail` prepends `there`. The classes
+-- are elaboration-time only — the path (data) is what runs.
 
--- KNOWN FALSE POSITIVES (accepted, documented): `warn.classDefReducibility`
--- flags every `@[instance]`-registered class-typed def below (hasCol*/
--- hasCase*/hasPayload*) as "semireducible" — at the ATTRIBUTE line —
--- whether the def carries `@[reducible]`, `@[instance_reducible]`, or
--- neither; the linter reads the attribute's OWN registration, not the
--- decl's hint. Silencing would trip the noLinterDisable lint; the
--- instances resolve (the whole Validate suite consumes them).
-
-/-- Head match: the queried name IS the head field's name and the
-    queried type IS its type. (Priority: same-name shadowing resolves
-    to the FIRST field.) -/
-instance (priority := 100) hasColHead {n : String} {t : Ty} {fs : List Field} :
-    HasCol ({ name := n, ty := t } :: fs) n t :=
-  ⟨.here⟩
-
-/-- Step: the name lives deeper — prepend `there`. -/
-instance hasColTail {f : Field} {fs : List Field} {n : String} {t : Ty}
-    [h : HasCol fs n t] : HasCol (f :: fs) n t :=
-  ⟨.there h.path⟩
+-- (The `warn.classDefReducibility` false-positive noise the hand-
+-- written shops carried is GONE: the generated instances carry the
+-- `@[derived]` stamp, which EXCLUDES generated decls from the linter
+-- (verified: the Validate build logs zero hasCol*/hasCase*/
+-- hasPayload* warnings — only CodecValue's pre-existing
+-- `closedDefault` one remains). If the stamp ever goes, the noise
+-- returns; the instances resolve either way (the whole Validate
+-- suite consumes them).
 
 /-! ## The indexed expression -/
 
@@ -542,71 +541,44 @@ def VRow.isName : {cs : List VariantCase} → VRow cs → String → Bool
   | ((n, _) :: _), .here _, m => n == m
   | (_ :: _), .there r, m => r.isName m
 
-/-- The tag position of case `n` — pure data, the `ColPath` pattern.
-    `here` binds BOTH name positions (the head case's name AND the
-    query), so a misspelled case finds no instance and fails at
-    ELABORATION (the `HasCol` idiom over the case list). -/
-inductive CaseTag (n : String) : List VariantCase → Type where
-  | here : {t : Option Ty} → {cs : List VariantCase} →
-      CaseTag n ((n, t) :: cs)
-  | there : {m : String} → {u : Option Ty} → {cs : List VariantCase} →
-      CaseTag n cs → CaseTag n ((m, u) :: cs)
+-- (The tag-position doc, formerly a `/-`-doc on the hand-written
+-- CaseTag, rides here as comment lines — the inductive is generated
+-- below. Shape, unabridged: `CaseTag n cs` is pure data, the
+-- `ColPath` pattern; `here` binds BOTH name positions (the head
+-- case's name AND the query), so a misspelled case finds no instance
+-- and fails at ELABORATION (the `HasCol` idiom over the case list).)
+-- GENERATED (W8 C1): the tag position + resolution class — ctor mode
+-- (the slot `(t : Option Ty)` binds ONLY in the head rule and the head
+-- instance; the path has ONE parameter, the class TWO). The
+-- `here`/`there` shapes reproduce the replaced hand-written decls
+-- exactly (the misspelled case fails at elaboration — no instance).
+declare_member_class HasCase (List VariantCase) CaseTag here there where
+  member_index := (n : String)
+  member_slot  := (t : Option Ty)
+  member_head  := ((n, t))
+  member_tail  := {m : String} {u : Option Ty}
+  member_field := tag
 
-/-- `HasCase` — the tag-test's resolution evidence. Elaboration-time
-    only; the eval compares names (`VRow.isName`), so the class
-    carries no runtime tail. -/
-class HasCase (cs : List VariantCase) (n : String) where
-  tag : CaseTag n cs
-
-/-- Head match (priority: same-name shadowing resolves to the FIRST
-    case — the `hasColHead` rule). -/
-instance (priority := 100) hasCaseHead {n : String} {t : Option Ty} {cs : List VariantCase} :
-    HasCase ((n, t) :: cs) n := ⟨.here⟩
-
-/-- Step: the case lives deeper. -/
-instance hasCaseTail {n m : String} {u : Option Ty} {cs : List VariantCase}
-    [h : HasCase cs n] : HasCase ((m, u) :: cs) n := ⟨.there h.tag⟩
-
-/-- The SOME-payload case's path: `here` exists ONLY over a
-    `(n, some t)` head — a NONE-payload case has no accessor BY
-    CONSTRUCTION (the honest NONE rule; the misspelled name fails the
-    same way — no instance). -/
-inductive CasePath (n : String) (t : Ty) : List VariantCase → Type where
-  | here : {cs : List VariantCase} → CasePath n t ((n, some t) :: cs)
-  | there : {m : String} → {u : Option Ty} → {cs : List VariantCase} →
-      CasePath n t cs → CasePath n t ((m, u) :: cs)
-
-/-- `HasPayload` — the arm-typed accessor's evidence: the extraction
-    path PLUS the 0-analog (`miss`) the evaluator yields when the
-    fired tag is NOT this arm. Payload types without a 0-analog (e.g.
-    a `.ty` ref — no `Value` ctor) get no instance: the accessor
-    fails to elaborate. Elaboration-time only (the ColPath
-discipline — the PATH is data, the class is not a backend target). -/
-class HasPayload (cs : List VariantCase) (n : String) (t : outParam Ty) where
-  path : CasePath n t cs
-  miss : Value t
-
-/-- The 0-analog instances: the valueable scalar fragment. Each is a
-    head match over a `some`-payload head of its OWN type — add a
-    fragment type by adding one head instance (the universe stays
-    closed; the extension is additive). -/
-instance (priority := 100) hasPayloadHead_u64 {n : String} {cs : List VariantCase} :
-    HasPayload ((n, some .u64) :: cs) n .u64 := ⟨.here, .u64 0⟩
-
-instance (priority := 100) hasPayloadHead_f64 {n : String} {cs : List VariantCase} :
-    HasPayload ((n, some .f64) :: cs) n .f64 := ⟨.here, .f64 0⟩
-
-instance (priority := 100) hasPayloadHead_bool {n : String} {cs : List VariantCase} :
-    HasPayload ((n, some .bool) :: cs) n .bool := ⟨.here, .bool false⟩
-
-instance (priority := 100) hasPayloadHead_string {n : String} {cs : List VariantCase} :
-    HasPayload ((n, some .string) :: cs) n .string := ⟨.here, .string ""⟩
-
-/-- Step: the case lives deeper (any head shape — the payload type
-    rides the recursion). -/
-instance hasPayloadTail {n m : String} {u : Option Ty} {cs : List VariantCase}
-    {t : Ty} [h : HasPayload cs n t] : HasPayload ((m, u) :: cs) n t :=
-  ⟨.there h.path, h.miss⟩
+-- (The SOME-payload-path doc, formerly a `/-`-doc on the hand-written
+-- CasePath, rides here as comment lines — the inductive is generated
+-- below. Shape, unabridged: `CasePath.here` exists ONLY over a
+-- `(n, some t)` head — a NONE-payload case has no accessor BY
+-- CONSTRUCTION (the honest NONE rule); the misspelled name fails the
+-- same way — no instance.)
+-- GENERATED (W8 C1): the SOME-payload path + arm-typed accessor —
+-- param mode, with the 0-analog table (one `priority := 100` head
+-- instance per valueable type; the `miss` field rides the caller's
+-- `Value`). A NONE-payload case has NO accessor BY CONSTRUCTION
+-- (`CasePath.here` exists only over a `(n, some t)` head); `.ty`-ref
+-- payloads have no `Value` ctor, so those arms get no instance.
+declare_member_class HasPayload (List VariantCase) CasePath here there where
+  member_index := (n : String) (t : Ty)
+  member_head  := ((n, some t))
+  member_tail  := {m : String} {u : Option Ty}
+  member_field := path
+  member_val   := (Value)
+  member_miss  := (.u64 | .u64 0) (.f64 | .f64 0) (.bool | .bool false)
+                 (.string | .string "")
 
 /-! ### The variant expression -/
 
@@ -641,6 +613,17 @@ def CasePath.payloadOf : CasePath n t cs → VRow cs → Option (Value t)
   | .here, .there _ => none
   | .there _, .here _ => none
   | .there p, .there r => p.payloadOf r
+
+/-- The arm-typed payload READ, factored from `evalCase`'s payload arm:
+    the path walk with the 0-analog fallback when the fired tag is not
+    the queried arm. `HasPayload` is elaboration-time evidence consumed
+    as DATA here (the path + the miss); the VCase ExprLang instance
+    projects this through the view. -/
+def CasePath.payloadRead {cs : List VariantCase} {n : String} {t : Ty}
+    [h : HasPayload cs n t] (row : VRow cs) : Value t :=
+  match h.path.payloadOf row with
+  | some v => v
+  | none => h.miss
 
 /-- The SECOND evaluator (the variant-row subject): expression + row →
     the case's value. Total by construction (the same GADT-index

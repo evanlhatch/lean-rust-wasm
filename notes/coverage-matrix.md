@@ -10,30 +10,30 @@ registry and the emitter re-run — `x` = output bytes changed, `.` = quiet) plu
 signature where one exists, else the featureTyTags projection of the oracle's
 own featuresOf tags; see the two-worlds finding below).
 
-| Ty ctor | wit | flags-wit | rust | gen-rust | vortex | ext-vortex | delta | delta-wit | change-spec | invariant | update | typestate | order-machine | circuit | witness | pipeline | wit-fixtures | wit-fixture-manifest | wit-sweep-fixtures | wit-sweep-manifest | docs | internals-docs | forge-jobs | oracle |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `bool` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `u8` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `u16` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `u32` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `u64` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `i8` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `i16` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `i32` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `i64` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `f32` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `f64` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `string` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `bytes` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `option` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `result` | x | . | x | x | . | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `list` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `map` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `set` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `future` | x | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `stream` | x | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
-| `tensor` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . |
-| `ty` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | x |
+| Ty ctor | wit | flags-wit | rust | gen-rust | vortex | ext-vortex | delta | delta-wit | change-spec | invariant | update | typestate | order-machine | circuit | witness | pipeline | wit-fixtures | wit-fixture-manifest | wit-sweep-fixtures | wit-sweep-manifest | docs | internals-docs | oracle-mirror | forge-jobs | oracle |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `bool` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `u8` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `u16` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `u32` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `u64` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `i8` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `i16` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `i32` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `i64` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `f32` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `f64` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `string` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `bytes` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `option` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `result` | x | . | x | x | . | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `list` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `map` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `set` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `future` | x | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `stream` | x | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
+| `tensor` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | . |
+| `ty` | x | . | x | x | x | . | x | x | . | . | . | . | . | . | . | . | . | . | . | . | x | . | . | . | x |
 
 ## Fully-quiet ctors (no emitter exercises them; the oracle never sees them)
 

@@ -13,6 +13,6 @@ The options themselves are set per-package in the lakefiles
 module
 
 -- This module's whole job is re-export: the two lint bundles must be
--- visible to every importer, hence `public import` (W5.4).
+-- visible to every importer, hence `public import`.
 public import Mathlib.Tactic.Linter.FlexibleLinter
 public import Mathlib.Tactic.Linter.Style

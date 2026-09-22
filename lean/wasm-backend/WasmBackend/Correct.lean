@@ -47,8 +47,7 @@ THE FRAGMENT (the honesty ledger):
   (`local.get base; i32.load8u offset; local.set 0` + the chain),
   `specCasesLoad_ok` covers the composed load+branch, and the
   wrong-offset negative control (`loadCases_buggy_disagrees`) pins the
-  bug class. (The OLD post-read `specCases_ok` is unchanged — the
-  composed template's tail.)
+  bug class.
 * NOT COVERED (documented exclusions, not oversights): N > 2 alt
   chains (the template generalizes; the theorem pins 2), alt bodies
   containing branches/calls (the nested-case/call seams), the
@@ -73,8 +72,7 @@ THE BRIDGE (what is proved vs what is tested):
 1. THEOREMS (over the TYPED emission templates, `spec*` below — total
    defs, kernel-checked): the Sem-execution of the template computes the
    intended arithmetic, for SYMBOLIC inputs and arbitrary initial state.
-   W6.9 (the Velvet shape): the correctness statements are
-   FUEL-INSENSITIVE — `X` says "IF the template's `Sem.execList` returns
+   The correctness statements are FUEL-INSENSITIVE — `X` says "IF the template's `Sem.execList` returns
    a state at ANY budget, the state is right" (partial correctness, no
    fuel hypothesis); the fuel side is a SEPARATE termination witness
    `X_converges` ("at any budget ≥ k it returns"), glued by
@@ -220,7 +218,6 @@ theorem spec_double_ok (k : UInt64) :
     ∃ s', Sem.exec initI64 (specDouble k) = .ok s' ∧ s'.stack = [.i64 (k + k)] :=
   ⟨_, rfl, rfl⟩
 
-/-- THE concrete pin, spelled out: 42. -/
 theorem spec_double_42 :
     ∃ s', Sem.exec initI64 (specDouble 21) = .ok s' ∧ s'.stack = [.i64 42] :=
   spec_double_ok 21
@@ -236,14 +233,12 @@ theorem spec_add_ok :
   ⟨_, rfl, rfl⟩
 
 open Lean Elab Term Tactic in
-/-- `fuel_budget k` (plan §4, family 1) — the convergence theorems'
-    budget normalization. After `intro m`, rewrites the budget `m + k`
-    into the `m.succ^k` shape `Sem.execList`'s equation lemmas fire on
-    (they match `fuel+1`; the numeral sum `m + k` does not). Expands to
-    exactly the hand-written `rw [show m + k = m.succ….succ from rfl]`
-    — one rfl proof, the term the hand chains spelled out. Chosen over a
-    `Nat.succ_eq_add_one`/`Nat.add` simp normalization because it keeps
-    the reduction behavior identical to the pinned proofs: the goal is
+/-- `fuel_budget k` — the convergence theorems' budget normalization.
+    After `intro m`, rewrites the budget `m + k` into the `m.succ^k`
+    shape `Sem.execList`'s equation lemmas fire on (they match
+    `fuel+1`; the numeral sum `m + k` does not). Chosen over a
+    `Nat.succ_eq_add_one`/`Nat.add` simp normalization: it keeps the
+    reduction behavior identical to the pinned proofs — the goal is
     only re-associated, never re-simplified (no risk of the normalizer
     touching `Sem.execList`'s own numerals). -/
 elab "fuel_budget " k:num : tactic => do
@@ -255,7 +250,7 @@ elab "fuel_budget " k:num : tactic => do
     chain ← `(term| Nat.succ $chain)
   evalTactic (← `(tactic| rw [show $mId + $kT = $chain from rfl]))
 
-/-- THE general theorem, the TERMINATION leg (W6.9): at any budget
+/-- THE general theorem, the TERMINATION leg : at any budget
     ≥ 6 the template RETURNS. (The `fuel_budget 6` rw puts the
     budget in `succ`-chain form so the `Sem.execList` equations fire
     under `simp only`.) -/
@@ -274,8 +269,7 @@ theorem tpl_add_ret_converges (x y l : Nat) (a b : UInt64) (s : Sem.State)
   rw [UInt64.add_comm]
   rfl
 
-/-- THE general theorem, PARTIAL CORRECTNESS (the primary statement —
-    W6.9, fuel-insensitive): for arbitrary local indices and arbitrary
+/-- THE general theorem, PARTIAL CORRECTNESS (the primary statement): for arbitrary local indices and arbitrary
     initial state whose stack is empty and whose locals `x`/`y` hold
     `a`/`b`, IF the emitted add-shape returns a state at ANY budget,
     the stack IS `a + b` (the `Sem.execList_ok_unique` transport
@@ -309,7 +303,6 @@ theorem tpl_add_ret_ok (x y l : Nat) (a b : UInt64) (s : Sem.State)
 def tplLitBuggy (n : UInt64) (l : Nat) : List Sem.Instr :=
   [.i64const n, .localset (l + 1)]
 
-/-- The buggy double-shape. -/
 def specDoubleBuggy (k : UInt64) : List Sem.Instr :=
   tplLitBuggy k 0 ++ tplAdd 0 0 1 ++ tplRet 1
 
@@ -477,13 +470,12 @@ def specCases (disc : Nat) (alts : List (List Sem.Instr)) : List Sem.Instr :=
     `local.get disc; i32.load8u offset=4; local.set tag` BEFORE
     `goAlts`; the template composes exactly that prefix (the byte read
     at `off` from the object pointer in local `base`, zero-extended,
-    stashed in local 0) with the post-read chain `specCases 0 alts` —
-    the OLD post-read template is the tail, unchanged. -/
+    stashed in local 0) with the post-read chain `specCases 0 alts`. -/
 def specCasesLoad (base off : Nat) (alts : List (List Sem.Instr)) :
     List Sem.Instr :=
   [.localget base, .i32load8u off, .localset 0] ++ specCases 0 alts
 
-/-- THE COMPOSED BRANCH THEOREM, the TERMINATION leg (W6.9): at any
+/-- THE COMPOSED BRANCH THEOREM, the TERMINATION leg : at any
     budget ≥ 15 (the read's 3 steps + the dispatch's 12) the load+branch
     template RETURNS — the tag read IN the spec: the object pointer in
     local `base`, the tag byte 0 AT `ptr + off` in memory, in bounds.
@@ -506,7 +498,7 @@ theorem specCasesLoad_ok_converges (z o : UInt64) (lz lo : Nat)
     specCases, specCasesFrom]
 
 /-- THE COMPOSED BRANCH THEOREM, PARTIAL CORRECTNESS (primary,
-    fuel-insensitive — W6.9): IF the load+branch template returns at
+    fuel-insensitive): IF the load+branch template returns at
     ANY budget, the result IS alt 0's value (the tag byte 0 selects
     the alt); the initial local 0 (overwritten by the read's
     `local.set`) is irrelevant. Arbitrary initial state. -/
@@ -527,7 +519,7 @@ theorem specCasesLoad_ok (z o : UInt64) (lz lo : Nat)
   cases Sem.execList_ok_unique h15 h
   exact hs15
 
-/-- THE BRANCH THEOREM, the TERMINATION leg (W6.9, the tag = 0 leg):
+/-- THE BRANCH THEOREM, the TERMINATION leg (the tag = 0 leg):
     at any budget ≥ 12 (the dispatch's 8 steps + the 3-instruction body
     + the tail, with slack) the 2-alt cases template RETURNS. (The
     statement splits by tag VALUE: a tag outside the ctor indices runs
@@ -547,8 +539,7 @@ theorem specCases_ok_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
   fuel_budget 12
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom]
 
-/-- THE BRANCH THEOREM, PARTIAL CORRECTNESS (primary, fuel-insensitive
-    — W6.9): IF the 2-alt cases template with STRAIGHT-LINE alt bodies
+/-- THE BRANCH THEOREM, PARTIAL CORRECTNESS (primary, fuel-insensitive): IF the 2-alt cases template with STRAIGHT-LINE alt bodies
     returns at ANY budget, the tag `0` (false's ctor index) in local 0
     selected alt 0 — the result IS the CHOSEN alt's value. Arbitrary
     initial state. Kernel-checked. -/
@@ -564,7 +555,7 @@ theorem specCases_ok (z o : UInt64) (lz lo : Nat) (b : UInt32)
   cases Sem.execList_ok_unique h12 h
   exact hs12
 
-/-- THE mirror leg, TERMINATION (W6.9): the tag `1` (true's ctor
+/-- THE mirror leg, TERMINATION : the tag `1` (true's ctor
     index) selects alt 1 — the template returns at any budget ≥ 12. -/
 theorem specCases_alt1_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b = 1)
@@ -579,8 +570,7 @@ theorem specCases_alt1_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
   fuel_budget 12
   simp [Sem.execList, Sem.step, hd, hs, specCases, specCasesFrom]
 
-/-- THE mirror leg, PARTIAL CORRECTNESS (primary, fuel-insensitive —
-    W6.9): IF the template returns at ANY budget with the tag `1`,
+/-- THE mirror leg, PARTIAL CORRECTNESS (primary, fuel-insensitive): IF the template returns at ANY budget with the tag `1`,
     the result IS alt 1's value. -/
 theorem specCases_alt1 (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b = 1)
@@ -594,7 +584,7 @@ theorem specCases_alt1 (z o : UInt64) (lz lo : Nat) (b : UInt32)
   cases Sem.execList_ok_unique h12 h
   exact hs12
 
-/-- THE exhaustiveness leg, the TERMINATION/behavior witness (W6.9):
+/-- THE exhaustiveness leg, the TERMINATION/behavior witness :
     at any budget ≥ 12 the out-of-range tag's run REACHES the trap. -/
 theorem specCases_trap_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b ≠ 0) (hb1 : b ≠ 1)
@@ -609,14 +599,12 @@ theorem specCases_trap_converges (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (show (0 : UInt32) ≠ b from fun hc => hb hc.symm),
     (show (1 : UInt32) ≠ b from fun hc => hb1 hc.symm)]
 
-/-- THE exhaustiveness leg, PARTIAL (primary, fuel-insensitive — W6.9):
+/-- THE exhaustiveness leg, PARTIAL (primary, fuel-insensitive):
     a tag outside the alts' ctor indices NEVER returns a state at any
     budget, and any error it DOES raise is the `trap` (or the
     `outOfFuel` artifact of a starving budget) — the dispatch is TOTAL
     over the scrutinee's values: chosen, or trap — never a silent
-    wrong-alt. (The old `∀ fuel ≥ 12, ∃ e, … = .error e ∧ e = .trap`
-    form is recovered: the witness traps at 12 and `trap` is
-    fuel-monotone by `Sem.execList_error_mono`.) -/
+    wrong-alt. (`Trap` is fuel-monotone by `Sem.execList_error_mono`.) -/
 theorem specCases_trap (z o : UInt64) (lz lo : Nat) (b : UInt32)
     (s : Sem.State) (hd : s.locals 0 = .i32 b) (hb : b ≠ 0) (hb1 : b ≠ 1)
     (hs : s.stack = []) :
@@ -656,7 +644,7 @@ theorem specCases_trap (z o : UInt64) (lz lo : Nat) (b : UInt32)
         injection herr with herr''
         exact .inr herr''.symm
 
-/-- THE checkFrame contract, dynamically, the TERMINATION leg (W6.9):
+/-- THE checkFrame contract, dynamically, the TERMINATION leg :
     at any budget ≥ 7 the br-0 program returns. Kernel-checked. -/
 theorem branch_br0_entry_stack_converges (s : Sem.State)
     (hs : s.stack = []) :
@@ -669,7 +657,7 @@ theorem branch_br0_entry_stack_converges (s : Sem.State)
   exact ⟨_, rfl, rfl⟩
 
 /-- THE checkFrame contract, dynamically, PARTIAL CORRECTNESS (primary,
-    fuel-insensitive — W6.9): IF the br-0 program returns at ANY
+    fuel-insensitive): IF the br-0 program returns at ANY
     budget, a `br 0` out of the chosen branch's inner frame exited at
     the frame-ENTRY stack — the values pushed inside since entry are
     dropped (Sem.lean's conservative no-result rule). This is the
@@ -735,9 +723,9 @@ def isBigAlts : List (List Sem.Instr) :=
 
 -- THE DUEL PINS (kernel-checked): the template computes is-big's own
 -- values — the true-Bool (250 > 100) picks the true-alt (= 1), the
--- false-Bool (42 > 100) picks the false-alt (= 0). (W6.9: the
--- CONVERGENCE legs at budget 988 + 12 — definitionally `defaultFuel`
--- = 1000, so the pins typecheck as `Sem.exec` statements.)
+-- false-Bool (42 > 100) picks the false-alt (= 0). (The convergence
+-- legs at budget 988 + 12 — definitionally `defaultFuel` = 1000 —
+-- make the pins typecheck as `Sem.exec` statements.)
 theorem isBig_250 :
     ∃ s', Sem.exec (bigParam 1) (specCases 0 isBigAlts) = .ok s'
       ∧ s'.stack = [.i64 1] :=
@@ -984,7 +972,7 @@ def tplPrologue1 (p0 p1 : Nat) : List Sem.Instr :=
 def tplPrologue2 (p0 p1 p2 : Nat) : List Sem.Instr :=
   [.localset p2, .localset p1, .localset p0]
 
-/-- THE CALLING-CONVENTION THEOREM, the TERMINATION leg (W6.9): at
+/-- THE CALLING-CONVENTION THEOREM, the TERMINATION leg : at
     any budget ≥ 5 the prep/prologue composition RETURNS.
     Kernel-checked. -/
 theorem call_convention1_converges (c x p0 p1 : Nat) (C A : Sem.Val)
@@ -1003,7 +991,7 @@ theorem call_convention1_converges (c x p0 p1 : Nat) (C A : Sem.Val)
   · rfl
 
 /-- THE CALLING-CONVENTION THEOREM (the 1-fresh closure-apply
-    contract), PARTIAL CORRECTNESS (primary, fuel-insensitive — W6.9):
+    contract), PARTIAL CORRECTNESS (primary, fuel-insensitive):
     IF the prep/prologue composition returns at ANY budget, the
     caller's pushes ARE the callee's entry state — param 0 = the
     closure ptr, param 1 = the fresh arg, stack drained. Arbitrary
@@ -1022,7 +1010,7 @@ theorem call_convention1 (c x p0 p1 : Nat) (C A : Sem.Val)
   exact ⟨hC, hA, hs5⟩
 
 /-- THE CALLING-CONVENTION THEOREM (the 2-fresh shape), the
-    TERMINATION leg (W6.9): returns at any budget ≥ 7.
+    TERMINATION leg : returns at any budget ≥ 7.
     Kernel-checked. -/
 theorem call_convention2_converges (c x0 x1 p0 p1 p2 : Nat)
     (C A B : Sem.Val) (s : Sem.State)
@@ -1045,7 +1033,7 @@ theorem call_convention2_converges (c x0 x1 p0 p1 p2 : Nat)
 
 /-- THE CALLING-CONVENTION THEOREM (the 2-fresh shape —
     `pap_curried._boxed_1`), PARTIAL CORRECTNESS (primary,
-    fuel-insensitive — W6.9): IF the composition returns at ANY
+    fuel-insensitive): IF the composition returns at ANY
     budget, param 0 = the closure ptr, param 1 = fresh arg 0,
     param 2 = fresh arg 1, stack drained. -/
 theorem call_convention2 (c x0 x1 p0 p1 p2 : Nat)
@@ -1080,7 +1068,7 @@ def tplTrampFwd2 (p : UInt32) (x0 x1 : Nat) : List Sem.Instr :=
   [.i32const p, .localget x0, .localget x1]
 
 /-- THE TRAMPOLINE'S CONTRACT (1-fresh), the TERMINATION leg
-    (W6.9): returns at any budget ≥ 5. Kernel-checked. -/
+    : returns at any budget ≥ 5. Kernel-checked. -/
 theorem trampoline_convention1_converges (p : UInt32) (x q0 q1 : Nat)
     (A : Sem.Val) (s : Sem.State) (ha : s.locals x = A)
     (hs : s.stack = []) (hd : q0 ≠ q1) :
@@ -1097,7 +1085,7 @@ theorem trampoline_convention1_converges (p : UInt32) (x q0 q1 : Nat)
   · rfl
 
 /-- THE TRAMPOLINE'S CONTRACT (the trampoline→target hop, 1-fresh
-    shape), PARTIAL CORRECTNESS (primary, fuel-insensitive — W6.9):
+    shape), PARTIAL CORRECTNESS (primary, fuel-insensitive):
     IF the forward+prologue composition returns at ANY budget, the
     loaded partial is DEEPEST (the target's param 0) and the fresh arg
     on top → partial → param 0, fresh → param 1. -/
@@ -1113,7 +1101,7 @@ theorem trampoline_convention1 (p : UInt32) (x q0 q1 : Nat)
   exact ⟨hp, hA, hs5⟩
 
 /-- THE TRAMPOLINE'S CONTRACT (2-fresh), the TERMINATION leg
-    (W6.9): returns at any budget ≥ 7. Kernel-checked. -/
+    : returns at any budget ≥ 7. Kernel-checked. -/
 theorem trampoline_convention2_converges (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
     (A B : Sem.Val) (s : Sem.State)
     (h0 : s.locals x0 = A) (h1 : s.locals x1 = B) (hs : s.stack = [])
@@ -1133,7 +1121,7 @@ theorem trampoline_convention2_converges (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
   · rfl
 
 /-- THE TRAMPOLINE'S CONTRACT (the golden's `pap_curried._boxed_1`
-    shape), PARTIAL CORRECTNESS (primary, fuel-insensitive — W6.9):
+    shape), PARTIAL CORRECTNESS (primary, fuel-insensitive):
     IF the composition returns at ANY budget, partial → param 0,
     fresh args → params 1/2, in order. -/
 theorem trampoline_convention2 (p : UInt32) (x0 x1 q0 q1 q2 : Nat)
@@ -1257,7 +1245,7 @@ def tplCallPrep2Buggy (c x0 x1 : Nat) : List Sem.Instr :=
           (tplCallPrep2Buggy 0 1 2 ++ tplPrologue2 3 4 5) with
         | .ok [] => true | _ => false) = true
 
-/-- The swapped prep, the TERMINATION leg (W6.9): returns at any
+/-- The swapped prep, the TERMINATION leg : returns at any
     budget ≥ 7, delivering the SWAPPED values. --/
 theorem call_convention2_buggy_converges (c x0 x1 p0 p1 p2 : Nat)
     (C A B : Sem.Val) (s : Sem.State)
@@ -1278,8 +1266,7 @@ theorem call_convention2_buggy_converges (c x0 x1 p0 p1 p2 : Nat)
   · simp [Ne.symm hd01]
   · simp [Ne.symm hd02, Ne.symm hd12]
 
-/-- The swapped prep, PARTIAL CORRECTNESS (primary, fuel-insensitive —
-    W6.9): IF the swapped composition returns at ANY budget, param 1 =
+/-- The swapped prep, PARTIAL CORRECTNESS (primary, fuel-insensitive): IF the swapped composition returns at ANY budget, param 1 =
     B and param 2 = A — the SWAPPED delivery (the same distinctness
     hypotheses as the convention). --/
 theorem call_convention2_buggy (c x0 x1 p0 p1 p2 : Nat)
@@ -1298,13 +1285,12 @@ theorem call_convention2_buggy (c x0 x1 p0 p1 p2 : Nat)
   cases Sem.execList_ok_unique h7 h
   exact ⟨hB, hA⟩
 
-/-- THE NEGATIVE INSTANCE (fuel-insensitive — W6.9): the swapped prep
+/-- THE NEGATIVE INSTANCE (fuel-insensitive): the swapped prep
     DISAGREES with the convention at ANY pair of budgets — whenever
     BOTH compositions return, the callee's entry state differs (param
     1 gets B instead of A). If a regression re-swapped the arg pushes,
     this theorem's shape is what the differential duel's sabotage
-    control checks empirically. (The old same-fuel ∃-form at
-    `fuel ≥ 7` is recovered via the `_converges` legs.) -/
+    control checks empirically. -/
 theorem call_convention2_buggy_disagrees
     (c x0 x1 p0 p1 p2 : Nat) (A B : Sem.Val) (s : Sem.State)
     (h0 : s.locals x0 = A) (h1 : s.locals x1 = B) (hs : s.stack = [])

@@ -20,7 +20,7 @@ fails before any write — the runtime twin of the registry audit test (the
 one-writer rule).
 
 LEGACY (non-module) file: meta env-extension access via Gates.Common
-(constraint 12, notes/w5-4-module-migration.md).
+(the module-migration constraint: such drivers stay legacy).
 -/
 import Gates.Common
 import Faults.Emit.Registry

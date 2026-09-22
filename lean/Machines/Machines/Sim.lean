@@ -56,7 +56,7 @@ public import Dbsp.Replicas
 -- additive meta import — constraint 7).
 public meta import Machines.Tactics
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/instances must reduce across module boundaries).
 @[expose] public section
 

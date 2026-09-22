@@ -32,7 +32,7 @@ public import CodegenCore.Kit -- `Obligation.Evidence.citedProof` (the tie)
 open Lean Elab Command Term Meta
 
 -- Elaboration-time only: env extension, attribute, and command
--- elaborators live in a `public meta section` (W5.4 module discipline).
+-- elaborators live in a `public meta section` (module discipline).
 public meta section
 
 namespace Dbsp.Certs
@@ -55,7 +55,7 @@ initialize registerBuiltinAttribute {
     let env ← getEnv
     unless (env.find? decl).isSome do
       throwError "@[cert]: unknown declaration `{decl}`"
-    -- NOTE (module system, W5.4): the theorem-kind check CANNOT live here.
+    -- NOTE (module system): the theorem-kind check CANNOT live here.
     -- In a module, theorem bodies elaborate deferred, so at attribute
     -- application time a `theorem` is visible as an `axiomInfo`
     -- (observed: `.afterCompilation` and `.afterTypeChecking` both).

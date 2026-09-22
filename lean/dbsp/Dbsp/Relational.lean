@@ -38,7 +38,7 @@ public import Dbsp.Linear
 public import Mathlib.Tactic.Abel
 public import Mathlib.Tactic.Ring
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

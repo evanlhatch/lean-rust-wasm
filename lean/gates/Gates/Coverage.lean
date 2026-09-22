@@ -1,7 +1,7 @@
 /-
 # Gates.Coverage — the coverage matrix as data (`gates coverage`)
 
-Closes the "no coverage gate" gap (notes/review-2026-09-16). The matrix:
+Closes the review-flagged "no coverage gate" gap. The matrix:
 the boundary universe's `Ty` constructors (SchemaLang.Ty — the CLOSED
 universe; a new ctor breaks every emitter by exhaustiveness, and this
 table's rows are the ctors) × the registered emitters
@@ -20,7 +20,7 @@ How a cell is classified (measured, not assumed):
   Emitters are pure `GenCtx → List GeneratedFile` (the emitter
   contract), so this is exact, not sampling.
 - The ORACLE column: two evidence sources, kept distinct because the tree
-  has TWO demo worlds (measured, 2026-09-17 — see FINDING below):
+  has TWO demo worlds (measured — see FINDING below):
   (i) the schema-registered gateway world (`Demo`-root func items) — a
       replayed fn matching a registry item contributes its signature's
       ctors (typed link, exact);
@@ -45,7 +45,7 @@ honest gaps). A replayed oracle fn with no matching registry item is
 structural drift and always fails.
 
 LEGACY (non-module) file: meta env-extension access via Gates.Common
-(constraint 12, notes/w5-4-module-migration.md).
+(the module-migration constraint: such drivers stay legacy).
 -/
 import Gates.Common
 import Oracle
@@ -72,7 +72,7 @@ def tyUniverse : List (String × Ty) :=
   , ("option", .option .bool)
   , ("result", .result .bool .bool)
   , ("list",   .list .string)
-  , ("map",    .map .string .u64)  -- W8.1: scalar key (the KeyTy gate)
+  , ("map",    .map .string .u64)  -- scalar key (the KeyTy gate)
   , ("set",    .set .string)
   , ("future", .future .u64)
   , ("stream", .stream .u64)

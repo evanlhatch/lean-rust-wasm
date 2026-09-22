@@ -276,8 +276,8 @@ def checkTestImportDiscipline (file : String) (content : String) : Array TextFin
 
 /-- Legacy `partial def` allowance (file-name suffix → max count). The
 ratchet: a file may carry AT MOST its listed count; any `partial def`
-elsewhere — or any overage — is a finding. Tighten the counts as the
-runbook's W3.1/W5.3 work shrinks them. -/
+elsewhere — or any overage — is a finding. Tighten as the runbook's
+earlier-listed work shrinks them. -/
 def partialAllowance : List (String × Nat) :=
   [("wasm-backend/WasmBackend.lean", 9),
    ("wasm-backend/WasmBackend/Correct.lean", 1),

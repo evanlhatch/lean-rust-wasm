@@ -30,7 +30,7 @@ public import Dbsp.Incremental
 public import Mathlib.Algebra.Group.Prod
 public import Mathlib.Data.Bool.Basic
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

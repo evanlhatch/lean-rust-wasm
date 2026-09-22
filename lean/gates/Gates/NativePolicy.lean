@@ -1,7 +1,7 @@
 /-
 # Gates.NativePolicy — the native_decide grandfathering gate (`gates native-policy`)
 
-W9.7, implementing notes/design-guest-verified.md §6.3 + the
+Implements notes/design-guest-verified.md §6.3 + the
 notes/lean-doctrine.md §3 rule it added: lean4lean does NOT support
 `reduceBool` (the kernel extension `native_decide` reduces through), so
 any declaration on the `_native` trust base is OUTSIDE the independent
@@ -11,8 +11,8 @@ grandfathered as permanent checked-set exiles (design §7 decision 3:
 re-proving them buys zero artifact-correctness — edgepython emits no
 shipped artifact; the gate's job is preventing NEW uses).
 
-How the trust base MANIFESTS (probe-verified 2026-09-17, v4.33.0):
-`native_decide` mints a per-declaration axiom named
+How the trust base MANIFESTS (probe-verified, v4.33.0): `native_decide` mints a per-declaration
+axiom named
 `<decl>._native.native_decide.ax_<N>_<M>` inside the cone —
 `EdgePython.Parity.parity_double_21._native.native_decide.ax_1_1`
 (legacy module) and, in module-mode files, the `_private.` mangled
@@ -44,8 +44,8 @@ was re-proved) also fails. The allowlist is additive only with a
 disclosed justification landing in the same commit (the doctrine rule).
 
 LEGACY (non-module) file: importModules replay + the meta axiom
-extension (the Gates.Axioms precedent; constraint 12,
-notes/w5-4-module-migration.md).
+extension (the Gates.Axioms precedent; the module-migration
+constraint: such drivers stay legacy).
 -/
 import Lean
 import LintKit
@@ -58,7 +58,7 @@ namespace Gates.NativePolicy
 
 open Gates (PkgSpec gatedPackages)
 
-/-- The grandfathered checked-set exiles (W9.7; design-guest-verified.md
+/-- The grandfathered checked-set exiles (design-guest-verified.md
     §6.3 + §7 decision 3; notes/lean-doctrine.md §3). The 3 disclosed
     `native_decide` uses, at (package dir, module) granularity:
     edgepython/EdgePython/Parity.lean (its header: "DISCLOSED trust

@@ -13,13 +13,13 @@ source needs evaporates for us).
 
 module
 
--- The umbrella `public import Batteries` was deleted (W5.4 hygiene batch):
+-- The umbrella `public import Batteries` was deleted (hygiene batch):
 -- no Batteries-named entity is referenced; it was a false coupling.
 public import Dbsp.Lint
 public import Mathlib.Algebra.Group.Pi.Basic
 public import Mathlib.Algebra.Notation.Prod
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

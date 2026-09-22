@@ -31,7 +31,7 @@ module
 
 public import Dbsp.Linear
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 
@@ -53,7 +53,7 @@ theorem incremental_unfold (Q : Operator a b) (s : Stream a) :
 
 /-! ## The inversion: incremental forms are a bijection on operators -/
 
--- W5.4: was `private`; the inversion theorems' SIGNATURES name it, and
+-- Was `private`; the inversion theorems' SIGNATURES name it, and
 -- private names cannot appear in public signatures under the module system.
 def incrementalInv (Q : Operator a b) : Operator a b := I ∘ Q ∘ D
 

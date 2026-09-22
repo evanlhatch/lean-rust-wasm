@@ -19,7 +19,7 @@ product/join/intersect bilinearity theorems); the source's `lifting2`
 bilinearity and the two alternative `derivative_integral` proofs stay
 deferred.
 
-Deleted as dead (2026-12 quality pass, zero consumers): `linear_add`
+Deleted as dead (quality pass, zero consumers): `linear_add`
 (the `Linear` definition itself, aliased), and the subtraction forms
 `bilinear_sub_1`/`bilinear_sub_2` — both one-liners over `lifting_sub`,
 recoverable from the op log if a future proof needs them.
@@ -33,7 +33,7 @@ public import Dbsp.Tactics
 public import Mathlib.Algebra.Group.Prod
 public import Mathlib.Tactic.Abel
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

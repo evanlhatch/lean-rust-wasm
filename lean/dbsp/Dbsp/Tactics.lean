@@ -17,7 +17,7 @@ module
 public import Lean
 
 -- Elaboration-time only: syntax/macros/attr registration live in a
--- `public meta section` (W5.4 module discipline).
+-- `public meta section` (module discipline).
 public meta section
 
 /-- The pointwise zset reading lemmas. -/

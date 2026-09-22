@@ -25,7 +25,7 @@ module
 -- additive meta import — constraint 7).
 public meta import Machines.Tactics
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (step?/run must reduce across module boundaries for rfl/decide proofs).
 @[expose] public section
 

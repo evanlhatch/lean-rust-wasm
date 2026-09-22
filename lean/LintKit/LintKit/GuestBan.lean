@@ -1,5 +1,5 @@
 /-
-LintKit.GuestBan — the guest-runtime ban as a DECL-CHECK (W7.13).
+LintKit.GuestBan — the guest-runtime ban as a DECL-CHECK.
 
 PROVENANCE: the pure predicate (`Ban`/`bannedAt?`/`checkExprAt`/`checkExpr`/
 `reasons`) moved VERBATIM from `CodegenCore.GuestGate` (itself moved verbatim
@@ -109,7 +109,7 @@ def reasonLine (level : Ban) (v : String) : String :=
 def reasons (level : Ban) (violations : List String) : String :=
   String.intercalate "\n" (violations.map (reasonLine level))
 
-/-- The guest ban as the SHARED decl-check (W7.13): scan the def's type +
+/-- The guest ban as the SHARED decl-check: scan the def's type +
     value at `level`; one diag carrying the historical error text
     (`attrName` is the mount's display name — the gate throws the message
     verbatim, the lint reports it). Non-defs are NOT findings: the lint

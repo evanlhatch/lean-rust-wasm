@@ -26,7 +26,7 @@ module
 public import Dbsp.Relational
 public import Dbsp.Incremental
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 
@@ -80,7 +80,7 @@ theorem distinct_incremental_ok :
   show D (lifting ZSet.distinct (I d)) t = lifting2 ZSet.distinctH (delay (I d)) d t
   cases t with
   | zero =>
-    -- W5.4 module discipline: the old `show` relied on `ZSet.distinct 0 ≡ 0`
+    -- Module discipline: the old `show` relied on `ZSet.distinct 0 ≡ 0`
     -- by kernel-unfolding through mathlib's `Finsupp.onFinsetSupport`, whose
     -- body is NOT exposed. The `show` now matches the exposed reduction
     -- (`delay _ 0 → 0`) and `sub_zero` discharges the subtraction.

@@ -10,43 +10,13 @@ import GuestlangStd.StrOps
 # WasmBackend — LCNF → WAT emission
 
 The `leanir` re-run pattern (see WasmGenMain): the final impure-phase LCNF →
-WebAssembly Text. Toolchain: `wasm-tools parse -g` → validate → wasmtime.
-
-TYPED WAT (the doctrine): the module is assembled as a `Wat.Module` and
-rendered by `Wat.Module.render` (`Std.Format` — never string
-interpolation for structure). The adapters' field offsets come from the
-PROVED `Layout.offsets` (user_offsets = [0,8,16,24], user_size = 32) —
-the emitted instrs are structurally the proved function's outputs. ZERO
-`Instr.raw` since the raw→typed migration: everything — the adapters,
-the general path (emitCode/emitLet/emitCases/goAlts/emitReturn/emitArg),
-the trampolines, the callbacks, cabi_realloc, the module assembly — is
-typed. The ONE raw is the `Wat.Item.raw "  ;;RUNTIME-SPLICE"` marker
-(WasmGenMain replaces those exact bytes with runtime.wat) — a module
-ITEM, not an instruction; `Instr.raw` is banned (Audit.lean).
-
-Record-param adapter's ABI fact (probed against the encoder): a record
-param crosses FLAT while its flattened form fits MAX_FLAT_PARAMS=16 —
-the demo's user (u64 + 3×(ptr,len) = 7 flat values) arrives as 7 core
-params `[i64, i32×6]`; a POINTER-form adapter FAILS `component new`
-(`expected [I64, I32, …]`). The adapter reconstructs the guest object:
-strings = alloc(16+len) {tag=250, len@8, memory.copy bytes@16}, the
-tags list = a cons chain built by walking the flat (ptr,len) array
-BACKWARD, the User = the refs-first object {tag, name@8, email@16,
-tags@24, id@32}. Design-essay details: notes/wasm-backend-notes.md.
-
-Layout (guestlang-owned): `{rc u32@0, tag u8@4, class u8@5, fields @8}`.
-Lean's field conventions: ref fields at `8+i*8` (oproj[i]); scalar
-fields after the ref slots at `8+size*8+off` (sproj[i,off]). Special
-tag: 254 = closure `{rc, 254, class, fnIdx u32@8, partial args@16…}`.
-
-Runtime (runtime.wat, spliced in): pooled allocator (size-class free
-lists) + $rc_inc/$rc_dec. inc/dec EMIT — the freelist reuse makes them
-load-bearing (a dec-freed persistent global = use-after-free).
-
-Closures: pap → trampoline-per-(fn,partial-arity) in a funcref table;
-closure apply = `call_indirect` (closure ptr, fresh args, fnIdx).
-ROBUSTNESS: unsupported constructs THROW (compile error), never emit
-comments; arity checks against the target decl's signature at emission.
+WebAssembly Text, `wasm-tools parse -g` → validate → wasmtime. Owned by the
+wasm-backend package; the ONE intentional raw is the module-level
+`;;RUNTIME-SPLICE` marker (WasmGenMain splices runtime.wat) — `Instr.raw` is
+banned (Audit.lean). Driving decisions: TYPED WAT (everything is a
+`Wat.Module`/`Wat.Func`, offsets from the PROVED `Layout.offsets`), the
+bounded-Nat boxed model, unsupported constructs THROW at emission (never
+emit comments). Essays: notes/wasm-backend-notes.md.
 -/
 
 namespace WasmBackend
@@ -63,8 +33,7 @@ def wasmTyOf? : Expr → Option String
     if c == `UInt64 then some "i64"
     else if c == `UInt32 || c == `UInt8 || c == `Bool then some "i32"
     -- Char: the single-u32-field structure erases to its scalar in the
-    -- LCNF (the decChar? x-ray: `Char.ofNat n` then a direct `box`) —
-    -- the guest model is the raw i32 codepoint.
+    -- LCNF — the guest model is the raw i32 codepoint.
     else if c == `Char then some "i32"
     else none
   | _ => none
@@ -84,10 +53,10 @@ structure S where
   n : Nat := 0
   /-- trampolines emitted so far (pap closures): (fnName, nPartial). -/
   tramps : Array (Name × Nat) := #[]
-  /-- every decl's wasm (param types, result type) — populated by
-  emitModule BEFORE the decls emit (the fap result-type lookup needs
-  the CALLEE's wasm result: object-returning calls with args = i32,
-  scalar = i64 — the type default alone miscasts the local). -/
+  /-- every decl's (param types, result type) — populated by emitModule
+  BEFORE the decls emit (the fap result-type lookup needs the callee's
+  wasm result: object = i32, scalar = i64 — the type default alone
+  miscasts the local). -/
   sigs : Std.HashMap Name (Array String × String) := {}
   /-- the join points IN SCOPE, by their fvar: (label, (param local, ty)…)
       — the `.jmp` sites' store/branch targets. -/
@@ -139,22 +108,21 @@ def binop? : Name → Option Wat.Op
   | ``UInt64.decEq => some .i64eq
   | _ => none
 
-/-- The LCNF specialization-product naming (the audit's gap 4): the
-    spec pass names a specialized instance-method call by its SOURCE —
+/-- The LCNF specialization-product naming: the spec pass names a
+    specialized instance-method call by its SOURCE —
     `<method>._at_.<caller>.spec_<n>`. The `Option.instBEq.beq` spec
-    never joins impureExt (it is a base-phase decl only, not in
-    `env.constants`), so its call sites are inline-lowered. -/
+    never joins impureExt (a base-phase decl only, not in
+    `env.constants`), so its call sites are inline-lowered here. -/
 def isSpecBEqName (n : Name) : Bool :=
   n.toString.startsWith "Option.instBEq.beq._at_."
 
 /-- The bounded-Nat fap surface the emitter INLINE-lowers at the
     `emitLet .fap` arms: no callee decl exists (extern primitives),
     nothing to compile or call — the operand-arity-checked arms
-    (Nat.decEq/beq/sub/add, the UInt64↔Nat seam). The callee COLLECTOR
-    and the UNSUPPORTED-LCNF diagnostic must agree with this surface:
-    chasing these names adds extern stubs + broken adapters (the
-    Nat.decEq_abi validate failure); flagging them re-bans the
-    sanctioned surface. -/
+    (Nat.decEq/beq/sub/add, the UInt64↔Nat seam). The callee
+    COLLECTOR and the UNSUPPORTED-LCNF diagnostic must agree with this
+    surface: chasing these names adds extern stubs + broken adapters;
+    flagging them re-bans the sanctioned surface. -/
 def inlineNatFap? (fn : Name) (arity : Nat) : Bool :=
   ((fn == ``UInt64.toNat || fn == ``Nat.toUInt64 || fn == ``UInt8.toNat
         || fn == ``UInt64.ofNat || fn == ``Char.ofNat) && arity == 1)
@@ -169,53 +137,40 @@ def specBEqArg : Arg .impure → M FVarId
   | .fvar f => pure f
   | _ => throw "WasmBackend: spec-BEq non-fvar arg"
 
-/-! ## The ONE impure-`Code` traversal skeleton (the layering audit's
-consolidation: the walker shape was hand-duplicated — `jumpsTo`, the
-`resultTy` family here, `fapCalleesOf` in WasmGenMain.lean — each re-writing
-the same structural recursion).
+/-! ## The ONE impure-`Code` traversal skeleton
 
 `Code.foldImpure` is a structural fold; a WALKER = a `spineAcc` + a
-`step` algebra + a seed. The skeleton's policy (stated, so each
-walker's fit is checkable):
+`step` algebra + a seed. Policy (stated, so each walker's fit is
+checkable):
 
-- the SPINE (`k`-bearing nodes: let/sset/uset/oset/setTag/inc/dec/del/
-  jp/fun) folds its `k` with the `spineAcc`-updated accumulator — a
-  `let` may REPLACE the accumulator (`resultTyOf`'s
-  most-recent-let type);
-- the NESTED bodies (jp/fun `FunDecl.value`, the case alts) fold with
-  the SEED — a nested body RESTARTS the fold (`resultTyOfAlt`'s
-  walk-from-none semantics);
-- `step` sees the node, the node's own accumulator, the nested folds,
-  the alt folds (ctor/default order), and the continuation's fold
-  (`none` where the node has no `k`): every short-circuit, kill, and
-  leaf decision is the walker's — no forced unification. EAGER (pure
+- the SPINE (`k`-bearing nodes) folds its `k` with the
+  `spineAcc`-updated accumulator — a `let` may REPLACE the accumulator
+  (resultTyOf's most-recent-let type);
+- the NESTED bodies (jp/fun values, the case alts) fold with the SEED
+  — a nested body RESTARTS the fold (walk-from-none);
+- `step` sees the node, its accumulator, the nested folds, the alt
+  folds (ctor/default order), and the continuation's fold (`none`
+  where the node has no `k`): every short-circuit, kill, and leaf
+  decision is the walker's — no forced unification. EAGER (pure
   walkers only; every consumer is).
 
-Exposed (not private): WasmGenMain.lean's `fapCalleesOf` walks with it —
-same exposure surface as `binop?`/`inlineNatFap?`.
-
-The MONADIC variant (`Code.foldImpureM`, the heatmap audit's #6 cut):
-the EMITTER is now one of its algebras (`emitStep` below) — the same
-traversal with the folds handed to `step` LAZY (`m` computations the
-step runs in its chosen order; eagerness would break the
-fresh-local-counter ORDER, which is part of the byte-tie) and with the
-continuation's RAW code exposed beside its fold (`let x := fap …;
-return x` tail-call fusion inspects the `k` shape). The step forks
-`scopedOut` around the nested/alt/continuation folds — the state
-generalization of the old `emitScoped`. BYTE-TIE: the emitted stream is
-pinned by `just wasm-compile && just wasm-diff-check` (bytes identical)
-plus `Correct.lean`'s `runEmit` extraction checks.
+The MONADIC variant (`Code.foldImpureM`): the EMITTER is one of its
+algebras (`emitStep` below) — the same traversal with the folds handed
+to `step` LAZY (eagerness would break the fresh-local-counter ORDER,
+part of the byte-tie) and the continuation's RAW code exposed beside
+its fold (the `let x := fap …; return x` tail-call fusion inspects the
+`k` shape). BYTE-TIE: the emitted stream is pinned by `just
+wasm-compile && just wasm-diff-check` (bytes identical) plus
+`Correct.lean`'s `runEmit` extraction checks.
 
 Walkers that do NOT fit (left alone, honestly): WasmGenMain.lean's
 `reportUnsupportedLCNF` walk (its diagnostic PATHS are child-position
 labels — `/jpK`, `/caseD` — the skeleton does not carry). -/
 
 -- The skeleton stays in the WasmBackend namespace (the file's `open`s
--- open Lean/Compiler/LCNF SEPARATELY, so `Code.foldImpure` would NOT
--- resolve through Lean.Compiler.LCNF from here); exposed (not private)
--- for WasmGenMain.lean's `fapCalleesOf` — the same exposure surface as
--- `binop?`/`inlineNatFap?`. Referenced cross-file as
--- `WasmBackend.Code.foldImpure`.
+-- open Lean/Compiler/LCNF SEPARATELY — `Code.foldImpure` would NOT
+-- resolve through Lean.Compiler.LCNF from here); referenced cross-file
+-- as `WasmBackend.Code.foldImpure`.
 
 /-- The alt walker's impossible-ctor discharge (the `.alt` ctor carries
     a `False` proof — every walker `absurd`s it; here once). -/
@@ -226,7 +181,6 @@ private def Alt.foldImpure {α : Type}
   | .default code => go code seed
   | .alt _ _ _ h => absurd h (by simp)
 
-/-- The alt fold, monadic (the `.cases` arm's alt folds). -/
 private def Alt.foldImpureM {α : Type} {m : Type → Type} [Monad m]
     (go : Code .impure → m α) (a : Alt .impure) : m α :=
   match a with
@@ -237,10 +191,7 @@ private def Alt.foldImpureM {α : Type} {m : Type → Type} [Monad m]
 /-- The MONADIC traversal skeleton: `Code.foldImpure` with the folds
     handed to `step` LAZY — a `step` that sequences effects (the
     emitter: instruction ORDER, fresh-local-counter ORDER, state
-    forking) controls exactly when each child fold runs. The
-    continuation's raw code rides beside its fold (`Option
-    (Code .impure × m α)`) — the emitter's tail-call fusion inspects
-    the `k` shape the pure skeleton's opaque continuation hid. -/
+    forking) controls exactly when each child fold runs. -/
 partial def Code.foldImpureM {α : Type} {m : Type → Type} [Monad m]
     (spineAcc : Code .impure → α → α)
     (step : Code .impure → α → Option (m α) → List (m α) →
@@ -285,9 +236,9 @@ partial def Code.foldImpure {α : Type}
       step code acc [] []
         (some (Code.foldImpure spineAcc step seed k (spineAcc code acc)))
 
-/-- Does this code jump to the given jp? (A loop-shaped jp — the body
-    jumping back to ITSELF — is unreachable in the block lowering:
-    the body sits outside the label's scope. Conservative reject.) -/
+/-- Loop-shaped jp (the body jumping back to ITSELF) is unreachable in
+    the block lowering — the body sits outside the label's scope.
+    Conservative reject. -/
 private def jumpsToStep (target : FVarId) :
     Code .impure → Bool → List Bool → List Bool → Option Bool → Bool
   | .jmp j _, _, _, _, _ => j == target
@@ -311,10 +262,9 @@ The std intrinsics fold the CLOSED `GuestlangStd.Intrinsic` universe
 to its ctor. The Lean bodies are never compiled (they are the
 differential ORACLE — see DemoFn).
 Guest string layout: `{rc@0, tag=250@4, len u32@8, bytes@16}` — a
-variable-size object (16 + len); the bytes live INLINE so RC frees the
-whole string. Byte-length ≠ char-length off ASCII (documented, v1). -/
+variable-size object (16 + len), the bytes INLINE. Byte-length ≠
+char-length off ASCII (documented, v1). -/
 
-/-- The guest string tag byte. -/
 def stringTag : Nat := 250
 
 def storeMemOp (ty : Option String) : Wat.MemOp :=
@@ -328,19 +278,18 @@ def emitIs (is : List Wat.Instr) : M Unit :=
 
 def emitArg : Arg .impure → M Unit
   | .fvar fvarId => do emitI (.localget (← load fvarId))
-  -- erased args push NOTHING (a no-op then and now — LCNF is ANF, so
-  -- real args are always fvars; the erased case is the unit filler)
+  -- erased args push NOTHING (LCNF is ANF, so real args are always
+  -- fvars; the erased case is the unit filler)
   | _ => pure ()
 
 /-- The spine accumulator: a `let` REPLACES the accumulated type with
     its own wasm type (the most-recent-let rule); every other node
     threads it unchanged. (Object-typed lets — ctor/pap/fn-typed — are
-    i32 pointers: the `getD \"i32\"` default.) -/
+    i32 pointers.) -/
 private def resultTyOfSpineAcc : Code .impure → Option String → Option String
   | .let decl _, _ => some ((wasmTyOf? decl.type).getD "i32")
   | _, a => a
 
-/-- `resultTyOf`'s algebra over `Code.foldImpure`. -/
 private def resultTyOfStep :
     Code .impure → Option String → List (Option String) → List (Option String) →
     Option (Option String) → Option String
@@ -359,19 +308,14 @@ private def resultTyOfStep :
 partial def resultTyOf : Code .impure → Option String :=
   fun c => Code.foldImpure resultTyOfSpineAcc resultTyOfStep none c none
 
-/-- The alt walker: each alt's code walked from the SEED (`none`) —
-    the walk-from-none semantics the skeleton's nested rule supplies. -/
 partial def resultTyOfAlt (a : Alt .impure) : Option String :=
   Alt.foldImpure (fun c _ => resultTyOf c) a none
 
 /-- Run `act` in a FORKED state (fresh `out`), returning the emitted
     instrs while KEEPING the fork's local bindings, the fresh-local
     counter, and the trampolines in the outer state (wasm locals are
-    function-scoped; LCNF branches terminate, so the branch's fvars are
-    dead after — keeping them bound is harmless, the fresh-name counter
-    guarantees uniqueness). The old `emitScoped`, generalized from
-    `emitCode` to any emitting action — the `emitStep` algebra forks it
-    around the fold's nested/alt/continuation folds. -/
+    function-scoped; the branch's fvars are dead after — keeping them
+    bound is harmless, the fresh-name counter guarantees uniqueness). -/
 private def scopedOut (act : M Unit) : M (List Wat.Instr) := do
   let s ← get
   let ((), s2) ← act.run { s with out := #[] }
@@ -392,20 +336,19 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
       let l ← bindLocal decl.fvarId "i32"
       emitI (.i32const v.toNat); emitI (.localset l)
   | .lit (.nat v) =>
-      -- THE BOUNDED-NAT LOWERING (W9.6). THE MODEL: a guest Nat is a
-      -- BOXED machine int — {rc, tag, i64 payload @8} — because the
-      -- pipeline RCs Nats as objects AND its compatible-types pass
-      -- hands single-Nat-field structures (WStep) where Nats are
-      -- expected: ONE boxed layout is the only sound representation.
-      -- The owner's bounded decision pins the PAYLOAD: machine u64,
-      -- never GMP; a literal at/above the cap is a DESIGN ERROR (fuel
-      -- is sized `consumed × 4`). The lowered surface: Nat.lit,
-      -- Nat.decEq/Nat.beq, Nat.sub (countdown), Nat.add (length-walk
-      -- counter) — the fap arms below. Ctor-case dispatch on a Nat
-      -- scrutinee is NOT lowered (nothing in the sanctioned closure
-      -- matches on Nat): the generic tag-dispatch path would read the
-      -- box's tag 0 and treat the payload as a POINTER — silently
-      -- wrong — so a Nat cases reaching the emitter throws loudly.
+      -- THE BOUNDED-NAT LOWERING. THE MODEL: a guest Nat is a BOXED
+      -- machine int — {rc, tag, i64 payload @8} — because the pipeline
+      -- RCs Nats as objects AND its compatible-types pass hands
+      -- single-Nat-field structures (WStep) where Nats are expected:
+      -- ONE boxed layout is the only sound representation. The owner's
+      -- bounded decision pins the PAYLOAD: machine u64, never GMP; a
+      -- literal at/above the cap is a DESIGN ERROR (fuel is sized
+      -- `consumed × 4`). The lowered surface: Nat.lit, Nat.decEq/beq,
+      -- Nat.sub (countdown), Nat.add (length-walk counter) — the fap
+      -- arms below. Ctor-case on a Nat scrutinee is NOT lowered: the
+      -- generic tag-dispatch path would read the box's tag 0 and treat
+      -- the payload as a POINTER — silently wrong — so such a cases
+      -- reaching the emitter throws loudly.
       if v >= 4611686018427387904 then
         unsupported s!"bounded-Nat: literal {v} at/above the pinned cap 2^62 (fuel is a bounded countdown — the `consumed × 4` sizing makes this a design error)"
       let l ← bindLocal decl.fvarId "i32"
@@ -474,10 +417,10 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.localset l)
       else if fn == ``Nat.sub || fn == ``Nat.add || fn == ``Nat.mul then
         -- boxed-payload arith → a FRESH box (Nats are immutable under
-        -- RC). All bounded: the counters walk in-memory lists, the
-        -- fuel is `consumed × 4`, a decoded Nat is at most its own
-        -- byte length × 7 bits — overflow is a design error (the lit
-        -- arm's cap pin; no wrap check on the ops).
+        -- RC). All bounded: the counters walk in-memory lists, fuel is
+        -- `consumed × 4`, a decoded Nat ≤ its byte length × 7 bits —
+        -- overflow is a design error (the lit arm's cap pin; no wrap
+        -- check on the ops).
         if args.size != 2 then unsupported s!"{fn} arity {args.size}"
         let a ← specBEqArg args[0]!
         let b ← specBEqArg args[1]!
@@ -493,13 +436,12 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.localget (← load decl.fvarId)); emitI (.localget r); emitI (.mem .i64store 8 none)
       else if fn == ``Nat.decLt || fn == ``Nat.decLe then
         -- the decode lane's domain tests: the varint digit's `b.toNat <
-        -- 128` (decLt) and decBytes?'s length gate `n ≤ rest.length`
-        -- (decLe) — the same bounded-Nat positions as the countdown
-        -- (the encoded length IS the bound). Boxed-payload compare,
-        -- UNSIGNED (a Nat's machine payload is its magnitude; the
-        -- bounded cap keeps signed/unsigned equal) → the RAW i32 Bool
-        -- (the decEq convention — the LCNF consumes it in a Bool cases,
-        -- and emitCases branches SCALAR Bool scrutinees on the value).
+        -- 128` (decLt), decBytes?'s length gate `n ≤ rest.length`
+        -- (decLe) — the encoded length IS the bound. Boxed-payload
+        -- compare, UNSIGNED (a Nat's machine payload is its magnitude;
+        -- the cap keeps signed/unsigned equal) → the raw i32 Bool (the
+        -- decEq convention — emitCases branches SCALAR Bool scrutinees
+        -- on the value).
         if args.size != 2 then unsupported s!"{fn} arity {args.size}"
         let a ← specBEqArg args[0]!
         let b ← specBEqArg args[1]!
@@ -509,9 +451,9 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.op (if fn == ``Nat.decLt then .i64ltu else .i64leu))
         emitI (.localset l)
       else if (fn == ``UInt8.toNat) && args.size == 1 then
-        -- the decode lane's digit read: `b.toNat` — the raw u8 scalar
-        -- (the cons head's unbox) → a BOXED Nat (payload = the
-        -- zero-extended value). The bounded model: a digit is < 256.
+        -- the decode lane's digit read: the raw u8 scalar (the cons
+        -- head's unbox) → a BOXED Nat (payload = the zero-extended
+        -- value). Bounded: a digit < 256.
         let l ← bindLocal decl.fvarId "i32"
         emitI (.i32const 16); emitI (.call "alloc"); emitI (.localset l)
         emitI (.localget (← load decl.fvarId)); emitI (.i32const 0); emitI (.mem .i32store8 4 none)
@@ -521,10 +463,9 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.mem .i64store 8 none)
       else if (fn == ``UInt64.ofNat) && args.size == 1 then
         -- the decode lane's u64 atom: the boxed Nat payload → the raw
-        -- u64 (IDENTITY at the machine model: the box payload IS the
-        -- u64; the owner's bounded decision covers the decode
-        -- direction — a decoded value above the u64 range is the wrap,
-        -- the encoder's range is always in-domain).
+        -- u64 — IDENTITY at the machine model (the box payload IS the
+        -- u64); a decoded value above the u64 range is the wrap, the
+        -- encoder's range is always in-domain.
         if args.size != 1 then unsupported s!"{fn} arity {args.size}"
         let l ← bindLocal decl.fvarId "i64"
         emitArg args[0]!
@@ -546,10 +487,9 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         -- matches: `decOpt?`'s `0 :: rest` / `1 :: rest` compile to
         -- `UInt8.decEq` faps — the core decl is `@[extern]`, so the
         -- closure fixpoint compiles it as an unreachable stub: the
-        -- inline lowering is the only body it gets). RAW scalar args
-        -- (the unbox happens at the pattern's head read), the raw i32
-        -- Bool result — the binop convention. A u64 beq rides i64eq;
-        -- the i32 family rides i32eq.
+        -- inline lowering is its only body). RAW scalar args (the unbox
+        -- happens at the pattern's head read), the raw i32 Bool
+        -- result — the binop convention.
         let a ← specBEqArg args[0]!
         let b ← specBEqArg args[1]!
         let l ← bindLocal decl.fvarId "i32"
@@ -558,13 +498,12 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         emitI (.op .i32eq)
         emitI (.localset l)
       else if isSpecBEqName fn then
-        -- the SPECIALIZATION PRODUCT of `Option.instBEq.beq` (the audit's
-        -- gap 4: the spec pass names it by its SOURCE TYPE and it never
-        -- joins impureExt — the call is inline-lowered here instead).
-        -- Scope: the CHECKER's spec decls ONLY (`.spec_` under the
-        -- WitnessCheck `_at_` — anything else throws loudly). The
-        -- payload is the checker's `Option UInt64` (boxed u64): tag
-        -- compare, both-none = true, both-some = unbox + i64.eq. A
+        -- the SPECIALIZATION PRODUCT of `Option.instBEq.beq` (named by
+        -- its SOURCE TYPE; it never joins impureExt — the call inline-
+        -- lowers here). Scope: the CHECKER's spec decls ONLY (`.spec_`
+        -- under the WitnessCheck `_at_` — anything else throws loudly).
+        -- The payload is the checker's `Option UInt64` (boxed u64):
+        -- tag compare, both-none = true, both-some = unbox + i64.eq. A
         -- different payload type would silently mis-compare — the
         -- name-scope + the checker's duel rows are the guards.
         if !(fn.toString.startsWith "Option.instBEq.beq._at_.SchemaLang.WitnessCheck.") then
@@ -579,10 +518,10 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
         let tb ← bindFresh "i32"
         emitI (.localget (← load b)); emitI (.mem .i32load8u 4 none); emitI (.localset tb)
         -- same tag? both none (0) → 1; both some → deref each option's
-        -- box ptr (@8 = the INNER UInt64 BOX) then payload i64.eq.
-        -- (The @8 direct load compared the POINTERS-as-i64 — latent
-        -- until a runtime value flowed: the constant sites folded at
-        -- compile.)
+        -- box ptr (@8 = the INNER UInt64 box) then payload i64.eq.
+        -- TRAP: the @8 direct load compared the POINTERS-as-i64 —
+        -- latent until a runtime value flowed (the constant sites
+        -- folded at compile).
         emitI (.localget ta); emitI (.localget tb); emitI (.op .i32eq)
         emitI (.if_ (some "i32")
           [ .localget ta, .op .i32eqz
@@ -647,9 +586,7 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
   | .sproj n offset var _ =>
       -- the slot index n = the field's position in the REORDERED
       -- (ref-first) layout, offset = the byte offset within the slot —
-      -- the SAME convention as the sset WRITER below. (The pre-migration
-      -- emitter discarded n — it read the byte offset alone: latent
-      -- until userValid, the first reader of a slot-3 scalar.)
+      -- the SAME convention as the sset WRITER below.
       let tyS := ty.getD "i64"
       let l ← bindLocal decl.fvarId tyS
       emitI (.localget (← load var))
@@ -713,30 +650,25 @@ partial def emitLet (decl : LetDecl .impure) : M Unit := do
           emitI (.localset l)
       | _, _ => unsupported s!"const {fn}"
 
-/-- The spine's continuation discharge: the skeleton hands `some` for
-    every `k`-bearing node; `none` is a contract violation that cannot
-    occur for the emitter's shapes. -/
 private def emitCont : Option (Code .impure × M Unit) → M Unit
   | some (_, kF) => kF
   | none => pure ()
 
-/-- The OLD `goAlts`, over the fold's LAZY alt folds: a ctorAlt wraps
-    its own forked body and the REST of the chain into an `if_`; a
-    default's body IS the whole chain (goAlts's `.default` arm returned
-    WITHOUT recursing — the remaining alt folds are never run, and
-    their state effects with them); an exhausted chain is the base
-    `[.unreach]`. Effect order = goAlts's (thenI before elseI,
-    recursively — the fresh-local-counter order is part of the
-    byte-tie).
+/-- Over the fold's LAZY alt folds: a ctorAlt wraps its forked body and
+    the REST of the chain into an `if_`; a default's body IS the whole
+    chain (the remaining alt folds are never run — their state effects
+    with them); an exhausted chain is the base `[.unreach]`. Effect
+    order: thenI before elseI, recursively (the fresh-local-counter
+    order is part of the byte-tie).
 
--- ONE result type for the WHOLE alt chain: a per-suffix read lets
--- the chain's LAST alt (a jp-fed arm ends in `.jmp`) pick a VOID if
--- while an EARLIER alt's `if (result i32)` owns the else slot — an
+-- ONE result type for the WHOLE alt chain: a per-suffix read lets the
+-- chain's LAST alt (a jp-fed arm ends in `.jmp`) pick a VOID if while
+-- an EARLIER alt's `if (result i32)` owns the else slot — an
 -- unreachable-but-REACHABLE empty stack at the enclosing `end`
--- (validator: unreachability does not leak out of a block end — the
--- checkWitness 3-way WProp chain). Safe because every RESOLVING arm
--- is terminal, the else path is the sole consumer, and the `.cases`
--- FALLTHROUGH SEAL discards any leftover at the chain's end. -/
+-- (validator: unreachability does not leak out of a block end). Safe
+-- because every RESOLVING arm is terminal, the else path is the sole
+-- consumer, and the `.cases` FALLTHROUGH SEAL discards any leftover
+-- at the chain's end. -/
 private def buildAlts (scrut : String) (resTy : Option String) :
     List (Alt .impure) → List (M Unit) → M (List Wat.Instr)
   | [], _ => pure [.unreach]
@@ -749,16 +681,13 @@ private def buildAlts (scrut : String) (resTy : Option String) :
       pure ([.localget scrut, .i32const info.cidx, .op .i32eq]
         ++ [.if_ resTy thenI elseI])
 
-/-- THE EMITTER as a `Code.foldImpureM` algebra (the heatmap audit's #6
-    cut): the per-node emission the old `emitCode`/`emitCases`/`goAlts`
-    mutual handwalk performed. The fold hands the node, the NESTED body
-    fold (the jp/fun value — `none` elsewhere), the ALT folds
-    (ctor/default order), and the continuation's fold WITH ITS RAW CODE
-    (the tail-call fusion inspects the `k` shape) — all LAZY: the step
-    runs them in the exact order the handwalk did (the
+/-- THE EMITTER as a `Code.foldImpureM` algebra: the fold hands the
+    node, its NESTED body fold (the jp/fun value — `none` elsewhere),
+    the ALT folds (ctor/default order), and the continuation's fold
+    WITH ITS RAW CODE (the tail-call fusion inspects the `k` shape) —
+    all LAZY: the step runs them in the exact handwalk order (the
     fresh-local-counter order is part of the byte-tie). Nested/alt/
-    continuation folds run under `scopedOut` (the fork); everything
-    else is verbatim the old arms. -/
+    continuation folds run under `scopedOut` (the fork). -/
 private def emitStep :
     Code .impure → Unit → Option (M Unit) → List (M Unit) →
       Option (Code .impure × M Unit) → M Unit := fun code _ nested altFs cont => do
@@ -882,18 +811,16 @@ private def emitStep :
   | .fun _ _ h => absurd h (by simp)
 
 /-- THE EMITTER: the `Code.foldImpureM` traversal with the `emitStep`
-    algebra — the old mutual handwalk (`emitCode`/`emitScoped`/
-    `emitCases`/`goAlts`) collapsed into the fold. BYTE-TIE: the
-    emitted stream is pinned by `just wasm-compile &&
-    just wasm-diff-check` (bytes identical) and `Correct.lean`'s
-    `runEmit` extraction checks. -/
+    algebra. BYTE-TIE: the emitted stream is pinned by `just
+    wasm-compile && just wasm-diff-check` (bytes identical) and
+    `Correct.lean`'s `runEmit` extraction checks. -/
 def emitCode (code : Code .impure) : M Unit :=
   Code.foldImpureM (fun _ a => a) emitStep () code ()
 
 /-! ## Decl emission -/
 
 /-- TYPED: the decl's func = a `Wat.Func` — the general path's body is
-    fully typed `Instr`s (the raw→typed migration; the header's ledger). -/
+    fully typed `Instr`s. -/
 def emitDecl (d : Decl .impure) : M Wat.Func := do
   let code := match d.value with
     | .code c => c
@@ -921,14 +848,12 @@ def dedupTramps : List (Name × Nat) → List (Name × Nat)
 /-! ## The adapter SHAPES (the canonical-ABI lowering table)
 
 The adapter generator needs each export's RESULT SHAPE (how to flatten
-the guest object into the canonical layout). R3: the shape registry
-(`adapterShape?`) stays the surface, but the five record shapes' BODIES
-are now the SCHEMA-TYPED GENERATOR's instantiations (the section below
-— per field → flatten per `flatTyOf` → load/rebox per the certified
-`Layout.offsets`); the old hand bodies survive as the `legacy*` pin
-fixtures (each generic body ≡ the hand shape, pinned rfl). The shapes'
-authority: the WIT world (byte-tied); a wrong shape = a differential
-failure (the host misreads).
+the guest object into the canonical layout). `adapterShape?` is the
+registry; the five record shapes' BODIES are the SCHEMA-TYPED
+generator's instantiations (each pinned ≡ the hand shape it replaced —
+the `legacy*` fixtures). The shapes' authority: the WIT world
+(byte-tied); a wrong shape = a differential failure (the host
+misreads).
 
 - `string`: [bytes-ptr, byte-len] — the static return area holds the
   pair; bytes-ptr = obj + 16 (bytes INLINE).
@@ -940,17 +865,11 @@ failure (the host misreads).
 -/
 
 -- The ASYNC-marked exports: NOT hand-listed here — `emitModule` takes
--- them as the `asyncFns` parameter, DERIVED by the driver from the
--- schema registry (the registered ret = the `Async.Future` marker,
--- `WasmGenMain.asyncExportsOf`). The hand list this replaced
--- (`["watch-orders", "watch-counts", "watch-users"]`) drifted by
--- construction: a new async `@[schema_fn]` needed a second site here.
--- The full async-lift recipe (the wasmparser-derived requirements:
--- async func type, task-intrinsic imports, `[async-lift]`/`[callback]`
--- export shapes, the task-return delivery): notes/wasm-backend-notes.md
--- §async-lift.
+-- them as `asyncFns`, DERIVED by the driver from the schema registry
+-- (`WasmGenMain.asyncExportsOf`). A hand list drifted by construction
+-- (a new async `@[schema_fn]` needed a second site here). Recipe:
+-- notes/wasm-backend-notes.md §async-lift.
 
-/-- The adapter result shape per export (kebab name). -/
 def adapterShape? : String → Option String
   | "get-user" => some "optionUser"
   | "watch-orders" => some "listUser"
@@ -959,20 +878,17 @@ def adapterShape? : String → Option String
   | "user-valid" => some "userParam"
   | "user-complete" => some "userParam"
   | "order-error-valid" => some "variantParam"
-  -- the W9.6 witness export: bytes in (the canonical list<u8> = the
-  -- (ptr, len) pair), verdict out (the raw i32 Bool)
+  -- the witness export: bytes in (the canonical list<u8> = the (ptr,
+  -- len) pair), verdict out (the raw i32 Bool)
   | "verify-witness" => some "bytesParam"
   | _ => none
 
-/-- The TYPED WAT for walking a guest List cons chain into a canonical
-    (array-ptr, count) pair written at `areaOff`/`areaOff+4`. Two passes:
-    COUNT the cons cells, `$alloc(n × elemSize)`, then FILL each element
-    via `lowerElem` (the per-element instrs; `$cur{suffix}` = the cons —
-    its head object = `load($cur{suffix} + 8)` — `$w{suffix}` = the
-    element's destination address). `suffix` uniquifies the locals/labels
-    (the NESTED walks: the list-of-records' elements carry their own
-    lists — the inner walk = the same generator, a different suffix). The
-    cons's layout: {tag@4 (nil=0/cons=1), head@8, tail@16}. -/
+/-- Walking a guest List cons chain into a canonical (array-ptr, count)
+    pair: COUNT the cons cells, `$alloc(n × elemSize)`, then FILL each
+    element via `lowerElem` (`$cur{suffix}` = the cons — its head =
+    `load(+8)`; `$w{suffix}` = the element's destination address).
+    `suffix` uniquifies the locals/labels (nested walks reuse the same
+    generator). Cons layout: {tag@4 (nil=0/cons=1), head@8, tail@16}. -/
 def listWalk (loadSeq : List Wat.Instr) (areaOff : Nat)
     (elemSize : Nat) (suffix : String) (lowerElem : List Wat.Instr) : List Wat.Instr :=
   let cur := s!"cur{suffix}"
@@ -1005,17 +921,16 @@ def listWalk (loadSeq : List Wat.Instr) (areaOff : Nat)
     , .block doneF [.loop fillL fillBody] ]
   -- the (ptr, len) stores: STATIC areaOff only. `areaOff = 0` means
   -- NO MEMORY WRITE: callers who need the list's (ptr,len) read the
-  -- walk's `$arr`/`$n` LOCALS — the old scratch write at the fill-end
+  -- walk's `$arr`/`$n` LOCALS. TRAP: a scratch write at the fill-end
   -- cursor CORRUPTED the next bump allocation (it landed on the first
-  -- inner-walk array). Scratch writes to "unused" memory are not
-  -- unused: the bump allocator hands that region out next.
+  -- inner-walk array) — "unused" memory is not unused.
   countLoop ++ fillLoop ++
     (if areaOff == 0 then []
      else [ .i32const areaOff, .localget arr, .mem .i32store 0 none
           , .i32const (areaOff + 4), .localget n, .mem .i32store 0 none ])
 
-/-- The per-element lowering of a `String` element (the flat pair =
-    (head+16 [bytes inline], load(head+8) [len]) at `$w{suffix}`). -/
+/-- A `String` element's flat pair ((head+16, load(head+8)) — bytes
+    inline, len) written at `$w{suffix}`. -/
 def strElemLower (suffix : String) : List Wat.Instr :=
   let cur := s!"cur{suffix}"
   let w := s!"w{suffix}"
@@ -1054,8 +969,7 @@ def pairRel (base : String) (off : Nat) (src : String) : List Wat.Instr :=
 /-- The canonical-ABI variant RE-BOX: the flat (discr i32, joined-payload
     i64) arrives as core params; alloc(16) {rc, tag=discr @4, payload i64
     @8} reconstructs the guest's variant object. Shared by `variantParam`
-    (order-error-valid) and `listUser` (watch-orders) — the same five
-    instructions, the only difference being what follows the box. -/
+    and `listUser` — the same five instructions; what follows differs. -/
 def variantBox (disc payload : String) : List Wat.Instr :=
   [ .i32const 16, .call "alloc", .localset "v"
   , .localget "v", .localget disc, .mem .i32store8 4 none
@@ -1084,22 +998,19 @@ def flatTyOf : SchemaLang.Ty → List String
   | .bool | .u8 | .u16 | .u32 | .i8 | .i16 | .i32 => ["i32"]
   | .string | .bytes | .list _ | .option _ | .result _ _ | .future _
   -- map/set flatten to the (ptr, len) pair of their wire list form
-  -- (the association/element list — the `list` precedent); no
-  -- map-specific ABI handling yet (W8.1: deliberate, not missing)
+  -- (the `list` precedent); no map-specific ABI handling yet
+  -- (deliberate, not missing)
   | .stream _ | .tensor _ _ | .map _ _ | .set _ | .ty _ => ["i32", "i32"]
 
 def userFlatTys (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) : List String :=
   (userFieldTys cert).flatMap flatTyOf
 
 /-- The flat params' NAMES: the id, then (ptr, len) per ref field
-    (name, email, tags) — same order as `userFlatTys`. The length pin
-    (below) makes a drift with the field types a BUILD failure — the
-    `getD` fallback at the emission site is then dead, not a mask. -/
+    (name, email, tags) — same order as `userFlatTys`. THE LENGTH PIN
+    below: one name per flat value — a `userTys` growth/reorder breaks
+    the build until the names follow (the `getD` fallback at the
+    emission site is then dead, not a mask). -/
 def userParamNames : List String := ["id", "np", "nl", "ep", "el", "tp", "tl"]
-
-/-- THE LENGTH PIN: one name per flat core value. If `userTys` (via
-    `Layout.userTys`) grows or reorders fields, this `rfl` breaks the
-    build until the names list follows. -/
 theorem userParamNames_length :
     userParamNames.length = (Layout.userTys.flatMap flatTyOf).length := rfl
 
@@ -1169,29 +1080,24 @@ def userElemLower (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys 
   ++ [ .localget "wU", .localget "arrT", .mem .i32store (fld 3) none
      , .localget "wU", .localget "nT", .mem .i32store (fld 3 + 4) none ]
 
-/-! ## The SCHEMA-TYPED adapter generator (R3)
+/-! ## The SCHEMA-TYPED adapter generator
 
-The five hand-built record-adapter shapes (`optionUser`/`listUser`/
-`userParam`/`streamUser`/`bytesParam`) were each a function of the
-flattened field types + the Layout offsets — ONE generator over the
-schema data, with the five named shapes as its instantiations. The
-machinery:
+ONE generator over the schema data replaces five hand-built record
+shapes (`optionUser`/`listUser`/`userParam`/`streamUser`/`bytesParam`).
+The machinery:
 
-- `Dst` — where a field's flat bytes land: the STATIC return area
-  (address = a pushed const, the store's mem-offset = 0) or a DYNAMIC
-  cursor (address = the base local, the store's mem-offset = the
-  field's offset). The abs/rel split IS the optionUser-vs-element
-  distinction at the instruction level.
+- `Dst` — where a field's flat bytes land: the STATIC return area (a
+  pushed const; store offset 0) or a DYNAMIC cursor (the base local;
+  store offset = the field's offset).
 - `pairOf` — the (ptr, len) pair write (`pairAbs`/`pairRel` are its
   specializations — pinned).
 - `lowerFields` — the FORWARD flattener: per field, by `flatTyOf` +
-  the certified `Layout.offsets`, guest object → flat area (the
-  optionUser some-branch; the list/stream element lowerings).
+  the certified `Layout.offsets`, guest object → flat area.
 - `listRebox` — the canonical list param's guest cons chain
   (`consChain` = its string instantiation — pinned; the witness lane's
   boxed-u8 walk = its u8 instantiation).
 - `reboxRecord` — the param direction: per-field builders + the
-  refs-first guest object (userParam).
+  refs-first guest object.
 
 The field universe (`lowered?`/`reboxed?`): the flat scalars, the
 inline-pair kinds (string/bytes), `list<string>`, and (param side)
@@ -1203,11 +1109,9 @@ never a silently-wrong adapter. A NEW record shape names its tys in
 
 EQUIVALENCE: each generic body ≡ the previous hand shape, pinned
 (`*_tie`, rfl — the adapters are data before emission) under the
-byte-tie (wasm-diff-check: the emitted bytes identical). The old hand
-bodies survive as the `legacy*` pin fixtures — frozen, generator-free;
-their helpers (`pairAbs`/`pairRel`/`consChain`/`userElemLower`/
-`userFlatTys`) are UNTOUCHED for exactly that and now serve the pins
-only (production emission routes through the generator). -/
+byte-tie. The `legacy*` bodies are FROZEN, generator-free fixtures
+serving the pins only; their helpers (`pairAbs`/`pairRel`/`consChain`/
+`userElemLower`/`userFlatTys`) are untouched for exactly that. -/
 
 /-- Where a lowered field's bytes land. -/
 inductive Dst where
@@ -1216,12 +1120,10 @@ inductive Dst where
   | /-- the DYNAMIC cursor: the address = the base local; the store's
        mem-offset operand = the field's offset. -/ rel (base : String)
 
-/-- The destination's address push. -/
 def Dst.push : Dst → Nat → List Wat.Instr
   | .abs area, off => [.i32const (area + off)]
   | .rel base, _ => [.localget base]
 
-/-- The destination's store mem-offset operand. -/
 def Dst.stOff : Dst → Nat → Nat
   | .abs _, _ => 0
   | .rel _, off => off
@@ -1283,17 +1185,13 @@ def reboxed? : SchemaLang.Ty → Bool
   | t => lowered? t
 
 /-- THE FORWARD FLATTENER: the guest record (its address pushed by
-    `src`) → the canonical flat fields at `dst`. Per field, by
-    `flatTyOf` + the certified offsets:
-    - scalar: load the guest ref-first scalar area (`gBase + scOff`),
-      store at the canonical offset;
-    - string/bytes: load the ref slot's pointer into `scratch`, write
-      the (bytes-ptr, len) pair (`pairOf`);
-    - `list string`: the cons-walk (`listWalk` + `strElemLower`) into
-      an 8n-byte array; the walk's (arr, n) lands at the field's
-      canonical pair (the inner-walk locals named by `suffix`).
-    Field kinds outside `lowered?` lower to [] — unreachable via the
-    emitModule gate (they throw at emission, never silent). -/
+    `src`) → the canonical flat fields at `dst`, per field by
+    `flatTyOf` + the certified offsets: scalar = load the guest
+    ref-first scalar area (`gBase + scOff`); string/bytes = load the
+    ref slot's pointer into `scratch` + `pairOf`; `list string` = the
+    cons-walk into an 8n-byte array, its (arr, n) landing at the
+    field's pair (inner-walk locals named by `suffix`). Kinds outside
+    `lowered?` lower to [] — unreachable via the emitModule gate. -/
 def lowerFields : List SchemaLang.Ty → List Nat → Nat → Nat → Nat →
     List Wat.Instr → Dst → String → String → List Wat.Instr
   | [], _, _, _, _, _, _, _, _ => []
@@ -1324,13 +1222,12 @@ def lowerFields : List SchemaLang.Ty → List Nat → Nat → Nat → Nat →
     BACKWARD (i = n … 0) from the flat source — `srcA` = the element
     source (the array pointer for strings, the byte pointer for u8s),
     `srcB` = the count — each element consed {tag=1@4, head@8, tail@16}
-    onto the accumulator `acc`; the EMPTY list = the allocated
-    {rc, tag=0} block (never the null pointer — the user-complete
-    trap). `consChain` = the string instantiation (pinned); the
-    witness lane's boxed-u8 walk = the u8 instantiation. ONE list
-    field per record (the accumulator local is shape-fixed — the
-    certified surface's constraint). Element kinds outside the rebox
-    gate lower to [] — unreachable via the emitModule gate. -/
+    onto `acc`; the EMPTY list = the allocated {rc, tag=0} block
+    (never the null pointer — the user-complete trap). `consChain` =
+    the string instantiation (pinned); the witness lane's boxed-u8
+    walk = the u8 instantiation. ONE list field per record (the
+    accumulator local is shape-fixed). Kinds outside the rebox gate
+    lower to [] — unreachable via the emitModule gate. -/
 def listRebox (elem : SchemaLang.Ty) (srcA srcB : String) : List Wat.Instr :=
   let doneL := if elem == .string then "tags-done" else "bts-done"
   let loopL := if elem == .string then "tags-loop" else "bts-loop"
@@ -1365,17 +1262,16 @@ def listRebox (elem : SchemaLang.Ty) (srcA srcB : String) : List Wat.Instr :=
            , .br loopL ] ) ] ]
 
 /-- One ref field's builder: the guest object the field's flat
-    (ptr, len) pair reconstructs. -/
+    (ptr, len) pair reconstructs; scalars never reach the plan, other
+    ref kinds are gate-excluded. -/
 def reboxOne : SchemaLang.Ty → List String → String → List Wat.Instr
   | .list .string, ns, _ => listRebox .string (ns.getD 0 "") (ns.getD 1 "")
   | .list .u8, ns, _ => listRebox .u8 (ns.getD 0 "") (ns.getD 1 "")
   | .string, ns, dst => stringCtor (ns.getD 0 "") (ns.getD 1 "") dst
-  -- scalars never reach the plan; other ref kinds are gate-excluded
   | _, _, _ => []
 
 /-- The ref fields' rebox plan: (ty, flat names, builder dst local) in
-    WIT order — the flat names consumed by the flatTyOf arities (1 per
-    scalar, 2 per ref). -/
+    WIT order. -/
 def refPlan : List SchemaLang.Ty → List String → List String →
     List (SchemaLang.Ty × List String × String)
   | [], _, _ => []
@@ -1393,8 +1289,7 @@ def reboxBuilders (plan : List (SchemaLang.Ty × List String × String)) : List 
   (lists ++ others).flatMap fun p => reboxOne p.1 p.2.1 p.2.2
 
 /-- The refs-first guest object's REF stores: the pointer slots
-    @8+i*8, WIT ref order (the demo-certified order: name, email,
-    tags, THEN the id — the pin caught the WIT-order draft). -/
+    @8+i*8, WIT ref order — the pin caught a WIT-order draft here. -/
 def reboxRefStores : List SchemaLang.Ty → Nat → List String → List String → String →
     List Wat.Instr
   | [], _, _, _, _ => []
@@ -1419,9 +1314,8 @@ def reboxScalarStores : List SchemaLang.Ty → Nat → Nat → List String → S
       ++ reboxScalarStores ts gBase (if isRefTy t then scOff else scOff + scalarWidth t)
         (names.drop k) obj
 
-/-- The refs-first guest object: alloc(guestSize), tag=0 @4, the ref
-    stores, the scalar stores, then the impl call (the object rides
-    the stack). -/
+/-- The refs-first guest object: alloc(guestSize), tag=0 @4, the ref +
+    scalar stores, then the impl call (the object rides the stack). -/
 def reboxObject (ts : List SchemaLang.Ty) (names refDsts : List String)
     (obj impl : String) : List Wat.Instr :=
   [ .i32const (guestSize ts), .call "alloc", .localset obj
@@ -1431,8 +1325,7 @@ def reboxObject (ts : List SchemaLang.Ty) (names refDsts : List String)
   ++ [ .localget obj, .call impl ]
 
 /-- THE PARAM-DIRECTION GENERATOR: the canonical flat params → the
-    guest record object in `obj`, then the impl call. Builders (per
-    `reboxOne`), then the refs-first object assembly. The demo user
+    guest record object in `obj`, then the impl call. The demo user
     instantiation = `userParamBody` (pinned ≡ the hand shape). -/
 def reboxRecord (ts : List SchemaLang.Ty) (names refDsts : List String)
     (obj impl : String) : List Wat.Instr :=
@@ -1447,15 +1340,14 @@ def reboxParams (ts : List SchemaLang.Ty) (names : List String) : List Wat.Param
   (ts.flatMap flatTyOf).zipIdx.map fun (ty, i) =>
     { name := some (names.getD i "flat"), ty }
 
-/-- The stream payload's element schema. -/
 inductive StreamElem where
   | /-- raw u64 items (watch-counts) -/ u64
   | /-- user records (watch-users) -/ user
 
-/-- The stream element's per-item lowering — the generator's
-    instantiation by the payload schema: the u64 = the boxed payload
-    read (the INLINE head load — no scratch local); the user = the
-    record flattener over Layout.userTys (the cons head via the `e` scratch). -/
+/-- The per-item lowering — the generator's instantiation by the
+    payload schema: the u64 = the boxed payload read (INLINE head load
+    — no scratch local); the user = the record flattener over
+    Layout.userTys (the cons head via the `e` scratch). -/
 def streamElemLower (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24]) :
     StreamElem → List Wat.Instr
   | .u64 => lowerFields [.u64] [0] 0 0 (guestScalarBase [.u64])
@@ -1464,18 +1356,18 @@ def streamElemLower (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTy
       ++ lowerFields Layout.userTys (userLayout cert) 0 0 (guestScalarBase Layout.userTys)
         [ .localget "e" ] (.rel "wU") "p2" "T"
 
-/-- The outer walk's shape by the payload: the item stride (the
-    element array's elemSize — the u64 = 8, the user = userSize), the
-    walk suffix, and the (arr, n) local names the stash reads. -/
+/-- The outer walk's shape by the payload: the item stride (u64 = 8,
+    user = userSize), the walk suffix, and the (arr, n) local names
+    the stash reads. -/
 def streamWalk (certSize : WasmBackend.Layout.size WasmBackend.Layout.userTys = 32) :
     StreamElem → Nat × String × String × String
   | .u64 => (8, "", "arr", "n")
   | .user => (userSize certSize, "U", "arrU", "nU")
 
 /-- The optionUser shape's body (the generator's instantiation over
-    Layout.userTys): the impl call → the option tag @56 → the SOME branch
-    flattens the payload record into the area @64 (the static `abs`
-    destination) → the area pointer. -/
+    Layout.userTys): the impl call → the option tag @56 → the SOME
+    branch flattens the payload record into the area @64 (the static
+    `abs` destination) → the area pointer. -/
 def optionUserBody (pass : List Wat.Instr)
     (cert : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24])
     (impl : String) : List Wat.Instr :=
@@ -1491,16 +1383,16 @@ def optionUserBody (pass : List Wat.Instr)
   , .if_ none thenI []
   , .i32const area ]
 
-/-- The userParam shape's body: the record-param rebox over userTys
-    (the flat names = userParamNames; the string builders' dsts
-    ns/es; the tags cons chain's acc). -/
+/-- The userParam body: the record-param rebox over userTys (flat
+    names = userParamNames; string builders' dsts ns/es; tags cons
+    chain's acc). -/
 def userParamBody (impl : String) : List Wat.Instr :=
   reboxRecord Layout.userTys userParamNames ["ns", "es", "acc"] "u" impl
 
-/-- The listUser shape's body (watch-orders): the variant param
-    re-boxed, the impl call, the outer walk lowering each user into a
-    32-byte flat record (the tags = the NESTED string-list walk), the
-    async task-return delivery. -/
+/-- The listUser body (watch-orders): the variant param re-boxed, the
+    impl call, the outer walk lowering each user into a 32-byte flat
+    record (the tags = the NESTED string-list walk), the async
+    task-return delivery. -/
 def listUserBody
     (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24])
     (certSize : WasmBackend.Layout.size WasmBackend.Layout.userTys = 32)
@@ -1513,9 +1405,9 @@ def listUserBody
      , .i32const 56, .i32const 60, .mem .i32load 0 none, .call s!"tr_{kebab}"
      , .i32const 0 ]
 
-/-- The stream shapes' body (watch-counts/watch-users): the handle
-    pair unpack, the walk, the stash + yield (the callback = the
-    write site). -/
+/-- The stream bodies (watch-counts/watch-users): the handle pair
+    unpack, the walk, the stash + yield (the callback = the write
+    site). -/
 def streamBody (pass : List Wat.Instr)
     (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24])
     (certSize : WasmBackend.Layout.size WasmBackend.Layout.userTys = 32)
@@ -1532,8 +1424,8 @@ def streamBody (pass : List Wat.Instr)
      , .localget "rd", .call s!"tr_{kebab}"
      , .i32const 1 ]
 
-/-- The bytesParam shape's body (verify-witness): the list<u8> rebox,
-    then the impl call (the raw i32 Bool verdict). -/
+/-- The bytesParam body (verify-witness): the list<u8> rebox, then the
+    impl call (the raw i32 Bool verdict). -/
 def bytesParamBody (impl : String) : List Wat.Instr :=
   listRebox .u8 "ptr" "len" ++ [ .localget "acc", .call impl ]
 
@@ -1553,7 +1445,7 @@ def paramShape? : String → Bool
   | "userParam" | "bytesParam" => true
   | _ => false
 
-/-! ## The equivalence pins (R3): generic ≡ the hand shapes
+/-! ## The equivalence pins: generic ≡ the hand shapes
 
 The old hand bodies, FROZEN as fixtures (generator-free; their
 helpers — pairAbs, pairRel, consChain, userElemLower, userFlatTys —
@@ -1657,9 +1549,8 @@ private def legacyBytesParamBody (impl : String) : List Wat.Instr :=
 /-- THE PINS: each generic body = the hand shape, instruction for
     instruction (rfl — the adapters are data before emission). -/
 -- (`0 + off` does not kernel-reduce for symbolic `off` — Nat.add
--- recurses on its SECOND argument — so a symbolic abs pin is stuck;
--- the deployed abs sites are all concrete offsets, and the five body
--- pins cover them — here one representative.)
+-- recurses on its SECOND argument — so the abs pin is concrete; the
+-- five body pins cover the deployed abs sites.)
 theorem pairOf_abs_tie (src : String) :
     pairOf (.abs 0) 8 src = pairAbs 8 src := rfl
 
@@ -1707,7 +1598,7 @@ theorem streamBody_user_tie (pass : List Wat.Instr)
 theorem bytesParamBody_tie (impl : String) :
     bytesParamBody impl = legacyBytesParamBody impl := rfl
 
-/-! ## R3's drift-class pin: a NEW record shape, NO new hand shape
+/-! ## The drift-class pin: a NEW record shape, NO new hand shape
 
 The synthetic 3-field fixture `{id : u64, name : string, tag : u32}`
 (no demo record carries it): the generator builds BOTH directions from
@@ -1716,13 +1607,13 @@ ref-first guest geometry and the canonical offsets all DERIVED. -/
 
 abbrev tripleTys : List SchemaLang.Ty := [.u64, .string, .u32]
 
-/-- The fixture's name table (1 name per flat value: id, then the
-    string's (ptr, len), then the u32). -/
+/-- The name table (1 name per flat value: id, the string's (ptr,
+    len), the u32). -/
 def tripleNames : List String := ["id", "np", "nl", "tag"]
 
 -- The schema's flat ABI: 4 core values ≤ MAX_FLAT_PARAMS = 16 (the
--- record crosses FLAT) — and the canonical layout the forward
--- direction flattens onto.
+-- record crosses FLAT); the canonical layout the forward direction
+-- flattens onto.
 theorem triple_flat : tripleTys.flatMap flatTyOf = ["i64", "i32", "i32", "i32"] := rfl
 theorem triple_params : (reboxParams tripleTys tripleNames).length = 4 := rfl
 theorem triple_offsets : WasmBackend.Layout.offsets tripleTys = [0, 8, 16] := rfl
@@ -1732,13 +1623,11 @@ theorem triple_offsets : WasmBackend.Layout.offsets tripleTys = [0, 8, 16] := rf
 -- numbers.
 theorem triple_guest_size : guestSize tripleTys = 28 := rfl
 
-/-- The fixture's param-direction adapter body (the object assembly —
-    reboxObject emits no structural forms, so the store offsets are
-    flat-visible). -/
+/-- The fixture's param-direction adapter body (reboxObject emits no
+    structural forms — the store offsets are flat-visible). -/
 def tripleObj (obj impl : String) : List Wat.Instr :=
   reboxObject tripleTys tripleNames ["ns"] obj impl
 
-/-- The mem-offset operands a body's flat stores carry. -/
 def storeOff? : Wat.Instr → Option Nat
   | .mem .i32store off _ => some off
   | .mem .i64store off _ => some off
@@ -1746,7 +1635,6 @@ def storeOff? : Wat.Instr → Option Nat
 
 def storeOffsets (is : List Wat.Instr) : List Nat := is.filterMap storeOff?
 
-/-- The i32 constants a body pushes (the abs-destination addresses). -/
 def constAddr? : Wat.Instr → Option Nat
   | .i32const n => some n
   | _ => none
@@ -1766,15 +1654,11 @@ theorem triple_lower_consts : constAddrs (lowerFields tripleTys
 convention. Borrowed-scalar params (objects in the impl) get BOXED;
 raw scalars pass through; an object RESULT gets unboxed to the flat
 i64. Exported under the WIT name; the impl stays internal (internal
-callers keep calling it directly).
-
-R3: the five record shapes' bodies = the schema-typed generator's
-instantiations (the section above; each pinned ≡ the hand shape it
-replaced). The `string`/`variantParam`/default shapes stay hand-built
-(no record schema to drive).
-
-TYPED: every shape builds a `Wat.Func` — ZERO `Instr.raw` (the offsets
-are structured fields fed from the PROVED `userLayout`). -/
+callers keep calling it directly). The five record shapes = the
+schema-typed generator's instantiations (pinned ≡ the hand shapes);
+the `string`/`variantParam`/default shapes stay hand-built (no record
+schema to drive). TYPED: every shape builds a `Wat.Func` — ZERO
+`Instr.raw` (offsets from the PROVED `userLayout`). -/
 def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.userTys = [0, 8, 16, 24])
     (certSize : WasmBackend.Layout.size WasmBackend.Layout.userTys = 32)
     (d : Decl .impure) (shape : String) (kebab : String) : Wat.Func := Id.run do
@@ -1786,18 +1670,13 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
   -- STRING result: the post-return convention — the core signature
   -- takes the return-area pointer as its LAST param; the adapter calls
   -- the impl (→ the string object), then writes (bytes-ptr, byte-len)
-  -- into it. (The STRING-ness comes from the ORIGINAL def type —
-  -- WasmGenMain looks it up in the imported env — the LCNF type is erased
-  -- to `obj` for every object result.)
+  -- into it. (The STRING-ness comes from the ORIGINAL def type — the
+  -- LCNF type is erased to `obj` for every object result.)
   if shape == "string" then
-    -- the shim: pass the flat args through, call the impl, write the
-    -- canonical-ABI string flattening (bytes-ptr, byte-len) into a
-    -- STATIC return area, return the area pointer (`[I64] -> [I32]`:
-    -- MAX_FLAT_RESULTS=1; the caller copies out of OUR memory via the
-    -- canon-lift memory option). The area is the fixed scratch slot at
-    -- 48 (the freelist owns 0..24, the heap starts at 64; 24..64 is
-    -- dead space — single-threaded, no clobber). bytes-ptr = obj + 16
-    -- (bytes INLINE).
+    -- the shim: a STATIC return area (the fixed scratch slot at 48 —
+    -- the freelist owns 0..24, the heap starts at 64), return the area
+    -- pointer (`[I64] -> [I32]`: MAX_FLAT_RESULTS=1; the caller copies
+    -- out via the canon-lift memory option). bytes-ptr = obj + 16.
     let body : List Wat.Instr :=
       pass ++ [ .call d.name.toString, .localset "p"
       , .i32const 48, .localget "p", .i32const 16, .op .i32add
@@ -1808,12 +1687,11 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
       params := paramsOf, result := some "i32"
       locals := [("p", "i32")], body }
   else if shape == "optionUser" then
-    -- option<user> lowering: THE GENERIC INSTANTIATION (the schema =
-    -- userTys — shapeTys?). The body = the generator's output, pinned
-    -- ≡ the hand shape (optionUser_tie): the SOME branch flattens the
-    -- payload record into the static area @64 (the discr @56; the
-    -- tags = the cons-chain walk's (ptr,len) array). Option ctor
-    -- tags: none = 0, some = 1 (Lean's ctor order); payload rides @8.
+    -- option<user> lowering: the generator's instantiation over userTys
+    -- (optionUser_tie): the SOME branch flattens the payload record
+    -- into the static area @64 (the discr @56; the tags = the
+    -- cons-chain walk's (ptr,len) array). Option ctor tags: none = 0,
+    -- some = 1 (Lean's ctor order); payload rides @8.
     let body := optionUserBody pass certLayout d.name.toString
     { name := s!"{d.name.toString}_abi"
       params := paramsOf, result := some "i32"
@@ -1821,13 +1699,11 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
                  , ("cur", "i32"), ("n", "i32"), ("arr", "i32"), ("w", "i32")]
       body }
   else if shape == "userParam" then
-    -- The RECORD-PARAM adapter (user-valid): the generator's
-    -- reboxRecord instantiation over userTys (userParamBody, pinned ≡
-    -- the hand shape). The flat params = reboxParams userTys
-    -- userParamNames (pinned ≡ userFlatTys — userParamParams_tie);
-    -- the body reconstructs the guest object (the string ctors, the
-    -- tags cons chain, the refs-first User {name@8, email@16,
-    -- tags@24, id@32}).
+    -- The RECORD-PARAM adapter (user-valid): the generator's reboxRecord
+    -- instantiation over userTys (userParamBody). The flat params =
+    -- reboxParams userTys userParamNames (pinned ≡ userFlatTys); the
+    -- body reconstructs the guest object (string ctors, tags cons
+    -- chain, refs-first User {name@8, email@16, tags@24, id@32}).
     let params : List Wat.Param := reboxParams Layout.userTys userParamNames
     let body := userParamBody d.name.toString
     { name := s!"{d.name.toString}_abi"
@@ -1838,11 +1714,11 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
       body }
   else if shape == "variantParam" then
     -- The VARIANT-PARAM adapter (order-error-valid): the canonical ABI
-    -- hands a variant FLAT — the discr i32 + the JOINED payload (the
-    -- max of the cases' flat types: invalid-item's [i64] and
-    -- insufficient-funds' [f64] join to i64). The RE-BOX (variantBox)
-    -- reconstructs the guest's variant object. The SYNC bool result:
-    -- the impl's Bool = raw i32 — no return area.
+    -- hands a variant FLAT — discr i32 + the JOINED payload (the max
+    -- of the cases' flat types: invalid-item's [i64] and
+    -- insufficient-funds' [f64] join to i64). variantBox reconstructs
+    -- the guest's variant object; the impl's Bool = raw i32 — no
+    -- return area.
     let body : List Wat.Instr :=
       variantBox "into_disc" "into_payload"
       ++ [ .call d.name.toString ]
@@ -1854,11 +1730,10 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
       body }
   else if shape == "listUser" then
     -- list<user> lowering (the ASYNC watch-orders' result): the
-    -- generator's instantiation (listUserBody, pinned ≡ the hand
-    -- shape) — the outer walk lowers EACH user into a 32-byte flat
-    -- record (the tags = a NESTED string-list walk); the return area
-    -- (56..64) = the list's own (ptr, len); the VARIANT param
-    -- re-boxed; the async task-return delivery.
+    -- generator's instantiation (listUserBody) — the outer walk lowers
+    -- EACH user into a 32-byte flat record (the tags = a NESTED
+    -- string-list walk); the return area (56..64) = the list's own
+    -- (ptr, len); the async task-return delivery.
     let body := listUserBody certLayout certSize d.name.toString kebab
     { name := s!"{d.name.toString}_abi"
       params := [ { name := some "into_disc", ty := "i32" }
@@ -1870,11 +1745,10 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
       body }
   else if shape == "streamU64" || shape == "streamUser" then
     -- STREAM lowering (the ASYNC watch-counts/watch-users): the
-    -- generator's instantiation (streamBody, pinned ≡ the hand
-    -- shape); the payload schema picks the element lowering + the
-    -- walk shape. THE DELIVERY DANCE (unchanged): the abi fn =
-    -- task-return(read) + stash (wr, arr, n) in the GLOBALS + return
-    -- 1 (YIELD); the callback = the WRITE SITE.
+    -- generator's instantiation (streamBody); the payload schema picks
+    -- the element lowering + walk shape. THE DELIVERY DANCE: the abi
+    -- fn = task-return(read) + stash (wr, arr, n) in the GLOBALS +
+    -- return 1 (YIELD); the callback = the WRITE SITE.
     let elem : StreamElem := if shape == "streamU64" then .u64 else .user
     let body := streamBody pass certLayout certSize d.name.toString kebab elem
     { name := s!"{d.name.toString}_abi"
@@ -1887,12 +1761,11 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
                           , ("arrT", "i32"), ("wT", "i32")])
       body }
   else if shape == "bytesParam" then
-    -- The BYTES-PARAM adapter (verify-witness, the W9.6 decode lane):
-    -- the generator's listRebox .u8 instantiation (bytesParamBody,
-    -- pinned ≡ the hand shape) — the guest List UInt8 cons chain
-    -- (elements = BOXED u8s, built BACKWARD; the EMPTY list = the
-    -- allocated {rc, tag=0} block); the verdict = the impl's raw i32
-    -- Bool, returned directly.
+    -- The BYTES-PARAM adapter (verify-witness, the decode lane): the
+    -- generator's listRebox .u8 instantiation (bytesParamBody) — the
+    -- guest List UInt8 cons chain (elements = BOXED u8s, built
+    -- BACKWARD; the EMPTY list = the allocated {rc, tag=0} block); the
+    -- verdict = the impl's raw i32 Bool, returned directly.
     let body := bytesParamBody d.name.toString
     { name := s!"{d.name.toString}_abi"
       params := [ { name := some "ptr", ty := "i32" }
@@ -1902,8 +1775,8 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
       body }
   else
     -- the GENERAL prologue: pass through / re-box the flat params, call
-    -- the impl, return its result (the object case unboxes the flat i64
-    -- from the box's slot @8). TYPED (the adapters' minimum).
+    -- the impl, return its result (the object case unboxes the flat
+    -- i64 from the box's slot @8).
     let code := match d.value with | .code c => c | .extern .. => .unreach (Expr.const `Unit [])
     let resultTy := resultTyOf code
     let mut body : List Wat.Instr := []
@@ -1938,15 +1811,11 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
       body }
 
 /-- Emit the module: runtime + funcs + trampolines + table + adapters +
-exports. The state THREADS across decls (tramps accumulate).
-`asyncFns` = the ASYNC-marked exports (the wire names; the world marks
-them `async func` — the canon lift's async option + the [callback]) —
-DERIVED by the driver from the schema registry (the registered ret =
-the `Async.Future` marker; the hand list this parameter replaced could
-drift from the registry). The full async-lift recipe
-(notes/wasm-backend-notes.md §async-lift): async func type,
-task-intrinsic imports, `[async-lift]`/`[callback]` export shapes, the
-task-return delivery. -/
+exports; the state THREADS across decls (tramps accumulate).
+`asyncFns` = the ASYNC-marked exports, DERIVED by the driver from the
+schema registry (a hand list could drift: a new async `@[schema_fn]`
+needed a second site). Full async-lift recipe
+(wasmparser-derived): notes/wasm-backend-notes.md §async-lift. -/
 def emitModule (decls : List (Decl .impure))
     (exportTargets : List (String × Name))
     (stringResult? : Name → Bool := fun _ => false)
@@ -2002,8 +1871,8 @@ def emitModule (decls : List (Decl .impure))
       -- (the sigs table): a raw i64 param is the scalar convention
       -- (unbox), an i32 param is the OBJECT convention (forward — the
       -- decode lane's first-class fns pass a list-taking decoder as a
-      -- closure value; the old blanket unbox-everything unboxed the
-      -- cons HEAD SLOT as the argument). A raw i32 param is ambiguous
+      -- closure value; a blanket unbox-everything unboxed the cons
+      -- HEAD SLOT as the argument). A raw i32 param is ambiguous
       -- (Bool scalar OR object) — no Bool-param target joins a
       -- trampoline in the sanctioned closure; a drift throws at
       -- validate, never silently misreads.
@@ -2061,7 +1930,7 @@ def emitModule (decls : List (Decl .impure))
     for d in decls do
       if d.name.toString == n.toString then
         let shape := if stringResult? n then "string" else adapterShape? kebab |>.getD "default"
-        -- THE SCHEMA-TYPED GATE (R3): a record shape's schema must sit
+        -- THE SCHEMA-TYPED GATE: a record shape's schema must sit
         -- in the generator's field universe (lowered?/reboxed? by
         -- direction) — outside it, THROW (the robustness rule), never
         -- a silently-wrong adapter. The five demo shapes are pinned
@@ -2202,8 +2071,8 @@ def emitModule (decls : List (Decl .impure))
                , .export { name := "__indirect_function_table", desc := .table 0 } ]
           else [ .export { name := "__indirect_function_table", desc := .table 0 } ])
   -- THE TYPED MODULE: rendered by Wat.Module.render (Std.Format). The
-  -- splice marker = the ONE module-level raw (WasmGenMain replaces its exact
-  -- bytes with runtime.wat).
+  -- splice marker = the ONE module-level raw (WasmGenMain replaces its
+  -- exact bytes with runtime.wat).
   let mod : Wat.Module :=
     { start := none
       items := asyncEnv ++ [ .raw "  ;;RUNTIME-SPLICE", .memory 1 ]

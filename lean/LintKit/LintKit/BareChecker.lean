@@ -59,9 +59,9 @@ def boolOrOptionResult : Expr → Bool
 
 /-- The GRANDFATHERED deliberate exceptions: (decl, reason). The ratchet
 only tightens — a new checker needs a bridge theorem, not a row here.
-Reasons prefixed REAL are true findings, reported to the owner (2026-09
-lint-gate run) and silenced only to keep the gate green; the fix lands
-with the ratchet. -/
+Reasons prefixed REAL are true findings, reported to the owner and
+silenced only to keep the gate green; the fix lands with the
+ratchet. -/
 def bareCheckerAllowance : List (Name × String) := [
   (`CodegenCore.Emit.Emitter.checkNodup,
    "the bridge is per-registry, discharged by the consumers (the \

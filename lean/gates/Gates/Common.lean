@@ -2,11 +2,11 @@
 
 The demo+flags `GenCtx` assembly now lives in SchemaLang.GenCtxIO
 (`loadGenCtx` — the former byte-duplicate of SchemaGenMain.runGen's
-preamble, deduped); this is the gates-side NAME the two consumers
-(`GenCheck`, `Coverage`) already call.
+preamble, deduped); this is the gates-side name the two consumers
+(`GenCheck`, `Coverage`) call.
 
-Also home of the shared DRIVER tails (R4, namespace `Gates.Driver`):
-the two tails the gate modules verifiably duplicate are (a) the
+Also home of the shared DRIVER tails (namespace `Gates.Driver`): the
+two tails the gate modules verifiably duplicate are (a) the
 `--package X` shard filter (Axioms, NativePolicy, KernelCheck) and (b)
 the write-or-diff baseline tail (Axioms whole-file mode, Coverage).
 The modules WITHOUT a committed baseline (GenCheck compares in-memory;
@@ -17,15 +17,13 @@ filter. `reportGate` composes its drift/absent lines from the gate name
 + two gate-specific fragments so the printed text stays byte-identical
 to the pre-combinator output the justfile and humans parse.
 
-LEGACY (non-module) file BY DESIGN: it (transitively) calls the meta
-env-extension accessors (`registeredItems` etc.) — constraint 12 of
-notes/w5-4-module-migration.md (drivers touching meta env extensions
-stay legacy).
+LEGACY (non-module) file BY DESIGN: (transitively) calls the meta
+env-extension accessors (`registeredItems` etc.) — drivers touching
+meta env extensions stay legacy.
 
 Paths: every recipe runs this exe from `lean/gates` (`cd lean/gates &&
 lake exe gates …`), the same depth as `lean/schema-lang`, so GenMain's
-`../feature-flags/…` extra-path convention worked unchanged (and its
-death with the SINGLE-LAKE absorb hit both copies identically).
+`../feature-flags/…` extra-path convention worked unchanged; a SINGLE-LAKE absorb hits both copies identically).
 -/
 import Lean
 import Gates.Packages
@@ -41,7 +39,7 @@ namespace Gates
 unsafe def loadGenCtx : IO SchemaLang.Emit.GenCtx :=
   SchemaLang.Emit.loadGenCtx
 
-/-! ## The shared gate-driver tails (R4) -/
+/-! ## The shared gate-driver tails -/
 
 namespace Driver
 
@@ -59,9 +57,9 @@ def diffBaseline (path : System.FilePath) (fresh : String) : IO Baseline := do
 /-- The write-or-diff baseline tail shared by the baseline-report gates
     (Axioms whole-file mode, Coverage). `--write` writes `fresh ++ "\n"`
     and prints `wrote <path>` — EXCEPT a non-empty diff (a drifted
-    baseline) is REFUSED unless `acceptDrift` (PolyFun's baseline rule:
-    a re-baseline must not pre-authorize future taint; in-sync writes
-    and the absent-file bootstrap stay free); the refusal names
+    baseline) is REFUSED unless `acceptDrift` (a re-baseline must not
+    pre-authorize future taint; in-sync writes and the absent-file
+    bootstrap stay free); the refusal names
     `--write --accept-drift`. Otherwise the committed file is diffed
     and the gate's drift/absent line printed. `what` names the artifact
     in the drift line ("report" / "matrix"), `why` is the gate's reason

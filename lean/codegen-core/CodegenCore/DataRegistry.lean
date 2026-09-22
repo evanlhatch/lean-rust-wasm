@@ -1,5 +1,5 @@
 /-
-# CodegenCore.DataRegistry — data-level registry with unique names (W7.16)
+# CodegenCore.DataRegistry — data-level registry with unique names
 
 Owns: the pure list-of-items registry for driver/runtime code (the
 env-extension layer stays in `CodegenCore.Registry`). Deliberately excluded:

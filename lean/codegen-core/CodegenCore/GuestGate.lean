@@ -14,7 +14,7 @@ public meta section
    std oleans). The gate is codegen-layer infrastructure: both the
    backend and the std package require codegen-core.
 
-   W7.13: the PURE predicate (`Ban`/`bannedAt?`/`checkExprAt`/`checkExpr`/
+   The PURE predicate (`Ban`/`bannedAt?`/`checkExprAt`/`checkExpr`/
    `reasons`) moved verbatim to `LintKit.GuestBan` — ONE `DeclCheck`
    (`LintKit.GuestBan.guestBanCheck`) now mounts BOTH ways: as the
    attribute GATE here (hard elab error, via `CodegenCore.mountAsGate`)
@@ -60,7 +60,7 @@ namespace CodegenCore.GuestGate
 
 open Lean
 
--- The predicate surface, re-homed in LintKit.GuestBan (W7.13) — the
+-- The predicate surface, re-homed in LintKit.GuestBan — the
 -- historical names keep resolving (WasmBackend.Check re-exports them;
 -- the wasm-backend #guard pins use them via `open`).
 export LintKit.GuestBan (Ban bannedAt? checkExprAt checkExpr reasonLine reasons)
@@ -86,11 +86,10 @@ def recordGuestMark (decl : Name) : CoreM Unit :=
     `LintKit.GuestBan.guestBanCheck` — scan the def's type + value at the
     attribute's ban level, hard-fail on diags; mark on pass. The two
     attributes (`@[guest]`/`@[guest_std]`) are one code path with the level
-    as the parameter (the `@[guest_std]` error used to render STRICT
-    reasons — bug 0.5 — the level-pinned `reasonLine` is the fix, and it
-    lives in the shared check). GATE-SIDE, outside the shared check (the
-    boundary): the "applies to defs only" misuse error and the guest-mark
-    registry write. -/
+    as the parameter (a `@[guest_std]` error used to render STRICT reasons
+    — the level-pinned `reasonLine` is the fix, in the shared check).
+    GATE-SIDE, outside the shared check (the boundary): the "applies to
+    defs only" misuse error and the guest-mark registry write. -/
 def checkGuestAt (attrName : String) (level : Ban) (decl : Name) : CoreM Unit := do
   let env ← getEnv
   match env.find? decl with

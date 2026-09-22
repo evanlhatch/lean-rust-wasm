@@ -24,10 +24,14 @@
 //!       (the hash the verdicts echo; Lean owns the string —
 //!       `lake exe oracle schema-surface` — consumers hash).
 //!
-//! The CompareMode/Outcome/verdict/classify code MIRRORS Oracle.lean
-//! arm-for-arm (the same discipline as guestlang-host's wasm_diff.rs phase-1
-//! mirror; Tests/Main.lean pins the Lean arms). The ser forms (ser_val)
-//! MUST match Lean's `resultOf` byte-for-byte.
+//! The CompareMode/Outcome/verdict/classify code + the ser forms
+//! (ser_val) are GENERATED from Oracle.lean — the oracle-mirror emitter
+//! (Oracle.lean's OracleMirror section, registered in schema-lang's
+//! coreEmitters) writes generated/rust/oracle_mirror_generated.rs,
+//! byte-tied by `just gen` + `forge gen --check`; this crate
+//! `#[path]`-includes that module. The Lean side owns the authority;
+//! Tests/Main.lean pins the Lean arms. The ser forms MUST match Lean's
+//! `resultOf` byte-for-byte.
 //!
 //! Provenance: the replay machinery (the flat-arg conventions, the stream
 //! drain) is lifted from guestlang-host/tests/wasm_diff.rs — kept honest by
@@ -49,6 +53,19 @@ use guestlang_host::bindings::GatewayUser;
 use guestlang_host::{CapabilitySet, ComponentRuntime, HostState, HostEngine};
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Source, StreamConsumer, StreamResult, Val};
+
+// ── the Oracle.lean mirror (GENERATED — byte-tied by `just gen`) ────
+// The comparison bookkeeping (CompareMode/ErrorId/Outcome/compare/
+// classify/first_diff_at/verdict/verdict_json/ser_val) is emitted by the
+// oracle-mirror emitter (Oracle.lean's OracleMirror section, registered
+// in schema-lang's coreEmitters) into
+// generated/rust/oracle_mirror_generated.rs — the hand copies were
+// DELETED (the mirror section below), this module IS the mirror.
+// Regenerate with `just gen`; never hand-edit the generated file.
+#[path = "../../../generated/rust/oracle_mirror_generated.rs"]
+mod oracle_mirror;
+
+use oracle_mirror::*;
 
 // The driver's fault domain for its INPUT: the user-supplied oracle
 // manifest (diff.json — `--manifest P` is arbitrary user input) and its
@@ -83,190 +100,6 @@ fast_observe::error! {
 /// [`OracleFault`]. (main keeps its `Box<dyn Error>` Termination — the
 /// debug loop's exit-code contract stays 1.)
 type OracleResult<T> = fast_observe::Result<T, OracleFault>;
-
-// ── the Oracle.lean mirror (CompareMode/Outcome/verdict) ─────────────
-
-/// How a row's outcome is compared against the replay. Every row in the
-/// current manifest binds `Full` (Oracle.lean's `modeOf`) — the other
-/// arms stay: the mirror is the WHOLE truth table (the Lean side pins
-/// every arm; the wire gains the mode column in a later phase).
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CompareMode {
-    /// Errors waive: an error on either side passes.
-    Ignore,
-    /// Compare error identity only — payloads never read.
-    Identity,
-    /// Compare identity AND payload, byte-for-byte (today's behavior).
-    Full,
-}
-
-/// The error identity an outcome can carry. Mirrors `Oracle.ErrorId`;
-/// the replay side's only identity today is `Trap` (a wasmtime trap
-/// carries no payload the oracle may read). `UnknownFn`/`ArityDrift`
-/// are the LEAN-side identities — constructed by the mirror's tests,
-/// kept for the arm-for-arm truth table.
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ErrorId {
-    UnknownFn,
-    ArityDrift,
-    Trap,
-}
-
-impl ErrorId {
-    fn as_str(self) -> &'static str {
-        match self {
-            ErrorId::UnknownFn => "unknownFn",
-            ErrorId::ArityDrift => "arityDrift",
-            ErrorId::Trap => "trap",
-        }
-    }
-}
-
-/// One side of a comparison. Mirrors `Oracle.Outcome`.
-#[derive(Clone, PartialEq, Eq, Debug)]
-struct Outcome {
-    error: Option<ErrorId>,
-    payload: String,
-}
-
-impl Outcome {
-    fn value(s: String) -> Self {
-        Outcome { error: None, payload: s }
-    }
-    fn trap() -> Self {
-        Outcome { error: Some(ErrorId::Trap), payload: String::new() }
-    }
-}
-
-/// The mode truth table — mirrors `Oracle.CompareMode.compare`
-/// arm-for-arm.
-fn compare(mode: CompareMode, expected: &Outcome, got: &Outcome) -> bool {
-    use CompareMode::*;
-    match (mode, expected.error, got.error) {
-        (Ignore, Some(_), _) | (Ignore, _, Some(_)) => true,
-        (Ignore, None, None) => expected.payload == got.payload,
-        (Identity, Some(e), Some(f)) => e == f,
-        (Identity, None, None) => true,
-        (Identity, _, _) => false,
-        (Full, Some(e), Some(f)) => e == f && expected.payload == got.payload,
-        (Full, None, None) => expected.payload == got.payload,
-        (Full, _, _) => false,
-    }
-}
-
-/// The divergence category — mirrors `Oracle.DivergenceClass`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum DivergenceCategory {
-    ValueMismatch,
-    ExpectedValueGotError,
-    ExpectedErrorGotValue,
-    ErrorIdentityMismatch,
-    ErrorPayloadMismatch,
-}
-
-impl DivergenceCategory {
-    fn as_str(self) -> &'static str {
-        use DivergenceCategory::*;
-        match self {
-            ValueMismatch => "valueMismatch",
-            ExpectedValueGotError => "expectedValueGotError",
-            ExpectedErrorGotValue => "expectedErrorGotValue",
-            ErrorIdentityMismatch => "errorIdentityMismatch",
-            ErrorPayloadMismatch => "errorPayloadMismatch",
-        }
-    }
-}
-
-/// The first-divergence witness — mirrors `Oracle.Divergence`.
-struct Divergence {
-    expected: Outcome,
-    observed: Outcome,
-    category: DivergenceCategory,
-    payload_diff_at: Option<usize>,
-}
-
-/// The first char offset at which two rendered payloads differ.
-/// Mirrors `Oracle.firstDiffAt` (char-wise; the ser forms are ASCII).
-fn first_diff_at(a: &str, b: &str) -> Option<usize> {
-    let mut i = 0;
-    let mut ac = a.chars();
-    let mut bc = b.chars();
-    loop {
-        match (ac.next(), bc.next()) {
-            (None, None) => return None,
-            (None, Some(_)) | (Some(_), None) => return Some(i),
-            (Some(x), Some(y)) if x == y => i += 1,
-            (Some(_), Some(_)) => return Some(i),
-        }
-    }
-}
-
-/// Mirrors `Oracle.classify` — total over the failure arms of every mode.
-fn classify(expected: &Outcome, observed: &Outcome) -> DivergenceCategory {
-    use DivergenceCategory::*;
-    match (expected.error, observed.error) {
-        (None, None) => ValueMismatch,
-        (None, Some(_)) => ExpectedValueGotError,
-        (Some(_), None) => ExpectedErrorGotValue,
-        (Some(e), Some(f)) => {
-            if e == f { ErrorPayloadMismatch } else { ErrorIdentityMismatch }
-        }
-    }
-}
-
-/// The mode's verdict — mirrors `Oracle.CompareMode.verdict`: `None` =
-/// pass, `Some(d)` = the first divergence.
-fn verdict(mode: CompareMode, expected: &Outcome, observed: &Outcome) -> Option<Divergence> {
-    if compare(mode, expected, observed) {
-        None
-    } else {
-        Some(Divergence {
-            expected: expected.clone(),
-            observed: observed.clone(),
-            category: classify(expected, observed),
-            payload_diff_at: first_diff_at(&expected.payload, &observed.payload),
-        })
-    }
-}
-
-fn json_str(s: &str) -> String {
-    // DELIBERATE INVARIANT (audit class (a)): serde_json's string
-    // serialization is infallible by construction (no pending failure
-    // state) — the expect documents that, never fires.
-    serde_json::to_string(s).expect("string serializes")
-}
-
-fn outcome_json(o: &Outcome) -> String {
-    let err = match o.error {
-        None => "null".to_string(),
-        Some(e) => json_str(e.as_str()),
-    };
-    format!("{{\"error\": {}, \"payload\": {}}}", err, json_str(&o.payload))
-}
-
-/// The verdict as JSON — mirrors `Oracle.jsonVerdict`'s shape byte-for-byte
-/// (the schema echo = the canonical surface STRING; hash it consumer-side).
-fn verdict_json(v: Option<&Divergence>, schema_surface: &str) -> String {
-    match v {
-        None => format!("{{\"ok\": true, \"schema\": {}}}", json_str(schema_surface)),
-        Some(d) => {
-            let at = match d.payload_diff_at {
-                None => "null".to_string(),
-                Some(n) => n.to_string(),
-            };
-            format!(
-                "{{\"ok\": false, \"category\": {}, \"expected\": {}, \"observed\": {}, \"payload_diff_at\": {}, \"schema\": {}}}",
-                json_str(d.category.as_str()),
-                outcome_json(&d.expected),
-                outcome_json(&d.observed),
-                at,
-                json_str(schema_surface)
-            )
-        }
-    }
-}
 
 // ── the schema surface (derived from ANY manifest, first-occurrence
 //    order — the same string `Oracle.schemaSurface` renders) ──────────
@@ -320,41 +153,6 @@ fn manifest_surface(rows: &[serde_json::Value]) -> OracleResult<String> {
         .map(|(f, n)| format!("{f}/{n}"))
         .collect::<Vec<_>>()
         .join(","))
-}
-
-// ── the ser forms (MUST match Lean's `resultOf` byte-for-byte) ───────
-
-fn ser_val(v: &Val) -> String {
-    match v {
-        Val::Bool(b) => {
-            if *b { "1".into() } else { "0".into() }
-        }
-        Val::U8(n) => n.to_string(),
-        Val::U16(n) => n.to_string(),
-        Val::U32(n) => n.to_string(),
-        Val::U64(n) => n.to_string(),
-        Val::S8(n) => n.to_string(),
-        Val::S16(n) => n.to_string(),
-        Val::S32(n) => n.to_string(),
-        Val::S64(n) => n.to_string(),
-        Val::Float32(f) => f.to_string(),
-        Val::Float64(f) => f.to_string(),
-        Val::Char(c) => c.to_string(),
-        Val::String(s) => s.clone(),
-        Val::Option(None) => "none".into(),
-        Val::Option(Some(inner)) => format!("some({})", ser_val(inner)),
-        Val::Record(fields) => {
-            let inner: Vec<String> =
-                fields.iter().map(|(k, v)| format!("{k}={}", ser_val(v))).collect();
-            format!("{{ {} }}", inner.join(", "))
-        }
-        Val::List(items) => {
-            let inner: Vec<String> = items.iter().map(ser_val).collect();
-            format!("({})", inner.join(","))
-        }
-        Val::Stream(_) => "<stream>".into(),
-        other => format!("{other:?}"),
-    }
 }
 
 // ── the flat-arg conventions (lifted from wasm_diff.rs) ──────────────

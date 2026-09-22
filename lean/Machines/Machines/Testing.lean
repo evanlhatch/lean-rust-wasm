@@ -17,7 +17,7 @@ authored machine:
 
 These are SWEEPS, not theorems: the framework proves the laws, the battery
 checks the instance. One line per machine — with the `machine!` `states:`
-clause (W2.3) EVERY input is generated (`door.labels`, `doorStates`,
+clause — EVERY input is generated (`door.labels`, `doorStates`,
 `door.labels_complete`, the `DecidablePred door.Inv` instance):
 
 ```lean
@@ -27,7 +27,7 @@ def doorConformance := Machines.Testing.conformance door
 
 Payload-carrying machines (a `send (v : α)` label family) have NO finite
 label enumeration, so the completeness proof is undischargeable — the
-`*Over` variants take a caller-supplied label SAMPLE instead (W2.3(d)
+`*Over` variants take a caller-supplied label SAMPLE instead
 follow-up; the same opt-in shape as the `states:` clause). An unsampled
 event family is simply unchecked, so the sample should cover every
 constructor shape:
@@ -117,7 +117,7 @@ def conformance (m : Machine) (labels : List m.Label) (states : List m.State)
   , ("guard-coverage", guardCoverage m labels states hcomplete)
   , ("invariant-non-vacuity", invariantNonVacuous m states) ]
 
-/-- The SAMPLED battery — the payload-machine path (W2.3(d) follow-up).
+/-- The SAMPLED battery — the payload-machine path.
     Same three checks over a caller-supplied label sample and state
     enumeration; no completeness proof exists for an infinite label
     family, so the sample's coverage of the constructor shapes is the

@@ -66,9 +66,8 @@ structure GenMeta where
   /-- The registered item count (the spec's size, at a glance). -/
   items : Nat := 0
   /-- `String.hash` over the artifact's body (the header excluded) —
-  the content's self-verification seed. (The header above calls it a
-  content hash; it is NOT FNV-1a — core's `String.hash` replaced the
-  hand-rolled FNV-1a, see the block comment.) -/
+  the content's self-verification seed. (NOT FNV-1a — core's
+  `String.hash`, see the block comment.) -/
   contentHash : UInt64 := 0
 
 /-- The generated-file header: TWO lines, dense metadata. `tool` names
@@ -154,13 +153,13 @@ structure Emitter (Spec : Type) where
   outputs : List String
   /-- Fold the spec into files. Pure and deterministic (tested). -/
   run : Spec → List GeneratedFile
-  /-- OPTIONAL emission law (W7.9 phase 1: the `CertifiedEmitter` pattern
+  /-- OPTIONAL emission law (the `CertifiedEmitter` pattern
       absorbed into the base structure). When `some L`, the driver SHOULD
       discharge `L spec` over the concrete spec and emit via
       `runCertified` — the artifact is unemittable without the discharged
       certificate. Defaults to `none` so every existing `Emitter` literal
-      compiles unchanged; phase 2 (next wave) makes the law mandatory
-      where a registry opts in. -/
+      compiles unchanged; a later round makes the law mandatory where
+      a registry opts in. -/
   law : Option (Spec → Prop) := none
 
 /-- The certificate an emitter demands over a concrete spec: `some L`
@@ -186,9 +185,9 @@ def Emitter.runCertified (e : Emitter Spec) (spec : Spec) (_cert : e.Cert spec) 
         Emitter.checkNodup myRegistry = true := by decide
     ```
 
-    (Phase 2 carries the proof INSIDE the registry type, making collisions
-    unconstructible; this wave keeps the check data-level. schema-lang's
-    registry consumes this check directly (W7.3 phase 2 — its inline
+    (A later phase carries the proof INSIDE the registry type, making
+    collisions unconstructible; the check stays data-level for now.
+    schema-lang's registry consumes this check directly (its inline
     `pathsUnique` re-implementation was deleted); faults' audit row is
     the remaining hand copy.) -/
 def Emitter.checkNodup (es : List (Emitter Spec)) : Bool :=

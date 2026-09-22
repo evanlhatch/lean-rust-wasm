@@ -35,10 +35,10 @@ The choreography as a `Machine`, GENERIC over the payload universe `P`:
   ELABORATION time — a type error, not a runtime check.
 
 Consumers instantiate the payload universe: the schema-typed one
-(`P := SchemaLang.Ty`) is `SchemaLang.Session` (W4.1c landed; it
-instantiates THIS generic layer directly — the string-bridge aliases
-are gone). The `P := String` demo instance (`gatewayProto` /
-`gateway_self_dual`) was deleted (2026-12 quality pass): the typed
+(`P := SchemaLang.Ty`) is `SchemaLang.Session`, which instantiates
+THIS generic layer directly — the string-bridge aliases are gone. The
+`P := String` demo instance (`gatewayProto` / `gateway_self_dual`) was
+deleted (quality pass): the typed
 layer is the only live consumer, and the string script duplicated the
 wire names already pinned by `SchemaLang.Session` + `wit/gateway.wit`.
 -/
@@ -47,7 +47,7 @@ module
 
 public import Machines.Core
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/instances must reduce across module boundaries).
 @[expose] public section
 

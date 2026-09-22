@@ -1,7 +1,7 @@
 /-
 # Machines.Tactics — local proof idioms + the open solver
 
-`guestlang_solver` (W6.8): the ONE open discharge tactic — the loom
+`guestlang_solver`: the ONE open discharge tactic — the loom
 pattern. Syntax declared once here; rungs are `macro_rules` extensions,
 so any downstream package adds its own closer without editing this file.
 `machine_safety` (Machines.Dsl) is its machine-obligation alias.
@@ -18,11 +18,11 @@ module
 
 -- The `declare_eqns` elab (plan §4, family 3) needs the Lean meta API —
 -- the guestlang_solver/guard_omega macros need only the prelude. Lean-core
--- import: no mathlib leak (constraint 14 does not apply).
+-- import: no mathlib leak (the module-migration constraint does not apply).
 public meta import Lean
 
 -- Elaboration-time only: syntax + the open ladder live in a
--- `public meta section` so downstream packages extend the rungs (W5.4).
+-- `public meta section` so downstream packages extend the rungs.
 public meta section
 
 /-- The open discharge solver. The DEFAULT ladder below is today's

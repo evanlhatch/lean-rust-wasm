@@ -34,7 +34,7 @@ public import Dbsp.Linear
 public import Mathlib.Data.Fin.Tuple.Basic
 public import Mathlib.Logic.Function.Basic
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/abbrevs/instances must reduce across module boundaries).
 @[expose] public section
 

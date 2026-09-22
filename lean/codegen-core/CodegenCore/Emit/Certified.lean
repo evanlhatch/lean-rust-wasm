@@ -14,7 +14,7 @@ Convention, not framework: a `CertifiedEmitter` is the `Emitter` metadata
 and a proof-carrying `run`. Drivers call `run spec cert`; registries audit
 `toEmitter` (one-writer over `outputs`, jobs coverage) exactly as today.
 
-SUPERSEDED (W7.9 phase 1): `Emitter` itself now carries an optional `law`
+SUPERSEDED: `Emitter` itself now carries an optional `law`
 field + `Emitter.runCertified` — new certified emitters should be plain
 `Emitter`s with `law := some L`. `CertifiedEmitter` is KEPT compiling
 (downstream may reference it); `toEmitter` now transports the law into the
@@ -87,7 +87,7 @@ theorem demoCert : demoCertified.Law demoItems :=
 example : (demoCertified.run demoItems demoCert).map (·.path)
     = demoCertified.outputs := rfl
 
-/-- The absorbed view (W7.9): the discharged certificate also serves the
+/-- The absorbed view: the discharged certificate also serves the
     new `Emitter.Cert` shape — the same law, transported by `toEmitter`. -/
 example : demoCertified.toEmitter.Cert demoItems := demoCert
 

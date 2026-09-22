@@ -1,11 +1,10 @@
 /-
 # Gates.DocsCheck — the notes excerpt-drift gate (`gates docs-check`)
 
-PolyFun's `check-docs-integrity.py` pattern (polyfun-study.md borrow item
-1, their check 4): our `notes/` carry Lean code fences that can silently
+The polyfun-study check-4 pattern: our `notes/` carry Lean code
+fences that can silently
 rot — a gate naming a decl that no longer exists (or never did) fails
-here. MINIMAL and true, by design (the study's "keep it minimal and
-true"):
+here. MINIMAL and true, by design ("keep it minimal and true"):
 
 (a) Every ```lean fence in `notes/*.md` must have its DECLARED
     top-level names (theorem/def/abbrev/instance/structure/class/

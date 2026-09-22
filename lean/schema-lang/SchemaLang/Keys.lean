@@ -52,6 +52,7 @@ public import SchemaLang.Wf
 public import SchemaLang.Validate
 public import SchemaLang.CodecValue
 public import CodegenCore
+import TestKit.WfKit
 
 @[expose] public section
 
@@ -440,8 +441,7 @@ theorem keyFieldDiags_eq_nil_iff {rec : String} {fields : List Field}
   generalize hf : fields.find? (·.name == key) = x
   cases x with
   | none =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨f, h1, _⟩ := hok; cases h1⟩
+      wf_split
   | some f =>
       show (if (Ty.toKeyTy? f.ty).isSome = true then []
           else [SchemaDiag.keyNotScalar rec f.name (reprStr f.ty)]) = [] ↔ _
@@ -449,10 +449,7 @@ theorem keyFieldDiags_eq_nil_iff {rec : String} {fields : List Field}
       · rw [if_pos hs]
         exact ⟨fun _ => ⟨f, rfl, hs⟩, fun _ => rfl⟩
       · rw [if_neg hs]
-        refine ⟨fun hc => absurd hc (List.cons_ne_nil _ _), fun hok => ?_⟩
-        obtain ⟨f', h1, hs'⟩ := hok
-        cases h1
-        exact absurd hs' hs
+        wf_split
 
 theorem foreignTyDiags_eq_nil_iff {rec : String} {fk : ForeignKey}
     {ff : Field} {tfields : List Field} {tkd : KeyDecl} :
@@ -463,8 +460,7 @@ theorem foreignTyDiags_eq_nil_iff {rec : String} {fk : ForeignKey}
   generalize hk : tfields.find? (·.name == tkd.key) = x
   cases x with
   | none =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨tf, h1, _⟩ := hok; cases h1⟩
+      wf_split
   | some tf =>
       show (if tf.ty = ff.ty then []
           else [SchemaDiag.foreignTypeMismatch rec fk.field fk.target
@@ -473,10 +469,7 @@ theorem foreignTyDiags_eq_nil_iff {rec : String} {fk : ForeignKey}
       · rw [if_pos hty]
         exact ⟨fun _ => ⟨tf, rfl, hty⟩, fun _ => rfl⟩
       · rw [if_neg hty]
-        refine ⟨fun hc => absurd hc (List.cons_ne_nil _ _), fun hok => ?_⟩
-        obtain ⟨tf', h1, hty'⟩ := hok
-        cases h1
-        exact absurd hty' hty
+        wf_split
 
 theorem foreignDeclDiags_eq_nil_iff {decls : List KeyDecl} {rec : String}
     {fk : ForeignKey} {ff : Field} {tfields : List Field} :
@@ -489,8 +482,7 @@ theorem foreignDeclDiags_eq_nil_iff {decls : List KeyDecl} {rec : String}
   generalize hd : decls.find? (·.record == fk.target) = x
   cases x with
   | none =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨tkd, tf, h1, _⟩ := hok; cases h1⟩
+      wf_split
   | some tkd =>
       rw [foreignTyDiags_eq_nil_iff]
       constructor
@@ -525,14 +517,11 @@ theorem foreignItemDiags_eq_nil_iff {decls : List KeyDecl} {rec : String}
         cases hit
         exact ⟨tkd, tf, hC, hD, hE⟩
   | variant cn cs =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨tfields, tkd, tf, hit, _⟩ := hok; cases hit⟩
+      wf_split
   | func s =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨tfields, tkd, tf, hit, _⟩ := hok; cases hit⟩
+      wf_split
   | resource rn =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨tfields, tkd, tf, hit, _⟩ := hok; cases hit⟩
+      wf_split
 
 theorem foreignDiags_eq_nil_iff {items : List Item} {decls : List KeyDecl}
     {rec : String} {fields : List Field} {fk : ForeignKey} :
@@ -542,18 +531,12 @@ theorem foreignDiags_eq_nil_iff {items : List Item} {decls : List KeyDecl}
   generalize hff : fields.find? (·.name == fk.field) = x
   cases x with
   | none =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by
-          obtain ⟨ff, tfields, tkd, tf, h1, _⟩ := hok
-          cases h1⟩
+      wf_split
   | some ff =>
       generalize ht : items.find? (fun it => it.name == fk.target) = y
       cases y with
       | none =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by
-              obtain ⟨ff', tfields, tkd, tf, h1, h2, _⟩ := hok
-              cases h2⟩
+          wf_split
       | some it =>
           have h2 := List.find?_some ht
           have hname : it.name = fk.target := beq_iff_eq.mp h2
@@ -584,8 +567,7 @@ theorem keyRecordDiags_eq_nil_iff {items : List Item} {decls : List KeyDecl}
       fun h => ⟨h.2.1, fun fk hfk =>
         foreignDiags_eq_nil_iff.mpr (h.2.2 fk hfk)⟩⟩
   · rw [if_neg hfs]
-    exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-      fun hok => absurd hok.1 hfs⟩
+    wf_split
 
 /-- The per-declaration mirror. -/
 theorem keyDeclCheck_eq_nil_iff {items : List Item} {decls : List KeyDecl}
@@ -595,8 +577,7 @@ theorem keyDeclCheck_eq_nil_iff {items : List Item} {decls : List KeyDecl}
   generalize h : items.find? (fun it => it.name == kd.record) = x
   cases x with
   | none =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+      wf_split
   | some it =>
       cases it with
       | record rn fields =>
@@ -613,14 +594,11 @@ theorem keyDeclCheck_eq_nil_iff {items : List Item} {decls : List KeyDecl}
             cases h1
             exact ⟨h2', hkey, hfk⟩
       | variant cn cs =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+          wf_split
       | func s =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+          wf_split
       | resource rn =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+          wf_split
 
 /-- The dup-diagnostic arm in Prop form (the shared
     `dupNamesDiags_eq_nil_iff` reduction at the `dupKeyDecl` ctor —

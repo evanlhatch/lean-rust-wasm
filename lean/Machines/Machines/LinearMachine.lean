@@ -36,7 +36,7 @@ public import Mathlib.Algebra.Group.Int.Defs
 public import Mathlib.Tactic.Abel
 public import Dbsp.ChangeSpec
 
--- W5.4 module discipline: all declarations public; bodies exposed
+-- Module discipline: all declarations public; bodies exposed
 -- (defs/instances must reduce across module boundaries).
 @[expose] public section
 

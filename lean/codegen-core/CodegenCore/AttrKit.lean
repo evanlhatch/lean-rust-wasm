@@ -1,6 +1,6 @@
 /-
 # CodegenCore.AttrKit — `register_check_attribute`: the BOILERPLATE macro,
-  plus `mountAsGate`: the GATE mount of the W7.13 decl-check shape
+  plus `mountAsGate`: the GATE mount of the shared decl-check shape
   (`LintKit.DeclCheck`) — one check, mountable as elab-time gate here or as
   env-lint via `LintKit.mountAsLinter`.
 -/

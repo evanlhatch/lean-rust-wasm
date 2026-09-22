@@ -25,7 +25,7 @@ public meta section
 
 open Lean Meta Linter EnvLinter
 
--- Default-OFF (2026-11 census): 83 violations across the tree (substrait
+-- Default-OFF (census): 83 violations across the tree (substrait
 -- 64, Machines 7, dbsp 8, wasm-backend 4) and the dominant cluster is
 -- DELIBERATE — doctrine §8: substrait's Decode proofs consume raw
 -- equation lemmas (`parseType.eq_*`), and fuel-based runners

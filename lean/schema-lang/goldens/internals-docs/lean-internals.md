@@ -61,8 +61,6 @@ function (the bridge lemma keeps simp firing on elaborator-produced
 goals).
 
 
-## The field resolution's ELABORATION half 
-
 ## The indexed expression 
 
 ## The evaluators 
@@ -191,6 +189,18 @@ skip: the mismatched conversation does not compile.
 ## The proof-term decoder 
 
 ## The claim decoder 
+
+## The witness family as `LawfulCodec` instances (additive)
+
+The round-trip theorems above, re-stated once as `Codec.LawfulCodec`
+instances (the class lives in SchemaLang.Codec — qualified here, this
+module's namespace is `SchemaLang.Witness`). Entry-point decoders only
+— `decWBoolExpr?`/`decWProof?` ALREADY carry the depth cap's
+sufficiency (fuel = bytes + 1, the `*_depth_le_length_enc` lemmas), so
+their append laws are honest whole-value laws. `Witness` itself has NO
+instance: its wire is the versioned envelope + a trailing-garbage
+reject (not append-form) — `decWitness?_encWitness` below still rides
+the class through the payload's four fields. 
 
 ## The witness wire (design §1: envelope + label + claim + proof + fuel) 
 

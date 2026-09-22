@@ -8,12 +8,12 @@ from the kernel's CollectAxioms; the allowlist (propext, Classical.choice,
 Quot.sound, disclosed _native.native_decide./_native.bv_decide. trust bases)
 is LintKit.AxiomAllowlist's, consumed via LintKit.runLintersOnDecls.
 
-## LintKit — 416 decls checked
+## LintKit — 417 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## TestKit — 173 decls checked
+## TestKit — 369 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -23,12 +23,12 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## codegen-core — 886 decls checked
+## codegen-core — 923 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## substrait — 7521 decls checked
+## substrait — 7606 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -38,12 +38,12 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## proofkit — 61 decls checked
+## proofkit — 60 decls checked
 
 axioms used: Proofkit.u64add_assoc._native.bv_decide.ax_1_5, Quot.sound, Classical.choice, propext
 violations: none
 
-## schema-lang — 10650 decls checked
+## schema-lang — 10886 decls checked
 
 axioms used: Quot.sound, Classical.choice, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalIncr_denote_tick3._native.native_decide.ax_1_1, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalCkt_denote_tick3._native.native_decide.ax_1_1, propext
 violations: none
@@ -53,7 +53,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## dbsp — 761 decls checked
+## dbsp — 765 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -68,12 +68,12 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## feature-flags — 96 decls checked
+## feature-flags — 94 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## wasm-backend — 2486 decls checked
+## wasm-backend — 2493 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none

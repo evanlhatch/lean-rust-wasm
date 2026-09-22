@@ -30,11 +30,11 @@ LintKit.AxiomAllowlist and is never re-encoded here). `@[nolint]` and
 `set_option` snapshots are honored exactly as in the old gate (same
 runner code path).
 
-Re-baseline discipline (PolyFun's baseline rule — polyfun-study.md item 2):
-`--write` REFUSES a non-empty diff (a drifted section, a missing one, or a
-drifted whole-file report) unless `--accept-drift` is also passed — a
-re-baseline must not pre-authorize future taint; it is a deliberate act.
-Writing an IN-SYNC report is always allowed (it is a no-op).
+Re-baseline discipline: `--write` REFUSES a non-empty diff (a drifted
+section, a missing one, or a drifted whole-file report) unless
+`--accept-drift` is also passed — a re-baseline must not pre-authorize
+future taint; it is a deliberate act. Writing an IN-SYNC report is
+always allowed (it is a no-op).
 
 Output: one block per package — decls checked, the DISTINCT axiom set the
 package actually depends on (the report the hand-maintained
@@ -52,8 +52,8 @@ must win). qlang/proofkit/ledger/feature-flags/edgepython are NOT
 requires of this package — their deps all sit inside gates' cone, so
 their own build dir is the only extra path they need.
 
-LEGACY (non-module) file: meta env-extension access (constraint 12,
-notes/w5-4-module-migration.md).
+LEGACY (non-module) file: meta env-extension access (the module-
+migration constraint: such drivers stay legacy).
 -/
 import Lean
 import LintKit

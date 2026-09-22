@@ -1,7 +1,7 @@
 /-
 # Gates.Manifest — the manifest-drift gate (`gates manifest-check`)
 
-Closes the "manifest drift" robustness gap (notes/review-2026-09-16):
+Closes the review-flagged "manifest drift" robustness gap:
 every `lean/*/lake-manifest.json` must agree with its lakefile.
 
 MECHANISM (documented per the work order — Lake has no `update
@@ -176,7 +176,7 @@ def checkPkg (dir : System.FilePath) (pkg : String) : IO (Array Finding) := do
       findings := findings.push ⟨pkg, s!"manifest entry '{e.name}' has no lakefile require — zombie, run `lake update`"⟩
   return findings
 
-/-- The gate (single-lake, 2026-09-19): ONE root lakefile.toml ↔
+/-- The gate (single-lake): ONE root lakefile.toml ↔
     lake-manifest.json, plus NO stray per-package lakefiles/manifests
     under lean/ (a stray = an un-absorbed package — the inventory rule's
     successor). Run from lean/gates (`../..` = the repo root). -/

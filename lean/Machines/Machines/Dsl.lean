@@ -24,7 +24,7 @@ carry by hand, byte-identical modulo names.
 Finite-state entourage clause (optional): `states: [<s1>, <s2>, …]` — for
 machines whose state space is a finite enumeration (a list LITERAL, so the
 generated proof can case it). When present, `machine!` additionally
-generates (W2.3 — the four in-tree hand-written copies this replaces):
+generates — the four in-tree hand-written copies this replaces:
 - `<m>States : List State` — the enumeration itself (the conformance
   battery's state argument, no longer hand-written),
 - `<m>Trans : List (<m>.Label × State × State)` — the transition table,
@@ -52,7 +52,7 @@ Requirements on the state type: `BEq` (the lookup key) and `DecidableEq`
 the exact state; keep those machines hand-written (the hand `tableStep?`
 wildcard arms are the mechanism the lookup cannot express).
 
-Payload-carrying events (the W2.3(d) follow-up): `event: send (v : α)
+Payload-carrying events: `event: send (v : α)
 guard: … action: …` — bracketed binders after the event name become
 Label-ctor arguments and PATTERN-BIND in the guard/action/safety bodies
 (`v` is in scope in all three slots). No `Machines.Core` change: the event
@@ -118,7 +118,7 @@ public meta import CodegenCore.DidYouMean
 public import Lean
 public import Mathlib.Tactic.FinCases
 
--- W5.4 module discipline: the entire DSL layer is elaboration-time
+-- Module discipline: the entire DSL layer is elaboration-time
 -- (syntax + the machine! command elaborator) → `public meta section`.
 public meta section
 
@@ -129,7 +129,7 @@ open Lean Lean.Parser.Command
 open Lean.Elab.Command (elabCommand CommandElabM)
 
 /-- The default safety discharge: the machine-obligation alias of
-    `guestlang_solver` (W6.8 — the ladder itself, and the extension
+    `guestlang_solver` (the ladder itself, and the extension
     point, live in Machines.Tactics). Named because tactic blocks
     containing `|` cannot be spliced into term quotations (the pipe
     collides with matchAlt's separator) — and because `machine!` authors
@@ -266,7 +266,7 @@ nullary constant's unexpander receives the BARE head ident (kind
 a nullary or partially-applied reference every input IS the generated
 decl and the render is the responsible answer.
 
-Module-mode constraint (the W5.4 phase-2 note): `@[app_unexpander]`
+Module-mode constraint: `@[app_unexpander]`
 decls must be `meta` AND `public` (`private` unexpanders are rejected)
 — the emitted per-decl definitions are `public meta def`s, and the
 factory itself lives in this `public meta section`. -/
@@ -421,7 +421,7 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
       theorem $completeId : ∀ l : $labelId, l ∈ $labelsId := by
         intro l; cases l <;> decide))
   -- The finite-state entourage, generated when the states clause is
-  -- present (W2.3 — replaces the hand-written `flagTrans`/
+  -- present (replaces the hand-written `flagTrans`/
   -- `flagTableStep?`/`flagTableStep?_eq_step?`/`DecidablePred` copies).
   -- The table is COMPUTED from the machine (step? over labels × states,
   -- label-major — the hand-written row order), so table and guards cannot

@@ -34,6 +34,20 @@ set_option linter.guestlang.packageNamespace false -- because the framework's re
 open SchemaLang TestKit
 open SchemaLang.Session (toWire tdual gatewayTyped)
 
+/-! ## Test helpers -/
+
+/-- The obligation-lane enumeration pin (the triad every lane's test
+    repeats): the obligations' labels, computed tiers, and provenance
+    names — asserted in one call. Each aspect keeps its own message
+    (the failures name the lane and the aspect). -/
+def obligationPins {α : Type} (obs : List (CodegenCore.Obligation α))
+    (msgLabels msgTiers msgProvs : String)
+    (labels : List String) (tiers : List CodegenCore.Obligation.Tier)
+    (provs : List Lean.Name) : CheckResult := do
+  _ ← assertEq msgLabels (obs.map (·.label)) labels
+  _ ← assertEq msgTiers (obs.map (·.tier)) tiers
+  _ ← assertEq msgProvs (obs.map (·.provenance)) provs
+
 /-! ## Item-algebra fixtures (test data, not spec)
 
 The items below reproduce the old `SchemaLang.Spec.Demo` hand-list verbatim.
@@ -4621,15 +4635,13 @@ def keyChecks : CheckResult := do
     | [.dupKeyDecl "user"] => true | _ => false)
     "keys: duplicate declaration rejected (dupKeyDecl)"
   -- the obligation VIEW: enumeration, labels, computed tiers, provenance
-  _ ← assertEq "keyObligations: one unique per decl + one per FK"
-    ((keyObligations keyDecls).map (·.label))
+  obligationPins (keyObligations keyDecls)
+    "keyObligations: one unique per decl + one per FK"
+    "keyObligations: the computed tier is decidableNow"
+    "keyObligations: provenance is the record"
     ["user.key-unique(id)", "order.key-unique(id)",
       "order.userId-references-user(id)"]
-  _ ← assertEq "keyObligations: the computed tier is decidableNow"
-    ((keyObligations keyDecls).map (·.tier))
     [.decidableNow, .decidableNow, .decidableNow]
-  _ ← assertEq "keyObligations: provenance is the record"
-    ((keyObligations keyDecls).map (·.provenance))
     [("user".toName), ("order".toName), ("order".toName)]
   -- the unique/broken/mismatch discharge verdicts are the kernel's
   -- (`userKeyUnique_discharges` / `brokenUnique_refused` /
@@ -4801,14 +4813,12 @@ def tableInvChecks : CheckResult := do
     (tableInvCheck tiItems [acctUnique, acctUnique])
     ["duplicate table-invariant name `acct-ids-unique`"]
   -- the obligation VIEW: enumeration, labels, computed tiers, provenance
-  _ ← assertEq "tableObligations: one obligation per declaration"
-    ((tableObligations tiDecls).map (·.label))
+  obligationPins (tableObligations tiDecls)
+    "tableObligations: one obligation per declaration"
+    "tableObligations: the computed tier is decidableNow"
+    "tableObligations: provenance is the name"
     ["acct-ids-unique", "acct-conserves", "acct-bounded", "acct-exact"]
-  _ ← assertEq "tableObligations: the computed tier is decidableNow"
-    ((tableObligations tiDecls).map (·.tier))
     [.decidableNow, .decidableNow, .decidableNow, .decidableNow]
-  _ ← assertEq "tableObligations: provenance is the name"
-    ((tableObligations tiDecls).map (·.provenance))
     [("acct-ids-unique".toName), ("acct-conserves".toName),
       ("acct-bounded".toName), ("acct-exact".toName)]
   -- the discharge/refusal verdicts are the kernel's

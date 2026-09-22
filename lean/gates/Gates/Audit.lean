@@ -42,8 +42,8 @@ Sections:
     rejected it).
 
 LEGACY (non-module) file: meta env-extension access
-(LintKit.packageDecls over `importModules`'d envs — constraint 12,
-notes/w5-4-module-migration.md).
+(LintKit.packageDecls over `importModules`'d envs — the module-
+migration constraint: such drivers stay legacy).
 -/
 import Lean
 import LintKit

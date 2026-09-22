@@ -90,6 +90,8 @@ granularity).
 module
 
 public import SchemaLang.Keys
+import TestKit.WfKit
+import TestKit.Obllane
 
 @[expose] public section
 
@@ -286,10 +288,7 @@ theorem TableAgg.fieldDiags_eq_nil_iff {rec : String} {fields : List Field}
       rcases Option.eq_none_or_eq_some (fields.find? (·.name == f)) with
         hf | ⟨fd, hfd⟩
       · simp only [hf, reduceCtorIdx]
-        constructor
-        · intro hc; exact absurd hc (List.cons_ne_nil _ _)
-        · rintro ⟨fd, h1, _⟩
-          nomatch h1
+        wf_split
       · rw [hfd]
         by_cases hty : fd.ty = .u64 <;> simp [hty]
 
@@ -311,8 +310,7 @@ theorem TableInvItem.diags_eq_nil_iff {items : List Item} {ti : TableInvItem} :
   generalize h : items.find? (fun it => it.name == ti.schemaRef) = x
   cases x with
   | none =>
-      exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-        fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+      wf_split
   | some it =>
       have h2 := List.find?_some h
       cases it with
@@ -332,20 +330,13 @@ theorem TableInvItem.diags_eq_nil_iff {items : List Item} {ti : TableInvItem} :
               cases hw
               exact ⟨rfl, (TableAgg.fieldDiags_eq_nil_iff ti.agg).mpr hok3⟩
           · rw [if_neg hfs]
-            exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-              fun hok => by
-                obtain ⟨w, hw, hwt, _⟩ := hok
-                cases hw
-                exact absurd hwt hfs⟩
+            wf_split
       | variant cn cs =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+          wf_split
       | func s =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+          wf_split
       | resource rn =>
-          exact ⟨fun hc => absurd hc (List.cons_ne_nil _ _),
-            fun hok => by obtain ⟨w, h1, _⟩ := hok; cases h1⟩
+          wf_split
 
 /-- THE REASONING AUTHORITY for table invariants (the `KeysWellFormed`
     sibling): every declaration checks against the universe, and
@@ -457,10 +448,8 @@ def TableObligation.discharge (o : TableObligation)
     `decideEvidence_sound` — the proof object is shared. -/
 theorem TableObligation.discharge_decidableNow_sound (o : TableObligation)
     (t : List (RowVals o.payload.fields)) (ht : o.tier = .decidableNow)
-    (h : o.discharge (some t) = some (.decided true)) : o.holdsOn t := by
-  unfold TableObligation.discharge at h
-  rw [ht] at h
-  exact CodegenCore.Obligation.decideEvidence_sound h
+    (h : o.discharge (some t) = some (.decided true)) : o.holdsOn t :=
+  TestKit.Obllane.decidableNow_sound (by simp [TableObligation.discharge, ht]) h
 
 /-- COMPLETENESS of the decidableNow backend: a table the check holds
     of discharges to the `.decided true` evidence — the backend FIRES
@@ -469,10 +458,8 @@ theorem TableObligation.discharge_decidableNow_sound (o : TableObligation)
 theorem TableObligation.discharge_decidableNow_of_holds (o : TableObligation)
     (t : List (RowVals o.payload.fields)) (ht : o.tier = .decidableNow)
     (h : o.holdsOn t) :
-    o.discharge (some t) = some (.decided true) := by
-  unfold TableObligation.discharge
-  rw [ht]
-  exact CodegenCore.Obligation.decideEvidence_of_claim h
+    o.discharge (some t) = some (.decided true) :=
+  TestKit.Obllane.decidableNow_of_claim (by simp [TableObligation.discharge, ht]) h
 
 /-- The decidableNow arm's verdict, as the Bool equation it decides
     (`decide` over a Bool equality — the rewrite shape the mis-wire
