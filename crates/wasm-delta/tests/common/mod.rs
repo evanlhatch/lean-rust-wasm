@@ -21,7 +21,12 @@
 
 use std::path::PathBuf;
 
-use wasm_delta::{Field, Row, Schema, SchemaSet, Ty, Value};
+use wasm_delta::Field;
+use wasm_delta::Row;
+use wasm_delta::Schema;
+use wasm_delta::SchemaSet;
+use wasm_delta::Ty;
+use wasm_delta::Value;
 
 /// The suite's deterministic LCG (Knuth constants 6364136223846793005 /
 /// 1442695040888963407; output after the multiply-add, >> 16).

@@ -2,26 +2,22 @@
 //! `Snapshot::restore` over a random call/snapshot sequence.
 //!
 //! NON-DUPLICATION RATIONALE (why this target exists at all):
-//! - Lean proves the guest programs' SEMANTICS; it cannot reach this
-//!   surface at all: snapshot/restore of a RETAINED wasmi instance
-//!   (the honest v1 memory-image + fuel contract, with the documented
-//!   globals gap) is a Rust-only state path with no Lean counterpart.
-//!   The existing `tests/snapshot.rs` pins the contract at fixed
-//!   points; this target drives it over RANDOM call/snapshot
-//!   interleavings — the Rust-only round-trip:
-//!   snap -> restore -> call ≡ direct call.
-//! - The property uses the PURE demo exports (`double`, `double-area`)
-//!   whose values Lean's oracle already fixed — the fuzz input is the
-//!   SEQUENCE (call/snapshot interleavings + args), not the expected
-//!   values, so nothing Lean proves is re-fuzzed here.
+//! - Lean proves the guest programs' SEMANTICS; it cannot reach this surface at all:
+//!   snapshot/restore of a RETAINED wasmi instance (the honest v1 memory-image + fuel contract,
+//!   with the documented globals gap) is a Rust-only state path with no Lean counterpart. The
+//!   existing `tests/snapshot.rs` pins the contract at fixed points; this target drives it over
+//!   RANDOM call/snapshot interleavings — the Rust-only round-trip: snap -> restore -> call ≡
+//!   direct call.
+//! - The property uses the PURE demo exports (`double`, `double-area`) whose values Lean's oracle
+//!   already fixed — the fuzz input is the SEQUENCE (call/snapshot interleavings + args), not the
+//!   expected values, so nothing Lean proves is re-fuzzed here.
 //!
 //! Contract encoded:
-//! - after any snapshot, restoring and calling a pure export gives the
-//!   SAME result as the direct (never-restored) instance's call —
-//!   results-coherence, NOT pointer identity (the globals gap means
-//!   the restored allocator re-bumps; see `Snapshot`'s doc).
-//! - every step is decode-or-error: a restore failure is a structured
-//!   `RtError` (loudly skipped), never a panic.
+//! - after any snapshot, restoring and calling a pure export gives the SAME result as the direct
+//!   (never-restored) instance's call — results-coherence, NOT pointer identity (the globals gap
+//!   means the restored allocator re-bumps; see `Snapshot`'s doc).
+//! - every step is decode-or-error: a restore failure is a structured `RtError` (loudly skipped),
+//!   never a panic.
 //!
 //! Requires `just wasm-compile`'s artifact (lean/wasm-backend/target/
 //! demo.wasm — the committed spec of record). Without it the target
@@ -45,10 +41,7 @@ const FUEL: u64 = 1_000_000;
 #[derive(Debug, Clone, arbitrary::Arbitrary)]
 enum Step {
     /// Call one pure export with a random scalar-ABI arg.
-    Call {
-        f: PureFn,
-        arg: i64,
-    },
+    Call { f: PureFn, arg: i64 },
     /// Freeze the direct instance's current state.
     Snapshot,
 }
@@ -88,9 +81,7 @@ fn main() {
         .for_each(move |steps: Vec<Step>| {
             let mut direct = match Runtime::new(&wasm, FUEL) {
                 Ok(rt) => rt,
-                Err(e) => panic!(
-                    "demo.wasm (the committed spec of record) failed to load: {e}"
-                ),
+                Err(e) => panic!("demo.wasm (the committed spec of record) failed to load: {e}"),
             };
             let mut snap: Option<Snapshot> = None;
             for step in steps {

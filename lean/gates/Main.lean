@@ -36,12 +36,13 @@ open Cli
 unsafe def runGenCheck (_p : Parsed) : IO UInt32 := Gates.GenCheck.run
 
 unsafe def runAxioms (p : Parsed) : IO UInt32 :=
-  Gates.Axioms.run (p.hasFlag "write") (p.flag? "package" |>.map (·.as! String))
+  Gates.Axioms.run (p.hasFlag "write") (p.hasFlag "accept-drift")
+    (p.flag? "package" |>.map (·.as! String))
 
 unsafe def runManifestCheck (_p : Parsed) : IO UInt32 := Gates.Manifest.run
 
 unsafe def runCoverage (p : Parsed) : IO UInt32 :=
-  Gates.Coverage.run (p.hasFlag "write") (p.hasFlag "strict")
+  Gates.Coverage.run (p.hasFlag "write") (p.hasFlag "accept-drift") (p.hasFlag "strict")
 
 unsafe def runObligationCheck (_p : Parsed) : IO UInt32 :=
   Gates.ObligationCheck.run
@@ -52,9 +53,13 @@ unsafe def runKernelCheck (p : Parsed) : IO UInt32 :=
 unsafe def runNativePolicy (p : Parsed) : IO UInt32 := Gates.NativePolicy.run (p.flag? "package" |>.map (·.as! String))
 
 unsafe def runArtifactManifest (p : Parsed) : IO UInt32 :=
-  Gates.ArtifactManifest.run (p.hasFlag "write")
+  Gates.ArtifactManifest.run (p.hasFlag "write") (p.hasFlag "accept-drift")
 
 unsafe def runAudit (_p : Parsed) : IO UInt32 := Gates.Audit.run
+
+unsafe def runDocsCheck (p : Parsed) : IO UInt32 :=
+  Gates.DocsCheck.run (p.flag? "package" |>.map (·.as! String))
+    (p.flag? "resolve" |>.map (·.as! String))
 
 /-- `just <recipe>` from the repo root (the exe runs at the root — the
     single-lake layout). -/
@@ -69,9 +74,9 @@ def shellJust (args : List String) : IO UInt32 := do
 unsafe def runAll (p : Parsed) : IO UInt32 := do
   for (name, step) in
     [ ("gen-check",     Gates.GenCheck.run)
-    , ("axioms",        Gates.Axioms.run false none)
+    , ("axioms",        Gates.Axioms.run false false none)
     , ("manifest-check", Gates.Manifest.run)
-    , ("coverage",      Gates.Coverage.run false false)
+    , ("coverage",      Gates.Coverage.run false false false)
     , ("obligation-check", Gates.ObligationCheck.run)
     , ("native-policy", Gates.NativePolicy.run none) ] do
     IO.println s!"══ gates all: {name} ══"
@@ -107,6 +112,9 @@ unsafe def axiomsCmd : Cmd := `[Cli|
 
   FLAGS:
     write;            "Update the committed notes/axiom-report.md instead of diffing it."
+    "accept-drift";   "Deliberate re-baseline: allow --write to overwrite a NON-EMPTY diff \
+      (a drifted or missing section). Without it --write REFUSES any non-empty diff — \
+      a re-baseline must not pre-authorize future taint (PolyFun's baseline discipline)."
     package : String; "Check ONE gated package (its Gates.Packages dir) — one \
       environment in this process, the sharded mode the lean-axioms recipe \
       loops over (the monolithic all-envs run peaks at ~26.5GB RSS). With \
@@ -128,8 +136,10 @@ unsafe def coverageCmd : Cmd := `[Cli|
    notes/coverage-matrix.md; fully-quiet ctors print as findings."
 
   FLAGS:
-    write;  "Update the committed notes/coverage-matrix.md instead of diffing it."
-    strict; "Fail on fully-quiet ctors (unexercised members of the closed universe)."
+    write;         "Update the committed notes/coverage-matrix.md instead of diffing it."
+    "accept-drift";  "Deliberate re-baseline: allow --write to overwrite a non-empty diff \
+      (without it --write refuses any non-empty diff — the reportGate discipline)."
+    strict;        "Fail on fully-quiet ctors (unexercised members of the closed universe)."
 ]
 
 unsafe def obligationCheckCmd : Cmd := `[Cli|
@@ -186,7 +196,9 @@ unsafe def artifactManifestCmd : Cmd := `[Cli|
    gen-check, which stays the binding byte-tie."
 
   FLAGS:
-    write; "Regenerate notes/artifacts.manifest instead of diffing it."
+    write;        "Regenerate notes/artifacts.manifest instead of diffing it."
+    "accept-drift"; "Deliberate re-baseline: allow --write to overwrite a non-empty diff \
+      (without it --write refuses any non-empty diff — the reportGate discipline)."
 ]
 
 unsafe def auditCmd : Cmd := `[Cli|
@@ -201,6 +213,21 @@ unsafe def auditCmd : Cmd := `[Cli|
    module-size lint."
 ]
 
+unsafe def docsCheckCmd : Cmd := `[Cli|
+  "docs-check" VIA runDocsCheck; ["0.1.0"]
+  "The notes excerpt-drift gate (PolyFun's check-docs-integrity.py pattern): \
+   every ```lean fence in notes/*.md must have its declared top-level names \
+   resolve in the gated packages' environments; fences of PROPOSED code tag \
+   themselves ```lean sketch (the marker convention — the fence is the truth \
+   about what is a sketch). Requires lean-build. The resolution is sharded \
+   (one short-lived child process per gated package — the parent never \
+   imports an env; the libgc lesson in Gates/DocsCheck.lean's header)."
+
+  FLAGS:
+    package : String; "Child mode (with --resolve): load ONE package's env in this process."
+    resolve : String;  "Child mode (with --package): the comma-separated pending names to resolve."
+]
+
 unsafe def allCmd : Cmd := `[Cli|
   "all" VIA runAll; ["0.1.0"]
   "gen-check + axioms + manifest-check + coverage + native-policy in one run."
@@ -213,7 +240,7 @@ unsafe def gatesCmd : Cmd := `[Cli|
   "gates" NOOP; ["0.1.0"]
   "The Lean-side gates driver (the pipeline-as-machine row)."
 
-  SUBCOMMANDS: genCheckCmd; axiomsCmd; manifestCheckCmd; coverageCmd; obligationCheckCmd; kernelCheckCmd; nativePolicyCmd; artifactManifestCmd; auditCmd; allCmd
+  SUBCOMMANDS: genCheckCmd; axiomsCmd; manifestCheckCmd; coverageCmd; obligationCheckCmd; kernelCheckCmd; nativePolicyCmd; artifactManifestCmd; auditCmd; docsCheckCmd; allCmd
 ]
 
 unsafe def main (args : List String) : IO UInt32 :=

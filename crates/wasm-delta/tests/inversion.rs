@@ -3,20 +3,23 @@
 //! (`patch (patch t Δ) (invert Δ) = t`), iterated to log scale
 //! (`Machines.Rewind`'s rewind-as-iterated-invert):
 //!
-//! 1. PER-STEP: after every append, rewinding one step restores the
-//!    exact prior materialized state.
-//! 2. FULL: a random walk rewound to 0 returns every table to empty;
-//!    rewound to k, the state equals the prefix replay `state_at(k)`
-//!    for sampled k.
-//! 3. PERSISTED: the inverses survive the byte boundary — the property
-//!    re-checked after a byte-level reopen.
+//! 1. PER-STEP: after every append, rewinding one step restores the exact prior materialized state.
+//! 2. FULL: a random walk rewound to 0 returns every table to empty; rewound to k, the state equals
+//!    the prefix replay `state_at(k)` for sampled k.
+//! 3. PERSISTED: the inverses survive the byte boundary — the property re-checked after a
+//!    byte-level reopen.
 //! Negative control: a log with a corrupted stored inverse must NOT
 //! satisfy the rewind law (the sweep bites).
 
 mod common;
 
-use common::{Lcg, row, schemas};
-use wasm_delta::{Change, DeltaLog, MemBackend, Value};
+use common::Lcg;
+use common::row;
+use common::schemas;
+use wasm_delta::Change;
+use wasm_delta::DeltaLog;
+use wasm_delta::MemBackend;
+use wasm_delta::Value;
 
 /// Append a random walk; return the log.
 fn walk(seed: u64, steps: u32) -> DeltaLog<MemBackend> {

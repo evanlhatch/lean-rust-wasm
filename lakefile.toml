@@ -270,6 +270,11 @@ root = "GuestlangStdTests.Main"
 name = "SchemaLang"
 srcDir = "lean/schema-lang"
 roots = ["SchemaLang", "SchemaGenMain", "CheckMain", "BreakingMain", "SchemaLangTests.SnapshotRT"]
+# RenderTie is a standalone scalar-spelling pin (NOT imported by the
+# SchemaLang root — the WasmBackend.Correct precedent: explicitly globbed
+# so `lake build` gates it). The roots stay in the globs so the
+# root-prefix buildability rule keeps covering every submodule.
+globs = ["SchemaLang", "SchemaGenMain", "CheckMain", "BreakingMain", "SchemaLangTests.SnapshotRT", "SchemaLang.RenderTie"]
 
 [[lean_lib]]
 name = "Demo"

@@ -396,7 +396,7 @@ wit-check:
 	"$WT" component wit wit/gateway.wit > /dev/null
 
 # Full gate: builds lean first (no stale oleans), then all drift checks.
-gates: lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms native-policy kernel-check manifest-check coverage check-schema breaking wasm-diff-check splice-smoke rt-conformance lean-lint budget-check
+gates: lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axioms native-policy kernel-check manifest-check coverage docs-check check-schema breaking wasm-diff-check splice-smoke rt-conformance lean-lint budget-check
 	@echo "gates: clean"
 
 # Axiom gate (delegated to the gates exe — Gates.Axioms): one process,
@@ -404,7 +404,9 @@ gates: lean-proof-roots lean-build gen-check artifact-headers wit-check lean-axi
 # checked against LintKit's allowlist (consumed via LintKit's own runner,
 # not re-encoded), plus a diff against the committed
 # notes/axiom-report.md — a silent axiom-surface change fails the gate.
-# Re-baseline with `cd lean/gates && lake exe gates axioms --write`.
+# Re-baseline with `cd lean/gates && lake exe gates axioms --write \
+#   --accept-drift` — --write alone REFUSES a non-empty diff (a
+# re-baseline is a deliberate act; it must not pre-authorize taint).
 # Requires `lean-build` (the gated packages' oleans).
 lean-axioms:
 	#!/usr/bin/env bash
@@ -444,12 +446,25 @@ coverage:
 # Gates.KernelCheck): every gated package's modules replayed through the
 # pure-Lean kernel. Requires `lean-build`. Disagreements are ledgered in
 # notes/divergences.md (investigated before the gate is bypassed).
+# Blind spots are documented at Gates/KernelCheck.lean's header
+# (caveat (d): `example`s, structure-field defaults, non-gated packages).
 # SHARDED like lean-axioms (--package, the NativePolicy filter pattern):
 # the unsharded single-process run exceeded 30 min on this box.
 kernel-check:
 	cd lean/gates && for p in LintKit TextKit TestKit Machines codegen-core substrait qlang proofkit schema-lang faults dbsp std wasm-backend ledger feature-flags edgepython; do \
 	  PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates kernel-check --package $p || exit 1; \
 	done
+
+# The notes excerpt-drift gate (delegated to the gates exe —
+# Gates.DocsCheck, PolyFun's check-docs-integrity.py pattern): every
+# ```lean fence in notes/*.md must have its declared top-level names
+# RESOLVE in the gated packages' environments (by last component — notes
+# write short names); fences of PROPOSED code tag themselves on the open
+# line: ```lean sketch (the marker convention — the fence, not a side
+# list, is the truth about what is a sketch). Requires lean-build (the
+# resolution walks the gated packages' oleans — it never builds).
+docs-check:
+	cd lean/gates && PATH="{{lean_tc}}:$PATH" {{lean_tc}}/lake --dir ../.. exe gates docs-check
 
 # The native_decide policy (delegated to the gates exe —
 # Gates.NativePolicy): no decl in the checked set depends on the

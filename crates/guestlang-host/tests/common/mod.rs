@@ -1,28 +1,23 @@
 //! Shared harness for guestlang-host's integration suites (one copy of the
 //! setup every test was hand-rolling):
 //!
-//! - FIXTURE PATHS — the demo-wasm location discipline in one place:
-//!   the compiled Lean guests live under `lean/wasm-backend/target/`
-//!   (repo root, NOT the crate's own `target/`), the spliced/composed
-//!   artifacts and rustc guest builds under the repo `target/`, and the
-//!   test-only fixtures under `tests/fixtures/`. Every path helper
-//!   below is THE spelling of one artifact's location.
-//! - SETUP — `canonicalize_or_skip` (the skip-if-unbuilt discipline)
-//!   and `instantiate` (engine + capability set → a live
-//!   [`ComponentRuntime`], the default GuestSetup shape). Per-test
-//!   custom setups (the typed bindgen path, hot-reload's Router, the
-//!   plain-core-module edgepython duel) stay in their suites.
-//! - STREAM DRAIN — [`drain::DrainCommon`] / [`drain::DrainTask`]:
-//!   the consumer = polled by the event loop as a BACKGROUND task (a
-//!   sync pipe-set is never polled: the loop exits before pumping).
-//!   Empty + not-finished = Pending — returning Dropped there ENDS the
-//!   stream and the in-flight items are lost. Do not "simplify" that.
-//! - HOUSE HELPERS — `fail` (no bare unwrap in tests), `tempdir`,
-//!   `user_val`/`try_load` (the record-arg + artifact-loading
-//!   preludes), the fixture-pair parser (`parse_pairs`), the fuzz
-//!   PRNG ([`Lcg`]), the generated-manifest loader
-//!   (`strip_header_comments` + `load_json_manifest`), and the
-//!   wit-parser lookup trio (`wit::resolve_gateway` etc.).
+//! - FIXTURE PATHS — the demo-wasm location discipline in one place: the compiled Lean guests live
+//!   under `lean/wasm-backend/target/` (repo root, NOT the crate's own `target/`), the
+//!   spliced/composed artifacts and rustc guest builds under the repo `target/`, and the test-only
+//!   fixtures under `tests/fixtures/`. Every path helper below is THE spelling of one artifact's
+//!   location.
+//! - SETUP — `canonicalize_or_skip` (the skip-if-unbuilt discipline) and `instantiate` (engine +
+//!   capability set → a live [`ComponentRuntime`], the default GuestSetup shape). Per-test custom
+//!   setups (the typed bindgen path, hot-reload's Router, the plain-core-module edgepython duel)
+//!   stay in their suites.
+//! - STREAM DRAIN — [`drain::DrainCommon`] / [`drain::DrainTask`]: the consumer = polled by the
+//!   event loop as a BACKGROUND task (a sync pipe-set is never polled: the loop exits before
+//!   pumping). Empty + not-finished = Pending — returning Dropped there ENDS the stream and the
+//!   in-flight items are lost. Do not "simplify" that.
+//! - HOUSE HELPERS — `fail` (no bare unwrap in tests), `tempdir`, `user_val`/`try_load` (the
+//!   record-arg + artifact-loading preludes), the fixture-pair parser (`parse_pairs`), the fuzz
+//!   PRNG ([`Lcg`]), the generated-manifest loader (`strip_header_comments` +
+//!   `load_json_manifest`), and the wit-parser lookup trio (`wit::resolve_gateway` etc.).
 //!
 //! Ownership: crates/guestlang-host/tests/common/mod.rs. Additive to
 //! src/**: nothing here touches it. The suites' ASSERTIONS stay in the
@@ -34,17 +29,28 @@
 #![allow(dead_code)]
 
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::task::Context;
+use std::task::Poll;
 
-use guestlang_host::{CapabilitySet, ComponentRuntime, HostState, HostEngine};
+use guestlang_host::CapabilitySet;
+use guestlang_host::ComponentRuntime;
+use guestlang_host::HostEngine;
+use guestlang_host::HostState;
 use wasmtime::StoreContextMut;
-use wasmtime::component::{
-    Accessor, AccessorTask, Component, Lift, Source, StreamConsumer, StreamReader, StreamResult,
-    Val,
-};
+use wasmtime::component::Accessor;
+use wasmtime::component::AccessorTask;
+use wasmtime::component::Component;
+use wasmtime::component::Lift;
+use wasmtime::component::Source;
+use wasmtime::component::StreamConsumer;
+use wasmtime::component::StreamReader;
+use wasmtime::component::StreamResult;
+use wasmtime::component::Val;
 
 // ── fixture paths ───────────────────────────────────────────────────
 
@@ -332,7 +338,12 @@ pub fn load_json_manifest(path: &Path) -> serde_json::Value {
 
 pub mod wit {
     use std::path::PathBuf;
-    use wit_parser::{Interface, Resolve, Type, TypeDefKind, TypeId};
+
+    use wit_parser::Interface;
+    use wit_parser::Resolve;
+    use wit_parser::Type;
+    use wit_parser::TypeDefKind;
+    use wit_parser::TypeId;
 
     /// Resolve `wit/gateway.wit` into a fully-resolved `Resolve` plus
     /// the parsed package's id.
@@ -371,10 +382,21 @@ pub mod wit {
 // ── the stream-drain machinery ──────────────────────────────────────
 
 pub mod drain {
-    use super::{
-        Accessor, AccessorTask, Arc, Context, HostState, Lift, Mutex, PhantomData, Pin, Poll,
-        Source, StoreContextMut, StreamConsumer, StreamReader, StreamResult,
-    };
+    use super::Accessor;
+    use super::AccessorTask;
+    use super::Arc;
+    use super::Context;
+    use super::HostState;
+    use super::Lift;
+    use super::Mutex;
+    use super::PhantomData;
+    use super::Pin;
+    use super::Poll;
+    use super::Source;
+    use super::StoreContextMut;
+    use super::StreamConsumer;
+    use super::StreamReader;
+    use super::StreamResult;
 
     /// The stream-drain consumer: the guest stream's items → a shared
     /// Vec (rendered item-by-item by `render`). Polled by the event
@@ -463,9 +485,7 @@ pub mod drain {
                 sink,
                 render,
             } = self;
-            async move {
-                accessor.with(|access| reader.pipe(access, DrainCommon::new(sink, render)))
-            }
+            async move { accessor.with(|access| reader.pipe(access, DrainCommon::new(sink, render))) }
         }
     }
 }

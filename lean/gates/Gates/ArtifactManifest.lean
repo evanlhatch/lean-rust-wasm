@@ -75,7 +75,7 @@ def render (entries : Array Entry) : String :=
      ++ (entries.toList.map fun e =>
           s!"| `{e.path}` | `{e.hash}` | `{e.emitter}` |"))
 
-unsafe def run (write : Bool) : IO UInt32 := do
+unsafe def run (write acceptDrift : Bool) : IO UInt32 := do
   let entries ← collect
   -- the one-writer rule, runtime twin: rows are path-sorted, so a duplicate
   -- path is adjacent. Fail BEFORE any write/diff — two writers on one path
@@ -89,7 +89,7 @@ unsafe def run (write : Bool) : IO UInt32 := do
       one-writer rule violated; fix the registries"
     return 1
   Driver.reportGate "artifact-manifest" "manifest" "the artifact surface changed"
-    baselinePath (render entries) write false
+    baselinePath (render entries) write acceptDrift false
     s!"artifact-manifest: {entries.size} artifact(s) in sync with the committed inventory"
 
 end Gates.ArtifactManifest

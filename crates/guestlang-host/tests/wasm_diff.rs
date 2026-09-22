@@ -12,10 +12,16 @@
 
 mod common;
 
+use std::sync::Arc;
+use std::sync::Mutex;
+
+use common::demo_component_path;
+use common::diff_json_path;
 use common::drain::DrainTask;
-use common::{demo_component_path, diff_json_path, instantiate};
-use std::sync::{Arc, Mutex};
-use guestlang_host::{CapabilitySet, ComponentRuntime, HostEngine};
+use common::instantiate;
+use common::user_val;
+use guestlang_host::CapabilitySet;
+use guestlang_host::HostEngine;
 use guestlang_host::bindings::GatewayUser;
 use wasmtime::component::Val;
 
@@ -170,7 +176,6 @@ fn ser_val(v: &Val) -> String {
     }
 }
 
-
 fn render_user(u: &GatewayUser) -> String {
     format!(
         "{{ id={}, name={}, email={}, tags=({}) }}",
@@ -182,25 +187,12 @@ fn render_user(u: &GatewayUser) -> String {
 }
 
 #[tokio::test]
-async fn lean_semantics_govern_the_shipped_wasm() -> Result<(), Box<dyn std::error::Error>> {
-    let rows = manifest();
-
-    let component = HostEngine::new()?
-        .load_component_bytes(&std::fs::read(demo_component_path())?)?;
-    let mut rt = ComponentRuntime::new(HostEngine::new()?, CapabilitySet::NONE).await?;
-    let _ = component;
-    let _ = &mut rt;
-    Ok(())
-}
-
-#[tokio::test]
 async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
     // the real replay (kept separate from the sabotage control so a
     // sabotaged build can't mask the honest run)
     let rows = manifest();
     let engine = HostEngine::new()?;
-    let component =
-        engine.load_component_bytes(&std::fs::read(demo_component_path())?)?;
+    let component = engine.load_component_bytes(&std::fs::read(demo_component_path())?)?;
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
 
     let mut failures: Vec<String> = Vec::new();
@@ -292,10 +284,13 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
             let sink = out.clone();
             rt.store_mut()
                 .run_concurrent(async move |accessor| {
-                    let f = accessor.with(|access| {
-                        instance.get_func(access, &fname).expect("export")
-                    });
-                    let mut results = [if is_counts { Val::U64(0) } else { Val::List(vec![]) }];
+                    let f =
+                        accessor.with(|access| instance.get_func(access, &fname).expect("export"));
+                    let mut results = [if is_counts {
+                        Val::U64(0)
+                    } else {
+                        Val::List(vec![])
+                    }];
                     f.call_concurrent(accessor, &args, &mut results).await?;
                     let any = match results[0].clone() {
                         Val::Stream(a) => a,
@@ -309,7 +304,11 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         let reader = any.try_into_stream_reader::<GatewayUser>()?;
                         accessor
-                            .spawn(DrainTask::new(reader, sink, render_user as fn(&GatewayUser) -> String))?
+                            .spawn(DrainTask::new(
+                                reader,
+                                sink,
+                                render_user as fn(&GatewayUser) -> String,
+                            ))?
                             .await;
                     }
                     Ok::<(), wasmtime::Error>(())
@@ -318,7 +317,11 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
             let items = out.lock().unwrap();
             Outcome::Value(format!(
                 "({})",
-                items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+                items
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             ))
         } else {
             match rt.call(f, &args).await {
@@ -389,93 +392,5 @@ async fn the_gate_catches_sabotage() -> Result<(), Box<dyn std::error::Error>> {
         "the sabotage didn't change the result — the control is vacuous"
     );
     assert_eq!(v.to_string(), "441", "the sabotage flipped the wrong op");
-    Ok(())
-}
-
-#[tokio::test]
-async fn stream_probe_debug() -> Result<(), Box<dyn std::error::Error>> {
-    use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
-    use std::task::{Context, Poll};
-    use wasmtime::StoreContextMut;
-    use wasmtime::component::{Instance, StreamConsumer, StreamResult, Source, StreamConsumer as _SC};
-    use guestlang_host::HostState;
-
-    let engine = HostEngine::new()?;
-    let component =
-        engine.load_component_bytes(&std::fs::read(demo_component_path())?)?;
-    let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
-    let instance: Instance = rt.instance().expect("instance").clone();
-
-    struct Drain(Arc<Mutex<Vec<u64>>>);
-    impl StreamConsumer<HostState> for Drain {
-        type Item = u64;
-        fn poll_consume(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            store: StoreContextMut<'_, HostState>,
-            mut source: Source<'_, Self::Item>,
-            finish: bool,
-        ) -> Poll<wasmtime::Result<StreamResult>> {
-            eprintln!("poll_consume: finish={finish}");
-            let mut buf: Vec<u64> = Vec::with_capacity(64);
-            source.read(store, &mut buf)?;
-            eprintln!("poll_consume: took {} items", buf.len());
-            if buf.is_empty() {
-                if finish {
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                }
-                return Poll::Pending;
-            }
-            self.0.lock().unwrap().extend(buf.drain(..));
-            Poll::Ready(Ok(StreamResult::Completed))
-        }
-    }
-
-    let out: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = out.clone();
-    rt.store_mut()
-        .run_concurrent(async move |accessor| {
-            let f = accessor.with(|access| {
-                instance
-                    .get_func(access, "watch-counts")
-                    .expect("watch-counts export")
-            });
-            let args = [Val::U64(3)];
-            let mut results = [Val::List(vec![])];
-            f.call_concurrent(accessor, &args, &mut results).await?;
-            eprintln!("call_concurrent returned");
-            let any = match results[0].clone() {
-                Val::Stream(a) => a,
-                other => panic!("not a stream: {other:?}"),
-            };
-            let reader = any.try_into_stream_reader::<u64>()?;
-            // the drain = a background task in the SAME event loop: the
-            // loop pumps it while the pending write is delivered
-            struct DrainTask {
-                reader: wasmtime::component::StreamReader<u64>,
-                sink: Arc<Mutex<Vec<u64>>>,
-            }
-            impl wasmtime::component::AccessorTask<HostState> for DrainTask {
-                fn run(
-                    self,
-                    accessor: &wasmtime::component::Accessor<HostState>,
-                ) -> impl std::future::Future<Output = wasmtime::Result<()>> + Send {
-                    let DrainTask { reader, sink } = self;
-                    async move {
-                        accessor.with(|access| reader.pipe(access, Drain(sink)))
-                    }
-                }
-            }
-            // AWAIT the join handle — a dropped handle may cancel the task
-            use std::future::Future as _;
-            let handle = accessor.spawn(DrainTask { reader, sink })?;
-            let _ = handle.await;
-            eprintln!("drain task joined");
-            Ok::<(), wasmtime::Error>(())
-        })
-        .await??;
-    eprintln!("drained: {:?}", out.lock().unwrap());
-    assert_eq!(*out.lock().unwrap(), vec![42, 43]);
     Ok(())
 }

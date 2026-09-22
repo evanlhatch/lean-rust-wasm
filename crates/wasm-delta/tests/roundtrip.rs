@@ -4,19 +4,27 @@
 //! same generator every run.
 //!
 //! Properties:
-//! 1. value round trip, append form: decode(encode v ++ rest) = (v, rest)
-//!    for random closed values and random trailing garbage.
-//! 2. row round trip through the log: entries appended, the log's raw
-//!    bytes re-opened, entries decode equal.
-//! 3. NEGATIVE: truncated buffers never panic and (for strict prefixes
-//!    shorter than the encoding) decode to None or a shorter-consumed
-//!    prefix — never the original value with the same consumption.
+//! 1. value round trip, append form: decode(encode v ++ rest) = (v, rest) for random closed values
+//!    and random trailing garbage.
+//! 2. row round trip through the log: entries appended, the log's raw bytes re-opened, entries
+//!    decode equal.
+//! 3. NEGATIVE: truncated buffers never panic and (for strict prefixes shorter than the encoding)
+//!    decode to None or a shorter-consumed prefix — never the original value with the same
+//!    consumption.
 //! 4. NEGATIVE: bit-flipped encodings either fail or decode DIFFERENT.
 
 mod common;
 
-use common::{Lcg, row, schemas};
-use wasm_delta::{Change, DeltaLog, MemBackend, Ty, Value, decode_value, encode_value};
+use common::Lcg;
+use common::row;
+use common::schemas;
+use wasm_delta::Change;
+use wasm_delta::DeltaLog;
+use wasm_delta::MemBackend;
+use wasm_delta::Ty;
+use wasm_delta::Value;
+use wasm_delta::decode_value;
+use wasm_delta::encode_value;
 
 /// A random leaf type.
 fn gen_leaf_ty(r: &mut Lcg) -> Ty {

@@ -30,8 +30,14 @@ LintKit.AxiomAllowlist and is never re-encoded here). `@[nolint]` and
 `set_option` snapshots are honored exactly as in the old gate (same
 runner code path).
 
-Output: one block per package — decls checked, the DISTINCT axiom set
-the package actually depends on (the report the hand-maintained
+Re-baseline discipline (PolyFun's baseline rule — polyfun-study.md item 2):
+`--write` REFUSES a non-empty diff (a drifted section, a missing one, or a
+drifted whole-file report) unless `--accept-drift` is also passed — a
+re-baseline must not pre-authorize future taint; it is a deliberate act.
+Writing an IN-SYNC report is always allowed (it is a no-op).
+
+Output: one block per package — decls checked, the DISTINCT axiom set the
+package actually depends on (the report the hand-maintained
 `#print axioms` lists never gave), violations. `--write` updates the
 committed `notes/axiom-report.md` (whole file, or X's section under
 `--package X`); without it, a diff against the committed report IS the
@@ -199,13 +205,23 @@ def printReport (r : PkgReport) : IO Bool := do
 /-- Sharded mode (`--package X`): analyze ONE package (one environment
     in this process); `--write` rewrites only X's section of the
     committed report in place, the check diffs only X's section. -/
-unsafe def runOne (base : SearchPath) (pkg : PkgSpec) (write : Bool) : IO UInt32 := do
+unsafe def runOne (base : SearchPath) (pkg : PkgSpec)
+    (write acceptDrift : Bool) : IO UInt32 := do
   let r ← analyzePkg base pkg
   let mut failed ← printReport r
   let fresh := normLines (renderBlock r)
   if write then
     if ← reportPath.pathExists then
       let (header, sections) := parseSections (← IO.FS.readFile reportPath)
+      let committed := sections.find? (·.1 == pkg.dir)
+      -- a non-empty diff = a drifted section OR a new one (both change bytes)
+      let drifted := match committed with
+        | some (_, c) => c != fresh
+        | none => true
+      if drifted && !acceptDrift then
+        IO.println s!"axioms: {pkg.dir}: --write REFUSED — non-empty diff against {reportPath} \
+          (a re-baseline is a deliberate act; review the diff, then rerun with --write --accept-drift)"
+        return 1
       let (found, sections') := sections.foldl (fun (found, acc) (k, ls) =>
         if k == pkg.dir then (true, acc ++ [(k, fresh)])
         else (found, acc ++ [(k, ls)])) (false, [])
@@ -235,7 +251,7 @@ unsafe def runOne (base : SearchPath) (pkg : PkgSpec) (write : Bool) : IO UInt32
   IO.println s!"axioms: {pkg.dir}: clean — every decl's cone inside the allowlist, section in sync"
   return 0
 
-unsafe def run (write : Bool) (pkgName : Option String := none) : IO UInt32 := do
+unsafe def run (write acceptDrift : Bool) (pkgName : Option String := none) : IO UInt32 := do
   -- initSearchPath reads LEAN_PATH (`lake exe` supplies gates' dep
   -- closure) + the sysroot; the per-package prepend happens per import.
   Lean.initSearchPath (← Lean.findSysroot)
@@ -243,7 +259,7 @@ unsafe def run (write : Bool) (pkgName : Option String := none) : IO UInt32 := d
   let some pkgs ← Driver.selectPackages "axioms" pkgName | return 1
   -- sharded: exactly one package → its section of the committed report
   if let #[pkg] := pkgs then
-    return ← runOne base pkg write
+    return ← runOne base pkg write acceptDrift
   -- no `--package`: the whole-file report (bootstrap / `gates all`).
   let mut reports : Array PkgReport := #[]
   let mut failed := false
@@ -253,7 +269,7 @@ unsafe def run (write : Bool) (pkgName : Option String := none) : IO UInt32 := d
     if ← printReport r then failed := true
   let text := render reports
   Driver.reportGate "axioms" "report" "the axiom surface changed"
-    reportPath text write failed
+    reportPath text write acceptDrift failed
     "axioms: clean — every decl's cone inside the allowlist, report in sync"
 
 end Gates.Axioms

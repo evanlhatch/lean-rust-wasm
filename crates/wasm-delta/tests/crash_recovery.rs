@@ -16,8 +16,16 @@ use std::path::PathBuf;
 
 mod common;
 
-use common::{Lcg, row, schemas, tempdir};
-use wasm_delta::{Change, DeltaError, DeltaLog, FsBackend, Schema, Value};
+use common::Lcg;
+use common::row;
+use common::schemas;
+use common::tempdir;
+use wasm_delta::Change;
+use wasm_delta::DeltaError;
+use wasm_delta::DeltaLog;
+use wasm_delta::FsBackend;
+use wasm_delta::Schema;
+use wasm_delta::Value;
 
 /// Write a journal of `n` entries through the file backend; return the
 /// path + the full byte content + per-record end offsets.

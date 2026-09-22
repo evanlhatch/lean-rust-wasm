@@ -22,18 +22,26 @@
 
 mod common;
 
-use common::wit::{follow_alias, interface, resolve_gateway};
-use common::{fail, fixtures_dir, load_json_manifest, universe_snapshot_path};
 use std::path::PathBuf;
 
+use common::fail;
+use common::fixtures_dir;
+use common::load_json_manifest;
+use common::universe_snapshot_path;
+use common::wit::follow_alias;
+use common::wit::interface;
+use common::wit::resolve_gateway;
 use guestlang_host::hostgen;
-
-use wit_parser::{
-    Case, Function, FunctionKind, Interface, Resolve, Type, TypeDef, TypeDefKind, WorldItem,
-    WorldKey,
-};
-
 use serde_json::Value;
+use wit_parser::Function;
+use wit_parser::FunctionKind;
+use wit_parser::Interface;
+use wit_parser::Resolve;
+use wit_parser::Type;
+use wit_parser::TypeDef;
+use wit_parser::TypeDefKind;
+use wit_parser::WorldItem;
+use wit_parser::WorldKey;
 
 /// One manifest entry: Lean's view of a fixture universe (navigated as a
 /// `serde_json::Value` — serde's derive feature isn't a dep here).
@@ -376,13 +384,17 @@ fn shape_of(resolve: &Resolve, ty: &wit_parser::Type) -> Value {
         T::Id(id) => {
             let td = &resolve.types[*id];
             match &td.kind {
-                TypeDefKind::Option(t) => serde_json::json!({ "kind": "option", "elem": shape_of(resolve, t) }),
+                TypeDefKind::Option(t) => {
+                    serde_json::json!({ "kind": "option", "elem": shape_of(resolve, t) })
+                }
                 TypeDefKind::Result(r) => serde_json::json!({
                     "kind": "result",
                     "ok": r.ok.as_ref().map(|t| shape_of(resolve, t)).unwrap_or(Value::Null),
                     "err": r.err.as_ref().map(|t| shape_of(resolve, t)).unwrap_or(Value::Null),
                 }),
-                TypeDefKind::List(t) => serde_json::json!({ "kind": "list", "elem": shape_of(resolve, t) }),
+                TypeDefKind::List(t) => {
+                    serde_json::json!({ "kind": "list", "elem": shape_of(resolve, t) })
+                }
                 TypeDefKind::Tuple(ts) => {
                     serde_json::json!({ "kind": "tuple", "elems": ts.types.iter().map(|t| shape_of(resolve, t)).collect::<Vec<_>>() })
                 }
@@ -431,8 +443,11 @@ fn check_sweep_entry(m: &SweepEntry) -> Result<(), String> {
             m.fixture, pkg.name.namespace, pkg.name.name, m.package
         ));
     }
-    let ifaces: Vec<&wit_parser::Interface> =
-        pkg.interfaces.values().map(|id| &resolve.interfaces[*id]).collect();
+    let ifaces: Vec<&wit_parser::Interface> = pkg
+        .interfaces
+        .values()
+        .map(|id| &resolve.interfaces[*id])
+        .collect();
 
     for t in &m.types {
         let td = ifaces
@@ -469,11 +484,10 @@ fn check_sweep_entry(m: &SweepEntry) -> Result<(), String> {
                     ));
                 }
                 for (c, (cname, payload)) in v.cases.iter().zip(t.cases.iter()) {
-                    let got = c
-                        .ty
-                        .as_ref()
-                        .map(|ty| shape_of(&resolve, ty))
-                        .unwrap_or(Value::Null);
+                    let got =
+                        c.ty.as_ref()
+                            .map(|ty| shape_of(&resolve, ty))
+                            .unwrap_or(Value::Null);
                     let want = payload.clone().unwrap_or(Value::Null);
                     if got != want {
                         return Err(format!(
@@ -488,7 +502,7 @@ fn check_sweep_entry(m: &SweepEntry) -> Result<(), String> {
                 return Err(format!(
                     "sweep {}: type `{}` is {kind} in the manifest but {got:?} parsed",
                     m.fixture, t.name
-                ))
+                ));
             }
         }
     }
@@ -651,9 +665,7 @@ fn sweep_corpus_covers_the_audit_corners() {
         // structural depth (option/list/result towers nest via "elem")
         fn depth(v: &Value) -> usize {
             match v {
-                Value::Object(o) => {
-                    1 + o.values().map(depth).max().unwrap_or(0)
-                }
+                Value::Object(o) => 1 + o.values().map(depth).max().unwrap_or(0),
                 Value::Array(a) => 1 + a.iter().map(depth).max().unwrap_or(0),
                 _ => 0,
             }
@@ -695,12 +707,18 @@ fn sweep_corpus_covers_the_audit_corners() {
             option_in_tuple |= walk_find(v, &|w: &Value| w["kind"] == "option");
         }
     }
-    assert!(option_in_tuple, "no option payload inside a map's tuple — the corner is starved");
+    assert!(
+        option_in_tuple,
+        "no option payload inside a map's tuple — the corner is starved"
+    );
     assert!(has("stream"), "no stream payload in the corpus");
     assert!(has("result"), "no result payload in the corpus");
     assert!(any_async, "no async func in the corpus");
     // Deep nesting: a shape nested ≥8 structural levels (the tower).
-    assert!(deepest >= 8, "deep nesting starved: max shape depth {deepest} < 8");
+    assert!(
+        deepest >= 8,
+        "deep nesting starved: max shape depth {deepest} < 8"
+    );
 }
 
 /// The negative control: hand-corrupted inputs MUST fail the sweep —
@@ -757,11 +775,15 @@ fn corrupted_sweep_inputs_are_caught() {
 // gateway universe's manifest is a DIFFERENT generated artifact than the
 // `wit_manifest.json` above: `WitFixture.lean` emits the fixture set,
 // while the gateway surface's SSOT is the committed byte-tied
-// `universe.snapshot` (parsed data-driven below) plus the hand-navigated
-// type/function checks the snapshot cannot express (payload types,
-// alias-following, async-ness, the world's export list). Everything is
-// asserted on STRUCTURE (names / kinds / payload types), never on
-// source text.
+// `universe.snapshot`. Names/member-order are checked data-driven below;
+// the per-member PAYLOAD TYPES (user.id u64, order.items list<order-item>,
+// the role/order-error case payloads, func params/ret/async-ness) are
+// compared in tests/hostgen_byte_tie.rs — the type-level tie — so the
+// historical hand-navigated re-listing in this file was removed as fully
+// covered. The exports-interface checks here (the world's export list,
+// alias follow-through) still live here: the byte-tie compares snapshot↔WIT
+// types/funcs, not the world/alias structure. Everything is asserted on
+// STRUCTURE (names / kinds / payload types), never on source text.
 
 /// Look up a named type declared in an interface.
 fn gateway_typedef<'r>(
@@ -830,9 +852,21 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
     for line in snapshot.lines() {
         let mut it = line.split_whitespace();
         match (it.next(), it.next()) {
-            (Some("record"), Some(n)) => entries.push(Entry { name: hostgen::kebab(n), kind: "record".into(), members: vec![] }),
-            (Some("variant"), Some(n)) => entries.push(Entry { name: hostgen::kebab(n), kind: "variant".into(), members: vec![] }),
-            (Some("resource"), Some(n)) => entries.push(Entry { name: hostgen::kebab(n), kind: "resource".into(), members: vec![] }),
+            (Some("record"), Some(n)) => entries.push(Entry {
+                name: hostgen::kebab(n),
+                kind: "record".into(),
+                members: vec![],
+            }),
+            (Some("variant"), Some(n)) => entries.push(Entry {
+                name: hostgen::kebab(n),
+                kind: "variant".into(),
+                members: vec![],
+            }),
+            (Some("resource"), Some(n)) => entries.push(Entry {
+                name: hostgen::kebab(n),
+                kind: "resource".into(),
+                members: vec![],
+            }),
             (Some("field"), Some(m)) => entries.last_mut().unwrap().members.push(hostgen::kebab(m)),
             (Some("case"), Some(m)) => entries.last_mut().unwrap().members.push(hostgen::kebab(m)),
             _ => {}
@@ -857,144 +891,14 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
             (kind, got) => fail(&format!("{name}: manifest kind {kind} but parsed {got:?}")),
         }
     }
-    // The user record's TYPE details are schema-pinned independently
-    // (the field-level type check below); the snapshot pattern
-    // only covers names/order — the type-navigation is per-field.
-    let user = gateway_typedef(&resolve, types, "user")?;
-    let TypeDefKind::Record(user_rec) = &user.kind else {
-        fail("`user` should be a record");
-        return Ok(());
-    };
-    fn field_ty<'a>(fields: &'a [wit_parser::Field], fname: &str) -> Option<&'a Type> {
-        fields.iter().find(|f| f.name == fname).map(|f| &f.ty)
-    }
-    assert!(
-        field_ty(&user_rec.fields, "id") == Some(&Type::U64),
-        "user.id should be u64"
-    );
-    assert!(
-        field_ty(&user_rec.fields, "name") == Some(&Type::String),
-        "user.name should be string"
-    );
-    assert!(
-        field_ty(&user_rec.fields, "email") == Some(&Type::String),
-        "user.email should be string"
-    );
-    match field_ty(&user_rec.fields, "tags") {
-        Some(ty) => assert_list_of_string(&resolve, ty, "user.tags"),
-        None => fail("user.tags missing"),
-    }
-
-    // ── record order-item (type-level check beyond field names) ──
-    let order_item = gateway_typedef(&resolve, types, "order-item")?;
-    let TypeDefKind::Record(order_item) = &order_item.kind else {
-        fail(&format!(
-            "`order-item` should be a record, got {:?}",
-            order_item.kind
-        ));
-        return Ok(());
-    };
-    assert!(
-        field_ty(&order_item.fields, "id") == Some(&Type::U64),
-        "order-item.id should be u64"
-    );
-    assert!(
-        field_ty(&order_item.fields, "qty") == Some(&Type::U32),
-        "order-item.qty should be u32"
-    );
-    assert!(
-        field_ty(&order_item.fields, "price") == Some(&Type::F64),
-        "order-item.price should be f64"
-    );
-
-    // ── record order ──
-    let order = gateway_typedef(&resolve, types, "order")?;
-    let TypeDefKind::Record(order) = &order.kind else {
-        fail(&format!("`order` should be a record, got {:?}", order.kind));
-        return Ok(());
-    };
-    let field_names: Vec<&str> = order.fields.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(field_names, ["id", "items", "total"], "order record fields");
-    match field_ty(&order.fields, "items") {
-        Some(Type::Id(items_id)) => {
-            let TypeDefKind::List(elem) = &resolve.types[*items_id].kind else {
-                fail(&format!(
-                    "order.items: expected list<...>, got {:?}",
-                    resolve.types[*items_id].kind
-                ));
-                return Ok(());
-            };
-            let Type::Id(elem_id) = elem else {
-                fail("order.items: list element should be the named `order-item` type");
-                return Ok(());
-            };
-            assert_eq!(
-                resolve.types[*elem_id].name.as_deref(),
-                Some("order-item"),
-                "order.items should be list<order-item>"
-            );
-        }
-        _ => fail("order.items: expected a list<order-item> type"),
-    }
-    assert!(
-        field_ty(&order.fields, "total") == Some(&Type::F64),
-        "order.total should be f64"
-    );
-
-    // ── variant role: 3 caseless cases ──
-    let role = gateway_typedef(&resolve, types, "role")?;
-    let TypeDefKind::Variant(role) = &role.kind else {
-        fail(&format!("`role` should be a variant, got {:?}", role.kind));
-        return Ok(());
-    };
-    let case_names: Vec<&str> = role.cases.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(
-        case_names,
-        ["admin", "editor", "viewer"],
-        "role variant cases"
-    );
-    assert!(
-        role.cases.iter().all(|c: &Case| c.ty.is_none()),
-        "role cases should have no payloads"
-    );
-
-    // ── variant order-error: 3 cases, 2 with payloads ──
-    let order_error = gateway_typedef(&resolve, types, "order-error")?;
-    let TypeDefKind::Variant(order_error) = &order_error.kind else {
-        fail(&format!(
-            "`order-error` should be a variant, got {:?}",
-            order_error.kind
-        ));
-        return Ok(());
-    };
-    let case_names: Vec<&str> = order_error.cases.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(
-        case_names,
-        ["empty-cart", "invalid-item", "insufficient-funds"],
-        "order-error cases"
-    );
-    let payload = |name: &str| -> Option<&Type> {
-        order_error
-            .cases
-            .iter()
-            .find(|c| c.name == name)
-            .and_then(|c| c.ty.as_ref())
-    };
-    assert!(
-        payload("empty-cart").is_none(),
-        "empty-cart should be caseless"
-    );
-    assert!(
-        payload("invalid-item") == Some(&Type::U64),
-        "invalid-item should carry u64"
-    );
-    assert!(
-        payload("insufficient-funds") == Some(&Type::F64),
-        "insufficient-funds should carry f64"
-    );
-
-    // resource `db` is checked in the data-driven loop above (the
-    // `"resource"` arm of the type-spec JSON).
+    // Per-member PAYLOAD TYPES (user.id u64, order.items
+    // list<order-item>, the role/order-error case payloads, …) are
+    // covered by tests/hostgen_byte_tie.rs
+    // (`snapshot_types_equal_the_wit_bindgen_consumed` compares the
+    // SNAPSHOT's member types against the WIT side, bidirectionally) —
+    // the historical hand-navigated re-listing was removed as fully
+    // covered. resource `db` is checked in the data-driven loop above
+    // (the `"resource"` arm of the type-spec JSON).
 
     Ok(())
 }
@@ -1146,23 +1050,6 @@ fn gateway_exports_interface_has_schema_functions() -> Result<(), Box<dyn std::e
     }
 
     Ok(())
-}
-
-/// Assert a type is `list<string>`.
-fn assert_list_of_string(resolve: &Resolve, ty: &Type, what: &str) {
-    let Type::Id(id) = ty else {
-        fail(&format!("{what}: expected list<string>, got {ty:?}"));
-        return;
-    };
-    match &resolve.types[*id].kind {
-        TypeDefKind::List(elem) => {
-            assert!(
-                *elem == Type::String,
-                "{what}: list element should be string, got {elem:?}"
-            );
-        }
-        kind => fail(&format!("{what}: expected list<...>, got {kind:?}")),
-    }
 }
 
 #[test]

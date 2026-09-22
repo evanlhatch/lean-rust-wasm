@@ -158,7 +158,7 @@ theorem, `Correct.tpl_add_ret_ok` retyped — String locals, `.op`
 wrapper; the proof strategy is unchanged, `simp only` over the same
 equation lemmas):
 
-```lean
+```lean sketch
 theorem tpl_add_ret_ok (x y l : String) (a b : UInt64) (s : Sem.State)
     (hx : s.locals x = .i64 a) (hy : s.locals y = .i64 b) (hs : s.stack = [])
     (fuel : Nat) (s' : Sem.State)
@@ -232,7 +232,7 @@ move, ON TOP of the collapse.** Dependency reasoning:
 row — this is the "law" column of the table, the per-op slice of
 `exec_typed`'s case shape, made standalone):
 
-```lean
+```lean sketch
 -- `row.op`'s preservation: IF the row's checker accepts the op on a
 -- stack of shape `pop ++ ts`, THEN any completed execution of the
 -- one-instruction program ends on `push ++ ts` (fuel-insensitive —

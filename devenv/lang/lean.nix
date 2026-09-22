@@ -16,5 +16,14 @@
     pkgs.leanPackages.Qq # quoted-term metaprogramming
     pkgs.leanPackages.Cli # CLI for the emitter binary
     pkgs.leanPackages.aesop # automation for routine obligations
+    # The wrapped clang: the module owns its C compiler (lake cc builds
+    # compile C; the wrapped clang carries the libc headers the unwrapped
+    # one lacks, so all C in the shell — cc-rs included — compiles).
+    pkgs.clang
   ];
+
+  enterShell = ''
+    export CC="${pkgs.clang}/bin/clang"
+    export PATH="${pkgs.clang}/bin:$PATH"
+  '';
 }

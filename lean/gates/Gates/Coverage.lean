@@ -251,7 +251,7 @@ def render (m : Matrix) (quiet : List String) : String := Id.run do
 /-- The committed baseline this gate diffs against. -/
 def baselinePath : System.FilePath := "../../notes/coverage-matrix.md"
 
-unsafe def run (write strict : Bool) : IO UInt32 := do
+unsafe def run (write acceptDrift strict : Bool) : IO UInt32 := do
   let m ← computeMatrix
   let quiet := m.quietCtors
   let text := render m quiet
@@ -265,7 +265,7 @@ unsafe def run (write strict : Bool) : IO UInt32 := do
       {String.intercalate ", " quiet}"
   if strict && !quiet.isEmpty then failed := true
   Driver.reportGate "coverage" "matrix" "the coverage surface changed"
-    baselinePath text write failed
+    baselinePath text write acceptDrift failed
     "coverage: matrix in sync with the committed baseline"
 
 end Gates.Coverage

@@ -8,7 +8,15 @@
 //! Schema (mirrors the generator):
 //!   user: [id: u64, name: string, tags: list string, active: bool]
 
-use wasm_delta::{Field, Row, Schema, Ty, Value, decode_row, decode_value, encode_row, encode_value};
+use wasm_delta::Field;
+use wasm_delta::Row;
+use wasm_delta::Schema;
+use wasm_delta::Ty;
+use wasm_delta::Value;
+use wasm_delta::decode_row;
+use wasm_delta::decode_value;
+use wasm_delta::encode_row;
+use wasm_delta::encode_value;
 
 fn hex(bs: &[u8]) -> String {
     bs.iter().map(|b| format!("{b:02x}")).collect()
@@ -24,10 +32,22 @@ fn unhex(s: &str) -> Vec<u8> {
 
 fn user_schema() -> Schema {
     Schema::new(vec![
-        Field { name: "id".into(), ty: Ty::U64 },
-        Field { name: "name".into(), ty: Ty::Str },
-        Field { name: "tags".into(), ty: Ty::List(Box::new(Ty::Str)) },
-        Field { name: "active".into(), ty: Ty::Bool },
+        Field {
+            name: "id".into(),
+            ty: Ty::U64,
+        },
+        Field {
+            name: "name".into(),
+            ty: Ty::Str,
+        },
+        Field {
+            name: "tags".into(),
+            ty: Ty::List(Box::new(Ty::Str)),
+        },
+        Field {
+            name: "active".into(),
+            ty: Ty::Bool,
+        },
     ])
 }
 
@@ -49,7 +69,12 @@ fn row2() -> Row {
     // id=7, name="", tags=[], active=false
     Row::new(
         &user_schema(),
-        vec![Value::U64(7), Value::Str(String::new()), Value::List(vec![]), Value::Bool(false)],
+        vec![
+            Value::U64(7),
+            Value::Str(String::new()),
+            Value::List(vec![]),
+            Value::Bool(false),
+        ],
     )
     .unwrap_or_else(|| panic!("row2 checks"))
 }
@@ -71,7 +96,11 @@ fn value_goldens_encode() {
         ("0568e9016c6c6f", Ty::Str, Value::Str("héllo".into())),
         ("03010203", Ty::Bytes, Value::Bytes(vec![1, 2, 3])),
         ("00", Ty::Opt(Box::new(Ty::U64)), Value::Opt(None)),
-        ("01ac02", Ty::Opt(Box::new(Ty::U64)), Value::Opt(Some(Box::new(Value::U64(300))))),
+        (
+            "01ac02",
+            Ty::Opt(Box::new(Ty::U64)),
+            Value::Opt(Some(Box::new(Value::U64(300)))),
+        ),
         (
             "0005",
             Ty::Res(Box::new(Ty::U8), Box::new(Ty::Str)),
@@ -105,13 +134,25 @@ fn value_goldens_decode() {
         ("01", Ty::I8, Value::I8(-1)),
         ("ffffffffffffffffff01", Ty::I64, Value::I64(i64::MIN)),
         ("0568e9016c6c6f", Ty::Str, Value::Str("héllo".into())),
-        ("030102ac02", Ty::List(Box::new(Ty::U64)), Value::List(vec![Value::U64(1), Value::U64(2), Value::U64(300)])),
+        (
+            "030102ac02",
+            Ty::List(Box::new(Ty::U64)),
+            Value::List(vec![Value::U64(1), Value::U64(2), Value::U64(300)]),
+        ),
     ];
     for (bytes_hex, ty, want) in cases {
         let bytes = unhex(bytes_hex);
         let got = decode_value(ty, &bytes);
-        assert_eq!(got.as_ref().map(|(v, _)| v), Some(want), "decode mismatch for {bytes_hex}");
-        assert_eq!(got.map(|(_, u)| u), Some(bytes.len()), "must consume all bytes");
+        assert_eq!(
+            got.as_ref().map(|(v, _)| v),
+            Some(want),
+            "decode mismatch for {bytes_hex}"
+        );
+        assert_eq!(
+            got.map(|(_, u)| u),
+            Some(bytes.len()),
+            "must consume all bytes"
+        );
     }
 }
 
@@ -127,8 +168,14 @@ fn row_goldens() {
     let b2 = encode_row(&s, &r2).unwrap_or_else(|| panic!("row2 encodes"));
     assert_eq!(hex(&b2), "07000000");
     // Decode direction: Lean's bytes → Rust rows, fully consumed.
-    assert_eq!(decode_row(&s, &b1).map(|(r, u)| (r, u)), Some((r1, b1.len())));
-    assert_eq!(decode_row(&s, &b2).map(|(r, u)| (r, u)), Some((r2, b2.len())));
+    assert_eq!(
+        decode_row(&s, &b1).map(|(r, u)| (r, u)),
+        Some((r1, b1.len()))
+    );
+    assert_eq!(
+        decode_row(&s, &b2).map(|(r, u)| (r, u)),
+        Some((r2, b2.len()))
+    );
     // row1's canonical key equals its full encoding here only because
     // the Lean golden rowKey == encRowVals for this row (pinned
     // upstream as row1_key = row1's bytes).

@@ -9,30 +9,35 @@
 //! engine, deterministic iteration count — not a cargo-fuzz-night
 //! campaign):
 //!
-//! 1. ARBITRARY JOURNAL: any byte string is a journal; `open_with`
-//!    must return Ok (with the decoded-entry invariants) or a
-//!    STRUCTURED `DeltaError` (Corrupt / WrongVersion /
+//! 1. ARBITRARY JOURNAL: any byte string is a journal; `open_with` must return Ok (with the
+//!    decoded-entry invariants) or a STRUCTURED `DeltaError` (Corrupt / WrongVersion /
 //!    FingerprintMismatch — never a silent accept, never a panic).
-//! 2. VALID-THEN-MUTATED: a genuinely valid journal (built through
-//!    the real `append` path, so the envelopes are exactly the
-//!    writer's output) with ONE random byte flipped, one byte
-//!    deleted, or a random truncation — the mutation complement of
-//!    the crash-recovery sweep. Same Ok-or-structured-Err contract,
-//!    plus: a surviving open decodes NO MORE entries than were
-//!    written (mutation can merge or drop records, never invent
-//!    them).
+//! 2. VALID-THEN-MUTATED: a genuinely valid journal (built through the real `append` path, so the
+//!    envelopes are exactly the writer's output) with ONE random byte flipped, one byte deleted, or
+//!    a random truncation — the mutation complement of the crash-recovery sweep. Same
+//!    Ok-or-structured-Err contract, plus: a surviving open decodes NO MORE entries than were
+//!    written (mutation can merge or drop records, never invent them).
 //!
 //! Replay discipline: bolero prints `BOLERO_RANDOM_SEED=<n>` on a
 //! failure; re-run with that env var set to reproduce the exact case.
 //! The mutation RNG is derived from the input bytes, so the seed
 //! alone reconstructs everything.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 mod common;
 
-use common::{Lcg, row, schemas};
-use wasm_delta::{Backend, Change, DeltaError, DeltaLog, Row, Schema, Value};
+use common::Lcg;
+use common::row;
+use common::schemas;
+use wasm_delta::Backend;
+use wasm_delta::Change;
+use wasm_delta::DeltaError;
+use wasm_delta::DeltaLog;
+use wasm_delta::Row;
+use wasm_delta::Schema;
+use wasm_delta::Value;
 
 /// The iterations per `cargo test` run (the CI lane — the long
 /// campaigns are `just fuzz`'s business).

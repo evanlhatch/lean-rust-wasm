@@ -58,19 +58,32 @@ def diffBaseline (path : System.FilePath) (fresh : String) : IO Baseline := do
 
 /-- The write-or-diff baseline tail shared by the baseline-report gates
     (Axioms whole-file mode, Coverage). `--write` writes `fresh ++ "\n"`
-    and prints `wrote <path>`; otherwise the committed file is diffed
+    and prints `wrote <path>` — EXCEPT a non-empty diff (a drifted
+    baseline) is REFUSED unless `acceptDrift` (PolyFun's baseline rule:
+    a re-baseline must not pre-authorize future taint; in-sync writes
+    and the absent-file bootstrap stay free); the refusal names
+    `--write --accept-drift`. Otherwise the committed file is diffed
     and the gate's drift/absent line printed. `what` names the artifact
     in the drift line ("report" / "matrix"), `why` is the gate's reason
     fragment — both composed so the message is byte-identical to the
     pre-combinator text. Returns the exit code: 1 on drift/absent/`failed`,
     else 0 after the gate's clean line. -/
 def reportGate (gate what why : String) (baseline : System.FilePath)
-    (fresh : String) (write failed : Bool) (cleanMsg : String) :
+    (fresh : String) (write acceptDrift failed : Bool) (cleanMsg : String) :
     IO UInt32 := do
   let mut failed := failed
   if write then
-    IO.FS.writeFile baseline (fresh ++ "\n")
-    IO.println s!"wrote {baseline}"
+    match ← diffBaseline baseline fresh with
+    | .drifted =>
+      unless acceptDrift do
+        IO.println s!"{gate}: --write REFUSED — non-empty diff against {baseline} \
+          (a re-baseline is a deliberate act; review the diff, then rerun with --write --accept-drift)"
+        return 1
+      IO.FS.writeFile baseline (fresh ++ "\n")
+      IO.println s!"wrote {baseline} (re-baseline accepted)"
+    | _ =>
+      IO.FS.writeFile baseline (fresh ++ "\n")
+      IO.println s!"wrote {baseline}"
   else
     match ← diffBaseline baseline fresh with
     | .inSync => pure ()

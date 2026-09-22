@@ -3,23 +3,27 @@
 //! engine) with IDENTICAL results. The compiler line's output is engine-
 //! agnostic: the IR seam holds.
 
-use guestlang_rt::{invoke_core, invoke_core_fueled};
+use guestlang_rt::invoke_core;
+use guestlang_rt::invoke_core_fueled;
 
 mod common;
 use common::demo_wasm;
+use common::manifest;
 
 /// Look up a (fn, args) row in the oracle manifest and return the
-/// expected scalar result as a u64. Panics on miss (manifest must
-/// cover every row the smoke test asserts — drift is a gate failure).
-/// Look up a (fn, args) row in the oracle manifest and return the
 /// expected scalar result and the args (as the manifest stores them).
-/// Panics on miss (the test must cover every fn it asserts).
+/// Panics on miss (manifest must cover every row the smoke test
+/// asserts — drift is a gate failure).
 fn manifest_expect(fn_name: &str) -> (Vec<String>, u64) {
     let rows = manifest();
-    let (_, args, exp) = rows.into_iter()
+    let (_, args, exp) = rows
+        .into_iter()
         .find(|(f, _, _)| f == fn_name)
         .unwrap_or_else(|| panic!("{fn_name} not in oracle manifest"));
-    (args, exp.parse().expect("manifest expected value is not a u64"))
+    (
+        args,
+        exp.parse().expect("manifest expected value is not a u64"),
+    )
 }
 
 #[test]
@@ -30,7 +34,10 @@ fn wasmi_runs_the_compiler_line_output() {
     // This replaces the old hardcoded (double 21=42, adder 40+2=42, etc.).
     {
         let (args, expected) = manifest_expect("double");
-        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        let iargs: Vec<i64> = args
+            .iter()
+            .map(|a| a.parse::<u64>().unwrap() as i64)
+            .collect();
         assert_eq!(
             invoke_core(&wasm, "double", &iargs, 1_000_000).unwrap(),
             vec![expected as i64]
@@ -38,7 +45,10 @@ fn wasmi_runs_the_compiler_line_output() {
     }
     {
         let (args, expected) = manifest_expect("adder");
-        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        let iargs: Vec<i64> = args
+            .iter()
+            .map(|a| a.parse::<u64>().unwrap() as i64)
+            .collect();
         assert_eq!(
             invoke_core(&wasm, "adder", &iargs, 1_000_000).unwrap(),
             vec![expected as i64]
@@ -46,7 +56,10 @@ fn wasmi_runs_the_compiler_line_output() {
     }
     {
         let (args, expected) = manifest_expect("run-paps");
-        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        let iargs: Vec<i64> = args
+            .iter()
+            .map(|a| a.parse::<u64>().unwrap() as i64)
+            .collect();
         assert_eq!(
             invoke_core(&wasm, "run-paps", &iargs, 1_000_000).unwrap(),
             vec![expected as i64]
@@ -54,7 +67,10 @@ fn wasmi_runs_the_compiler_line_output() {
     }
     {
         let (args, expected) = manifest_expect("double-area");
-        let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+        let iargs: Vec<i64> = args
+            .iter()
+            .map(|a| a.parse::<u64>().unwrap() as i64)
+            .collect();
         assert_eq!(
             invoke_core(&wasm, "double-area", &iargs, 1_000_000).unwrap(),
             vec![expected as i64]
@@ -63,7 +79,10 @@ fn wasmi_runs_the_compiler_line_output() {
     // pick: uses invoke_core_vals due to heterogeneous arg types
     {
         let (args_str, expected) = manifest_expect("pick");
-        let pick_args = args_str.iter().map(|a| a.parse::<u64>().unwrap()).collect::<Vec<_>>();
+        let pick_args = args_str
+            .iter()
+            .map(|a| a.parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
         let r = guestlang_rt::invoke_core_vals(
             &demo_wasm(),
             "pick",
@@ -84,7 +103,10 @@ fn fuel_bounds_runaway_guests_deterministically() {
     let wasm = demo_wasm();
     // Use the first manifest row for double
     let (args, expected) = manifest_expect("double");
-    let iargs: Vec<i64> = args.iter().map(|a| a.parse::<u64>().unwrap() as i64).collect();
+    let iargs: Vec<i64> = args
+        .iter()
+        .map(|a| a.parse::<u64>().unwrap() as i64)
+        .collect();
     let r = invoke_core(&wasm, "double", &iargs, 1_000_000).unwrap();
     assert_eq!(r, vec![expected as i64]);
     // …but 1 fuel cannot even START a call — the deterministic bound.
@@ -130,33 +152,6 @@ const COMPONENT_ONLY: &[&str] = &[
     // out; the bytesParam adapter builds the guest cons chain
     "verify-witness",
 ];
-
-fn manifest() -> Vec<(String, Vec<String>, String)> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lean/wasm-backend/target/diff.json");
-    let rows: Vec<serde_json::Value> =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("run `just wasm-compile`"))
-            .expect("diff.json");
-    assert!(
-        rows.len() >= 100,
-        "oracle generated only {} rows — vacuous",
-        rows.len()
-    );
-    rows.into_iter()
-        .map(|r| {
-            (
-                r["fn"].as_str().unwrap().to_string(),
-                r["args"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|a| a.as_str().unwrap().to_string())
-                    .collect(),
-                r["expected"].as_str().unwrap().to_string(),
-            )
-        })
-        .collect()
-}
 
 #[test]
 fn manifest_partition_is_exhaustive() {

@@ -12,9 +12,7 @@ true"):
     inductive/opaque, after the usual modifiers) RESOLVE in the gated
     tree's environment — resolved by the constant's LAST component
     (notes habitually write short names; `Correct.tpl_add_ret_ok` is
-    written `tpl_add_ret_ok`). Resolution walks the gated packages'
-    environments one at a time via the shared `loadPkgEnv` preamble
-    (the sharded memory discipline — each env is dropped after use).
+    written `tpl_add_ret_ok`).
 (b) `path:line` citations and inline `Name.path` references are
     deliberately NOT checked (the honest subset is (a); adding (b)
     without a real citation convention would be a false-positive
@@ -34,6 +32,17 @@ Requires `just lean-build` (the resolution imports the gated packages'
 oleans — this gate never builds). Not a load-time gate: a package env
 that fails to load is a FAILURE (an unloadable tree verifies nothing).
 
+MEMORY SHAPE (the axioms-gate lesson, learned twice): importing the
+gated packages' environments into ONE process accumulates RSS — libgc's
+conservative stack scan retains each dropped env, and the walk reached
+~15GB before earlyoom's SIGTERM. So the resolution is SHARDED like
+`gates axioms`' `--package` mode: the outer process scans the notes and
+then spawns ONE short-lived child per gated package
+(`docs-check --package X --resolve n1,n2,…`) — one environment per
+process, the child prints the names its env resolves and dies; the
+parent collects the lines and stops early once nothing is pending. The
+parent itself never imports an env, so its RSS stays flat.
+
 Pure Lean core + Gates.Packages (+ Gates.Common's shared loader).
 -/
 import Lean
@@ -51,9 +60,9 @@ open Gates (PkgSpec gatedPackages loadPkgEnv)
 /-- Whitespace trim without the deprecated `String.trim` (fence lines
     are short — the list round-trip is free). -/
 def trimWs (s : String) : String :=
-  (s.toList.dropWhile Char.isWhitespace
+  String.ofList (s.toList.dropWhile Char.isWhitespace
     |>.reverse.dropWhile Char.isWhitespace
-    |>.reverse).asString
+    |>.reverse)
 
 /-- The top-level declaration keywords a fence's names are read from. -/
 def declKeywords : Array String :=
@@ -67,12 +76,12 @@ def declModifiers : Array String :=
     "public", "recursive", "local", "meta", "sealed"]
 
 def isIdentChar (c : Char) : Bool :=
-  c.isAlphanumeric || c == '_' || c == '\''
+  c.isAlpha || c.isDigit || c == '_' || c == '\''
 
 /-- The identifier prefix of a token: `foo:` → `foo`, `(x` → "" —
     anonymous/invalid decl positions yield the empty string. -/
 def identPrefix (tok : String) : String :=
-  (tok.toList.takeWhile isIdentChar).asString
+  String.ofList (tok.toList.takeWhile isIdentChar)
 
 /-- The declared name on one fence line, if any: strip the modifiers,
     expect a decl keyword, take the next token's identifier prefix.
@@ -88,9 +97,9 @@ def declName? (line : String) : Option String :=
       match rest with
       | n :: _ =>
         let name := identPrefix n
-        match name.get? 0 with
-        | some c => if c.isAlphanumeric || c == '_' then some name else none
-        | none => none
+        match name.toList with
+        | c :: _ => if c.isAlpha || c.isDigit || c == '_' then some name else none
+        | [] => none
       | [] => none
     else none
   | [] => none
@@ -124,7 +133,7 @@ def scanFile (file : String) (path : System.FilePath) : IO (Array Fence) := do
         cur := none
       | none =>
         -- open fence: the info string after the backtick run
-        let stripped := ((trimmed.toList.dropWhile (· == '`')).asString)
+        let stripped := String.ofList (trimmed.toList.dropWhile (· == '`'))
         let info := (trimWs stripped |>.splitOn " ").filter (· != "")
         if info.headD "" == "lean" then
           cur := some { file, openLine := i + 1, sketch := info.contains "sketch", body := #[] }
@@ -136,7 +145,7 @@ def scanFile (file : String) (path : System.FilePath) : IO (Array Fence) := do
     out := out.push { f with unclosed := true }
   return out
 
-/-! ## Resolution -/
+/-! ## Child mode: one package env per process -/
 
 /-- A name's last component (`WasmBackend.Correct.tpl_add_ret_ok` →
     `tpl_add_ret_ok`) — notes write short names. -/
@@ -150,28 +159,67 @@ def lastComponent (n : Name) : Name :=
 def envLeafNames (env : Environment) : NameSet :=
   env.constants.fold (fun acc n _ => acc.insert (lastComponent n)) {}
 
-/-- Drop the pending names this environment resolves. -/
-def filterResolved (env : Environment) (pending : Array (String × String)) :
-    Array (String × String) :=
-  let leaves := envLeafNames env
-  pending.filter fun (_, n) =>
-    !leaves.contains (lastComponent (String.toName n))
+/-- One package's env, imported in THIS process (the sharded mode —
+    the parent never imports an env, see the header). Prints one
+    `RESOLVED <name>` line per pending name this env resolves. -/
+unsafe def runChild (pkg : PkgSpec) (names : Array String) : IO UInt32 := do
+  Lean.initSearchPath (← Lean.findSysroot)
+  let base ← Lean.searchPathRef.get
+  match ← loadPkgEnv base pkg with
+  | .error e =>
+    IO.eprintln s!"docs-check: LOAD FAILED ({pkg.dir}) — {e} (run `just lean-build` first)"
+    return 1
+  | .ok env =>
+    let leaves := envLeafNames env
+    for n in names do
+      if leaves.contains (lastComponent (String.toName n)) then
+        IO.println s!"RESOLVED {n}"
+    return 0
+
+/-- Spawn the child for one package and return the names it resolved. -/
+def spawnChild (pkg : PkgSpec) (names : Array String) :
+    IO (Except String (Array String)) := do
+  let out ← IO.Process.output
+    { cmd := "lake"
+    , args := #["--dir", "../..", "exe", "gates", "docs-check",
+                "--package", pkg.dir, "--resolve",
+                String.intercalate "," names.toList]
+    , cwd := some ("." : System.FilePath) }
+  if out.exitCode != 0 then
+    -- a child load failure is a gate failure (an unloadable tree
+    -- verifies nothing), not a skip
+    let tail := String.intercalate "\n" (((out.stderr.splitOn "\n").reverse.take 6).reverse)
+    return .error s!"{pkg.dir}: child exited {out.exitCode} — {tail}"
+  return .ok ((((out.stdout.splitOn "\n").filter (·.startsWith "RESOLVED ")).map
+    (fun l => trimWs (String.ofList (l.toList.drop 9)))).toArray)
 
 /-! ## The gate -/
 
 /-- The notes dir, relative to the exe's cwd (`lean/gates`). -/
 def notesDir : System.FilePath := "../../notes"
 
-unsafe def run : IO UInt32 := do
-  Lean.initSearchPath (← Lean.findSysroot)
-  let base ← Lean.searchPathRef.get
+/-- Display name for a scanned file: strip the dir prefix, report
+    `notes/<file>.md` (the repo-relative shape the notes cite). -/
+def dispName (f : String) : String :=
+  match f.dropPrefix? (notesDir.toString ++ "/") with
+  | some r => "notes/" ++ r
+  | none => f
+
+/-- Parent mode: scan the notes, then resolve the pending decl names
+    against the gated packages' environments — one short-lived child
+    process per package (`--package X --resolve …`), so this process
+    never imports an env (the memory shape in the header). -/
+unsafe def runParent : IO UInt32 := do
   unless ← notesDir.pathExists do
     IO.eprintln s!"docs-check: {notesDir} not found (run the exe from lean/gates)"
     return 1
   -- 1. scan (deterministic file order)
   let mut files : Array System.FilePath := #[]
   for e in ← notesDir.readDir do
-    if !← e.path.isDir && e.path.extension == some "md" then
+    -- nested `if`s, NOT `&&` over monadic operands (the KernelCheck
+    -- lesson: do-notation hoists every `←` out of `&&` eagerly)
+    if ← e.path.isDir then continue
+    if e.path.extension == some "md" then
       files := files.push e.path
   files := files.qsort (fun a b => a.toString < b.toString)
   let mut fences : Array Fence := #[]
@@ -184,21 +232,24 @@ unsafe def run : IO UInt32 := do
     for (ln, line) in f.body do
       if (trimWs line).startsWith "--" then continue
       if let some n := declName? line then
-        pending := pending.push (s!"notes/{f.file}:{ln}", n)
-  -- 3. resolve: one gated package env at a time (dropped after use —
-  --    the sharded memory discipline); stop when nothing is pending
+        pending := pending.push (s!"{dispName f.file}:{ln}", n)
+  -- 3. resolve: one child process per gated package (one env per
+  --    process — the sharded memory discipline); stop when none pending
   let mut loadErrors : Array String := #[]
   for pkg in gatedPackages do
     if pending.isEmpty then break
-    match ← loadPkgEnv base pkg with
-    | .error e => loadErrors := loadErrors.push s!"{pkg.dir}: {e}"
-    | .ok env => pending := filterResolved env pending
+    let names := (pending.map (·.2)).foldl (fun acc n =>
+      if acc.contains n then acc else acc.push n) #[]
+    match ← spawnChild pkg names with
+    | .error e => loadErrors := loadErrors.push e
+    | .ok resolved =>
+      pending := pending.filter fun (_, n) => !resolved.contains n
   -- 4. report
   let mut failed := false
   for f in fences do
     if f.unclosed then
       failed := true
-      IO.println s!"docs-check: notes/{f.file}:{f.openLine}: UNCLOSED lean fence"
+      IO.println s!"docs-check: {dispName f.file}:{f.openLine}: UNCLOSED lean fence"
   for (loc, n) in pending do
     failed := true
     IO.println s!"docs-check: {loc}: fence names '{n}' — no such declaration in \
@@ -212,5 +263,21 @@ unsafe def run : IO UInt32 := do
   if failed then return 1
   IO.println "docs-check: clean — every non-sketch lean fence's decl names resolve in the tree's env"
   return 0
+
+/-- Dispatch: no flags = the parent (scan + shard); `--package X
+    --resolve n1,n2,…` = the child (ONE env in this process). -/
+unsafe def run (pkgName resolve : Option String) : IO UInt32 := do
+  match pkgName, resolve with
+  | some pkg, some csv =>
+    let some pkg ← Driver.selectPackages "docs-check" (some pkg) | return 1
+    match pkg with
+    | #[p] => runChild p ((csv.splitOn "," |>.map trimWs |>.filter (· != "")).toArray)
+    | _ =>
+      IO.eprintln "docs-check: child mode takes exactly one --package"
+      return 1
+  | none, none => runParent
+  | _, _ =>
+    IO.eprintln "docs-check: --package and --resolve are given together (child mode)"
+    return 1
 
 end Gates.DocsCheck

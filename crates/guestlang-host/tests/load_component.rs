@@ -8,13 +8,17 @@
 
 mod common;
 
-use common::{
-    demo_component_path, gateway_component_path, guest_demo_component_path, instantiate,
-    try_load, user_val, wasip3_guest_path,
-};
+use common::demo_component_path;
+use common::gateway_component_path;
+use common::guest_demo_component_path;
+use common::instantiate;
+use common::try_load;
+use common::user_val;
+use common::wasip3_guest_path;
+use guestlang_host::CapabilitySet;
+use guestlang_host::ComponentRuntime;
+use guestlang_host::HostEngine;
 use wasmtime::component::Val;
-
-use guestlang_host::{CapabilitySet, ComponentRuntime, HostEngine};
 
 /// Inline WAT component: same world as the guest — proves the call
 /// plumbing (lift + Val lift/lower) independent of the toolchain build.
@@ -52,7 +56,8 @@ async fn guest_demo_component_exports_call_through() -> Result<(), Box<dyn std::
             "skipping: run `just wasm-guest-component` to build {:?}",
             guest_demo_component_path()
         ),
-    )? else {
+    )?
+    else {
         return Ok(());
     };
 
@@ -79,7 +84,8 @@ async fn wasip3_artifact_instantiates_on_wasi_03_host() -> Result<(), Box<dyn st
             "skipping: run `just wasm-guest` to build {:?}",
             wasip3_guest_path()
         ),
-    )? else {
+    )?
+    else {
         return Ok(());
     };
 
@@ -117,12 +123,17 @@ async fn missing_export_faults_cleanly() -> Result<(), Box<dyn std::error::Error
 #[tokio::test]
 async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn std::error::Error>>
 {
-    use guestlang_host::bindings::{GatewayPre, GatewayUser};
+    use guestlang_host::bindings::GatewayPre;
+    use guestlang_host::bindings::GatewayUser;
 
     let Some((engine, component)) = try_load(
         &gateway_component_path(),
-        &format!("skipping: build with `just wasm-guest-gateway` for {:?}", gateway_component_path()),
-    )? else {
+        &format!(
+            "skipping: build with `just wasm-guest-gateway` for {:?}",
+            gateway_component_path()
+        ),
+    )?
+    else {
         return Ok(());
     };
 
@@ -158,8 +169,12 @@ async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn 
 async fn the_validator_gates_the_processing_call() -> Result<(), Box<dyn std::error::Error>> {
     let Some((engine, component)) = try_load(
         &demo_component_path(),
-        &format!("skipping: run `just wasm-compile` to build {:?}", demo_component_path()),
-    )? else {
+        &format!(
+            "skipping: run `just wasm-compile` to build {:?}",
+            demo_component_path()
+        ),
+    )?
+    else {
         return Ok(());
     };
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
@@ -183,7 +198,10 @@ async fn the_validator_gates_the_processing_call() -> Result<(), Box<dyn std::er
         if *gate {
             // the gate OPEN: the host proceeds to the processing call
             let r = rt.call("get-user", &[Val::U64(id)]).await?;
-            assert!(matches!(&r[0], Val::Option(Some(_))), "the processed user came back");
+            assert!(
+                matches!(&r[0], Val::Option(Some(_))),
+                "the processed user came back"
+            );
             processed += 1;
         } else {
             // the gate CLOSED: the processing call never fires — the
@@ -229,12 +247,17 @@ fn fault_registry_resolves_host_and_guest_codes() {
 /// bound it).
 #[tokio::test]
 async fn gateway_typed_watch_orders_async_abi() -> Result<(), Box<dyn std::error::Error>> {
-    use guestlang_host::bindings::{GatewayOrderError, GatewayPre};
+    use guestlang_host::bindings::GatewayOrderError;
+    use guestlang_host::bindings::GatewayPre;
 
     let Some((engine, component)) = try_load(
         &gateway_component_path(),
-        &format!("skipping: build with `just wasm-guest-gateway` for {:?}", gateway_component_path()),
-    )? else {
+        &format!(
+            "skipping: build with `just wasm-guest-gateway` for {:?}",
+            gateway_component_path()
+        ),
+    )?
+    else {
         return Ok(());
     };
 
@@ -268,8 +291,12 @@ async fn gateway_typed_watch_orders_async_abi() -> Result<(), Box<dyn std::error
 async fn compiled_lean_component_runs() -> Result<(), Box<dyn std::error::Error>> {
     let Some((engine, component)) = try_load(
         &demo_component_path(),
-        &format!("skipping: run `just wasm-compile` to build {:?}", demo_component_path()),
-    )? else {
+        &format!(
+            "skipping: run `just wasm-compile` to build {:?}",
+            demo_component_path()
+        ),
+    )?
+    else {
         return Ok(());
     };
 
@@ -297,8 +324,12 @@ async fn compiled_lean_component_runs() -> Result<(), Box<dyn std::error::Error>
 async fn the_span_manifest_governs_the_host_spans() -> Result<(), Box<dyn std::error::Error>> {
     let Some((engine, component)) = try_load(
         &demo_component_path(),
-        &format!("skipping: run `just wasm-compile` to build {:?}", demo_component_path()),
-    )? else {
+        &format!(
+            "skipping: run `just wasm-compile` to build {:?}",
+            demo_component_path()
+        ),
+    )?
+    else {
         return Ok(());
     };
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
@@ -307,7 +338,9 @@ async fn the_span_manifest_governs_the_host_spans() -> Result<(), Box<dyn std::e
     // — the names = the kebab fn names; the delivery = the contract)
     for name in ["double", "watch-counts"] {
         assert!(
-            guestlang_host::observability_generated::SPANS.iter().any(|s| s.name == name),
+            guestlang_host::observability_generated::SPANS
+                .iter()
+                .any(|s| s.name == name),
             "the spec's span table must cover {name}"
         );
     }
@@ -318,7 +351,11 @@ async fn the_span_manifest_governs_the_host_spans() -> Result<(), Box<dyn std::e
         .iter()
         .find(|s| s.name == "double")
         .expect("the registered call must be spanned");
-    assert_eq!(double_span.tag, Some("once"), "the delivery tag = the spec's");
+    assert_eq!(
+        double_span.tag,
+        Some("once"),
+        "the delivery tag = the spec's"
+    );
 
     // the stream fn's span carries the STREAM delivery tag (the
     // spec's contract, not the host's guess)

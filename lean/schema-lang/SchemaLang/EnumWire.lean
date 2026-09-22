@@ -38,6 +38,18 @@ declaration): inserting a ctor appends a new tag only if done at the
 end — reordering is a WIRE-BREAKING change (the same rule as the
 versioned envelope's fingerprint; `BreakingMain` is the gate).
 
+`declare_wire_tags <Name> where <ctor> | ... | <ctor>` is the INT-TAG
+mode — the same ctor-order rule WITHOUT the codec/plausible/proof
+surface: EXACTLY the tag inductive (`deriving Repr, BEq, DecidableEq`),
+`toNat`, `ofNat?`, and the `ofNat?_toNat` round-trip theorem (the
+`cases t <;> rfl` kernel proof). The four witness tag families
+(Witness.lean) consume it. The generated `ofNat?` is deliberately
+UNMARKED — it is the decode lane's INTERNAL tag dispatcher: the
+wasm-gen closure fixpoint compiles it (the List-helper precedent)
+WITHOUT exporting; a mark would make it a core EXPORT target (four
+same-named `of-nat?` exports failed the module encode — Witness's own
+comment).
+
 -/
 
 module
@@ -59,7 +71,7 @@ meta def elabGenerated (src : String) : CommandElabM Unit := do
   match Lean.Parser.runParserCategory (← getEnv) `command src with
   | .ok stx => elabCommand stx
   | .error e =>
-      throwError "declare_enum_wire: internal: generated code failed to parse\n{e}"
+      throwError "EnumWire: internal: generated code failed to parse\n{e}"
 
 /-- The generated declarations, in order (each entry is one command). -/
 meta def generatedSources (n : String) (ctors : Array String) : Array String :=
@@ -106,6 +118,43 @@ meta def generatedSources (n : String) (ctors : Array String) : Array String :=
   s!"def {n}.wireSabotage (e : {n}) : Bool :=\n  {n}.ofTag? ({n}.toTag e + 1) == some e"
   ]
 
+/-- The shared command shape: `<Name> where <ctor> | ... | <ctor>` →
+    the name + ctor list, validated (nonempty + no duplicates). -/
+meta def ctorListOf (cmd : String) (stx : Syntax) : CommandElabM (String × Array String) := do
+  let n := stx[1].getId.toString
+  let mut ctors : Array String := #[stx[3].getId.toString]
+  for rep in stx[4].getArgs do
+    ctors := ctors.push rep[1].getId.toString
+  if ctors.isEmpty then
+    throwError s!"{cmd} {n}: at least one constructor required"
+  if (ctors.toList.eraseDups).length != ctors.size then
+    throwError s!"{cmd} {n}: duplicate constructor names"
+  return (n, ctors)
+
+/-- The INT-TAG mode's generated declarations (each entry is one
+    command): the tag inductive (`deriving Repr, BEq, DecidableEq`),
+    `toNat` (ctor order 0-based — the wire tag), `ofNat?`, and the
+    round-trip theorem (`cases t <;> rfl`). `ofNat?` is deliberately
+    UNMARKED — it is the decode lane's INTERNAL tag dispatcher: the
+    wasm-gen closure fixpoint compiles it (the List-helper precedent)
+    WITHOUT exporting; a mark would make it a core EXPORT target (the
+    module header). Ctor order is FIXED at the declaration: inserting
+    a ctor appends a tag only at the end; reordering is a
+    wire-breaking change. -/
+meta def tagSources (n : String) (ctors : Array String) : Array String :=
+  let indAlts := String.intercalate " " (ctors.toList.map (fun c => s!"| {c}"))
+  let tagArms := String.intercalate "\n"
+    ((ctors.toList.zipIdx).map (fun (c, i) => s!"  | .{c} => {i}"))
+  let tagParseArms := String.intercalate "\n"
+    ((ctors.toList.zipIdx).map (fun (c, i) => s!"  | {i} => some .{c}"))
+      ++ s!"\n  | _ => none"
+  #[
+  s!"inductive {n} where\n  {indAlts}\nderiving Repr, BEq, DecidableEq",
+  s!"def {n}.toNat : {n} → Nat\n{tagArms}",
+  s!"def {n}.ofNat? : Nat → Option {n}\n{tagParseArms}",
+  s!"theorem {n}.ofNat?_toNat (t : {n}) : {n}.ofNat? t.toNat = some t := by\n  cases t <;> rfl"
+  ]
+
 /-- `declare_enum_wire <Name> where <ctor> | ... | <ctor>` — generate the
     enum inductive, its token spelling, its binary wire codec with the
     proved round-trip laws, the plausible instances, and the sabotage
@@ -115,15 +164,22 @@ syntax (name := declareEnumWire) "declare_enum_wire " ident " where "
 
 @[command_elab declareEnumWire]
 meta def declareEnumWireImpl : CommandElab := fun stx => do
-  let n := stx[1].getId.toString
-  let mut ctors : Array String := #[stx[3].getId.toString]
-  for rep in stx[4].getArgs do
-    ctors := ctors.push rep[1].getId.toString
-  if ctors.isEmpty then
-    throwError "declare_enum_wire {n}: at least one constructor required"
-  if (ctors.toList.eraseDups).length != ctors.size then
-    throwError s!"declare_enum_wire {n}: duplicate constructor names"
+  let (n, ctors) ← ctorListOf "declare_enum_wire" stx
   for src in generatedSources n ctors do
+    elabGenerated src
+
+/-- `declare_wire_tags <Name> where <ctor> | ... | <ctor>` — the INT-TAG
+    mode: EXACTLY the tag inductive + `toNat`/`ofNat?` + the
+    `ofNat?_toNat` round-trip theorem, ctor order fixed (the wire-tag
+    rule — no codec/plausible/proof surface; Witness' four tag
+    families consume it; module header). -/
+syntax (name := declareWireTags) "declare_wire_tags " ident " where "
+  ident (" | " ident)* : command
+
+@[command_elab declareWireTags]
+meta def declareWireTagsImpl : CommandElab := fun stx => do
+  let (n, ctors) ← ctorListOf "declare_wire_tags" stx
+  for src in tagSources n ctors do
     elabGenerated src
 
 end SchemaLang.EnumWire

@@ -13,25 +13,22 @@
 //!
 //! Injection surface mapped before writing (what is actually loadable-
 //! corruptible):
-//!   - `src/*_generated.rs` — COMPILED IN, not a runtime artifact. Not
-//!     injectable; excluded by construction.
-//!   - `lean/wasm-backend/target/demo.component.wasm` — the guest,
-//!     loaded via `HostEngine::load_component` (wasmtime
-//!     `Component::from_file`). THE wasm target.
-//!   - `tests/fixtures/wit_fixture_*.wit` — parsed by wit-parser at
-//!     test time (`wit_fixture_sweep.rs`).
-//!   - `tests/fixtures/wit_manifest.json` + `goldens/universe.snapshot`
-//!     — consumed ONLY by tests (the sweep / round-trip gates) and by
-//!     `src/hostgen.rs` (W8.11: the host parses the snapshot and
-//!     validates its generated surface + types against the committed
-//!     expectation — `tests/hostgen_byte_tie.rs` pins the failure
-//!     modes: parse errors and contract skew are structured, never a
-//!     panic). The manifest gets one truncation case (the corruption
-//!     class must be detectable by its serde consumer); the snapshot's
-//!     corruption classes are pinned by hostgen's parse gate.
-//!   - the schema-skew check (`schema.rs`) — `schema_skew.rs` covers
-//!     the perturbed SURFACE; here: a TRUNCATED guest fails at load,
-//!     BEFORE the skew check can even read a surface (fail-fast order).
+//!   - `src/*_generated.rs` — COMPILED IN, not a runtime artifact. Not injectable; excluded by
+//!     construction.
+//!   - `lean/wasm-backend/target/demo.component.wasm` — the guest, loaded via
+//!     `HostEngine::load_component` (wasmtime `Component::from_file`). THE wasm target.
+//!   - `tests/fixtures/wit_fixture_*.wit` — parsed by wit-parser at test time
+//!     (`wit_fixture_sweep.rs`).
+//!   - `tests/fixtures/wit_manifest.json` + `goldens/universe.snapshot` — consumed ONLY by tests
+//!     (the sweep / round-trip gates) and by `src/hostgen.rs` (W8.11: the host parses the snapshot
+//!     and validates its generated surface + types against the committed expectation —
+//!     `tests/hostgen_byte_tie.rs` pins the failure modes: parse errors and contract skew are
+//!     structured, never a panic). The manifest gets one truncation case (the corruption class must
+//!     be detectable by its serde consumer); the snapshot's corruption classes are pinned by
+//!     hostgen's parse gate.
+//!   - the schema-skew check (`schema.rs`) — `schema_skew.rs` covers the perturbed SURFACE; here: a
+//!     TRUNCATED guest fails at load, BEFORE the skew check can even read a surface (fail-fast
+//!     order).
 
 #![allow(
     clippy::disallowed_methods,
@@ -40,13 +37,19 @@
 
 mod common;
 
-use common::{
-    canonicalize_or_skip, demo_component_path, demo_core_path, fail, fixtures_dir,
-    load_json_manifest, strip_header_comments, tempdir,
-};
-
-use guestlang_host::schema::{self, EXPECTED_DEMO_SURFACE};
-use guestlang_host::{CapabilitySet, ComponentRuntime, HostEngine};
+use common::canonicalize_or_skip;
+use common::demo_component_path;
+use common::demo_core_path;
+use common::fail;
+use common::fixtures_dir;
+use common::load_json_manifest;
+use common::strip_header_comments;
+use common::tempdir;
+use guestlang_host::CapabilitySet;
+use guestlang_host::ComponentRuntime;
+use guestlang_host::HostEngine;
+use guestlang_host::schema::EXPECTED_DEMO_SURFACE;
+use guestlang_host::schema::{self};
 
 /// THE truncation sweep: the guest component cut at offsets across the
 /// whole file — dense at the header (the first 64 bytes carry magic /
@@ -161,7 +164,10 @@ fn corrupt_guest_bytes_fail_with_a_named_error() {
         Ok(_) => fail("text bytes must be refused"),
         Err(e) => e,
     };
-    assert!(!format!("{err:?}").is_empty(), "the refusal must say something");
+    assert!(
+        !format!("{err:?}").is_empty(),
+        "the refusal must say something"
+    );
 
     // Class 3: a CORE module where a COMPONENT is required — the
     // pre-`component new` artifact is a well-formed wasm binary of the
@@ -227,7 +233,8 @@ async fn truncated_guest_fails_before_the_skew_check() -> Result<(), Box<dyn std
     let component = engine.load_component(&path)?;
     schema::verify_surface(engine.engine(), &component, EXPECTED_DEMO_SURFACE)?;
     let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
-    rt.instantiate_checked(&component, EXPECTED_DEMO_SURFACE).await?;
+    rt.instantiate_checked(&component, EXPECTED_DEMO_SURFACE)
+        .await?;
     let r = rt
         .call("double", &[wasmtime::component::Val::U64(21)])
         .await?;
@@ -254,7 +261,9 @@ fn corrupt_wit_fixture_fails_with_a_named_diagnostic() {
         std::fs::write(&p, &raw[..raw.len() / 2]).unwrap_or_else(|e| fail(&format!("write: {e}")));
         let mut resolve = wit_parser::Resolve::default();
         let err = match resolve.push_path(&p) {
-            Ok(_) => fail(&format!("fixture {name}: a truncated fixture must not parse")),
+            Ok(_) => fail(&format!(
+                "fixture {name}: a truncated fixture must not parse"
+            )),
             Err(e) => e,
         };
         let msg = format!("{err:#}");

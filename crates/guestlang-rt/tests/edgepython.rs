@@ -7,7 +7,8 @@
 //! frontend-neutral AND engine-agnostic: the runtime never learns what
 //! language produced the module.
 
-use guestlang_rt::{invoke_core, invoke_core_fueled};
+use guestlang_rt::invoke_core;
+use guestlang_rt::invoke_core_fueled;
 
 fn py_wasm() -> Vec<u8> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -20,13 +21,34 @@ fn edgepython_runs_under_wasmi() {
     let wasm = py_wasm();
     // the duel constants — Lean (EdgePython.Parity) + wasmtime pin the
     // SAME numbers
-    assert_eq!(invoke_core(&wasm, "double", &[21], 1_000_000).unwrap(), vec![42]);
-    assert_eq!(invoke_core(&wasm, "adder", &[40, 2], 1_000_000).unwrap(), vec![42]);
-    assert_eq!(invoke_core(&wasm, "dec1", &[5], 1_000_000).unwrap(), vec![4]);
-    assert_eq!(invoke_core(&wasm, "loop_sum", &[10], 1_000_000).unwrap(), vec![45]);
-    assert_eq!(invoke_core(&wasm, "loop_sum", &[0], 1_000_000).unwrap(), vec![0]);
-    assert_eq!(invoke_core(&wasm, "if_max", &[3, 9], 1_000_000).unwrap(), vec![9]);
-    assert_eq!(invoke_core(&wasm, "if_max", &[9, 3], 1_000_000).unwrap(), vec![9]);
+    assert_eq!(
+        invoke_core(&wasm, "double", &[21], 1_000_000).unwrap(),
+        vec![42]
+    );
+    assert_eq!(
+        invoke_core(&wasm, "adder", &[40, 2], 1_000_000).unwrap(),
+        vec![42]
+    );
+    assert_eq!(
+        invoke_core(&wasm, "dec1", &[5], 1_000_000).unwrap(),
+        vec![4]
+    );
+    assert_eq!(
+        invoke_core(&wasm, "loop_sum", &[10], 1_000_000).unwrap(),
+        vec![45]
+    );
+    assert_eq!(
+        invoke_core(&wasm, "loop_sum", &[0], 1_000_000).unwrap(),
+        vec![0]
+    );
+    assert_eq!(
+        invoke_core(&wasm, "if_max", &[3, 9], 1_000_000).unwrap(),
+        vec![9]
+    );
+    assert_eq!(
+        invoke_core(&wasm, "if_max", &[9, 3], 1_000_000).unwrap(),
+        vec![9]
+    );
 }
 
 #[test]

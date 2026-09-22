@@ -36,6 +36,22 @@ run):
     verifying it builds under the v4.33.0 RELEASE toolchain with
     batteries v4.33.0 (the root require in gates' lakefile overrides
     lean4lean's rc2 batteries pin; lean4lean itself is NOT patched).
+(d) BLIND SPOTS — what a green run does NOT prove (the PolyFun axiom
+    sweep's honest-gaps list, mirrored per polyfun-study.md item 2):
+    1. `example`s — they create no constants, so NO env-based sweep sees
+       them (this gate replays the env's constants; the axiom census
+       walks the same constants): a sorry inside an `example` is caught
+       only by the build's warning, never by either gate.
+    2. structure-field defaults — a default value body is elaborated at
+       declaration time but never replayed as a standalone constant, so
+       its firing path is outside the kernel sweep.
+    3. anything OUTSIDE `gatedPackages` — the sweep covers only the
+       gated set (gates itself is exempt by role — Gates.Packages); a
+       new package must join the list or it ships unchecked. The axiom
+       census half (`gates axioms`) additionally covers only the gated
+       ROOTS' declarations — same gap at module granularity.
+    Pair this gate with `just gates`' other lanes; a green kernel sweep
+    means exactly the checked surface, never more.
 
 Mechanics (first-sweep lessons, 2026-09-17 — the full sweep's findings
 were all harness/resource artifacts, ZERO kernel disagreements; see
