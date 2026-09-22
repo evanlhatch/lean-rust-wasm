@@ -40,6 +40,7 @@ nothing else writes `goldens/universe.snapshot`.
 module
 
 public import SchemaLang.Diff
+public import CodegenCore.GenKit
 
 @[expose] public section
 
@@ -102,6 +103,22 @@ def nameOk (s : String) : Bool :=
   !s.isEmpty && s.all fun c => c.isAlphanum || c == '-' || c == '_' || c == '.'
 
 /-! ## The Ty parser -/
+
+/-- The legal `<ty>` tokens — the unknown-type-token rejection's
+    did-you-mean candidates (every `Ty` constructor's snapshot spelling,
+    `Ty.toSnapshot` above). -/
+def tyTokenLegals : List String :=
+  ["bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
+   "f32", "f64", "string", "bytes", "option", "list", "set", "map",
+   "future", "stream", "result", "tensor"]
+
+/-- The legal `sem` nullSem tokens — the unknown-nullSem-token
+    rejection's did-you-mean candidates (`NullSem.toToken`, Item.lean). -/
+def nullSemTokenLegals : List String := ["strict", "propagate", "custom"]
+
+/-- The legal `sem` determinism tokens — the unknown-determinism-token
+    rejection's did-you-mean candidates (`Determinism.toToken`, Item.lean). -/
+def detTokenLegals : List String := ["pure", "stable", "volatile"]
 
 /-- Fuel-bounded total parser (fuel = input length + 1 at the top;
     each recursive call consumes at least one character, so the zero
@@ -215,7 +232,8 @@ def parseTy : Nat → List Char → Except String (Ty × List Char)
                       | ')' :: r => .ok (.tensor dims elem, r)
                       | _ => .error "snapshot: expected ')' after tensor"
           | _ => .error "snapshot: expected '(' after `tensor`"
-      | other => .error s!"snapshot: unknown type token `{other}`"
+      | other => .error (s!"snapshot: unknown type token `{other}`" ++
+          CodegenCore.didYouMeanSuffix other tyTokenLegals)
 
 /-- Parse a whole type token; trailing garbage is an error. -/
 def parseTyText (s : String) : Except String Ty :=
@@ -327,10 +345,12 @@ def parseLine (st : State) (line : String) : State := do
       | some (.func fn ps (some r) none) => do
           let ns ← match NullSem.ofToken? nsTok with
             | some v => pure v
-            | none => throw s!"snapshot: unknown nullSem token `{nsTok}` — valid: strict, propagate, custom"
+            | none => throw (s!"snapshot: unknown nullSem token `{nsTok}` — valid: " ++
+                "strict, propagate, custom" ++ CodegenCore.didYouMeanSuffix nsTok nullSemTokenLegals)
           let ds ← match Determinism.ofToken? dsTok with
             | some v => pure v
-            | none => throw s!"snapshot: unknown determinism token `{dsTok}` — valid: pure, stable, volatile"
+            | none => throw (s!"snapshot: unknown determinism token `{dsTok}` — valid: " ++
+                "pure, stable, volatile" ++ CodegenCore.didYouMeanSuffix dsTok detTokenLegals)
           -- the OPTIONAL 4th token: the delivery (`stream`; its absence =
           -- `once` — the default, keeping old baselines parsable)
           let del : Delivery := if (line.splitOn " ").getLast! == "stream" then .stream else .once

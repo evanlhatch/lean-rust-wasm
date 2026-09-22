@@ -23,8 +23,10 @@
 mod common;
 
 use common::wit::{follow_alias, interface, resolve_gateway};
-use common::{fail, fixtures_dir, universe_snapshot_path};
+use common::{fail, fixtures_dir, load_json_manifest, universe_snapshot_path};
 use std::path::PathBuf;
+
+use guestlang_host::hostgen;
 
 use wit_parser::{
     Case, Function, FunctionKind, Interface, Resolve, Type, TypeDef, TypeDefKind, WorldItem,
@@ -67,15 +69,7 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 /// Load + strip the GENERATED header (`//` comment lines) — serde_json
 /// rejects them, and the header contract applies to every artifact.
 fn load_manifest() -> Vec<FixtureManifest> {
-    let path = fixtures_dir().join("wit_manifest.json");
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(&format!("manifest: {e}")));
-    let json: String = raw
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let root: Value =
-        serde_json::from_str(&json).unwrap_or_else(|e| fail(&format!("manifest parse: {e}")));
+    let root = load_json_manifest(&fixtures_dir().join("wit_manifest.json"));
     root.as_array()
         .expect("manifest is an array")
         .iter()
@@ -347,15 +341,7 @@ fn parse_sweep_entry(v: &Value) -> SweepEntry {
 
 /// Load the sweep manifest (stripping the GENERATED header lines).
 fn load_sweep_manifest() -> Vec<SweepEntry> {
-    let path = sweep_dir().join("manifest.json");
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(&format!("sweep manifest: {e}")));
-    let json: String = raw
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let root: Value =
-        serde_json::from_str(&json).unwrap_or_else(|e| fail(&format!("sweep manifest parse: {e}")));
+    let root = load_json_manifest(&sweep_dir().join("manifest.json"));
     root.as_array()
         .expect("sweep manifest is an array")
         .iter()
@@ -746,15 +732,7 @@ fn corrupted_sweep_inputs_are_caught() {
 
     // Class 2: corrupt the FIRST field's shape kind (bool → f64) — the
     // agreement check must name the disagreement.
-    let v: Value = serde_json::from_str(
-        &std::fs::read_to_string(sweep_dir().join("manifest.json"))
-            .unwrap_or_else(|e| fail(&format!("read manifest: {e}")))
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-    .unwrap_or_else(|e| fail(&format!("manifest parse: {e}")));
+    let v: Value = load_json_manifest(&sweep_dir().join("manifest.json"));
     let mut corrupted = v.clone();
     corrupted[0]["types"][0]["fields"][0]["shape"]["kind"] = Value::String("f64".into());
     let entry = parse_sweep_entry(&corrupted[0]);
@@ -842,16 +820,6 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
     // registry's own surface, never a hand mirror. The snapshot's line
     // format: `record|variant|resource Name` open an entry; `field`/`case`
     // append to it; names are PascalCase/camelCase there, kebab on the wire.
-    fn kebab(s: &str) -> String {
-        let mut out = String::new();
-        for (i, c) in s.chars().enumerate() {
-            if c.is_uppercase() && i > 0 {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        }
-        out
-    }
     struct Entry {
         name: String,
         kind: String,
@@ -862,11 +830,11 @@ fn gateway_types_interface_has_schema_types() -> Result<(), Box<dyn std::error::
     for line in snapshot.lines() {
         let mut it = line.split_whitespace();
         match (it.next(), it.next()) {
-            (Some("record"), Some(n)) => entries.push(Entry { name: kebab(n), kind: "record".into(), members: vec![] }),
-            (Some("variant"), Some(n)) => entries.push(Entry { name: kebab(n), kind: "variant".into(), members: vec![] }),
-            (Some("resource"), Some(n)) => entries.push(Entry { name: kebab(n), kind: "resource".into(), members: vec![] }),
-            (Some("field"), Some(m)) => entries.last_mut().unwrap().members.push(kebab(m)),
-            (Some("case"), Some(m)) => entries.last_mut().unwrap().members.push(kebab(m)),
+            (Some("record"), Some(n)) => entries.push(Entry { name: hostgen::kebab(n), kind: "record".into(), members: vec![] }),
+            (Some("variant"), Some(n)) => entries.push(Entry { name: hostgen::kebab(n), kind: "variant".into(), members: vec![] }),
+            (Some("resource"), Some(n)) => entries.push(Entry { name: hostgen::kebab(n), kind: "resource".into(), members: vec![] }),
+            (Some("field"), Some(m)) => entries.last_mut().unwrap().members.push(hostgen::kebab(m)),
+            (Some("case"), Some(m)) => entries.last_mut().unwrap().members.push(hostgen::kebab(m)),
             _ => {}
         }
     }

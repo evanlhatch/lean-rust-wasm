@@ -10,8 +10,8 @@
 // error! emits Error::provide — nightly-only (same gate as the root crate).
 #![feature(error_generic_member_access)]
 
-// The workspace's ONE global-allocator policy (crates/workspace-alloc).
-workspace_alloc::init_global_alloc!();
+#[global_allocator]
+static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use forge::oci;
 
@@ -89,6 +89,9 @@ struct Job {
 /// byte-tied. The manifest is itself byte-tied (`just gen --check`), and
 /// the Lean-side consistency test (`jobsCoverEmitters`) fails CI on
 /// registry/manifest drift.
+// Cross-language mirror of the same manifest set: the Lean side lives as
+// `forgeJobManifests` in lean/LintKit/LintKit/Runner.lean — same paths, no
+// shared const; keep the two in lockstep when the manifest set changes.
 const MANIFESTS: &[&str] = &[
     "crates/forge/src/jobs_generated.json",
     "crates/forge/src/faults_jobs_generated.json",

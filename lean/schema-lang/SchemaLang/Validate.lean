@@ -94,7 +94,7 @@ story, the strlen precedent).
 module
 
 public import Lean
-public import SchemaLang.Field
+public import SchemaLang.Item
 -- the `DefaultVal` class (the one default table — `defaultValue?` is
 -- its coverage enumeration)
 public import SchemaLang.CodecValue

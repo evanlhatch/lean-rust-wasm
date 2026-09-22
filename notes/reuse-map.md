@@ -52,6 +52,7 @@ a reuse story is dead weight — delete it.
 | Replicas | two_replica_converge, batch_order_irrelevant (the wire's reordering license!), retract_is_inverse | any replica story |
 | ChangeSpec | the certified patch/valid contracts (the generated trait's source) | the CRUD/delta impls |
 | Circuit/Subsystems/Recursive/NestedCycle | the incremental-computation semantics | the staging/cycle stories |
+| Subsystems | the §4.3 D/I readings (Journal/Checkpoint/hotreload/replica-divergence) — an import aggregator; the narrative lives in `dbsp-subsystems.md` | any incremental world history |
 | Machines.Core/Sync/LinearMachine/Compose | the guarded machines, the trace predicates, the linear composition | the stateful components |
 | Session | the choreography + duality proved | the protocol spec layer |
 

@@ -684,17 +684,6 @@ impl Universe {
     }
 }
 
-/// Render ordered pairs back to the canonical surface string
-/// (`fn/arity`, comma-joined).
-#[must_use]
-pub fn render_surface(entries: &[(String, usize)]) -> String {
-    entries
-        .iter()
-        .map(|(f, n)| format!("{f}/{n}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 /// The refusal: the snapshot-generated surface diverged from the
 /// host's committed expectation, with both renderings + the first
 /// difference named.
@@ -755,7 +744,7 @@ pub fn check_contract(
     let contract = schema::parse_surface(expected);
     let skew = |detail: String| ContractSkew {
         expected: expected.to_string(),
-        actual: render_surface(entries),
+        actual: schema::render_surface(entries),
         detail,
     };
     let mut covered = Vec::new();

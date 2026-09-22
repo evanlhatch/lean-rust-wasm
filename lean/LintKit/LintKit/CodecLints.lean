@@ -141,14 +141,6 @@ def dymAllowance : List (String × String) := [
    "REAL (reported 2026-09-19): `@[cert]: unknown declaration` and \
      `unknown constant` neither enumerate the legal space nor append the \
      did-you-mean — fix: didYouMeanSuffix over the cert/decl names"),
-  ("lean/schema-lang/SchemaLang/Snapshot.lean",
-   "REAL (reported 2026-09-19, minor): the three unknown-token rejections \
-     ENUMERATE the legal space (`— valid: …`) but lack the did-you-mean \
-     suffix — fix: append didYouMeanSuffix"),
-  ("lean/schema-lang/SchemaLang/Meta/Register/Funcs.lean",
-   "REAL (reported 2026-09-19, minor): the unknown @[schema_fn] argument \
-     rejection enumerates but lacks the did-you-mean suffix — fix: append \
-     didYouMeanSuffix"),
 ]
 
 /-- `didyoumeanDiscipline`: an unknown-name rejection with no did-you-mean

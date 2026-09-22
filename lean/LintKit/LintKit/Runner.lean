@@ -210,16 +210,22 @@ private def outputsOf (manifest : String) : List String := Id.run do
       else if inStr then cur := cur ++ c.toString
   return outs.reverse
 
+/-- The forge job manifests this gate reads. The driver-side mirror of this
+list is `MANIFESTS` in `crates/forge/src/main.rs` — same paths, two
+languages, no shared const; keep the two in lockstep when the manifest set
+changes. -/
+private def forgeJobManifests : List String :=
+  ["crates/forge/src/jobs_generated.json",
+   "crates/forge/src/faults_jobs_generated.json"]
+
 /-- The artifact-header gate: every generated output DECLARED in a forge
 jobs manifest exists on disk and starts with the GENERATED header (the
 driver prepends it — a missing header means a hand-written or stale file
 sits at a generated path). `repoRoot` because the exe runs from a package
 dir. Returns findings (linter name `linter.guestlang.artifactHeader`). -/
 def checkGeneratedArtifacts (repoRoot : System.FilePath) : IO (Array TextFinding) := do
-  let manifests := ["crates/forge/src/jobs_generated.json",
-                    "crates/forge/src/faults_jobs_generated.json"]
   let mut findings := #[]
-  for m in manifests do
+  for m in forgeJobManifests do
     let path := repoRoot / m
     unless ← path.pathExists do continue
     let content ← IO.FS.readFile path

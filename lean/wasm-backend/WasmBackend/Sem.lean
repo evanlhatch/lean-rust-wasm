@@ -691,6 +691,24 @@ local macro "sub_case_if" hin:ident stE:term "," il:term "," pre:tactic okTac:ta
                     subst hls;
                     exact ($hin).2.2 (k'+1) ls hx)))
 
+/-- The shared frame-check case body for the `block`/`loop` arms:
+    `checkStack`'s `.block` and `.loop` clauses both reduce to this
+    `checkFrame`-match shape, so one proof covers both. The `.block`/
+    `.loop` theorem statements are NOT defeq (distinct `Instr` ctors
+    stuck under `checkStack`), so `block_checkStack_inv` /
+    `loop_checkStack_inv` remain as thin entry lemmas. -/
+private theorem frame_checkStack_inv_general (locals : Nat → Ty) (body is : List Instr)
+    (base final : List Ty)
+    (hcheck : (match checkFrame locals base body with
+               | .ok _ => checkStack locals base is
+               | .error e => .error e) = .ok final) :
+    checkFrame locals base body = .ok () ∧ checkStack locals base is = .ok final := by
+  cases hf : checkFrame locals base body with
+  | error _ => rw [hf] at hcheck; simp at hcheck
+  | ok _ =>
+      rw [hf] at hcheck; simp at hcheck
+      exact ⟨rfl, hcheck⟩
+
 /-- The frame-check FACTORIZATION (the `block`/`loop` arms' shared
     head, lifted to a lemma so the `sub_case` macros carry no `by`): the
     case check implies the frame check holds and the tail is checked
@@ -700,11 +718,7 @@ theorem block_checkStack_inv (locals : Nat → Ty) (body is : List Instr)
     (hcheck : checkStack locals base (.block body :: is) = .ok final) :
     checkFrame locals base body = .ok () ∧ checkStack locals base is = .ok final := by
   simp only [checkStack] at hcheck
-  cases hf : checkFrame locals base body with
-  | error _ => rw [hf] at hcheck; simp at hcheck
-  | ok _ =>
-      rw [hf] at hcheck; simp at hcheck
-      exact ⟨rfl, hcheck⟩
+  exact frame_checkStack_inv_general locals body is base final hcheck
 
 /-- The `.loop` mirror of `block_checkStack_inv` (the restart form). -/
 theorem loop_checkStack_inv (locals : Nat → Ty) (body is : List Instr)
@@ -712,11 +726,7 @@ theorem loop_checkStack_inv (locals : Nat → Ty) (body is : List Instr)
     (hcheck : checkStack locals base (.loop body :: is) = .ok final) :
     checkFrame locals base body = .ok () ∧ checkStack locals base is = .ok final := by
   simp only [checkStack] at hcheck
-  cases hf : checkFrame locals base body with
-  | error _ => rw [hf] at hcheck; simp at hcheck
-  | ok _ =>
-      rw [hf] at hcheck; simp at hcheck
-      exact ⟨rfl, hcheck⟩
+  exact frame_checkStack_inv_general locals body is base final hcheck
 
 /-- THE core lemma. Part 2 additionally assumes the tail `is` is checked
     `base → final` (the restart re-enters at `.loop body :: is`). The

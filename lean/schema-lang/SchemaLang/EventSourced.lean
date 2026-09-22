@@ -224,36 +224,58 @@ def witnessOf (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : List ρ) : WD
             some rows[rows.findIdx (fun r => key r == k)], none⟩
       else ⟨rows.length, none, none⟩
 
+/-- The two row-carrying deltas witness identically: the witness is a
+    function of the row payload, not of which ctor carried it. (The
+    shared lemma `apply_eq_patchW`/`witnessOf_valid` route their
+    insert/update arms through.) -/
+theorem witnessOf_row (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ) :
+    witnessOf key (.insert row) rows = witnessOf key (.update row) rows := by
+  simp only [witnessOf]
+
+/-- The first-match branch of the row-carrying witness: position = the
+    first key match, old = that row, new = the payload. -/
+theorem witnessOf_findIdx_pos (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
+    (h : rows.findIdx (fun r => key r == key row) < rows.length) :
+    witnessOf key (.insert row) rows
+      = ⟨rows.findIdx (fun r => key r == key row),
+         some rows[rows.findIdx (fun r => key r == key row)], some row⟩ := by
+  simp only [witnessOf]
+  rw [dif_pos h]
+
+/-- The no-match branch of the row-carrying witness: append position,
+    no old row, payload as new row. -/
+theorem witnessOf_findIdx_neg (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ)
+    (h : ¬ rows.findIdx (fun r => key r == key row) < rows.length) :
+    witnessOf key (.insert row) rows = ⟨rows.length, none, some row⟩ := by
+  simp only [witnessOf]
+  rw [dif_neg h]
+
+/-- THE SHARED ROW-CARRYING CASE of `apply_eq_patchW`: insert and
+    update both fire as upsert, and the dedup-factored witness lets
+    both ctor arms end in `exact` on this one lemma (the update arm
+    normalizes its witness through `witnessOf_row` first). -/
+private theorem apply_eq_patchW_row (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ) :
+    apply key (.insert row) rows = patchW rows (witnessOf key (.insert row) rows) := by
+  by_cases h : rows.findIdx (fun r => key r == key row) < rows.length
+  · rw [witnessOf_findIdx_pos key row rows h]
+    show upsert key row rows = rows.set _ row
+    exact upsert_eq_set key row rows h
+  · rw [witnessOf_findIdx_neg key row rows h]
+    have hi : rows.findIdx (fun r => key r == key row) = rows.length :=
+      Nat.le_antisymm List.findIdx_le_length (Nat.le_of_not_gt h)
+    show upsert key row rows = rows.insertIdx rows.length row
+    rw [upsert_eq_append key row rows hi, List.insertIdx_length_self]
+
 /-- Firing an event IS patching the table by the recorded delta — the
     `RewindableMachine.action_is_patch` obligation, discharged once
     here for every event-sourced record. -/
 theorem apply_eq_patchW (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : List ρ) :
     apply key d rows = patchW rows (witnessOf key d rows) := by
   cases d with
-  | insert row =>
-      show upsert key row rows = _
-      simp only [witnessOf]
-      by_cases h : rows.findIdx (fun r => key r == key row) < rows.length
-      · rw [dif_pos h]
-        show upsert key row rows = rows.set _ row
-        exact upsert_eq_set key row rows h
-      · rw [dif_neg h]
-        have hi : rows.findIdx (fun r => key r == key row) = rows.length :=
-          Nat.le_antisymm List.findIdx_le_length (Nat.le_of_not_gt h)
-        show upsert key row rows = rows.insertIdx rows.length row
-        rw [upsert_eq_append key row rows hi, List.insertIdx_length_self]
+  | insert row => exact apply_eq_patchW_row key row rows
   | update row =>
-      show upsert key row rows = _
-      simp only [witnessOf]
-      by_cases h : rows.findIdx (fun r => key r == key row) < rows.length
-      · rw [dif_pos h]
-        show upsert key row rows = rows.set _ row
-        exact upsert_eq_set key row rows h
-      · rw [dif_neg h]
-        have hi : rows.findIdx (fun r => key r == key row) = rows.length :=
-          Nat.le_antisymm List.findIdx_le_length (Nat.le_of_not_gt h)
-        show upsert key row rows = rows.insertIdx rows.length row
-        rw [upsert_eq_append key row rows hi, List.insertIdx_length_self]
+      rw [← witnessOf_row key row rows]
+      exact apply_eq_patchW_row key row rows
   | remove k =>
       show rows.eraseIdx (rows.findIdx (fun r => key r == k)) = _
       simp only [witnessOf]
@@ -267,23 +289,27 @@ theorem apply_eq_patchW (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : Lis
         rw [hi]
         exact List.eraseIdx_of_length_le (Nat.le_refl _)
 
+/-- THE SHARED ROW-CARRYING CASE of `witnessOf_valid`: the recorded
+    insert-with-found-key witness is valid at the found position; the
+    no-match witness is valid in append range (the same for update via
+    `witnessOf_row`, so both ctor arms end in `exact`). -/
+private theorem witnessOf_row_valid (key : ρ → κ) [BEq κ] (row : ρ) (rows : List ρ) :
+    validW rows (witnessOf key (.insert row) rows) := by
+  by_cases h : rows.findIdx (fun r => key r == key row) < rows.length
+  · rw [witnessOf_findIdx_pos key row rows h]
+    exact ⟨h, rfl⟩
+  · rw [witnessOf_findIdx_neg key row rows h]
+    exact Nat.le_refl _
+
 /-- The recorded delta is valid for the state that produced it — the
     `RewindableMachine.deltaOf_valid` obligation, discharged once here. -/
 theorem witnessOf_valid (key : ρ → κ) [BEq κ] (d : Delta ρ κ) (rows : List ρ) :
     validW rows (witnessOf key d rows) := by
   cases d with
-  | insert row =>
-      show validW rows (witnessOf key (.insert row) rows)
-      simp only [witnessOf]
-      by_cases h : rows.findIdx (fun r => key r == key row) < rows.length
-      · rw [dif_pos h]; exact ⟨h, rfl⟩
-      · rw [dif_neg h]; exact Nat.le_refl _
+  | insert row => exact witnessOf_row_valid key row rows
   | update row =>
-      show validW rows (witnessOf key (.update row) rows)
-      simp only [witnessOf]
-      by_cases h : rows.findIdx (fun r => key r == key row) < rows.length
-      · rw [dif_pos h]; exact ⟨h, rfl⟩
-      · rw [dif_neg h]; exact Nat.le_refl _
+      rw [← witnessOf_row key row rows]
+      exact witnessOf_row_valid key row rows
   | remove k =>
       show validW rows (witnessOf key (.remove k) rows)
       simp only [witnessOf]

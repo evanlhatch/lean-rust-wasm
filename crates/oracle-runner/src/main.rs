@@ -1,12 +1,6 @@
 //! oracle-runner — the differential oracle's host-side driver + debug loop
 //! (W6.3 phase 2).
 //!
-//! ALLOCATOR: mimalloc as the global allocator (wasmtime's own
-//! recommendation for hosts replaying many small allocations — the
-//! differential loop's shape). The wasm GUEST (guest-demo) is NOT touched:
-//! mimalloc-sys has no wasm32 build, and the guest's allocation is the
-//! spliced runtime.wat allocator's territory anyway.
-//!
 //! WHAT IT IS: the oracle manifest (lean/wasm-backend/target/diff.json —
 //! Lean's own evals, the semantics authority) replayed against the emitted
 //! component, with the comparison pushed INTO the oracle's terms: a mismatch
@@ -43,9 +37,8 @@
 // error! emits Error::provide — nightly-only (same gate as the root crate).
 #![feature(error_generic_member_access)]
 
-// The workspace's ONE global-allocator policy (crates/workspace-alloc) —
-// wasmtime's recommended host allocator; see the ALLOCATOR note above.
-workspace_alloc::init_global_alloc!();
+#[global_allocator]
+static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -278,6 +271,14 @@ fn verdict_json(v: Option<&Divergence>, schema_surface: &str) -> String {
 // ── the schema surface (derived from ANY manifest, first-occurrence
 //    order — the same string `Oracle.schemaSurface` renders) ──────────
 
+/// The sha256 of the schema surface — the hash the verdicts echo. The
+/// hasher is LOCAL on purpose: guestlang-host's copy is the twin,
+/// pinned by the triple-agreement test (the two must stay in lockstep).
+fn schema_hash(surface: &str) -> String {
+    let digest = Sha256::digest(surface.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// One manifest row's string field — a missing/mistyped field is a
 /// Manifest fault naming the row (was an index-panic on the expect).
 fn row_str<'a>(row: &'a serde_json::Value, i: usize, key: &str) -> OracleResult<&'a str> {
@@ -321,11 +322,6 @@ fn manifest_surface(rows: &[serde_json::Value]) -> OracleResult<String> {
         .join(","))
 }
 
-fn schema_hash(surface: &str) -> String {
-    let digest = Sha256::digest(surface.as_bytes());
-    digest.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 // ── the ser forms (MUST match Lean's `resultOf` byte-for-byte) ───────
 
 fn ser_val(v: &Val) -> String {
@@ -363,15 +359,22 @@ fn ser_val(v: &Val) -> String {
 
 // ── the flat-arg conventions (lifted from wasm_diff.rs) ──────────────
 
+/// One flat arg, by index — a short row is a RowArgs fault naming the
+/// missing slot, not a panic (was `.expect(...)` on user-supplied
+/// manifest data).
+fn arg<'a>(strs: &'a [&str], idx: usize, what: &str) -> OracleResult<&'a str> {
+    Ok(strs.get(idx).ok_or_else(|| {
+        OracleFault::RowArgs(RowArgs {
+            detail: format!("missing arg #{idx} ({what}) — row too short"),
+        })
+    })?)
+}
+
 /// One flat arg → u64 (the oracle's boundary rows are u64-range); a
 /// short or non-numeric arg is a RowArgs fault, not a panic (was
 /// `.expect("user id")` etc. on user-supplied manifest data).
 fn arg_u64(strs: &[&str], idx: usize, what: &str) -> OracleResult<u64> {
-    let s = strs.get(idx).ok_or_else(|| {
-        OracleFault::RowArgs(RowArgs {
-            detail: format!("missing arg #{idx} ({what}) — row too short"),
-        })
-    })?;
+    let s = arg(strs, idx, what)?;
     s.parse::<u64>().map_err(|e| {
         OracleFault::RowArgs(RowArgs {
             detail: format!("arg #{idx} ({what}): `{s}` does not parse as u64: {e}"),
@@ -382,11 +385,7 @@ fn arg_u64(strs: &[&str], idx: usize, what: &str) -> OracleResult<u64> {
 
 /// One flat arg → f64 (the variant payload's f64 slot). Same discipline.
 fn arg_f64(strs: &[&str], idx: usize, what: &str) -> OracleResult<f64> {
-    let s = strs.get(idx).ok_or_else(|| {
-        OracleFault::RowArgs(RowArgs {
-            detail: format!("missing arg #{idx} ({what}) — row too short"),
-        })
-    })?;
+    let s = arg(strs, idx, what)?;
     s.parse::<f64>().map_err(|e| {
         OracleFault::RowArgs(RowArgs {
             detail: format!("arg #{idx} ({what}): `{s}` does not parse as f64: {e}"),
@@ -400,39 +399,12 @@ fn arg_f64(strs: &[&str], idx: usize, what: &str) -> OracleResult<f64> {
 fn user_record(strs: &[&str]) -> OracleResult<Val> {
     Ok(Val::Record(vec![
         ("id".into(), Val::U64(arg_u64(strs, 0, "user id")?)),
-        (
-            "name".into(),
-            Val::String(
-                strs.get(1)
-                    .ok_or_else(|| {
-                        OracleFault::RowArgs(RowArgs {
-                            detail: "missing arg #1 (name) — row too short".into(),
-                        })
-                    })?
-                    .to_string(),
-            ),
-        ),
-        (
-            "email".into(),
-            Val::String(
-                strs.get(2)
-                    .ok_or_else(|| {
-                        OracleFault::RowArgs(RowArgs {
-                            detail: "missing arg #2 (email) — row too short".into(),
-                        })
-                    })?
-                    .to_string(),
-            ),
-        ),
+        ("name".into(), Val::String(arg(strs, 1, "name")?.to_string())),
+        ("email".into(), Val::String(arg(strs, 2, "email")?.to_string())),
         (
             "tags".into(),
             Val::List(
-                strs.get(3)
-                    .ok_or_else(|| {
-                        OracleFault::RowArgs(RowArgs {
-                            detail: "missing arg #3 (tags) — row too short".into(),
-                        })
-                    })?
+                arg(strs, 3, "tags")?
                     .split(',')
                     .map(|t| Val::String(t.to_string()))
                     .collect(),
@@ -445,13 +417,13 @@ fn user_record(strs: &[&str]) -> OracleResult<Val> {
 /// flat form (discr = the WIT case order; the payload rides the joined
 /// i64 slot — u64 raw, f64 bits).
 fn order_error_variant(strs: &[&str]) -> OracleResult<Val> {
-    Ok(match strs.first().copied() {
-        Some("0") => Val::Variant("empty-cart".into(), None),
-        Some("1") => Val::Variant(
+    Ok(match arg(strs, 0, "order-error discr")? {
+        "0" => Val::Variant("empty-cart".into(), None),
+        "1" => Val::Variant(
             "invalid-item".into(),
             Some(Box::new(Val::U64(arg_u64(strs, 1, "invalid-item payload")?))),
         ),
-        Some(_) => Val::Variant(
+        _ => Val::Variant(
             "insufficient-funds".into(),
             Some(Box::new(Val::Float64(arg_f64(
                 strs,
@@ -459,12 +431,6 @@ fn order_error_variant(strs: &[&str]) -> OracleResult<Val> {
                 "insufficient-funds payload",
             )?))),
         ),
-        None => {
-            return Err(OracleFault::RowArgs(RowArgs {
-                detail: "missing arg #0 (order-error discr) — row too short".into(),
-            })
-            .into())
-        }
     })
 }
 

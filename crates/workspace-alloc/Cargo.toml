@@ -1,9 +1,0 @@
-[package]
-name = "workspace-alloc"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
-description = "The workspace's ONE global-allocator policy: mimalloc + the init macro. Binary crates depend on this and call `workspace_alloc::init_global_alloc!()` in main.rs — never on mimalloc directly."
-
-[dependencies]
-mimalloc.workspace = true

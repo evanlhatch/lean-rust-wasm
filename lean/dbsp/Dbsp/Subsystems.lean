@@ -1,27 +1,7 @@
 /-
-# Dbsp.Subsystems — D/I absorbs four subsystems (lean-v3 §4.3)
-
-The §4.3 claim, made into types and theorems:
-
-- **Journal = D(state stream).** `Journal s := D s`. Completeness is
-  `derivative_integral`: replaying the journal from zero reconstructs the
-  world. Invertibility the other way is `integral_derivative`.
-- **Checkpoints = partial I.** `sumVals s (n+1)` is the state after n deltas
-  — the checkpoint. Resumption from a checkpoint is the journal from the
-  cutover tick onward (`journalResumption`).
-- **Hot-reload-by-replay = the same input stream through a new circuit** —
-  `incrementalize_ok` (Dbsp.Incremental) is the license: the reloaded
-  incremental circuit computes the same function of the same journal.
-- **Replica consistency = group subtraction.** A divergence is a zset, and
-  re-integrating it cancels (`replica_divergence_cancels`) — the netcode
-  reconvergence algebra. (An earlier `replica_consistent` here was a
-  syntactic-reflexivity theorem — `I (Journal s) t = I (Journal s) t` —
-  deleted as vacuous, 2026-12 quality pass; the genuine convergence
-  content — same deltas in any order — lives in `Dbsp.Replicas`,
-  `two_replica_converge`/`batch_order_irrelevant`.)
-
-These are READINGS: the proofs are one-liners because the work was done in
-Linear/Incremental. The value is the named surface the engine cites.
+# Dbsp.Subsystems — ownership: lean/dbsp/Dbsp/Subsystems.lean; aggregates
+Dbsp.Circuit + the §4.3 D/I readings (Journal/Checkpoint/hotreload/
+replica-divergence) for consumers. Narrative moved to notes/dbsp-subsystems.md.
 -/
 
 module
@@ -64,7 +44,7 @@ abbrev Checkpoint (s : Stream a) (n : Nat) : a := sumVals s n
     "hot-reload" named: replaying the journal through the new circuit is
     correct iff the new circuit is the incrementalization of the old —
     `incrementalize_ok` is exactly that. (The theorem lives in
-    Dbsp.Incremental; re-exported here so the §4.3 surface is one import.) -/
+    Dbsp.Circuit; re-exported here so the §4.3 surface is one import.) -/
 abbrev hotreload_incrementalize_ok := @incrementalize_ok
 
 /-- Replica divergence cancels: if replicas A and B see histories that differ

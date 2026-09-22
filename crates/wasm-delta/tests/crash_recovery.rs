@@ -14,74 +14,40 @@
 
 use std::path::PathBuf;
 
-use wasm_delta::{Change, DeltaError, DeltaLog, Field, FsBackend, Row, Schema, SchemaSet, Ty, Value};
+mod common;
 
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        self.0 >> 16
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-fn schemas() -> SchemaSet {
-    let mut s = SchemaSet::new();
-    s.register(
-        "t",
-        Schema::new(vec![
-            Field { name: "k".into(), ty: Ty::U64 },
-            Field { name: "v".into(), ty: Ty::Str },
-        ]),
-    );
-    s
-}
-
-fn tempdir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "wasm-delta-crash-{tag}-{}-{:x}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("tempdir: {e}"));
-    dir
-}
+use common::{Lcg, row, schemas, tempdir};
+use wasm_delta::{Change, DeltaError, DeltaLog, FsBackend, Schema, Value};
 
 /// Write a journal of `n` entries through the file backend; return the
 /// path + the full byte content + per-record end offsets.
 fn write_journal(dir: &PathBuf, n: u32) -> (PathBuf, Vec<u8>, Vec<usize>) {
     let path = dir.join("journal.bin");
     let mut log = DeltaLog::open(&path, schemas()).unwrap_or_else(|e| panic!("open: {e}"));
-    let schema = schemas().get("t").unwrap_or_else(|| panic!("registered")).clone();
+    let schema = schemas()
+        .get("t")
+        .unwrap_or_else(|| panic!("registered"))
+        .clone();
     let mut r = Lcg(0xc0ffee);
     for i in 0..n {
         let key = r.below(6);
         let change = match r.below(3) {
-            0 => Change::Insert(
-                row(&schema, key, &format!("inserted-{i}-with-some-payload-bytes")),
-            ),
+            0 => Change::Insert(row(
+                &schema,
+                key,
+                &format!("inserted-{i}-with-some-payload-bytes"),
+            )),
             1 => Change::Update(row(&schema, key, &format!("updated-{i}"))),
             _ => Change::Remove(Value::U64(key)),
         };
-        log.append("t", change).unwrap_or_else(|e| panic!("append: {e}"));
+        log.append("t", change)
+            .unwrap_or_else(|e| panic!("append: {e}"));
     }
     drop(log);
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read: {e}"));
     // Recompute the record boundaries by scanning with a fresh log open
     // per prefix — but cheaper: the offsets are where reopen stops.
     (path, bytes, Vec::new())
-}
-
-fn row(schema: &Schema, k: u64, v: &str) -> Row {
-    Row::new(schema, vec![Value::U64(k), Value::Str(v.into())])
-        .unwrap_or_else(|| panic!("test row checks"))
 }
 
 /// The reference: entries of a log opened over the complete journal.
@@ -123,10 +89,16 @@ fn torn_tail_at_every_offset() {
         if got.len() < reference.len() {
             recovered_any += 1;
         }
-        let schema = schemas().get("t").unwrap_or_else(|| panic!("registered")).clone();
+        let schema = schemas()
+            .get("t")
+            .unwrap_or_else(|| panic!("registered"))
+            .clone();
         log_post_recovery_append(&tmp, &schema);
     }
-    assert!(recovered_any > 0, "vacuous: no truncation ever dropped an entry");
+    assert!(
+        recovered_any > 0,
+        "vacuous: no truncation ever dropped an entry"
+    );
     std::fs::remove_dir_all(&dir).unwrap_or_else(|e| panic!("cleanup: {e}"));
 }
 
@@ -208,9 +180,15 @@ fn mid_log_corruption_is_an_error() {
     // start by decoding the header manually: version is 1 byte ("01");
     // walk varints.
     let varint_len = |bs: &[u8]| bs.iter().position(|b| *b < 128).map(|p| p + 1);
-    let Some(vlen) = varint_len(&bytes) else { panic!("header") };
-    let Some(flen) = varint_len(&bytes[vlen..]) else { panic!("header") };
-    let Some(llen) = varint_len(&bytes[vlen + flen..]) else { panic!("header") };
+    let Some(vlen) = varint_len(&bytes) else {
+        panic!("header")
+    };
+    let Some(flen) = varint_len(&bytes[vlen..]) else {
+        panic!("header")
+    };
+    let Some(llen) = varint_len(&bytes[vlen + flen..]) else {
+        panic!("header")
+    };
     let payload_start = vlen + flen + llen;
     // Flip the table-name tag byte of the entry payload (payload[0] is
     // the table string's char-count varint; 24 chars → 0x18; a huge

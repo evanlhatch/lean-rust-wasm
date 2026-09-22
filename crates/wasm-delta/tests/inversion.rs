@@ -13,37 +13,10 @@
 //! Negative control: a log with a corrupted stored inverse must NOT
 //! satisfy the rewind law (the sweep bites).
 
-use wasm_delta::{Change, DeltaLog, Field, MemBackend, Row, Schema, SchemaSet, Ty, Value};
+mod common;
 
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        self.0 >> 16
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-fn schemas() -> SchemaSet {
-    let mut s = SchemaSet::new();
-    s.register(
-        "t",
-        Schema::new(vec![
-            Field { name: "k".into(), ty: Ty::U64 },
-            Field { name: "v".into(), ty: Ty::Str },
-        ]),
-    );
-    s
-}
-
-fn row(schema: &Schema, k: u64, v: &str) -> Row {
-    Row::new(schema, vec![Value::U64(k), Value::Str(v.into())])
-        .unwrap_or_else(|| panic!("test row checks"))
-}
+use common::{Lcg, row, schemas};
+use wasm_delta::{Change, DeltaLog, MemBackend, Value};
 
 /// Append a random walk; return the log.
 fn walk(seed: u64, steps: u32) -> DeltaLog<MemBackend> {
@@ -59,7 +32,8 @@ fn walk(seed: u64, steps: u32) -> DeltaLog<MemBackend> {
             1 => Change::Update(row(&schema, key, &format!("u{i}"))),
             _ => Change::Remove(Value::U64(key)),
         };
-        log.append("t", change).unwrap_or_else(|e| panic!("append: {e}"));
+        log.append("t", change)
+            .unwrap_or_else(|e| panic!("append: {e}"));
     }
     log
 }
@@ -79,7 +53,9 @@ fn per_step_correct_invert() {
             1 => Change::Update(row(&schema, key, &format!("u{i}"))),
             _ => Change::Remove(Value::U64(key)),
         };
-        let seq = log.append("t", change).unwrap_or_else(|e| panic!("append: {e}"));
+        let seq = log
+            .append("t", change)
+            .unwrap_or_else(|e| panic!("append: {e}"));
         // patch (patch t Δ) (invert Δ) = t — via the stored inverse.
         log.rewind_to(seq).unwrap_or_else(|e| panic!("rewind: {e}"));
         assert_eq!(
@@ -148,8 +124,7 @@ fn corrupted_inverse_breaks_rewind() {
             let mut bad = bytes.clone();
             bad[i] ^= bit;
             let mut backend = MemBackend::new();
-            wasm_delta::Backend::append(&mut backend, &bad)
-                .unwrap_or_else(|e| panic!("seed: {e}"));
+            wasm_delta::Backend::append(&mut backend, &bad).unwrap_or_else(|e| panic!("seed: {e}"));
             let Ok(mut l) = DeltaLog::open_with(backend, schemas()) else {
                 rejections += 1;
                 continue;

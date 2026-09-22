@@ -40,7 +40,10 @@
 
 mod common;
 
-use common::{canonicalize_or_skip, demo_component_path, demo_core_path, fail, fixtures_dir, tempdir};
+use common::{
+    canonicalize_or_skip, demo_component_path, demo_core_path, fail, fixtures_dir,
+    load_json_manifest, strip_header_comments, tempdir,
+};
 
 use guestlang_host::schema::{self, EXPECTED_DEMO_SURFACE};
 use guestlang_host::{CapabilitySet, ComponentRuntime, HostEngine};
@@ -300,11 +303,7 @@ fn corrupt_wit_fixture_fails_with_a_named_diagnostic() {
 fn corrupt_wit_manifest_is_detectable_by_its_consumer() {
     let raw = std::fs::read_to_string(fixtures_dir().join("wit_manifest.json"))
         .unwrap_or_else(|e| fail(&format!("read manifest: {e}")));
-    let json: String = raw
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let json = strip_header_comments(&raw);
 
     // Class 1: truncation → serde_json SYNTAX error (named class).
     let err = serde_json::from_str::<serde_json::Value>(&json[..json.len() / 2])
@@ -325,7 +324,6 @@ fn corrupt_wit_manifest_is_detectable_by_its_consumer() {
     );
 
     // (c) STATELESSNESS: the intact manifest still parses to an array.
-    let good: serde_json::Value =
-        serde_json::from_str(&json).unwrap_or_else(|e| fail(&format!("good parse: {e}")));
+    let good = load_json_manifest(&fixtures_dir().join("wit_manifest.json"));
     assert!(good.as_array().is_some(), "the good manifest is an array");
 }

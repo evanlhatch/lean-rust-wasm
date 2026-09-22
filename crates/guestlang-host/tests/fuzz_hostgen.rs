@@ -33,6 +33,8 @@
 //! The pair choice and the mutation schedule are pure functions of
 //! the input bytes, so the seed alone reconstructs everything.
 
+mod common;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -55,38 +57,18 @@ struct Pair {
     snap: String,
 }
 
-/// Split the fixture file into pairs (the format `SnapshotRT.fixtureFile`
-/// writes: `== u<i>` headers, `snap:` sections; `expect:` sections are
-/// skipped — the differential owns them).
-fn parse_fixture_file(text: &str) -> Vec<Pair> {
-    let mut pairs = Vec::new();
-    let mut cur: Option<(String, Vec<String>, u8)> = None; // (name, snap lines, section)
-    for line in text.lines() {
-        if let Some(name) = line.strip_prefix("== ") {
-            if let Some((n, s, _)) = cur.take() {
-                pairs.push(Pair { name: n, snap: s.join("\n") });
-            }
-            cur = Some((name.to_string(), Vec::new(), 0));
-        } else if line == "snap:" {
-            if let Some((_, _, sect)) = &mut cur {
-                *sect = 1;
-            }
-        } else if line == "expect:" {
-            if let Some((_, _, sect)) = &mut cur {
-                *sect = 2;
-            }
-        } else if line.is_empty() || line.starts_with('#') {
-            // header comment or blank
-        } else if let Some((_, snap, sect)) = &mut cur {
-            if *sect == 1 {
-                snap.push(line.to_string());
-            }
-        }
-    }
-    if let Some((n, s, _)) = cur.take() {
-        pairs.push(Pair { name: n, snap: s.join("\n") });
-    }
-    pairs
+/// The fixture pairs, via the SHARED fixture-file parser (`common`'s
+/// strict `parse_pairs` — the writer never emits content outside a
+/// section, so the shared semantics are this layer's too); only the
+/// snap half is kept.
+fn parse_pairs(text: &str) -> Vec<Pair> {
+    common::parse_pairs(text)
+        .into_iter()
+        .map(|p| Pair {
+            name: p.name,
+            snap: p.snap.join("\n"),
+        })
+        .collect()
 }
 
 /// The fixture pairs with their base parses (the Lean-sanctioned
@@ -100,7 +82,7 @@ impl Base {
     fn load() -> Self {
         let text = std::fs::read_to_string(fixture_path())
             .unwrap_or_else(|e| panic!("reading the fixture file: {e}"));
-        let pairs = parse_fixture_file(&text);
+        let pairs = parse_pairs(&text);
         assert!(pairs.len() >= 16, "the fixture file carries {} pairs — the generator regressed", pairs.len());
         let shapes = pairs
             .iter()
@@ -130,31 +112,6 @@ fn kind_shape(items: &[Item]) -> Vec<String> {
             Item::Resource { .. } => "resource".to_string(),
         })
         .collect()
-}
-
-/// Deterministic small PRNG seeded from the fuzz input: the pair
-/// choice and mutation schedule are pure functions of the input, so a
-/// printed seed replays exactly.
-struct Lcg(u64);
-
-impl Lcg {
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut seed = 0xcbf2_9ce4_8422_2325u64; // FNV offset basis
-        for b in bytes {
-            seed ^= u64::from(*b);
-            seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        Self(seed | 1)
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-        self.0 >> 16
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
 }
 
 /// TARGET 1: arbitrary strings — the parser's floor. Never panic; a
@@ -188,7 +145,7 @@ fn mutated_fixtures_error_or_shape_stable() {
         .with_iterations(ITERATIONS)
         .for_each(|input: &[u8]| {
             ran.fetch_add(1, Ordering::Relaxed);
-            let mut r = Lcg::from_bytes(input);
+            let mut r = common::Lcg::from_bytes(input);
             let idx = r.below(base.pairs.len() as u64) as usize;
             let mut bytes = base.pairs[idx].snap.clone().into_bytes();
             if bytes.is_empty() {

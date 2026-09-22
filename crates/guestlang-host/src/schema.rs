@@ -80,8 +80,11 @@ pub(crate) fn parse_surface(surface: &str) -> Vec<(String, usize)> {
         .collect()
 }
 
-/// Render ordered pairs back to the canonical string.
-fn render_surface(pairs: &[(String, usize)]) -> String {
+/// Render ordered pairs back to the canonical string
+/// (`fn/arity`, comma-joined). `pub(crate)`: hostgen's contract check
+/// renders the SAME pairs with it (one renderer per format).
+#[must_use]
+pub(crate) fn render_surface(pairs: &[(String, usize)]) -> String {
     pairs
         .iter()
         .map(|(f, n)| format!("{f}/{n}"))

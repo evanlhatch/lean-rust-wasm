@@ -836,9 +836,9 @@ name = "forge"
 version = "0.1.0"
 dependencies = [
  "fast-observe",
+ "mimalloc",
  "serde_json",
  "sha2",
- "workspace-alloc",
 ]
 
 [[package]]
@@ -1617,11 +1617,11 @@ version = "0.1.0"
 dependencies = [
  "fast-observe",
  "guestlang-host",
+ "mimalloc",
  "serde_json",
  "sha2",
  "tokio",
  "wasmtime",
- "workspace-alloc",
 ]
 
 [[package]]
@@ -3124,13 +3124,6 @@ dependencies = [
  "serde_json",
  "unicode-ident",
  "wasmparser 0.258.0",
-]
-
-[[package]]
-name = "workspace-alloc"
-version = "0.1.0"
-dependencies = [
- "mimalloc",
 ]
 
 [[package]]

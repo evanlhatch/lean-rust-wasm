@@ -854,29 +854,6 @@ theorem decode_encodeValue (t : Ty) (v : Value t) (h : CodecClosed t) :
   simp only [List.append_nil] at h2
   simp [h2]
 
-/-- Sub-proof: a closed result's ok side is closed. -/
-def resultOkClosed {ok err : Ty} (h : CodecClosed (.result ok err)) :
-    CodecClosed ok :=
-  match h with | .result hok _ => hok
-
-/-- Sub-proof: a closed future's payload is closed. -/
-def futureClosed {t : Ty} (h : CodecClosed (.future t)) : CodecClosed t :=
-  match h with | .future h' => h'
-
-/-- Sub-proof: a closed list's element type is closed. -/
-def listClosed {t : Ty} (h : CodecClosed (.list t)) : CodecClosed t :=
-  match h with | .list h' => h'
-
-/-- Sub-proof: a closed stream's element type is closed. -/
-def streamClosed {t : Ty} (h : CodecClosed (.stream t)) : CodecClosed t :=
-  match h with | .stream h' => h'
-
-/-- the closed-tensor's element proof (the resultOkClosed pattern) -/
-def tensorClosed {t : Ty} {dims : List Nat} (h : CodecClosed (.tensor dims t)) :
-    CodecClosed t :=
-  match h with | .tensor h' => h'
-
-
 -- (plain comment: doc comments cannot precede `mutual`. The doc:
 -- a default value for any codec-closed type — the generator/shrinker
 -- base case (structural recursion on the CodecClosed proof). The

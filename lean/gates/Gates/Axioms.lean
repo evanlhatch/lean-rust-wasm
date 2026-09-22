@@ -91,21 +91,19 @@ def analyzeEnv (roots : Array Name) :
       axs := axs.insert a
   return (decls, findings, axs.toArray.qsort Name.quickLt)
 
-/-- Import one package's roots (its olean dir prepended so its
-    `Tests.Main` wins over same-named dep modules) and analyze. -/
+/-- Import one package's roots via the shared loadPkgEnv preamble (olean
+    dir prepended so its `Tests.Main` wins over same-named dep modules)
+    and analyze. -/
 unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
-  Lean.searchPathRef.set (pkg.oleanDirOf :: base)
-  try
-    Lean.enableInitializersExecution
-    let env ← importModules (pkg.roots.map ({ module := · })) {}
-      (trustLevel := 1024) (loadExts := true)
+  match ← loadPkgEnv base pkg with
+  | .error e =>
+    return { dir := pkg.dir, loadError := some e }
+  | .ok env =>
     let modRoots := pkg.roots.map (·.getRoot)
     let ctx : Core.Context := { fileName := "<gates-axioms>", fileMap := default }
     let (res, _) ← (analyzeEnv modRoots).toIO ctx { env := env }
     let (decls, findings, axs) := res
     return { dir := pkg.dir, decls := decls.size, axioms := axs, violations := findings }
-  catch e =>
-    return { dir := pkg.dir, loadError := some (toString e) }
 
 /-- The committed report this gate diffs against (the `diff = CI gate`
     half). -/

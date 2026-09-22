@@ -170,17 +170,6 @@ def sweepCorpusWfChecks : CheckResult := do
       (universeWellFormed items) true
   .ok ()
 
-/-! ## The linen patterns, exercised -/
-
-/-- Schema-indexed field resolution (abbrev list — the reducibility rule). -/
-abbrev userFields : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩ ]
-
-def fieldResolutionChecks : CheckResult := do
-  _ ← assertEq "id at 0" (fieldIndex userFields "id" .u64) 0
-  _ ← assertEq "email at 2" (fieldIndex userFields "email" .string) 2
-  .ok ()
-
 def codecChecks : CheckResult := do
   -- the round trips are PROVED (Codec.decode_encodeBool/decode_encodeU8 —
   -- axiom-gated); what needs executing is the REJECTION surface
@@ -6707,7 +6696,6 @@ unsafe def main (args : List String) : IO UInt32 := do
   let provenance ← provenanceChecks
   let code ← mainOfChecks "SchemaLang"
     ([ ("resolution", resolutionChecks)
-     , ("fieldRes", fieldResolutionChecks)
      , ("wfEmitterGate", sweepCorpusWfChecks)
      , ("codec", codecChecks)
      , ("codecCombinators", codecCombinatorChecks)

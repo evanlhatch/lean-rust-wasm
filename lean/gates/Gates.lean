@@ -23,6 +23,11 @@ TYPED access to what the justfile recipes used to grep/subprocess:
                         additive to the byte-tie)
 - `Gates.Audit`       — the static census (zero-consumer candidates,
                         comment ratio, the hand-roll citation) — report-only
+- `Gates.DocsCheck`   — the notes excerpt-drift gate (PolyFun's
+                        check-docs-integrity.py pattern: every non-sketch
+                        ```lean fence in notes/*.md declares names that
+                        resolve in the gated tree's env; sketches tag
+                        themselves ```lean sketch)
 
 Legacy (non-module) files by design — the drivers touch meta
 env-extension state (constraint 12, notes/w5-4-module-migration.md).
@@ -38,3 +43,4 @@ import Gates.KernelCheck
 import Gates.NativePolicy
 import Gates.ArtifactManifest
 import Gates.Audit
+import Gates.DocsCheck

@@ -32,7 +32,10 @@
     reason = "fuzz harness: a violated property MUST abort the run — the panic is the crash report"
 )]
 
+#[path = "../common/mod.rs"]
+mod common;
 use bolero::check;
+use common::demo_wasm_opt;
 use guestlang_rt::Runtime;
 use guestlang_rt::Snapshot;
 
@@ -67,18 +70,8 @@ impl PureFn {
     }
 }
 
-/// The demo module (the compiler line's output; `just wasm-compile`).
-fn demo_wasm() -> Option<Vec<u8>> {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lean/wasm-backend/target/demo.wasm");
-    match std::fs::read(std::fs::canonicalize(p).ok()?) {
-        Ok(wasm) => Some(wasm),
-        Err(_) => None,
-    }
-}
-
 fn main() {
-    let Some(wasm) = demo_wasm() else {
+    let Some(wasm) = demo_wasm_opt() else {
         eprintln!(
             "SKIP snapshot_restore_seq: no demo.wasm — run `just wasm-compile` \
              (a skipped fuzz target covers nothing)"

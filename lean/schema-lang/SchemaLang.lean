@@ -21,7 +21,6 @@ public import SchemaLang.EnumWire
 public import SchemaLang.CodecValue
 public import SchemaLang.Layout
 public import SchemaLang.Gen
-public import SchemaLang.Field
 public import SchemaLang.Validate
 public import SchemaLang.Refine
 public import SchemaLang.ExprLang
@@ -32,7 +31,6 @@ public import SchemaLang.Vortex.Emit
 public import SchemaLang.Vortex.ExtDType
 public import SchemaLang.Vortex.Encoding
 public import SchemaLang.Vortex.Batch
-public import SchemaLang.Vortex.DataFusion
 public import SchemaLang.Pipeline
 public import SchemaLang.OrderMachine
 public import SchemaLang.Emit.Machine

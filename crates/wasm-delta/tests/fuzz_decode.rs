@@ -29,25 +29,14 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wasm_delta::{Backend, Change, DeltaError, DeltaLog, Field, Row, Schema, SchemaSet, Ty, Value};
+mod common;
+
+use common::{Lcg, row, schemas};
+use wasm_delta::{Backend, Change, DeltaError, DeltaLog, Row, Schema, Value};
 
 /// The iterations per `cargo test` run (the CI lane — the long
 /// campaigns are `just fuzz`'s business).
 const ITERATIONS: usize = 512;
-
-/// The single-table schema set the fuzz journals speak (the
-/// crash-recovery suite's table: `k u64`, `v Str`).
-fn schemas() -> SchemaSet {
-    let mut s = SchemaSet::new();
-    s.register(
-        "t",
-        Schema::new(vec![
-            Field { name: "k".into(), ty: Ty::U64 },
-            Field { name: "v".into(), ty: Ty::Str },
-        ]),
-    );
-    s
-}
 
 /// A journal of raw bytes (the fuzz input IS the journal): the
 /// `Backend` seam means the decoder is attacked in memory — no fs,
@@ -76,40 +65,18 @@ impl Backend for RawJournal {
     }
 }
 
-/// Deterministic small PRNG seeded from the fuzz input (the
-/// crash-recovery suite's Lcg): the mutation schedule is a pure
-/// function of the input, so a printed seed replays exactly.
-struct Lcg(u64);
-
-impl Lcg {
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut seed = 0xcbf2_9ce4_8422_2325u64; // FNV offset basis
-        for b in bytes {
-            seed ^= u64::from(*b);
-            seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        Self(seed | 1)
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-        self.0 >> 16
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
-
-/// A random valid row for table `t`.
+/// A random valid row for table `t` (the `row` builder over the same
+/// LCG stream: key then value, same draw order as before).
 fn fuzz_row(schema: &Schema, r: &mut Lcg) -> Row {
-    Row::new(schema, vec![Value::U64(r.below(8)), Value::Str(format!("fuzz-{}", r.below(1000)).into())])
-        .unwrap_or_else(|| panic!("fuzz row checks"))
+    row(schema, r.below(8), &format!("fuzz-{}", r.below(1000)))
 }
 
 /// Build a GENUINELY valid journal through the real append path.
 fn build_valid_journal(r: &mut Lcg) -> (Vec<u8>, usize) {
-    let schema = schemas().get("t").unwrap_or_else(|| panic!("registered")).clone();
+    let schema = schemas()
+        .get("t")
+        .unwrap_or_else(|| panic!("registered"))
+        .clone();
     let mut log = DeltaLog::open_with(RawJournal(Vec::new()), schemas())
         .unwrap_or_else(|e| panic!("empty journal opens: {e}"));
     let n = 1 + r.below(8) as usize;
@@ -159,7 +126,11 @@ fn assert_open_contract(bytes: Vec<u8>, max_entries: Option<usize>) {
         | Err(e @ DeltaError::SchemaMismatch { .. }) => {
             panic!("in-memory open leaked a non-decode error: {e}")
         }
-        Err(DeltaError::WrongVersion { .. } | DeltaError::FingerprintMismatch { .. } | DeltaError::Corrupt { .. }) => {
+        Err(
+            DeltaError::WrongVersion { .. }
+            | DeltaError::FingerprintMismatch { .. }
+            | DeltaError::Corrupt { .. },
+        ) => {
             // the structured decode classes: exactly what the contract
             // allows (data, not strings — see DeltaError)
         }

@@ -9,8 +9,8 @@
 mod common;
 
 use common::{
-    canonicalize_or_skip, demo_component_path, gateway_component_path,
-    guest_demo_component_path, instantiate, wasip3_guest_path,
+    demo_component_path, gateway_component_path, guest_demo_component_path, instantiate,
+    try_load, user_val, wasip3_guest_path,
 };
 use wasmtime::component::Val;
 
@@ -46,17 +46,15 @@ async fn wat_component_add_1_2_is_3() -> Result<(), Box<dyn std::error::Error>> 
 
 #[tokio::test]
 async fn guest_demo_component_exports_call_through() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(path) = canonicalize_or_skip(
+    let Some((engine, component)) = try_load(
         &guest_demo_component_path(),
         &format!(
             "skipping: run `just wasm-guest-component` to build {:?}",
             guest_demo_component_path()
         ),
-    ) else {
+    )? else {
         return Ok(());
     };
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
 
     // Guest touches no WASI — closed box must still instantiate.
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
@@ -75,13 +73,15 @@ async fn guest_demo_component_exports_call_through() -> Result<(), Box<dyn std::
 
 #[tokio::test]
 async fn wasip3_artifact_instantiates_on_wasi_03_host() -> Result<(), Box<dyn std::error::Error>> {
-    let path = wasip3_guest_path();
-    if !path.exists() {
-        eprintln!("skipping: run `just wasm-guest` to build {path:?}");
+    let Some((engine, component)) = try_load(
+        &wasip3_guest_path(),
+        &format!(
+            "skipping: run `just wasm-guest` to build {:?}",
+            wasip3_guest_path()
+        ),
+    )? else {
         return Ok(());
-    }
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
+    };
 
     // The wasip3 std component imports wasi:cli/clocks/filesystem@0.3.0 —
     // instantiation proves the p3 host satisfies the world.
@@ -119,14 +119,12 @@ async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn 
 {
     use guestlang_host::bindings::{GatewayPre, GatewayUser};
 
-    let Some(path) = canonicalize_or_skip(
+    let Some((engine, component)) = try_load(
         &gateway_component_path(),
         &format!("skipping: build with `just wasm-guest-gateway` for {:?}", gateway_component_path()),
-    ) else {
+    )? else {
         return Ok(());
     };
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
 
     let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
     let pre = rt.instantiate_pre(&component)?;
@@ -158,38 +156,24 @@ async fn gateway_typed_get_user_returns_structured_user() -> Result<(), Box<dyn 
 /// enforces the gate the schema declares.
 #[tokio::test]
 async fn the_validator_gates_the_processing_call() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(path) = canonicalize_or_skip(
+    let Some((engine, component)) = try_load(
         &demo_component_path(),
         &format!("skipping: run `just wasm-compile` to build {:?}", demo_component_path()),
-    ) else {
+    )? else {
         return Ok(());
     };
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
 
     // the record arg = the flat field values (the duel's convention:
     // the validator's subject crosses the boundary as the record)
-    fn user_record(id: u64, name: &str, email: &str, tags: &[&str]) -> Val {
-        Val::Record(vec![
-            ("id".into(), Val::U64(id)),
-            ("name".into(), Val::String(name.into())),
-            ("email".into(), Val::String(email.into())),
-            (
-                "tags".into(),
-                Val::List(tags.iter().map(|t| Val::String(t.to_string())).collect()),
-            ),
-        ])
-    }
-
     let mut processed = 0usize;
     let mut refused = 0usize;
     for (user, id) in [
         // the INVALID user: id 0 → the validator refuses → NO
         // processing call (the gate's else branch)
-        (user_record(0, "zero", "0@g.dev", &["a"]), 0u64),
+        (user_val(0, "zero", "0@g.dev", &["a"]), 0u64),
         // the VALID user: every gate passes → the processing call runs
-        (user_record(5, "first", "5@g.dev", &["a", "b"]), 5),
+        (user_val(5, "first", "5@g.dev", &["a", "b"]), 5),
     ] {
         let verdict = rt.call("user-complete", &[user]).await?;
         assert_eq!(verdict.len(), 1);
@@ -247,14 +231,12 @@ fn fault_registry_resolves_host_and_guest_codes() {
 async fn gateway_typed_watch_orders_async_abi() -> Result<(), Box<dyn std::error::Error>> {
     use guestlang_host::bindings::{GatewayOrderError, GatewayPre};
 
-    let Some(path) = canonicalize_or_skip(
+    let Some((engine, component)) = try_load(
         &gateway_component_path(),
         &format!("skipping: build with `just wasm-guest-gateway` for {:?}", gateway_component_path()),
-    ) else {
+    )? else {
         return Ok(());
     };
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
 
     let mut rt = ComponentRuntime::new(engine.clone(), CapabilitySet::NONE).await?;
     let pre = rt.instantiate_pre(&component)?;
@@ -284,14 +266,12 @@ async fn gateway_typed_watch_orders_async_abi() -> Result<(), Box<dyn std::error
 /// output — the full guestlang pipeline, no wit-bindgen guest involved.
 #[tokio::test]
 async fn compiled_lean_component_runs() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(path) = canonicalize_or_skip(
+    let Some((engine, component)) = try_load(
         &demo_component_path(),
         &format!("skipping: run `just wasm-compile` to build {:?}", demo_component_path()),
-    ) else {
+    )? else {
         return Ok(());
     };
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
 
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
 
@@ -315,14 +295,12 @@ async fn compiled_lean_component_runs() -> Result<(), Box<dyn std::error::Error>
 /// span to open — the host cannot invent one).
 #[tokio::test]
 async fn the_span_manifest_governs_the_host_spans() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(path) = canonicalize_or_skip(
+    let Some((engine, component)) = try_load(
         &demo_component_path(),
         &format!("skipping: run `just wasm-compile` to build {:?}", demo_component_path()),
-    ) else {
+    )? else {
         return Ok(());
     };
-    let engine = HostEngine::new()?;
-    let component = engine.load_component(&path)?;
     let mut rt = instantiate(&engine, &component, CapabilitySet::NONE).await?;
 
     // the spec's table covers the world's exports (the schema's manifest

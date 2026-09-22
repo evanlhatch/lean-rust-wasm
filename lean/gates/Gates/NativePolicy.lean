@@ -103,20 +103,17 @@ def analyzeEnv (roots : Array Name) : CoreM (Array Name × Array (Name × Name))
       native := native.push (m, d)
   return (decls, native)
 
-/-- Import one package's roots (its olean dir prepended — the
-    Axioms.lean search-path lesson) and analyze. -/
+/-- Import one package's roots via the shared loadPkgEnv preamble (olean
+    dir prepended — the Axioms.lean search-path lesson) and analyze. -/
 unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
-  Lean.searchPathRef.set (pkg.oleanDirOf :: base)
-  try
-    Lean.enableInitializersExecution
-    let env ← importModules (pkg.roots.map ({ module := · })) {}
-      (trustLevel := 1024) (loadExts := true)
+  match ← loadPkgEnv base pkg with
+  | .error e =>
+    return { dir := pkg.dir, loadError := some e }
+  | .ok env =>
     let modRoots := pkg.roots.map (·.getRoot)
     let ctx : Core.Context := { fileName := "<gates-native-policy>", fileMap := default }
     let ((decls, native), _) ← (analyzeEnv modRoots).toIO ctx { env := env }
     return { dir := pkg.dir, decls := decls.size, native := native }
-  catch e =>
-    return { dir := pkg.dir, loadError := some (toString e) }
 
 /-- The `--package` filter lives in Gates.Driver.selectPackages (the
     sharded mode: one env per PROCESS — the full sweep in one process

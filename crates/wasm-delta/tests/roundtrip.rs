@@ -13,23 +13,10 @@
 //!    prefix — never the original value with the same consumption.
 //! 4. NEGATIVE: bit-flipped encodings either fail or decode DIFFERENT.
 
-use wasm_delta::{
-    Change, DeltaLog, MemBackend, Row, Schema, SchemaSet, Ty, Value, decode_value, encode_value,
-};
+mod common;
 
-/// A tiny LCG (TestKit.lcg's shape): deterministic, dependency-free.
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        self.0 >> 16
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-}
+use common::{Lcg, row, schemas};
+use wasm_delta::{Change, DeltaLog, MemBackend, Ty, Value, decode_value, encode_value};
 
 /// A random leaf type.
 fn gen_leaf_ty(r: &mut Lcg) -> Ty {
@@ -55,7 +42,10 @@ fn gen_ty(r: &mut Lcg, depth: u32) -> Ty {
     }
     match r.below(14) {
         11 => Ty::Opt(Box::new(gen_ty(r, depth - 1))),
-        12 => Ty::Res(Box::new(gen_ty(r, depth - 1)), Box::new(gen_ty(r, depth - 1))),
+        12 => Ty::Res(
+            Box::new(gen_ty(r, depth - 1)),
+            Box::new(gen_ty(r, depth - 1)),
+        ),
         13 => Ty::List(Box::new(gen_ty(r, depth - 1))),
         _ => gen_leaf_ty(r),
     }
@@ -93,9 +83,11 @@ fn gen_value(r: &mut Lcg, ty: &Ty, depth: u32) -> Value {
                 Value::Res(Err(Box::new(gen_value(r, err, depth - 1))))
             }
         }
-        Ty::List(t) => {
-            Value::List((0..r.below(5)).map(|_| gen_value(r, t, depth - 1)).collect())
-        }
+        Ty::List(t) => Value::List(
+            (0..r.below(5))
+                .map(|_| gen_value(r, t, depth - 1))
+                .collect(),
+        ),
     }
 }
 
@@ -113,9 +105,21 @@ fn value_roundtrip_append_form() {
         let rest: Vec<u8> = (0..r.below(7)).map(|_| r.next() as u8).collect();
         bytes.extend_from_slice(&rest);
         let got = decode_value(&ty, &bytes);
-        assert_eq!(got.as_ref().map(|(gv, _)| gv), Some(&v), "round trip failed for {v:?}");
-        assert_eq!(got.map(|(_, u)| u), Some(enc_len), "consumption wrong for {v:?}");
-        assert_eq!(&bytes[enc_len..], rest.as_slice(), "trailing bytes disturbed");
+        assert_eq!(
+            got.as_ref().map(|(gv, _)| gv),
+            Some(&v),
+            "round trip failed for {v:?}"
+        );
+        assert_eq!(
+            got.map(|(_, u)| u),
+            Some(enc_len),
+            "consumption wrong for {v:?}"
+        );
+        assert_eq!(
+            &bytes[enc_len..],
+            rest.as_slice(),
+            "trailing bytes disturbed"
+        );
     }
 }
 
@@ -183,38 +187,28 @@ fn value_bitflip_never_silent() {
 /// re-open, entries and states must decode equal.
 #[test]
 fn log_bytes_roundtrip() {
-    let mut schemas = SchemaSet::new();
-    schemas.register(
-        "t",
-        Schema::new(vec![
-            wasm_delta::Field { name: "k".into(), ty: Ty::U64 },
-            wasm_delta::Field { name: "v".into(), ty: Ty::Str },
-        ]),
-    );
-    let schema = schemas.get("t").unwrap_or_else(|| panic!("registered")).clone();
+    let schema = schemas()
+        .get("t")
+        .unwrap_or_else(|| panic!("registered"))
+        .clone();
     let mut r = Lcg(0xdead);
-    let mut log = DeltaLog::open_with(MemBackend::new(), schemas.clone())
-        .unwrap_or_else(|e| panic!("open: {e}"));
+    let mut log =
+        DeltaLog::open_with(MemBackend::new(), schemas()).unwrap_or_else(|e| panic!("open: {e}"));
     for i in 0..200 {
         let key = r.below(16);
         let change = match r.below(3) {
-            0 => Change::Insert(Row::new(
-                &schema,
-                vec![Value::U64(key), Value::Str(format!("v{i}"))],
-            ).unwrap_or_else(|| panic!("row checks"))),
-            1 => Change::Update(Row::new(
-                &schema,
-                vec![Value::U64(key), Value::Str(format!("u{i}"))],
-            ).unwrap_or_else(|| panic!("row checks"))),
+            0 => Change::Insert(row(&schema, key, &format!("v{i}"))),
+            1 => Change::Update(row(&schema, key, &format!("u{i}"))),
             _ => Change::Remove(Value::U64(key)),
         };
-        log.append("t", change).unwrap_or_else(|e| panic!("append: {e}"));
+        log.append("t", change)
+            .unwrap_or_else(|e| panic!("append: {e}"));
     }
     let bytes = log.backend().bytes().to_vec();
     // Re-open from the raw bytes (simulating a restart).
     let mut backend = MemBackend::new();
     wasm_delta::Backend::append(&mut backend, &bytes).unwrap_or_else(|e| panic!("seed: {e}"));
-    let log2 = DeltaLog::open_with(backend, schemas).unwrap_or_else(|e| panic!("reopen: {e}"));
+    let log2 = DeltaLog::open_with(backend, schemas()).unwrap_or_else(|e| panic!("reopen: {e}"));
     assert_eq!(log.len(), log2.len());
     for seq in 0..log.len() {
         assert_eq!(log.entry(seq), log2.entry(seq), "entry {seq} diverged");

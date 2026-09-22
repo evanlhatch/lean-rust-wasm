@@ -17,8 +17,12 @@
 //!   sync pipe-set is never polled: the loop exits before pumping).
 //!   Empty + not-finished = Pending — returning Dropped there ENDS the
 //!   stream and the in-flight items are lost. Do not "simplify" that.
-//! - HOUSE HELPERS — `fail` (no bare unwrap in tests), `tempdir`, and
-//!   the wit-parser lookup trio (`wit::resolve_gateway` etc.).
+//! - HOUSE HELPERS — `fail` (no bare unwrap in tests), `tempdir`,
+//!   `user_val`/`try_load` (the record-arg + artifact-loading
+//!   preludes), the fixture-pair parser (`parse_pairs`), the fuzz
+//!   PRNG ([`Lcg`]), the generated-manifest loader
+//!   (`strip_header_comments` + `load_json_manifest`), and the
+//!   wit-parser lookup trio (`wit::resolve_gateway` etc.).
 //!
 //! Ownership: crates/guestlang-host/tests/common/mod.rs. Additive to
 //! src/**: nothing here touches it. The suites' ASSERTIONS stay in the
@@ -39,6 +43,7 @@ use guestlang_host::{CapabilitySet, ComponentRuntime, HostState, HostEngine};
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
     Accessor, AccessorTask, Component, Lift, Source, StreamConsumer, StreamReader, StreamResult,
+    Val,
 };
 
 // ── fixture paths ───────────────────────────────────────────────────
@@ -155,6 +160,24 @@ pub async fn instantiate(
     Ok(rt)
 }
 
+/// The artifact-loading prelude every suite hand-rolled: canonicalize-
+/// or-skip → engine → `load_component`. `skip_msg` prints verbatim
+/// (`canonicalize_or_skip`'s wording — the pre-harness skip
+/// diagnostics) when the artifact is absent; `Ok(None)` = the test
+/// skips. `Err` = a REAL load failure — a built artifact that fails to
+/// load is a test failure, never a skip.
+pub fn try_load(
+    path: &Path,
+    skip_msg: &str,
+) -> Result<Option<(HostEngine, Component)>, Box<dyn std::error::Error>> {
+    let Some(path) = canonicalize_or_skip(path, skip_msg) else {
+        return Ok(None);
+    };
+    let engine = HostEngine::new()?;
+    let component = engine.load_component(&path)?;
+    Ok(Some((engine, component)))
+}
+
 // ── house helpers ───────────────────────────────────────────────────
 
 /// Fail loud, fail clear (the house pattern: no bare `unwrap`).
@@ -176,6 +199,133 @@ pub fn tempdir(tag: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| fail(&format!("tempdir: {e}")));
     dir
+}
+
+/// The user-record `Val` (the record-ARG convention: a record-valued
+/// param crosses the boundary as the FLAT field list — id, name,
+/// email, tags; the wasm_diff manifest rows adapt their string slice
+/// to this typed form).
+pub fn user_val(id: u64, name: &str, email: &str, tags: &[&str]) -> Val {
+    Val::Record(vec![
+        ("id".into(), Val::U64(id)),
+        ("name".into(), Val::String(name.into())),
+        ("email".into(), Val::String(email.into())),
+        (
+            "tags".into(),
+            Val::List(tags.iter().map(|t| Val::String(t.to_string())).collect()),
+        ),
+    ])
+}
+
+// ── fixture-pair parsing (the snapshot differential + fuzz layer) ───
+
+/// One generated pair: the snapshot text + the authority's parse dump
+/// (format `SnapshotRT.fixtureFile` writes: `== u<i>` headers, `snap:`
+/// and `expect:` sections).
+pub struct Pair {
+    pub name: String,
+    pub snap: Vec<String>,
+    pub expect: Vec<String>,
+}
+
+/// Split the fixture file into pairs. STRICT: content outside a
+/// section (or before the first pair) is corruption, failed loudly.
+pub fn parse_pairs(text: &str) -> Vec<Pair> {
+    let mut pairs = Vec::new();
+    // (name, snap lines, expect lines, section: 0=none 1=snap 2=expect)
+    let mut cur: Option<(String, Vec<String>, Vec<String>, usize)> = None;
+    for line in text.lines() {
+        if let Some(name) = line.strip_prefix("== ") {
+            if let Some((n, s, e, _)) = cur.take() {
+                pairs.push(Pair {
+                    name: n,
+                    snap: s,
+                    expect: e,
+                });
+            }
+            cur = Some((name.to_string(), Vec::new(), Vec::new(), 0));
+        } else if line == "snap:" {
+            if let Some((_, _, _, sect)) = &mut cur {
+                *sect = 1;
+            }
+        } else if line == "expect:" {
+            if let Some((_, _, _, sect)) = &mut cur {
+                *sect = 2;
+            }
+        } else if line.is_empty() || line.starts_with('#') {
+            // header comment or blank — outside the sections
+        } else if let Some((_, snap, expect, sect)) = &mut cur {
+            match *sect {
+                1 => snap.push(line.to_string()),
+                2 => expect.push(line.to_string()),
+                _ => fail(&format!("fixture: content outside a section: `{line}`")),
+            }
+        } else {
+            fail(&format!("fixture: content before the first pair: `{line}`"));
+        }
+    }
+    if let Some((n, s, e, _)) = cur.take() {
+        pairs.push(Pair {
+            name: n,
+            snap: s,
+            expect: e,
+        });
+    }
+    pairs
+}
+
+// ── the fuzz layer's deterministic PRNG ─────────────────────────────
+
+/// Deterministic small PRNG seeded from the fuzz input (FNV-1a over
+/// the bytes, forced odd): the pair choice and mutation schedule are
+/// pure functions of the input, so a printed `BOLERO_RANDOM_SEED`
+/// replays exactly. Knuth consts; the draw order is pinned
+/// (`from_bytes` → `next` → `below`) everywhere it is used.
+pub struct Lcg(u64);
+
+impl Lcg {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut seed = 0xcbf2_9ce4_8422_2325u64; // FNV offset basis
+        for b in bytes {
+            seed ^= u64::from(*b);
+            seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Self(seed | 1)
+    }
+
+    pub fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 >> 16
+    }
+
+    pub fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+// ── the generated-manifest loader ───────────────────────────────────
+
+/// Strip the GENERATED header (`//` comment lines) — serde_json
+/// rejects them, and the header contract applies to every generated
+/// artifact (the corrupted-manifest control needs the stripped TEXT
+/// separately from the parsed value).
+pub fn strip_header_comments(text: &str) -> String {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Load + strip + parse a GENERATED JSON manifest: ONE strip + ONE
+/// parse with ONE panic text — the loader every manifest-consuming
+/// test shares.
+pub fn load_json_manifest(path: &Path) -> serde_json::Value {
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| fail(&format!("manifest: {e}")));
+    let json = strip_header_comments(&raw);
+    serde_json::from_str(&json).unwrap_or_else(|e| fail(&format!("manifest parse: {e}")))
 }
 
 // ── wit-parser lookups (shared by the round-trip + byte-tie gates) ──

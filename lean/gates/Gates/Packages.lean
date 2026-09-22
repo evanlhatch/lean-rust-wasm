@@ -1,12 +1,16 @@
 /-
 # Gates.Packages — the gated package set, as data
 
-One table, consumed by the axiom report (Gates.Axioms), the kernel
-double-check (Gates.KernelCheck), and any future per-package gate —
-the `lean-axioms` recipe's package list lifted out of shell. Mirrors
-the old recipe's `run` lines exactly: same dirs, same root modules
-(`Tests.Main` included where the package has a test driver; std/ledger/
-feature-flags have none — review-2026-09-16 F5 records std's gap).
+One table + the shared per-package env loader, consumed by the axiom
+report (Gates.Axioms), the kernel double-check (Gates.KernelCheck), and
+any future per-package gate — the `lean-axioms` recipe's package list
+lifted out of shell. Mirrors the old recipe's `run` lines exactly: same
+dirs, same root modules (`Tests.Main` included where the package has a
+test driver; std/ledger/feature-flags have none — review-2026-09-16 F5
+records std's gap).
+
+`loadPkgEnv` is the ONE import-preamble the loading gates share (the
+Axioms/NativePolicy/Audit replay, deduped).
 
 Pure Lean core — the cheapest module in the package.
 -/
@@ -48,6 +52,22 @@ def PkgSpec.srcDirOf (pkg : PkgSpec) : System.FilePath :=
   match pkg.srcDir with
   | some d => d
   | none => s!"../{pkg.dir}"
+
+/-- Load one gated package's environment: its olean dir prepended to the
+    search path (so its `Tests.Main` wins over same-named dep modules),
+    initializers executed, its root modules `importModules`'d at the
+    per-package gate trust level. The loading gates (Axioms, NativePolicy,
+    Audit) own only their per-package post-processing after this. -/
+unsafe def loadPkgEnv (base : Lean.SearchPath) (pkg : PkgSpec) :
+    IO (Except String Lean.Environment) := do
+  Lean.searchPathRef.set (pkg.oleanDirOf :: base)
+  try
+    Lean.enableInitializersExecution
+    let env ← Lean.importModules (pkg.roots.map ({ module := · })) {}
+      (trustLevel := 1024) (loadExts := true)
+    return .ok env
+  catch e =>
+    return .error (toString e)
 
 /-- The gated set. -/
 def gatedPackages : Array PkgSpec := #[

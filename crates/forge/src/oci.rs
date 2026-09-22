@@ -126,33 +126,33 @@ impl OciStore {
         self.blobs_dir().join(digest).exists()
     }
 
-/// Strip the leading GENERATED-header comment lines: the header = the
-/// metadata (timestamps, git state, hashes) — the byte-tie = the
-/// CONTENT. A regen's header may differ freely (a new timestamp); the
-/// content's sha must not. The strip = the LEADING comment block only
-/// (the `//`, `#`, `--`, `;;` prefixes + the blanks) — the first code
-/// line ends it.
-pub fn strip_header(data: &[u8]) -> Vec<u8> {
-    let s = String::from_utf8_lossy(data);
-    let mut out = String::new();
-    let mut in_header = true;
-    for line in s.lines() {
-        let t = line.trim_start();
-        if in_header
-            && (t.is_empty()
-                || t.starts_with("//")
-                || t.starts_with("#")
-                || t.starts_with("--")
-                || t.starts_with(";;"))
-        {
-            continue;
+    /// Strip the leading GENERATED-header comment lines: the header = the
+    /// metadata (timestamps, git state, hashes) — the byte-tie = the
+    /// CONTENT. A regen's header may differ freely (a new timestamp); the
+    /// content's sha must not. The strip = the LEADING comment block only
+    /// (the `//`, `#`, `--`, `;;` prefixes + the blanks) — the first code
+    /// line ends it.
+    pub fn strip_header(data: &[u8]) -> Vec<u8> {
+        let s = String::from_utf8_lossy(data);
+        let mut out = String::new();
+        let mut in_header = true;
+        for line in s.lines() {
+            let t = line.trim_start();
+            if in_header
+                && (t.is_empty()
+                    || t.starts_with("//")
+                    || t.starts_with("#")
+                    || t.starts_with("--")
+                    || t.starts_with(";;"))
+            {
+                continue;
+            }
+            in_header = false;
+            out.push_str(line);
+            out.push('\n');
         }
-        in_header = false;
-        out.push_str(line);
-        out.push('\n');
+        out.into_bytes()
     }
-    out.into_bytes()
-}
 
     /// Byte-tie a label against the store: look up the stored digest,
     /// read the current file, CONTENT-hash (the header stripped from

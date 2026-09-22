@@ -25,15 +25,12 @@
 //!     tolerance — a newer emitter must not break an older forge);
 //!     pinned as documentation by `unknown_field_is_tolerated_deliberately`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Fail loud, fail clear (the house pattern: no bare `unwrap`).
-#[track_caller]
-#[allow(clippy::panic, reason = "test helper: fail loud, fail clear")]
-fn fail(msg: &str) -> ! {
-    panic!("{msg}");
-}
+use common::{fail, tempdir};
 
 /// The two generated manifests the binary loads (the `MANIFESTS`
 /// constant in main.rs), keyed by their repo-root-relative path.
@@ -42,27 +39,15 @@ const MANIFESTS: &[&str] = &[
     "crates/forge/src/faults_jobs_generated.json",
 ];
 
-/// Unique tempdir per test (the wasm-delta pattern).
-fn tempdir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "forge-fault-{tag}-{}-{:x}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).unwrap_or_else(|e| fail(&format!("tempdir: {e}")));
-    dir
-}
-
 /// A fake repo root with BOTH manifests copied in intact. Returns the
 /// root; the caller then corrupts one file under it.
 fn stage_root(tag: &str) -> PathBuf {
     let root = tempdir(tag);
     let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for manifest in MANIFESTS {
-        let file_name = Path::new(manifest).file_name().unwrap_or_else(|| fail("name"));
+        let file_name = Path::new(manifest)
+            .file_name()
+            .unwrap_or_else(|| fail("name"));
         let dst = root.join(manifest);
         std::fs::create_dir_all(dst.parent().unwrap_or_else(|| fail("parent")))
             .unwrap_or_else(|e| fail(&format!("mkdir: {e}")));
@@ -307,7 +292,8 @@ fn job_wrong_type_outputs_is_a_named_error() {
 fn empty_manifests_are_refused_as_zero_jobs() {
     let root = stage_root("zero");
     for manifest in MANIFESTS {
-        std::fs::write(root.join(manifest), "[]\n").unwrap_or_else(|e| fail(&format!("write: {e}")));
+        std::fs::write(root.join(manifest), "[]\n")
+            .unwrap_or_else(|e| fail(&format!("write: {e}")));
     }
 
     let run = run_forge(&root);
@@ -337,7 +323,11 @@ fn unknown_field_is_tolerated_deliberately() {
     let root = stage_root("unknown");
     let target = root.join(MANIFESTS[1]);
     let raw = std::fs::read_to_string(&target).unwrap_or_else(|e| fail(&format!("read: {e}")));
-    let corrupt = raw.replacen(r#""package": "faults""#, r#""bogus": "x", "package": "faults""#, 1);
+    let corrupt = raw.replacen(
+        r#""package": "faults""#,
+        r#""bogus": "x", "package": "faults""#,
+        1,
+    );
     assert_ne!(corrupt, raw, "the corruption must land");
     std::fs::write(&target, corrupt).unwrap_or_else(|e| fail(&format!("write: {e}")));
 

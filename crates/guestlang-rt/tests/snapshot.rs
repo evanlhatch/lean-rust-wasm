@@ -4,11 +4,8 @@
 
 use guestlang_rt::Runtime;
 
-fn demo_wasm() -> Vec<u8> {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..//lean/wasm-backend/target/demo.wasm");
-    std::fs::read(std::fs::canonicalize(&p).expect("run `just wasm-compile`")).unwrap()
-}
+mod common;
+use common::demo_wasm;
 
 #[test]
 fn snapshot_restore_is_fresh_call_equivalent() {

@@ -92,17 +92,16 @@ structure PkgScan where
   decls : Array (Name × Bool) := #[]
   loadError : Option String := none
 
-/-- Load one package's env (the Axioms preamble: its olean dir prepended,
-    initializers executed), collect its own decls, and merge the env's
-    our-tree used-constant set into `usedRef`. The env is dropped after
-    the scan — one environment in memory at a time. -/
+/-- Load one package's env via the shared loadPkgEnv preamble (olean dir
+    prepended, initializers executed), collect its own decls, and merge
+    the env's our-tree used-constant set into `usedRef`. The env is
+    dropped after the scan — one environment in memory at a time. -/
 unsafe def scanPkg (base : SearchPath) (pkg : PkgSpec) (usedRef : IO.Ref NameSet) :
     IO PkgScan := do
-  Lean.searchPathRef.set (pkg.oleanDirOf :: base)
-  try
-    Lean.enableInitializersExecution
-    let env ← importModules (pkg.roots.map ({ module := · })) {}
-      (trustLevel := 1024) (loadExts := true)
+  match ← loadPkgEnv base pkg with
+  | .error e =>
+    return { dir := pkg.dir, loadError := some e }
+  | .ok env =>
     let ctx : Core.Context := { fileName := "<gates-audit>", fileMap := default }
     let (decls, _) ← (LintKit.packageDecls env (pkg.roots.map (·.getRoot))).toIO ctx { env := env }
     let rows := decls.toList.map fun d =>
@@ -111,8 +110,6 @@ unsafe def scanPkg (base : SearchPath) (pkg : PkgSpec) (usedRef : IO.Ref NameSet
       (d, Lean.Meta.isInstanceCore env d)
     usedRef.modify (scanUsedConsts env ++ ·)
     return { dir := pkg.dir, decls := rows.toArray }
-  catch e =>
-    return { dir := pkg.dir, loadError := some (toString e) }
 
 /-- Render the zero-consumer section: per package, the decls no loaded
     env references, minus the allowlist. Sorted by name (deterministic). -/

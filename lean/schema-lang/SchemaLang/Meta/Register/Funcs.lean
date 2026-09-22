@@ -77,7 +77,9 @@ def funcSemOfStx (stx : Syntax) : Except String FuncSem := do
     | other =>
         .error (s!"unknown @[schema_fn] argument `{other}` — valid: "
           ++ "strict, propagate, custom (nullSem); pure, stable, volatile (determinism); "
-          ++ "stream, once (delivery)")
+          ++ "stream, once (delivery)" ++
+          CodegenCore.didYouMeanSuffix other
+            ["strict", "propagate", "custom", "pure", "stable", "volatile", "stream", "once"])
   -- `simple` shape: [name ident, one optional arg]; .missing =
   -- programmatic application (no args)
   let opts := match stx with

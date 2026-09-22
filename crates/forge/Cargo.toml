@@ -15,4 +15,4 @@ serde_json = "1"
 # libraries must not forward fastrace (guestlang-host's manifest note).
 fast-observe = { version = "0.1", default-features = false, features = ["instant"] }
 sha2 = "0.10"
-workspace-alloc = { path = "../workspace-alloc" }
+mimalloc.workspace = true

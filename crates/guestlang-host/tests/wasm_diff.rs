@@ -206,24 +206,17 @@ async fn engine_same_instance() -> Result<(), Box<dyn std::error::Error>> {
     let mut failures: Vec<String> = Vec::new();
     // The record-ARG convention: a record-valued param's row args = the
     // FIELD VALUES FLAT (id, name, email, tags comma-joined) — the
-    // manifest rows are List String, so the arg-builder constructs the
-    // Val::Record from them (the canonical ABI flattens the user to
-    // u64 + 3×(ptr,len); wasmtime lowers the Val tree the same way).
+    // manifest rows are List String, so the arg-builder ADAPTS the
+    // shared `user_val` from the string row (the canonical ABI
+    // flattens the user to u64 + 3×(ptr,len); wasmtime lowers the Val
+    // tree the same way).
     fn user_record(strs: &[&str]) -> Val {
-        Val::Record(vec![
-            ("id".into(), Val::U64(strs[0].parse::<u64>().expect("user id"))),
-            ("name".into(), Val::String(strs[1].to_string())),
-            ("email".into(), Val::String(strs[2].to_string())),
-            (
-                "tags".into(),
-                Val::List(
-                    strs[3]
-                        .split(',')
-                        .map(|t| Val::String(t.to_string()))
-                        .collect(),
-                ),
-            ),
-        ])
+        user_val(
+            strs[0].parse::<u64>().expect("user id"),
+            strs[1],
+            strs[2],
+            &strs[3].split(',').collect::<Vec<_>>(),
+        )
     }
     // The VARIANT-ARG convention: a variant-valued param's row args =
     // [discr, payload] — the canonical-ABI flat form. The discr = the

@@ -5,11 +5,8 @@
 
 use guestlang_rt::{invoke_core, invoke_core_fueled};
 
-fn demo_wasm() -> Vec<u8> {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..//lean/wasm-backend/target/demo.wasm");
-    std::fs::read(std::fs::canonicalize(&p).expect("run `just wasm-compile`")).unwrap()
-}
+mod common;
+use common::demo_wasm;
 
 /// Look up a (fn, args) row in the oracle manifest and return the
 /// expected scalar result as a u64. Panics on miss (manifest must
