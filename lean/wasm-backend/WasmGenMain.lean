@@ -14,7 +14,7 @@ The `leanir` pattern: import the manifest's modules' oleans, re-run the
 LCNF pipeline (the impure-phase LCNF — Perceus RC included — is NOT
 persisted in oleans), read the final `Decl`s from `impureExt`, emit WAT.
 
-Pipeline: this exe writes `target/demo.wat` + `demo-world.wit` (+ the
+Pipeline: this exe writes `artifact/demo.wat` + `demo-world.wit` (+ the
 observability manifest); the oracle manifest is `lake exe oracle`
 (OracleMain.lean — the row universe lives in the Oracle library);
 the justfile drives `wasm-tools parse -g` → binary, the component
@@ -531,8 +531,8 @@ component embeds IT.
 
 /-! ## The Emitter spine (W7.12)
 
-The three artifacts this exe writes (`target/demo.wat`,
-`demo-world.wit`, `../../src/observability_generated.rs`) are
+The three artifacts this exe writes (`artifact/demo.wat`,
+`demo-world.wit`, `../../generated/rust/observability_generated.rs`) are
 `CodegenCore.Emit.Emitter` instances over `WasmGenSpec` — declared
 outputs, header discipline, one write path (`runEmitters`). The spec
 is NOT `List Item`: the wat emitter's input is the LCNF re-run's
@@ -593,24 +593,25 @@ def observabilityRsOf (worldExports : List WorldExport) : String :=
       ++ spanRows.map (· ++ ",\n")
       ++ ["];\n"] )
 
-/-- The compiled module (`target/demo.wat`). `watBody` carries the
+/-- The compiled module (`artifact/demo.wat`). `watBody` carries the
     LCNF re-run's result; the emitter only wraps it with the path (the
     header is the driver's prepend). -/
 def watEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
   name := "wat"
   style := .wat
   specSource := "DemoFn.lean"
-  outputs := ["target/demo.wat"]
-  run spec := [{ path := "target/demo.wat", contents := spec.watBody }]
+  outputs := ["artifact/demo.wat"]
+  run spec := [{ path := "artifact/demo.wat", contents := spec.watBody }]
 
-/-- The component world (`demo-world.wit` — `./`-prefixed so the shared
-    write path's parent-dir computation names a real directory). -/
+/-- The component world (`generated/wit/demo-world.wit` — repo-root
+    relative like the schema-lang WIT emitters; `../..`-prefixed so the
+    shared write path's parent-dir computation names a real directory). -/
 def worldWitEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
   name := "world-wit"
   style := .doubleSlash
   specSource := "the schema registry (the @[schema_fn] items — the fold)"
-  outputs := ["./demo-world.wit"]
-  run spec := [{ path := "./demo-world.wit", contents := worldWitOf spec.items spec.worldExports }]
+  outputs := ["../../generated/wit/demo-world.wit"]
+  run spec := [{ path := "../../generated/wit/demo-world.wit", contents := worldWitOf spec.items spec.worldExports }]
 
 /-- THE OBSERVABILITY MANIFEST (the fast-observe seam): the spans =
     spec data, emitted from the SAME fold as the world (one writer). -/
@@ -618,9 +619,9 @@ def observabilityEmitter : CodegenCore.Emit.Emitter WasmGenSpec where
   name := "observability"
   style := .doubleSlash
   specSource := "the world fold (worldExportsOf)"
-  outputs := ["../../src/observability_generated.rs"]
+  outputs := ["../../generated/rust/observability_generated.rs"]
   run spec :=
-    [{ path := "../../src/observability_generated.rs"
+    [{ path := "../../generated/rust/observability_generated.rs"
        contents := observabilityRsOf spec.worldExports }]
 
 /-- The registry. Order = write order (wat, wit, observability — the
@@ -689,4 +690,4 @@ unsafe def main : IO Unit := do
       -- wall-clock is byte-tie-safe).
       if e.name == "wat" then CodegenCore.Emit.genMeta 0 0
       else CodegenCore.Emit.genMeta worldExports.length witBody.hash
-  IO.println "wrote target/demo.wat + demo-world.wit (the oracle: lake exe oracle)"
+  IO.println "wrote artifact/demo.wat + generated/wit/demo-world.wit (the oracle: lake exe oracle)"

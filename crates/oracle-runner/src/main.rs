@@ -1,7 +1,7 @@
 //! oracle-runner — the differential oracle's host-side driver + debug loop
 //! (W6.3 phase 2).
 //!
-//! WHAT IT IS: the oracle manifest (lean/wasm-backend/target/diff.json —
+//! WHAT IT IS: the oracle manifest (lean/wasm-backend/artifact/diff.json —
 //! Lean's own evals, the semantics authority) replayed against the emitted
 //! component, with the comparison pushed INTO the oracle's terms: a mismatch
 //! reports a VERDICT — the first-divergence triple (observed vs expected vs
@@ -683,8 +683,8 @@ struct Cli {
 
 fn parse_flags(args: &[String]) -> Result<Cli, String> {
     let mut cli = Cli {
-        manifest: repo_path("lean/wasm-backend/target/diff.json"),
-        component: repo_path("lean/wasm-backend/target/demo.component.wasm"),
+        manifest: repo_path("lean/wasm-backend/artifact/diff.json"),
+        component: repo_path("lean/wasm-backend/artifact/demo.component.wasm"),
         rest: Vec::new(),
     };
     let mut i = 0;

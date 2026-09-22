@@ -17,7 +17,7 @@ use forge::oci;
 
 // GENERATED driver surface (byte-tied): the pipeline stage machine.
 // (path is relative to THIS file's dir: crates/forge/src)
-#[path = "../../../src/pipeline_generated.rs"]
+#[path = "../../../generated/rust/pipeline_generated.rs"]
 pub mod pipeline_generated;
 
 use std::fs;
@@ -93,8 +93,8 @@ struct Job {
 // `forgeJobManifests` in lean/LintKit/LintKit/Runner.lean — same paths, no
 // shared const; keep the two in lockstep when the manifest set changes.
 const MANIFESTS: &[&str] = &[
-    "crates/forge/src/jobs_generated.json",
-    "crates/forge/src/faults_jobs_generated.json",
+    "generated/json/jobs_generated.json",
+    "generated/json/faults_jobs_generated.json",
 ];
 
 fn load_jobs(root: &Path) -> DriverResult<Vec<Job>> {
@@ -320,6 +320,10 @@ fn run(cmd: &mut Command, what: &str) -> DriverResult<()> {
 
 /// Build + run one generator exe. CWD is the lean package dir; the exe
 /// writes repo-root-relative paths (GenMain convention).
+/// SINGLE-LAKE (notes/single-lake-migration.md §7): the leaf lakefiles
+/// are deleted (the root lakefile is the workspace), so lake needs
+/// `--dir ../..` (the root workspace) and the CWD stays at the package
+/// dir for the exe's cwd-relative writes (the §7 gen-exe rule).
 fn run_job(tc: &Path, root: &Path, job: &Job) -> DriverResult<()> {
     let pkg_dir = root.join("lean").join(&job.package);
     let lake = tc.join("lake");
@@ -327,6 +331,8 @@ fn run_job(tc: &Path, root: &Path, job: &Job) -> DriverResult<()> {
     path = format!("{}:{}", tc.display(), path);
     run(
         Command::new(&lake)
+            .arg("--dir")
+            .arg("../..")
             .arg("build")
             .arg(&job.exe)
             .current_dir(&pkg_dir)
@@ -335,6 +341,8 @@ fn run_job(tc: &Path, root: &Path, job: &Job) -> DriverResult<()> {
     )?;
     run(
         Command::new(&lake)
+            .arg("--dir")
+            .arg("../..")
             .arg("exe")
             .arg(&job.exe)
             .args(&job.args)
@@ -366,7 +374,7 @@ fn main() {
 
     // Initialize the OCI store (lazy — only used with --store, and
     // read-only for drift checks with --check).
-    let oci_root = root.join("target/oci");
+    let oci_root = root.join("cache/oci");
     let mut store = match oci::OciStore::open(&oci_root) {
         Ok(store) => store,
         Err(e) => {

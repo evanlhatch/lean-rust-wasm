@@ -10,7 +10,7 @@ row identity, v1: the u64 order id), transitions as METHODS on the
 source state returning the target DIRECTLY.
 
 Ownership: this module is the ONLY writer of
-`../../src/order_typestate_generated.rs` (and its golden under
+`../../generated/rust/order_typestate_generated.rs` (and its golden under
 `goldens/typestate/`); `typestateEmitter` is registered in
 `SchemaLang.Emit.Registry.emitters`.
 
@@ -176,9 +176,9 @@ def typestateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "typestate"
   style := .doubleSlash
   specSource := "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
-  outputs := ["../../src/order_typestate_generated.rs"]
+  outputs := ["../../generated/rust/order_typestate_generated.rs"]
   run _ctx :=
-    [{ path := "../../src/order_typestate_generated.rs"
+    [{ path := "../../generated/rust/order_typestate_generated.rs"
        contents := typestateRust }]
   law := some typestateLaw
 

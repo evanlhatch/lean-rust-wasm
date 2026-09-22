@@ -15,23 +15,23 @@
 //! assertion's text verbatim, collision-free.
 //!
 //! Ownership: crates/guestlang-host/tests/replay.rs (the witness-replay
-//! lanes). Additive only; src/** untouched (included by path, compiled
-//! as-is).
+//! lanes). Additive only; generated/** untouched (included by path,
+//! compiled as-is).
 
 // The GENERATED modules, included by path (the suites' original anchor:
-// tests/ + three ups = the repo-root src/). The per-lane inner modules
+// tests/ + three ups = the repo-root generated/rust/). The per-lane inner modules
 // below import from `super` — keeping the lane bodies verbatim.
 
-#[path = "../../../src/circuit_generated.rs"]
+#[path = "../../../generated/rust/circuit_generated.rs"]
 mod circuit_generated;
 
-#[path = "../../../src/order_machine_generated.rs"]
+#[path = "../../../generated/rust/order_machine_generated.rs"]
 mod order_machine;
 
-#[path = "../../../src/order_typestate_generated.rs"]
+#[path = "../../../generated/rust/order_typestate_generated.rs"]
 mod order_typestate;
 
-#[path = "../../../src/updates_generated.rs"]
+#[path = "../../../generated/rust/updates_generated.rs"]
 mod updates;
 
 // The generated `updates` module's `crate::schema_generated::User` —
@@ -42,7 +42,7 @@ use lean_rust_wasm::schema_generated;
 // ── lane: the certified dbsp circuit ────────────────────────────────
 
 mod circuit_lane {
-    //! `src/circuit_generated.rs`, GENERATED from `SchemaLang.Emit.Circuit`
+    //! `generated/rust/circuit_generated.rs`, GENERATED from `SchemaLang.Emit.Circuit`
     //! (the fold of `orderTotalCkt`; the incrementalization's certificate is
     //! the Lean theorem `Dbsp.incrementalize_ok`, shape-pinned by
     //! `#check_cert` in the emitter module). Replays the batch circuit's
@@ -129,7 +129,7 @@ mod circuit_lane {
 // ── lane: the order lifecycle (machine) ─────────────────────────────
 
 mod machine_lane {
-    //! `src/order_machine_generated.rs`, GENERATED from
+    //! `generated/rust/order_machine_generated.rs`, GENERATED from
     //! `SchemaLang.OrderMachine` (the proved machine: `lifecycle_rank_advances`,
     //! `terminal_only_reset`, `orderTableStep?_eq_step?` — Lean theorems).
     //! Replays place → ship → deliver, the cancel path, the terminal
@@ -187,7 +187,7 @@ mod machine_lane {
 // ── lane: the order lifecycle (typestate) ───────────────────────────
 
 mod typestate_lane {
-    //! `src/order_typestate_generated.rs` folds the SAME proved table as
+    //! `generated/rust/order_typestate_generated.rs` folds the SAME proved table as
     //! the enum+step module (`orderTableStep?_eq_step?`): legal transitions
     //! are direct returns (illegal = unrepresentable — no Option, no
     //! panic); `stray`/terminals get no constructors/methods (`Inv`
@@ -225,7 +225,7 @@ mod typestate_lane {
 // ── lane: the update semantics ──────────────────────────────────────
 
 mod updates_lane {
-    //! `src/updates_generated.rs`, GENERATED from the `schema_update`
+    //! `generated/rust/updates_generated.rs`, GENERATED from the `schema_update`
     //! registry (the proved `UpdateItem.applyRow` discipline: guard AND
     //! value read the ORIGINAL row; a refused row passes through
     //! untouched; the tick re-runs updates in registration order).

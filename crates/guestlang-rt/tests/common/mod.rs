@@ -4,7 +4,7 @@
 //! ONE demo-component loader. The three rt test surfaces
 //! (`conformance`, `snapshot`, `snapshot_restore_seq`) all exercise the
 //! SAME committed artifact: the compiler line's output at
-//! `lean/wasm-backend/target/demo.wasm` (`just wasm-compile`). A single
+//! `lean/wasm-backend/artifact/demo.wasm` (`just wasm-compile`). A single
 //! read path keeps the load story honest — every call site resolves the
 //! artifact identically, and an absent artifact surfaces loudly (the
 //! conformance/snapshot tests panic with the compile-line reminder; the
@@ -12,7 +12,7 @@
 //! have — hence the `-opt` twin).
 //!
 //! ONE oracle-manifest loader: the wasm-backend authority's generated
-//! rows at `lean/wasm-backend/target/diff.json` (the same `just
+//! rows at `lean/wasm-backend/artifact/diff.json` (the same `just
 //! wasm-compile` artifact the host crate's differential replays) —
 //! `diff_json_path` / `manifest` below.
 //!
@@ -28,7 +28,7 @@
 /// artifact is absent.
 fn demo_component_path() -> Option<std::path::PathBuf> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lean/wasm-backend/target/demo.wasm");
+        .join("../../lean/wasm-backend/artifact/demo.wasm");
     std::fs::canonicalize(p).ok()
 }
 
@@ -54,7 +54,7 @@ pub fn demo_wasm_opt() -> Option<Vec<u8>> {
 /// host's differential manifest consumes).
 pub fn diff_json_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lean/wasm-backend/target/diff.json")
+        .join("../../lean/wasm-backend/artifact/diff.json")
 }
 
 /// The oracle manifest rows `(fn, args, expected)` — the authority the

@@ -57,9 +57,9 @@ def guestEmitter : Emitter FaultsSpec where
   name := "faults-guest"
   style := .doubleSlash
   specSource := "Faults/Spec/Demo.lean"
-  outputs := ["../../src/faults_generated.rs"]
+  outputs := ["../../generated/rust/faults_generated.rs"]
   run items :=
-    [ { path := "../../src/faults_generated.rs"
+    [ { path := "../../generated/rust/faults_generated.rs"
       , contents := Rust.renderModule (Rust.faultModule "OrderError" items.codes) } ]
   law := some codesNodupLaw
 
@@ -72,9 +72,9 @@ def hostEmitter : Emitter FaultsSpec where
   name := "faults-host"
   style := .doubleSlash
   specSource := "Faults/Spec/Host.lean"
-  outputs := ["../../src/host_faults_generated.rs"]
+  outputs := ["../../generated/rust/host_faults_generated.rs"]
   run items :=
-    [ { path := "../../src/host_faults_generated.rs"
+    [ { path := "../../generated/rust/host_faults_generated.rs"
       , contents := Rust.renderModule (Rust.faultModule "HostFault" items.codes (guest? := false)) } ]
   law := some codesNodupLaw
 
@@ -98,8 +98,8 @@ the per-package manifest files and byte-ties every listed output.
 
 def forgeJobs : List (String × List String) :=
   [("faults-gen",
-    [ "../../src/faults_generated.rs"
-    , "../../src/host_faults_generated.rs"
+    [ "../../generated/rust/faults_generated.rs"
+    , "../../generated/rust/host_faults_generated.rs"
     ])]
 
 def jobsCoverEmitters : Bool :=
@@ -131,9 +131,9 @@ def forgeJobsEmitter : Emitter FaultsSpec where
   name := "forge-jobs"
   style := .hash
   specSource := "Faults.Emit.Registry (forgeJobs)"
-  outputs := ["../../crates/forge/src/faults_jobs_generated.json"]
+  outputs := ["../../generated/json/faults_jobs_generated.json"]
   run _ :=
-    [{ path := "../../crates/forge/src/faults_jobs_generated.json"
+    [{ path := "../../generated/json/faults_jobs_generated.json"
        contents := "[\n" ++ String.intercalate ",\n" forgeJobsLines ++ "\n]\n" }]
 
 /-- Pair each emitter with the spec it consumes (faults has two spec

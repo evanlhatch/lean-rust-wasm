@@ -1,7 +1,7 @@
 /-
 # SchemaLang.Vortex.Emit — the Vortex target
 
-Fold `Item`s to `src/vortex_generated.rs`: one DType constant and one
+Fold `Item`s to `generated/rust/vortex_generated.rs`: one DType constant and one
 `IntoVortex` impl per record. Discipline per codegen-core: names arrive
 pre-mangled (`Emit.pascal`/`snake`/`rustIdent` — the one mangling
 module), the item shape is the `CodegenCore.Emit.Rust.Item` AST, and
@@ -381,12 +381,12 @@ def vortexEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "vortex"
   style := .doubleSlash
   specSource := "Demo.lean"
-  outputs := ["../../src/vortex_generated.rs"]
+  outputs := ["../../generated/rust/vortex_generated.rs"]
   run ctx :=
     let table := match ctx.checkedItems? with
       | some cu => recordDTypesChecked cu
       | none => recordDTypes ctx.items
-    [ { path := "../../src/vortex_generated.rs"
+    [ { path := "../../generated/rust/vortex_generated.rs"
         contents :=
           CodegenCore.Emit.Rust.renderModule
             (useItems ++ table.flatMap recordItems) }

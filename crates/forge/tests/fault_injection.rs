@@ -1,8 +1,8 @@
 //! FAULT INJECTION — corrupt/truncated forge job manifests
 //! (review 2026-09-16 item 6).
 //!
-//! Injection surface: `src/jobs_generated.json` +
-//! `src/faults_jobs_generated.json` — the ONLY files the forge binary
+//! Injection surface: `generated/json/jobs_generated.json` +
+//! `generated/json/faults_jobs_generated.json` — the ONLY files the forge binary
 //! parses to decide what to run. The parser is a hand-rolled minimal
 //! reader PRIVATE to the binary (`main.rs::load_jobs_of`), so the
 //! honest test drives the REAL binary as a subprocess with
@@ -35,15 +35,17 @@ use common::{fail, tempdir};
 /// The two generated manifests the binary loads (the `MANIFESTS`
 /// constant in main.rs), keyed by their repo-root-relative path.
 const MANIFESTS: &[&str] = &[
-    "crates/forge/src/jobs_generated.json",
-    "crates/forge/src/faults_jobs_generated.json",
+    "generated/json/jobs_generated.json",
+    "generated/json/faults_jobs_generated.json",
 ];
 
 /// A fake repo root with BOTH manifests copied in intact. Returns the
 /// root; the caller then corrupts one file under it.
 fn stage_root(tag: &str) -> PathBuf {
     let root = tempdir(tag);
-    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // The manifests live at generated/json/ (repo-root-relative) — the
+    // source dir is computed from the crate dir (crates/forge).
+    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../generated/json");
     for manifest in MANIFESTS {
         let file_name = Path::new(manifest)
             .file_name()

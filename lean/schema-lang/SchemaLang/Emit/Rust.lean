@@ -535,13 +535,13 @@ def rustEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "rust"
   style := .doubleSlash
   specSource := "Demo.lean"
-  outputs := ["../../src/schema_generated.rs"]
+  outputs := ["../../generated/rust/schema_generated.rs"]
   run ctx :=
     let items := match ctx.checkedItems? with
       | some cu => SchemaLang.Emit.Rust.schemaItemsChecked cu
       | none => SchemaLang.Emit.Rust.schemaItems ctx.items
     [
-      { path := "../../src/schema_generated.rs"
+      { path := "../../generated/rust/schema_generated.rs"
         contents := CodegenCore.Emit.Rust.renderModule items }
     ]
   law := some SchemaLang.Emit.Rust.rustLaw

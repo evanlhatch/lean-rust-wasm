@@ -15,7 +15,7 @@
 //! corruptible):
 //!   - `src/*_generated.rs` — COMPILED IN, not a runtime artifact. Not injectable; excluded by
 //!     construction.
-//!   - `lean/wasm-backend/target/demo.component.wasm` — the guest, loaded via
+//!   - `lean/wasm-backend/artifact/demo.component.wasm` — the guest, loaded via
 //!     `HostEngine::load_component` (wasmtime `Component::from_file`). THE wasm target.
 //!   - `tests/fixtures/wit_fixture_*.wit` — parsed by wit-parser at test time
 //!     (`wit_fixture_sweep.rs`).

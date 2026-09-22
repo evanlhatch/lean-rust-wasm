@@ -187,12 +187,12 @@ def deltaEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "delta"
   style := .doubleSlash
   specSource := "Demo.lean"
-  outputs := ["../../src/delta_generated.rs"]
+  outputs := ["../../generated/rust/delta_generated.rs"]
   run ctx :=
     let recordUses :=
       (Item.partition ctx.items).records.map fun (n, _) =>
         CodegenCore.Emit.Rust.Item.use_ s!"crate::schema_generated::{CodegenCore.Emit.pascal n}"
-    [{ path := "../../src/delta_generated.rs"
+    [{ path := "../../generated/rust/delta_generated.rs"
        contents :=
          CodegenCore.Emit.Rust.renderModule
            ([ .use_ "crate::dbsp" ]
@@ -209,9 +209,9 @@ def deltaWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "delta-wit"
   style := .doubleSlash
   specSource := "Demo.lean"
-  outputs := ["../../wit/delta.wit"]
+  outputs := ["../../generated/wit/delta.wit"]
   run ctx :=
-    [{ path := "../../wit/delta.wit"
+    [{ path := "../../generated/wit/delta.wit"
        contents :=
          String.join ((ctx.items.flatMap Item.changeWitDecl).map (· ++ "\n")) }]
 
@@ -230,9 +230,9 @@ def changeSpecEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "change-spec"
   style := .doubleSlash
   specSource := "Dbsp.ChangeSpec (lean/dbsp) — the kernel-checked Change class"
-  outputs := ["../../src/dbsp_change_generated.rs"]
+  outputs := ["../../generated/rust/dbsp_change_generated.rs"]
   run _ctx :=
-    [{ path := "../../src/dbsp_change_generated.rs"
+    [{ path := "../../generated/rust/dbsp_change_generated.rs"
        contents := CodegenCore.Emit.Rust.renderModule
          [ .comment "The guestlang change algebra — the Rust mirror of"
          , .comment "`Dbsp.ChangeSpec` (Lean's kernel-checked class: `Change (α Δα)`"

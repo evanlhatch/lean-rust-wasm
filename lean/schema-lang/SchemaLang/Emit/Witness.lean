@@ -9,7 +9,7 @@ proof term in W9.1's calculus, the pinned fuel (`consumed × 4`, owner
 decision 2 / §7.3), the envelope pair (version + the schema-surface
 hash of the record's field list) — SELF-CHECK it in-process with
 W9.2's checker (`selfChecked?`), and emit the byte-tied witness
-registry artifact (`../../src/witnesses_generated.rs`, one row per
+registry artifact (`../../generated/rust/witnesses_generated.rs`, one row per
 obligation: label + artifact name + version + surface hash + fuel +
 the encoded certificate bytes).
 
@@ -41,7 +41,7 @@ two directions together: the host ships only checked witnesses
    needs NO wiring for this artifact (the fold is ctx-independent);
    the coverage matrix baseline gains one emitter column (the owner's
    `gates coverage --write`).
-2. **The artifact is a Rust static table in `src/`, not a `witnesses/`
+2. **The artifact is a Rust static table in `generated/rust/`, not a `witnesses/`
    blob directory.** The declared-outputs discipline: one writer (this
    emitter), byte-tied like every sibling. The per-obligation
    `witnesses/<record>-v<from>-v<to>.wtn` name (design §4) is the
@@ -306,7 +306,7 @@ theorem witnessLaw_discharged (ctx : GenCtx) : witnessLaw ctx := by
 
 /-- The registry artifact's path (repo-root-relative, the declared
     output — the one-writer discipline). -/
-def witnessArtifactPath : String := "../../src/witnesses_generated.rs"
+def witnessArtifactPath : String := "../../generated/rust/witnesses_generated.rs"
 
 /-- The wire bytes as a Rust `&[u8]` literal's body. -/
 def renderBytes (bs : List UInt8) : String :=

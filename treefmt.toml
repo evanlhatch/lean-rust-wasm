@@ -6,6 +6,10 @@
 excludes = [
     "target/*",
     "target-fix/*",
+    # EMITTER OUTPUTS (byte-tied; rustfmt/dprint would churn the pins —
+    # the generated-artifacts home, cf. the old src/*_generated.rs + the
+    # crates/forge/src/*_generated.json files which had the same hazard).
+    "generated/*",
     ".devenv/*",
     ".direnv/*",
     "result",

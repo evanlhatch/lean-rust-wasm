@@ -333,9 +333,9 @@ def circuitEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "circuit"
   style := .doubleSlash
   specSource := "SchemaLang.Emit.Circuit (orderTotalCkt; cert Dbsp.incrementalize_ok)"
-  outputs := ["../../src/circuit_generated.rs"]
+  outputs := ["../../generated/rust/circuit_generated.rs"]
   run _ctx :=
-    [{ path := "../../src/circuit_generated.rs"
+    [{ path := "../../generated/rust/circuit_generated.rs"
        contents := circuitRust }]
   law := some circuitLaw
 

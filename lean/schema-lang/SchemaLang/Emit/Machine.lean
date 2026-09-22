@@ -186,9 +186,9 @@ def orderMachineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "order-machine"
   style := .doubleSlash
   specSource := "SchemaLang.OrderMachine (orderMachineTrans + orderMachineTableStep?_eq_step?)"
-  outputs := ["../../src/order_machine_generated.rs"]
+  outputs := ["../../generated/rust/order_machine_generated.rs"]
   run _ctx :=
-    [{ path := "../../src/order_machine_generated.rs"
+    [{ path := "../../generated/rust/order_machine_generated.rs"
        contents := orderMachineRust }]
   law := some orderMachineLaw
 

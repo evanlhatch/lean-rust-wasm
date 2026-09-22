@@ -443,7 +443,7 @@ def partitionChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   let some ff := SchemaLang.Emit.emitters.find? fun e => e.name == "flags-wit" |
     throw "flags-wit emitter not registered"
   let files := ff.run ctx
-  _ ← assertEq "flags path" (files.head?.map (·.path)) (some "../../wit/flags.wit")
+  _ ← assertEq "flags path" (files.head?.map (·.path)) (some "../../generated/wit/flags.wit")
   _ ← assert ((files.head?.map (·.contents) |>.getD "").contains "world flags {")
     "flags world rendered (empty partition = the bare world)"
   -- the lookup is total over the roots the ctx names
@@ -593,7 +593,7 @@ def genRustChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   -- a fn (the non-vacuity sweep)
   let files := genRustEmitter.run ctx
   _ ← assertEq "gen-rust path" (files.head?.map (·.path))
-    (some "../../src/gen_generated.rs")
+    (some "../../generated/rust/gen_generated.rs")
   _ ← assertEq "gen-rust deterministic" (files.map (·.contents))
     ((genRustEmitter.run ctx).map (·.contents))
   let demoOut := files.head?.map (·.contents) |>.getD ""
@@ -685,11 +685,11 @@ def deltaChecks : CheckResult := do
   _ ← assert (out.contains "impl dbsp::Change<User> for UserChange") "ChangeSpec impl"
   -- the emitters: declared paths, determinism
   let files := deltaEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)
-  _ ← assertEq "delta path" (files.head?.map (·.path)) (some "../../src/delta_generated.rs")
+  _ ← assertEq "delta path" (files.head?.map (·.path)) (some "../../generated/rust/delta_generated.rs")
   _ ← assertEq "delta deterministic" (files.map (·.contents))
     ((deltaEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)).map (·.contents))
   let wfiles := deltaWitEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)
-  _ ← assertEq "deltaWit path" (wfiles.head?.map (·.path)) (some "../../wit/delta.wit")
+  _ ← assertEq "deltaWit path" (wfiles.head?.map (·.path)) (some "../../generated/wit/delta.wit")
   let wout := wfiles.head?.map (·.contents) |>.getD ""
   _ ← assertEq "deltaWit deterministic" wout
     ((deltaWitEmitter.run (SchemaLang.Emit.GenCtx.itemsOnly demoItems)).head?.map (·.contents) |>.getD "")
@@ -733,7 +733,7 @@ def extDTypeChecks : CheckResult := do
   let files := SchemaLang.Vortex.Emit.extVortexEmitter.run
     (SchemaLang.Emit.GenCtx.itemsOnly [])
   _ ← assertEq "ext path" (files.head?.map (·.path))
-    (some "../../src/ext_dtypes_generated.rs")
+    (some "../../generated/rust/ext_dtypes_generated.rs")
   .ok ()
 
 /-! ## Vortex well-formedness gate (3.5): every emitted dtype is wellFormed -/
@@ -2032,7 +2032,7 @@ def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
     (some (.citedProof `userNameLenProved))
   _ ← assertEq "boundary row's evidence is the emitted check fn"
     (SchemaLang.SchemaObligation.discharge obs[0]!)
-    (some (.generatedCheck "../../src/invariants_generated.rs" "check_id_positive"))
+    (some (.generatedCheck "../../generated/rust/invariants_generated.rs" "check_id_positive"))
   -- negative control: a hand-set proved tier WITHOUT the citation is
   -- the loud gap — discharge refuses, it does not fabricate evidence
   let bogus := { obs[0]! with tier := CodegenCore.Obligation.Tier.provedAtElab }
@@ -2057,7 +2057,7 @@ def invariantChecks (invs : List SchemaLang.InvariantItem) : CheckResult := do
   let files := SchemaLang.Emit.Invariant.invariantEmitter.run
     { items := [], invariants := invs, updates := [] }
   _ ← assertEq "invariant path" (files.head?.map (·.path))
-    (some "../../src/invariants_generated.rs")
+    (some "../../generated/rust/invariants_generated.rs")
   _ ← assertEq "invariant deterministic" (files.map (·.contents))
     ((SchemaLang.Emit.Invariant.invariantEmitter.run
         { items := [], invariants := invs, updates := [] }).map (·.contents))
@@ -2648,7 +2648,7 @@ def updateChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   -- the lane runs over the EXT-REPLAYED rows (the v2 contract)
   let files := SchemaLang.Emit.Update.updateEmitter.run ctx
   _ ← assertEq "update path" (files.head?.map (·.path))
-    (some "../../src/updates_generated.rs")
+    (some "../../generated/rust/updates_generated.rs")
   _ ← assertEq "update deterministic" (files.map (·.contents))
     ((SchemaLang.Emit.Update.updateEmitter.run ctx).map (·.contents))
   let out := files.head?.map (·.contents) |>.getD ""
@@ -4039,7 +4039,7 @@ example : demoObligation.discharge
 -- every ctx (the registry is module data — the `circuitLaw` precedent)
 example : witnessEmitter.law.isSome = true := rfl
 example (ctx : SchemaLang.Emit.GenCtx) : witnessEmitter.Cert ctx := witnessLaw_discharged ctx
-example : witnessEmitter.outputs = ["../../src/witnesses_generated.rs"] := rfl
+example : witnessEmitter.outputs = ["../../generated/rust/witnesses_generated.rs"] := rfl
 
 /-- The executed pins: the artifact's byte payload decoded + resolved +
     re-checked at RUNTIME (the codec's kernel path is un-evaluable —
@@ -4070,7 +4070,7 @@ def witnessEmitChecks : CheckResult := do
     -- the emitted artifact's content: the registry, the row, THE BYTES
     match witnessFiles demoWitnesses with
     | [f] => do
-      _ ← assertEq "artifact path" f.path "../../src/witnesses_generated.rs"
+      _ ← assertEq "artifact path" f.path "../../generated/rust/witnesses_generated.rs"
       _ ← assertContains "artifact declares the registry" f.contents "pub static WITNESS_REGISTRY"
       _ ← assertContains "artifact row: the obligation label" f.contents "user-v1-v2-id-positive"
       _ ← assertContains "artifact row: the pinned fuel" f.contents "fuel: 12u64"
@@ -4093,7 +4093,7 @@ def parseRowBytes? (text : String) : Option (List UInt8) := do
     artifact (what the host ships), parse the row's bytes back out,
     decode + resolve, re-check. IO; run from `main`. -/
 def artifactFileChecks : IO UInt32 := do
-  let path : System.FilePath := "../../src/witnesses_generated.rs"
+  let path : System.FilePath := "../../generated/rust/witnesses_generated.rs"
   unless ← path.pathExists do
     IO.println "W9.4 artifact-file check FAILED: witnesses_generated.rs absent — run `lake exe schema gen`"
     return 1

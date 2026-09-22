@@ -12,7 +12,7 @@ use guestlang_rt::invoke_core_fueled;
 
 fn py_wasm() -> Vec<u8> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lean/edgepython/target/py.wasm");
+        .join("../../lean/edgepython/artifact/py.wasm");
     std::fs::read(std::fs::canonicalize(&p).expect("run `just edgepython`")).unwrap()
 }
 

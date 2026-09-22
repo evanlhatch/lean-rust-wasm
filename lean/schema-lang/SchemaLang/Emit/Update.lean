@@ -3,7 +3,7 @@
 
 The update registry (SchemaLang.Meta.Reflect's `updateItemExt`,
 authoring surface `schema_update`) is EMITTED here:
-`../../src/updates_generated.rs` — one `pub fn apply_<name>(rows: &mut
+`../../generated/rust/updates_generated.rs` — one `pub fn apply_<name>(rows: &mut
 Vec<<Record>>) ` per update (the guard + the single-column write,
 compiled from the VExpr values), plus one `pub fn tick_<record>`
 folding that record's updates in registration order (the tick's
@@ -164,7 +164,7 @@ def moduleItems (ups : List DemoUpdate) : List CodegenCore.Emit.Rust.Item :=
 
 /-- The emitter's pure fold (the compile logic, fully testable). -/
 def updateFiles (ups : List DemoUpdate) : List CodegenCore.Emit.GeneratedFile :=
-  [ { path := "../../src/updates_generated.rs"
+  [ { path := "../../generated/rust/updates_generated.rs"
       contents := CodegenCore.Emit.Rust.renderModule (moduleItems ups) } ]
 
 /-! ## The emitter -/
@@ -208,7 +208,7 @@ def updateEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "update"
   style := .doubleSlash
   specSource := "SchemaLang.Meta.Reflect (updateItemExt) — schema_update"
-  outputs := ["../../src/updates_generated.rs"]
+  outputs := ["../../generated/rust/updates_generated.rs"]
   run ctx := updateFiles (ctxRows ctx)
 
 end SchemaLang.Emit.Update

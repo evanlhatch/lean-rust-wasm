@@ -340,13 +340,13 @@ def genRustEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "gen-rust"
   style := .doubleSlash
   specSource := "Demo.lean + FeatureFlags.lean (@[schema] records; cedar-study.md Generators)"
-  outputs := ["../../src/gen_generated.rs"]
+  outputs := ["../../generated/rust/gen_generated.rs"]
   run ctx :=
     let items := match ctx.checkedItems? with
       | some cu => cu.val
       | none => ctx.items
     [
-      { path := "../../src/gen_generated.rs"
+      { path := "../../generated/rust/gen_generated.rs"
         contents := CodegenCore.Emit.Rust.renderModule
           (SchemaLang.Emit.GenRust.genRustItems items) }
     ]

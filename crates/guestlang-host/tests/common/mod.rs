@@ -2,7 +2,7 @@
 //! setup every test was hand-rolling):
 //!
 //! - FIXTURE PATHS — the demo-wasm location discipline in one place: the compiled Lean guests live
-//!   under `lean/wasm-backend/target/` (repo root, NOT the crate's own `target/`), the
+//!   under `lean/wasm-backend/artifact/` (repo root, NOT the crate's own `target/`), the
 //!   spliced/composed artifacts and rustc guest builds under the repo `target/`, and the test-only
 //!   fixtures under `tests/fixtures/`. Every path helper below is THE spelling of one artifact's
 //!   location.
@@ -64,18 +64,18 @@ pub fn repo_path(rel: &str) -> PathBuf {
 /// The compiled Lean demo component (`just wasm-compile`) — THE guest
 /// every suite loads. Component-wrapped (`demo.wasm` + component embed/new).
 pub fn demo_component_path() -> PathBuf {
-    repo_path("lean/wasm-backend/target/demo.component.wasm")
+    repo_path("lean/wasm-backend/artifact/demo.component.wasm")
 }
 
 /// The pre-`component new` CORE module (`just wasm-compile`'s inner
 /// artifact — a well-formed wasm binary of the wrong layer).
 pub fn demo_core_path() -> PathBuf {
-    repo_path("lean/wasm-backend/target/demo.wasm")
+    repo_path("lean/wasm-backend/artifact/demo.wasm")
 }
 
 /// The passthrough-spliced demo component (`just splice-smoke`).
 pub fn spliced_component_path() -> PathBuf {
-    repo_path("lean/wasm-backend/target/spliced.component.wasm")
+    repo_path("lean/wasm-backend/artifact/spliced.component.wasm")
 }
 
 /// The middleware-COMPOSED demo (`just splicer-mw`): the same
@@ -103,12 +103,12 @@ pub fn wasip3_guest_path() -> PathBuf {
 
 /// The EdgePython duel module (`just edgepython`).
 pub fn py_wasm_path() -> PathBuf {
-    repo_path("lean/edgepython/target/py.wasm")
+    repo_path("lean/edgepython/artifact/py.wasm")
 }
 
 /// The differential manifest — the wasm-backend oracle's generated rows.
 pub fn diff_json_path() -> PathBuf {
-    repo_path("lean/wasm-backend/target/diff.json")
+    repo_path("lean/wasm-backend/artifact/diff.json")
 }
 
 /// Lean's committed schema-surface rendering (`lake exe oracle coverage`).
@@ -123,7 +123,7 @@ pub fn universe_snapshot_path() -> PathBuf {
 
 /// The GENERATED wit the host's `bindgen!` consumed.
 pub fn gateway_wit_path() -> PathBuf {
-    repo_path("wit/gateway.wit")
+    repo_path("generated/wit/gateway.wit")
 }
 
 /// The crate's test fixtures (wit sweeps, the tampered snapshot).

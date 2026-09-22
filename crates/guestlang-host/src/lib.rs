@@ -38,7 +38,7 @@ pub mod valves;
 /// The host spans exactly what the spec declares, by name, with the
 /// spec's fields; an unregistered fn = no span (the coverage = the
 /// registry by construction).
-#[path = "../../../src/observability_generated.rs"]
+#[path = "../../../generated/rust/observability_generated.rs"]
 pub mod observability_generated;
 
 pub use engine::HostEngine;

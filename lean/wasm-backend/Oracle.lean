@@ -3,7 +3,7 @@
 
 THE single source of the oracle's rows (the generated-script era is
 over): the emission loop is `OracleMain.lean` (`lake exe oracle`;
-`just wasm-compile` pipes it to `target/diff.json`). The extraction makes
+`just wasm-compile` pipes it to `artifact/diff.json`). The extraction makes
 the gate's Lean side testable: `Tests/Main.lean` now ships a
 `TestKit.DiffSpec` proving the oracle REJECTS a sabotaged row (unknown
 fn, arity drift) — the corruption-negative discipline the smoke
@@ -36,7 +36,7 @@ arm (the same `decWitness?` + `checkWitness` the guest compiles — the
 duel pins the two backends agree). The existing rows' bytes are
 unchanged (append-only, the header's rule); the manifest hash above
 covers the pre-W9.6 universe and is superseded by the regenerated
-target/diff.json (`just wasm-diff-check` = the tie).
+artifact/diff.json (`just wasm-diff-check` = the tie).
 
 W9.x (the witness DIFFERENTIAL batch — the fuzz-gap audit's gap #1):
 the row universe grew again, append-only: `witnessBatch` (33 rows,

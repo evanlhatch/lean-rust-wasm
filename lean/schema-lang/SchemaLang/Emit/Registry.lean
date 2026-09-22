@@ -189,9 +189,9 @@ def pipelineEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "pipeline"
   style := .doubleSlash
   specSource := "SchemaLang.Pipeline (pipelineTrans + pipelineTableStep?_eq_step?)"
-  outputs := ["../../src/pipeline_generated.rs"]
+  outputs := ["../../generated/rust/pipeline_generated.rs"]
   run _ctx :=
-    [{ path := "../../src/pipeline_generated.rs"
+    [{ path := "../../generated/rust/pipeline_generated.rs"
        contents := pipelineRust }]
   law := some pipelineLaw
 
@@ -237,7 +237,7 @@ def coreEmitters : List (CodegenCore.Emit.Emitter GenCtx) :=
 /-- The manifest's OWN output path — the one output no core emitter
     declares (breaking the rows → registry → manifest cycle). -/
 def forgeJobsOutputPath : String :=
-  "../../crates/forge/src/jobs_generated.json"
+  "../../generated/json/jobs_generated.json"
 
 /-- The forge job rows for THIS package: (exe, args, outputs). DERIVED from
     the core emitter registry — no hand copy. Adding an emitter to
@@ -264,9 +264,9 @@ def forgeJobsEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "forge-jobs"
   style := .hash
   specSource := "SchemaLang.Emit.Registry (forgeJobs)"
-  outputs := ["../../crates/forge/src/jobs_generated.json"]
+  outputs := ["../../generated/json/jobs_generated.json"]
   run _ctx :=
-    [{ path := "../../crates/forge/src/jobs_generated.json"
+    [{ path := "../../generated/json/jobs_generated.json"
        contents := "[\n" ++ String.intercalate ",\n" forgeJobsLines ++ "\n]\n" }]
 
 /-- The registry. Order = write order. Declared AFTER every emitter it

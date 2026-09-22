@@ -648,9 +648,9 @@ def witEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "wit"
   style := .doubleSlash
   specSource := "Demo.lean"
-  outputs := ["../../wit/gateway.wit"]
+  outputs := ["../../generated/wit/gateway.wit"]
   run ctx := [
-    { path := "../../wit/gateway.wit"
+    { path := "../../generated/wit/gateway.wit"
       contents := SchemaLang.Emit.Wit.worldOf "demo:gateway" "gateway"
         (ctx.rootItems `Demo) }
   ]
@@ -673,9 +673,9 @@ def flagsWitEmitter : CodegenCore.Emit.Emitter SchemaLang.Emit.GenCtx where
   name := "flags-wit"
   style := .doubleSlash
   specSource := "FeatureFlags.lean (via GenCtx.rootPartitionOf)"
-  outputs := ["../../wit/flags.wit"]
+  outputs := ["../../generated/wit/flags.wit"]
   run ctx := [
-    { path := "../../wit/flags.wit"
+    { path := "../../generated/wit/flags.wit"
       contents := SchemaLang.Emit.Wit.worldOf "guestlang:flags" "flags"
         (ctx.rootItems `FeatureFlags) }
   ]

@@ -53,7 +53,7 @@ def manglerInverseChecks : CheckResult := do
   _ ← assertEq "capitalize" (capitalize "health") "Health"
   _ ← assertEq "capitalize empty" (capitalize "") ""
   -- rootRel: the "../../" prefix strips once; plain paths pass through
-  _ ← assertEq "rootRel strips ../../" (rootRel "../../wit/delta.wit") "wit/delta.wit"
+  _ ← assertEq "rootRel strips ../../" (rootRel "../../generated/wit/delta.wit") "generated/wit/delta.wit"
   _ ← assertEq "rootRel plain" (rootRel "plain/path.rs") "plain/path.rs"
   -- jsonStr: quotes and backslashes are the whole story
   _ ← assertEq "jsonStr plain" (jsonStr "/api/user") "\"/api/user\""

@@ -19,7 +19,7 @@
 //! - every step is decode-or-error: a restore failure is a structured `RtError` (loudly skipped),
 //!   never a panic.
 //!
-//! Requires `just wasm-compile`'s artifact (lean/wasm-backend/target/
+//! Requires `just wasm-compile`'s artifact (lean/wasm-backend/artifact/
 //! demo.wasm — the committed spec of record). Without it the target
 //! skips loudly (a fuzz target must not fake coverage of a module it
 //! does not have).

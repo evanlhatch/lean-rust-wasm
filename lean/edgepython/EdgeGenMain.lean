@@ -16,8 +16,8 @@ def main : IO Unit := do
   match compiledModule? with
   | none => throw (IO.userError "edgepython: the fixtures FAILED to compile")
   | some _ =>
-    IO.FS.createDirAll "target"
+    IO.FS.createDirAll "artifact"
     let wat := fixturesModule.render
-    IO.FS.writeFile "target/py.wat" wat
-    IO.println s!"edgepython: wrote target/py.wat ({wat.length} bytes, \
+    IO.FS.writeFile "artifact/py.wat" wat
+    IO.println s!"edgepython: wrote artifact/py.wat ({wat.length} bytes, \
       {fixtures.length} fns, {compiledFns.foldl (fun n f => n + f.body.length) 0} instrs)"

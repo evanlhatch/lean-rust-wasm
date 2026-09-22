@@ -4,7 +4,7 @@
 The row universe + expected-value fold live in `Oracle` (the library —
 testable, DiffSpec-covered); this exe is ONLY the emission loop. The
 manifest prints to stdout as a JSON array; `just wasm-compile` pipes it
-to `target/diff.json`, and steel-host's `wasm_diff` test replays it
+to `artifact/diff.json`, and steel-host's `wasm_diff` test replays it
 against the emitted wasm (wasmtime AND wasmi, with the sabotage
 control). Regenerated with the WAT so the manifest can never go stale
 against the module it audits.

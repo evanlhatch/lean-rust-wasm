@@ -22,7 +22,7 @@ pub extern "C" fn get_version() -> u32 {
 // `get_user` and embeds the component-type section into the core module.
 
 wit_bindgen::generate!({
-    path: "../../wit/gateway.wit",
+    path: "../../generated/wit/gateway.wit",
     world: "gateway",
     // The WIT emitter emits `async func` for `Async.Future` returns (wasi 0.3
     // async ABI) — watch-orders binds as a plain Rust async fn. No filter

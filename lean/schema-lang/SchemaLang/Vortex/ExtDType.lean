@@ -224,9 +224,9 @@ def extVortexEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "ext-vortex"
   style := .doubleSlash
   specSource := "SchemaLang/Vortex/ExtDType.lean (extDTypes)"
-  outputs := ["../../src/ext_dtypes_generated.rs"]
+  outputs := ["../../generated/rust/ext_dtypes_generated.rs"]
   run _ctx :=
-    [ { path := "../../src/ext_dtypes_generated.rs"
+    [ { path := "../../generated/rust/ext_dtypes_generated.rs"
         contents :=
           CodegenCore.Emit.Rust.renderModule (extDTypeModule extDTypes) }
     ]

@@ -3,7 +3,7 @@
 
 The invariant registry (SchemaLang.Meta.Reflect's `invariantItemExt`,
 authoring surface `schema_invariant`) is EMITTED here:
-`../../src/invariants_generated.rs` — one `pub fn check_<name>(v:
+`../../generated/rust/invariants_generated.rs` — one `pub fn check_<name>(v:
 &<Record>) -> bool` per invariant, compiled from the VExpr value (the
 `evalB` discipline: raw u64 ops over the struct's fields; strlen =
 `.len()` on strings), plus one `validate_<record>` folding that
@@ -130,7 +130,7 @@ def moduleItems (invs : List InvariantItem) : List CodegenCore.Emit.Rust.Item :=
 
 /-- The emitter's pure fold (the compile logic, fully testable). -/
 def invariantFiles (invs : List InvariantItem) : List CodegenCore.Emit.GeneratedFile :=
-  [ { path := "../../src/invariants_generated.rs"
+  [ { path := "../../generated/rust/invariants_generated.rs"
       contents := CodegenCore.Emit.Rust.renderModule (moduleItems invs) } ]
 
 /-! ## The emitter -/
@@ -149,7 +149,7 @@ def invariantEmitter : CodegenCore.Emit.Emitter GenCtx where
   name := "invariant"
   style := .doubleSlash
   specSource := "SchemaLang.Meta.Reflect (invariantItemExt) — schema_invariant"
-  outputs := ["../../src/invariants_generated.rs"]
+  outputs := ["../../generated/rust/invariants_generated.rs"]
   run ctx := invariantFiles ctx.invariants
 
 end SchemaLang.Emit.Invariant

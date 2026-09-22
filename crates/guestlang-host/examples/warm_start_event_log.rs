@@ -36,7 +36,8 @@ use guestlang_host::{CapabilitySet, ComponentRuntime, HostEngine};
 use wasmtime::component::Val;
 
 fn v1_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lean/wasm-backend/target/demo.component.wasm")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lean/wasm-backend/artifact/demo.component.wasm")
 }
 
 fn v2_path() -> PathBuf {

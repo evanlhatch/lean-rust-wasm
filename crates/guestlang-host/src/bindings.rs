@@ -15,7 +15,7 @@
 // The macro needs the WIT resolvable relative to this crate's root
 // (crates/guestlang-host → ../../ = repo root).
 wasmtime::component::bindgen!({
-    path: "../../wit/gateway.wit",
+    path: "../../generated/wit/gateway.wit",
     world: "gateway",
 });
 

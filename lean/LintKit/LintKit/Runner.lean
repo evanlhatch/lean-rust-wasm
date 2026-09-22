@@ -215,8 +215,8 @@ list is `MANIFESTS` in `crates/forge/src/main.rs` — same paths, two
 languages, no shared const; keep the two in lockstep when the manifest set
 changes. -/
 private def forgeJobManifests : List String :=
-  ["crates/forge/src/jobs_generated.json",
-   "crates/forge/src/faults_jobs_generated.json"]
+  ["generated/json/jobs_generated.json",
+   "generated/json/faults_jobs_generated.json"]
 
 /-- The artifact-header gate: every generated output DECLARED in a forge
 jobs manifest exists on disk and starts with the GENERATED header (the
