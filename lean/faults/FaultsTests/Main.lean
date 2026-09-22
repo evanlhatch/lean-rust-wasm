@@ -215,11 +215,12 @@ def knownTypesChecks (typeNames : List String) : CheckResult := do
     closed-world suggestion (via `Ty.check` → `CodegenCore.didYouMean`),
     and the elaboration diagnostics resolve THEIR E-codes from the same
     allocation schedule (single lookup). The kinds list is DERIVED from
-    `SchemaDiag`'s constructors — the full-list pin here is the
-    regression control on constructor order (a `SchemaDiag` edit shifts
-    the E-code block; the byte-tie and this pin both go loud). Negative
-    control: the lookup is keyed on the constructor kind — a sabotaged
-    kind misses. -/
+    `SchemaDiag`'s constructors at its definition site (`derive_ctor_kinds`
+    in Emit/Registry.lean) — the derived-only pins here (length + E-code
+    positions) are the regression controls on constructor order (a
+    `SchemaDiag` edit shifts the E-code block; the byte-tie and these
+    pins both go loud). Negative control: the lookup is keyed on the
+    constructor kind — a sabotaged kind misses. -/
 def diagCodeChecks : CheckResult := do
   -- the faults error path: did-you-mean reaches the payload diagnostics
   let broken : FailureModeItem :=
@@ -228,27 +229,33 @@ def diagCodeChecks : CheckResult := do
   let ds := broken.diagnose Spec.knownTypes
   _ ← assertEq "diagnose nonempty" ds.isEmpty false
   _ ← assertEq "diagnose did-you-mean" (ds.any fun d => d.contains "did you mean") true
-  -- the derived kinds: exactly the constructor list, in order. The pin
-  -- lists ALL of SchemaDiag's ctors — the W8.2 key lane, W8.13 inlineCycle
-  -- and the emitter-bug lane were added AFTER this pin was written (the
-  -- stale 10-ctor pin sat unnoticed: no gate ran this exe — lean-test is
-  -- lean-build only); updated to the current derived order, still the
-  -- append-only regression control on ctor order.
-  _ ← assertEq "schema-diag kinds (ctor order pinned)"
-    Faults.Emit.schemaDiagKinds
-    [ "unknownRef", "dupName", "asyncField", "nonBoundaryType"
-    , "notAStructure", "noCtor", "binderMismatch", "multiPayload"
-    , "reservedWord", "volatileInPureContext"
-    , "keyRecordMissing", "keyRecordNotRecord", "keyFieldsMismatch"
-    , "keyFieldMissing", "keyNotScalar", "foreignFieldMissing"
-    , "foreignTargetMissing", "foreignTargetNotRecord"
-    , "foreignTargetKeyless", "foreignTypeMismatch", "dupKeyDecl"
-    , "inlineCycle", "mangledCollision", "emptyVariant" ]
+  -- C2: the kinds list is DERIVED at its definition site
+  -- (`derive_ctor_kinds schemaDiagKinds schemaDiagKind from
+  -- SchemaLang.SchemaDiag` in Emit/Registry.lean — the constructor list
+  -- itself, in declaration order). The 24-name hand re-list that lived
+  -- here was a PROJECTION of that data — and it drifted once (the
+  -- W8.2/W8.13/emitter-bug ctors landed while the stale 10-ctor pin sat
+  -- unnoticed because no gate ran this exe). The pins are now
+  -- derived-only: a LENGTH pin (append-only guard — a new SchemaDiag
+  -- ctor without a deliberate pin update goes red), an allocation-keys
+  -- tie (`allocateCodes` zips list position, so the code KEYS are the
+  -- derived order), and E-code position pins at the FIRST, SECOND and
+  -- LAST positions (an insert before any ctor shifts the moved ctors'
+  -- codes; an append trips the length pin). The byte-tie is the
+  -- comprehensive stability control on the allocation.
+  _ ← assertEq "schema-diag kinds length (append-only)"
+    Faults.Emit.schemaDiagKinds.length 24
+  _ ← assertEq "schema-diag allocation keys = derived kind order"
+    (Faults.Emit.schemaDiagCodes.map (·.1)) Faults.Emit.schemaDiagKinds
   -- the schema-diag block: allocated AFTER the fault registries (4 + 4)
   _ ← assertEq "schema-diag codes start E108"
     ((Faults.Emit.schemaDiagCodes.map (·.2)).head?.getD "") "E108"
   _ ← assertEq "schema-diag block size"
     Faults.Emit.schemaDiagCodes.length Faults.Emit.schemaDiagKinds.length
+  -- the LAST ctor's code (position 23 → E131): a mid-list insert that
+  -- shifts any later ctor's code goes red on this pin
+  _ ← assertEq "tail ctor code E131"
+    ((Faults.Emit.schemaDiagCodes.map (·.2)).getLast?.getD "") "E131"
   -- the cross-ref: single-lookup coded render
   _ ← assertEq "coded render"
     (Faults.Emit.renderDiagCoded (.dupName "user"))

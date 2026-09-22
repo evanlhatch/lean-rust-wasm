@@ -115,13 +115,31 @@ fn fuel_bounds_runaway_guests_deterministically() {
 }
 
 // ── wasmi 2.0 consumption: the multi-engine proof surface ──────────
+//
+// C2: the scalar/component partition is DERIVED from the manifest rows
+// (the spec of record — diff.json), not hand-maintained. A fn is scalar
+// iff EVERY row's args AND expected parse as u64 — the flat core-ABI
+// surface `invoke_core` runs directly. The derivation's soundness probe
+// (2026-09-22 artifact, scratch run): every derived-scalar fn passes
+// the flat i64-bitcast duel against the Lean oracle row-for-row, and
+// every canonical-surface fn carries a NON-numeric row tell — string
+// args (`user-valid`'s `"zero"/"0@g.dev"`), string/record expected
+// (`greet`, `get-user`, `watch-*`), the variant's f64-payload row
+// (`order-error-valid` `["2","1.5"]` — not a u64), the witness byte
+// list (`verify-witness`). The one surface the shape cannot see is
+// `str-len-demo`'s WIT String RESULT — its manifest rows record only
+// the u64 length projection, and the flat duel passes all 42 rows, so
+// the derivation (correctly) duels it. The SURFACE PIN below keeps the
+// hand ENGINE-COVERAGE intent (which engine path each fn MUST exercise)
+// as the tie-test in `manifest_partition_is_exhaustive`: a manifest
+// shape change that would silently re-partition the duel fails loudly.
 
-/// The scalar subset of the oracle manifest: fns whose args/results are
-/// pure canonical scalars — the CORE-ABI surface wasmi runs directly.
-/// (String/record/option rows go through the component's canonical-ABI
-/// adapters — the wasmtime host's surface; async rows need the wasi 0.3
-/// task intrinsics.) The partition pin below RATCHETS: a new demo fn
-/// must be classified here or the duel fails.
+/// The hand surface pin (engine-coverage intent): fns whose WIT
+/// surface is pure canonical scalars — the CORE-ABI surface wasmi runs
+/// directly. (String/record/option rows go through the component's
+/// canonical-ABI adapters — the wasmtime host's surface; async rows
+/// need the wasi 0.3 task intrinsics.) MUST equal the derived scalar
+/// partition exactly.
 const SCALAR_DUEL: &[&str] = &[
     "double",
     "is-big",
@@ -130,21 +148,30 @@ const SCALAR_DUEL: &[&str] = &[
     "run-paps",
     "total",
     "pick",
-];
-const COMPONENT_ONLY: &[&str] = &[
+    // C2: moved here from COMPONENT_ONLY by the shape derivation —
+    // every row is (u64 id, u64 length) and the flat duel passes all
+    // 42 rows (the String result never appears in the manifest).
     "str-len-demo",
+];
+
+/// The hand surface pin (engine-coverage intent): fns whose rows run
+/// through the component's canonical-ABI adapters — the wasmtime host's
+/// surface. MUST equal the derived component-only partition exactly.
+const COMPONENT_ONLY: &[&str] = &[
     "greet",
     "get-user",
     "watch-counts",
     "watch-users",
     // the record-PARAM row: the flat field values reconstruct to guest
-    // pointers by the canonical-ABI adapter — the wasmtime host's
-    // surface (wasmi's core-abi invoke has no Val::Record lowering)
+    // pointers by the canonical-ABI adapter — the wasmi core-abi
+    // invoke has no Val::Record lowering (the row args are strings, so
+    // the shape derivation keeps them component-only)
     "user-valid",
     // the validators phase 2: the same component-adapter surface —
     // user-complete reconstructs the record (strlen/list-count gates);
     // order-error-valid's variant param = the flat [discr, payload]
-    // re-boxed by the variantParam adapter
+    // re-boxed by the variantParam adapter (its f64 case renders the
+    // non-numeric payload `"1.5"` — the row tell the derivation reads)
     "user-complete",
     "order-error-valid",
     // the W9.6 witness export: bytes in (the canonical list<u8> pair —
@@ -153,30 +180,79 @@ const COMPONENT_ONLY: &[&str] = &[
     "verify-witness",
 ];
 
-#[test]
-fn manifest_partition_is_exhaustive() {
-    // every manifest fn is classified — a new export can't silently
-    // dodge the duel (the Lean authority covers it SOMEWHERE)
+/// The manifest's fn names, deduped + sorted (stable key order).
+fn manifest_fn_names() -> Vec<String> {
     let mut fns: Vec<String> = manifest().into_iter().map(|(f, _, _)| f).collect();
     fns.sort();
     fns.dedup();
-    let mut classified: Vec<&str> = SCALAR_DUEL.iter().chain(COMPONENT_ONLY).copied().collect();
-    classified.sort();
-    classified.dedup();
+    fns
+}
+
+/// Shape-scalar: EVERY row's args AND expected parse as u64 — the flat
+/// canonical-scalar surface the core-ABI invoke runs directly.
+fn rows_are_canonical_scalars(fn_name: &str) -> bool {
+    manifest()
+        .into_iter()
+        .filter(|(f, _, _)| f == fn_name)
+        .all(|(_, args, expected)| {
+            args.iter().all(|a| a.parse::<u64>().is_ok()) && expected.parse::<u64>().is_ok()
+        })
+}
+
+/// The DERIVED duel partition: one fold over the manifest (the spec of
+/// record) — no hand list to rot. Scalar = shape-scalar fns, the rest
+/// are component-only.
+fn scalar_duel_fns() -> Vec<String> {
+    manifest_fn_names()
+        .into_iter()
+        .filter(|f| rows_are_canonical_scalars(f))
+        .collect()
+}
+
+fn component_only_fns() -> Vec<String> {
+    let scalar = scalar_duel_fns();
+    manifest_fn_names()
+        .into_iter()
+        .filter(|f| !scalar.contains(f))
+        .collect()
+}
+
+#[test]
+fn manifest_partition_is_exhaustive() {
+    // every manifest fn is classified BY SHAPE — a new export can't
+    // silently dodge the duel (the Lean authority covers it SOMEWHERE
+    // by construction). The derived-vs-surface-pin tie below is the
+    // drift alarm: a manifest shape change that would re-partition the
+    // duel (not merely add rows) FAILS here instead of silently
+    // shuffling engine coverage.
+    let scalar = scalar_duel_fns();
+    let component = component_only_fns();
+    let all = manifest_fn_names();
     assert_eq!(
-        SCALAR_DUEL.len() + COMPONENT_ONLY.len(),
-        classified.len(),
-        "overlap in the partition tables"
+        scalar.len() + component.len(),
+        all.len(),
+        "derived partition must cover exactly the manifest fns"
     );
-    let unclassified: Vec<&String> = fns
-        .iter()
-        .filter(|f| !classified.contains(&f.as_str()))
-        .collect();
     assert!(
-        unclassified.is_empty(),
-        "manifest fns not classified in the duel: {unclassified:?}"
+        component.iter().all(|f| !scalar.contains(f)),
+        "overlap in the derived partition"
     );
-    assert!(!SCALAR_DUEL.is_empty(), "scalar duel must be non-empty");
+    assert!(!scalar.is_empty(), "scalar duel must be non-empty");
+    // THE TIE with the hand surface pin (engine-coverage intent):
+    let mut pin_scalar: Vec<&str> = SCALAR_DUEL.to_vec();
+    pin_scalar.sort();
+    let mut pin_component: Vec<&str> = COMPONENT_ONLY.to_vec();
+    pin_component.sort();
+    let derived_scalar: Vec<&str> = scalar.iter().map(String::as_str).collect();
+    let derived_component: Vec<&str> = component.iter().map(String::as_str).collect();
+    assert_eq!(
+        derived_scalar, pin_scalar,
+        "derived scalar duel != surface pin — update the pin OR the manifest shape changed"
+    );
+    assert_eq!(
+        derived_component, pin_component,
+        "derived component-only != surface pin — update the pin OR the manifest shape changed"
+    );
 }
 
 #[test]
@@ -184,9 +260,10 @@ fn engine_duel_wasmi_matches_the_lean_authority() {
     // the SAME manifest rows guestlang-host replays under wasmtime, replayed
     // here under wasmi: one authority (Lean's evals), two engines
     let wasm = demo_wasm();
+    let scalar_duel = scalar_duel_fns();
     let mut ran = 0;
     for (f, args, expected) in manifest() {
-        if !SCALAR_DUEL.contains(&f.as_str()) {
+        if !scalar_duel.contains(&f) {
             continue;
         }
         // the boundary rows are U64 (the oracle's full-range inputs) —
