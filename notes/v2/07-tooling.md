@@ -50,6 +50,10 @@ and an explanation (CI as a machine) for what the pipeline IS.
 - Every `deriving`-staged handler must terminate in linear work over the
   record's fields; a handler that needs a fixpoint or search is a review
   failure.
+- The fallback: a type-gate whose elaboration cost breaches the regression
+  watch's delta DROPS a ladder rung with a note in the module header (which
+  rung it was, the measured cost) — never a silent `maxHeartbeats` bump (09 §1's
+  smell).
 
 ## 5. The kernel/axiom gates
 

@@ -87,3 +87,15 @@ are the only five questions a shape asks, and the answers are instances.
 - The layered model is the docs' spine: roots (01-02, 16-20), kernels
   (02), instances (12-15, 17-19), sequencing (11) — no layer re-invents
   a higher layer's theory.
+
+## 8. Temporality, resources, provenance (the would-be fourth roots)
+
+| Would-be root | What it actually is | The discipline |
+|---|---|---|
+| Temporality | the TraceModel's ORDER (Lamport; the Nat clock is the degenerate total-order case) | rate/duration = metric data over the order — Universe content, not a root |
+| Resources | monotone consumption (fuel/budgets/size) | a `Change` instance (the monus discipline) |
+| Provenance | the TraceModel OF THE BUILD | the ledger is an event log; the causal trail its poset (15 rides 19) |
+
+One line each: no new root earns entry without naming its slot in `00-core.md`
+— the only fourth-root trigger is probability (randomized semantics), and only
+when a product lane needs it.

@@ -39,6 +39,10 @@ the ladder; they do not substitute for it.
   fail loudly, per the Spec discipline).
 - Vacuity tripwire: every positive sweep ships its negative control; a control
   the sampler cannot catch is flagged VACUOUS.
+- The boundary: generated TESTS are product surface (sanctioned — they run in
+  CI); generated CERTIFICATES are verification objects (forbidden — infer them:
+  R11). A generated conformance battery is the former; a generated proof is the
+  latter.
 
 ## 4. The oracle / differential duel as regression
 

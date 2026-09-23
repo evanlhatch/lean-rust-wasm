@@ -30,6 +30,12 @@ Provability inherits: an instance cites the root theorems (20 §4).
 - C2 theory (Machines/Dbsp, mathlib). C3 app (emitters, meta, lanes, Vortex, per-product).
 - Enforcement: import-ban table as data; each module's cone in its header. C0/C1 never imports C2.
 
+Post-single-lakefile-migration (2026-09): the packages named in §2/§5 are
+LIBRARIES (`lean_lib` targets) in the one root lakefile, not lake packages; the
+cone rule is enforced by the import-ban linter as data (the lakefile boundaries
+are gone). `schema-core`/`wasm-core` = new libraries in the root, core-only by
+the ban table.
+
 ## 3. The primitives (four kinds + statement + one generative machine)
 
 1. **Registry** — append + replay + snapshot + member (`declare_registry_member`).
@@ -72,7 +78,11 @@ deriving Repr, Inhabited
 - ONE committed snapshot text covers all lanes → one breaking diff.
 - All goldens/witnesses/tests are folds of `Universe`; each lane is a field + a
   snapshot case + its emitter rows.
-- New lane = one field + one member registration + one derived reader.
+- The Universe value is the MATERIALIZATION (a fold) of the per-lane registry
+  env-extensions: the extensions remain the compile-time machinery, the Universe
+  the snapshot-time object.
+- New lane = one field + one member registration (the extension) + one derived
+  reader.
 
 ## 5. Target module tree (per cone — create/move modules to these homes)
 

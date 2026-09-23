@@ -10,6 +10,8 @@ create, delete, migrate, and how to know it is done.
 
 ## Reading order (agents)
 
+0. `00-core.md` — the minimal core: the three roots, the one carrier, the one
+   spine; everything else is instances (read before 01).
 1. `01-principles.md` — the doctrine: correctness as a code property; the
    decision ladder; the two axioms (closed core / open mounts; closed worlds /
    curated errors); the reuse laws; extensibility as the acceptance test.

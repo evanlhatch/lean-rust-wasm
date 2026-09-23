@@ -106,6 +106,10 @@ structure Attestation where
 - "Do we trust this artifact's claim?" = resolve its domain chain against
   the TCB — data, not judgment; the guestVerified tier is the domain that's
   genuinely ours.
+- The mapping `domainsOf : Tier → List TrustDomain` (partial where a tier
+  honestly spans domains) is the SINGLE mapping — a row's tier and its
+  attestation's domain agree by it, never by independent declarations (drift
+  between them is a finding).
 
 ## 5. Acceptance
 

@@ -42,6 +42,13 @@ hostile string-typed evidence test that fails); elab-time delta flat.
 
 ## Phase 3 — The TraceModel + finite model-checking + liveness (build in from the outset)
 
+**Sequencing note:** the TraceModel's HEAVY half (the POR soundness proofs, the
+vector clocks) moves to FOLLOW the first genuinely-concurrent consumer —
+Phase 7's sessions/effects stratum — not built here ahead of it. The finite
+liveness + model-checking half STAYS in this phase: it pays immediately on the
+finite machines. Justification: the leftover rule (01 §4) — theory with no
+consumer is wired or deferred, never built ahead of its consumer.
+
 **Creates:** `CodegenCore.TraceModel` (19: events + independence + causal
 order + the POR-soundness/refinement theorems proved ONCE — the
 fundamental model); `CodegenCore.ModelCheck` (12 §3 — finite enum +

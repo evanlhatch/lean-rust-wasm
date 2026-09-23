@@ -15,7 +15,10 @@ blocks the change or is called out loudly.
   generation: product surface (emitters: WIT/Rust/goldens) and genuinely
   new embeddings (the portable verifier reuses the one checker). A
   "battery/spec/cert" emitted as a file where a `by decide` obligation over
-  the inferred structure would do is a violation (02 §3a, 19, 17).
+  the inferred structure would do is a violation (02 §3a, 19, 17). The line:
+  generated TESTS are product surface (sanctioned — they run in CI); generated
+  CERTIFICATES are verification objects (forbidden — infer them: R11). A
+  generated conformance battery is the former; a generated proof is the latter.
 
 ## The hard rules (severity: BLOCK)
 
