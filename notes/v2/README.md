@@ -46,6 +46,30 @@ create, delete, migrate, and how to know it is done.
 15. `15-provenance.md` — provenance for generated things: the artifact ledger,
     backward/forward queries, regen ergonomics, layout rules, header↔ledger
     agreement.
+16. `16-theory.md` — the theory integration: ILC (parked → Changeable-
+    deriving), quotients (adopt, one place), delimited continuations
+    (vocabulary), bisimulation up-to (adopt into Fusion), difference lists
+    (doctrine), indexed-type extensions.
+17. `17-foundation-contract.md` — declare once, inherit SIX: the derived
+    products every declaration ships by default (canonical, change, effect,
+    correspondence, statement, behavior semantics) and their inheritance.
+18. `18-systems-semantics.md` — the TLA+/Dafny untapped layer: trace sets +
+    refinement, stutter/fairness, assume/guarantee boundaries, function
+    contracts; the property-classification doctrine.
+19. `19-events.md` — the TraceModel: traces as partial orders; denotation
+    (machines/circuits/schedules/provenance denote into it); POR
+    soundness proved once; vector clocks; causal debugging as the DAG;
+    the INFERENCE LAW (verification = theorem of the declaration, never
+    generated artifacts) — 02 §3a, 10 R11. (Mazurkiewicz equivalence,
+    happens-before, partial-order reduction, what-if as the cone, slicing,
+    MUS, why-provenance.)
+20. `20-roots.md` — the layered model: Universe/Change/TraceModel ×
+    Statement/Correspondence; kernels and instance libraries; the
+    inheritance-of-provability table; the instantiation checklist.
+21. `21-application-modeling.md` — application modeling: the completed
+    effect kernel (failure row, linearity, determinism, observe), the
+    tabular layer (certified rewrites, windows, indexed tables, TVL),
+    transactions as instances, and the TRUST DOMAIN primitive.
 
 ## How to execute (the agent protocol)
 
@@ -71,6 +95,6 @@ rows+instances extensibility contract, finite model-checking, the proof
 ladder, and the engineered diagnostics/causal-trail discipline. Read them as
 engineering doctrine, not repo history.
 
-Note: docs 13–16 are the newest strata — the data superpowers, the
-substrate integration, provenance, and theory — read them after 12 when
-working in those areas.
+Note: docs 13–21 are the newest strata — the data superpowers, the
+substrate integration, provenance, theory, the foundation contract, and the
+systems-semantics layer — read them after 12 when working in those areas.

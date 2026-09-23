@@ -43,7 +43,7 @@ violations: none
 axioms used: Proofkit.u64add_assoc._native.bv_decide.ax_1_5, Quot.sound, Classical.choice, propext
 violations: none
 
-## schema-lang — 10895 decls checked
+## schema-lang — 10887 decls checked
 
 axioms used: Quot.sound, Classical.choice, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalIncr_denote_tick3._native.native_decide.ax_1_1, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalCkt_denote_tick3._native.native_decide.ax_1_1, propext
 violations: none
@@ -88,7 +88,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## TextKit — 132 decls checked
+## TextKit — 571 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none

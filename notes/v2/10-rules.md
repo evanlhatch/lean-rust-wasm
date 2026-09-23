@@ -3,6 +3,20 @@
 These are the reviewables. Every change passes this checklist; a violation
 blocks the change or is called out loudly.
 
+## The inference law (severity: BLOCK)
+
+- **R11 No verification-artifact generation.** Verification objects
+  (independence, posets, trace sets, vector clocks, POR batteries, causal
+  trails, refinement certificates) are THEOREMS and DEFINITIONAL views of
+  what already exists — inferred + proved, never freshly generated
+  artifacts. The smell test: a verification object that needs NEW data
+  (a table, registry, or emitted file) rather than being computable from
+  the declaration + theory is a design error. The only sanctioned
+  generation: product surface (emitters: WIT/Rust/goldens) and genuinely
+  new embeddings (the portable verifier reuses the one checker). A
+  "battery/spec/cert" emitted as a file where a `by decide` obligation over
+  the inferred structure would do is a violation (02 §3a, 19, 17).
+
 ## The hard rules (severity: BLOCK)
 
 - **R1 No parallel tables/worlds.** A fact lives in ONE table; a second

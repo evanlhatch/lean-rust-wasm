@@ -37,13 +37,13 @@ pins the LAWS the assembly rests on, as kernel-replayable theorems:
 3. The STRUCTURAL constructor laws (the fmt-injectivity set): append
    injectivity, text injection, the coerced-atom spellings, and the
    noConfusion families — INCLUDING `line`/`nest` vs `append`/`text`
-   (equating hard-line shapes). These mirror, statement-for-statement,
-   the historical set in `SchemaLang.Emit.Wit` (`fmtAppend_inj`…).
-   The schema-lang module KEEPS its own copies — the wave boundary
-   (schema-lang is owned elsewhere); a later wave can switch
-   `SchemaLang/Emit/Wit.lean` to import this module without changing a
-   statement, `witFmt_inj` compiling unchanged (pure code motion,
-   byte-tie-neutral).
+   (equating hard-line shapes). These are the RELOCATED set that lived
+   in `SchemaLang.Emit.Wit` (`fmtAppend_inj`…), statement-for-statement:
+   `SchemaLang/Emit/Wit.lean` now imports this module and cites the
+   theorems by their full names here — `witFmt_inj` compiles unchanged
+   in statements, only the referenced home moved (pure code motion,
+   byte-tie-neutral; verified by the schema-lang axiom shard's decl
+   count falling by exactly the moved set).
 
 CORE-ONLY: `Std.Format` lives in Init — zero imports.
 -/
@@ -173,9 +173,10 @@ theorem render_nest_line (n : Int) (f : Std.Format) :
 
 /-! ## the structural constructor laws (the fmt-injectivity set)
 
-Statements mirror `SchemaLang.Emit.Wit`'s historical set name-for-name
-(documented in the module header — the relocation the wave boundary
-deferred); `wit_simp`-style proofwork uses them by their names here. -/
+The RELOCATED set: statements identical to the historical
+`SchemaLang.Emit.Wit` copies, which now import this module and cite
+these names (witFmt_inj's proofwork by full name); see the module
+header's relocation note. -/
 
 /-- `append` is injective (a Format tree equality forces both halves). -/
 theorem fmtAppend_inj {a b c d : Std.Format}

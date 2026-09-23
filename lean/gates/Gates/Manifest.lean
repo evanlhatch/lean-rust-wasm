@@ -27,14 +27,18 @@ manifest stale — deterministically and offline:
    lakefile require (a dropped require must not leave a zombie entry).
 
 The lakefile parser is deliberately NOT a TOML parser: it reads only
-the `[[require]]` block shapes this repo writes (`name`/`git`/`rev`/
-`path` as bare `key = "value"` lines). A fancier lakefile feature
-(scope, subDir, version) appearing in a require block fails the parse
-loudly (listed as an error), never silently skips.
+the `[[require]]` block shapes this repo writes. The SHAPES are one
+`TextKit.Grammar` value each (the T1 lane — `Shape.header`, the four
+`key = "…"` key lines, the generic any-key line), recognized over the
+`TextKit.Parser` monad by `Grammar.pOfLift`; an in-block line matching
+NO shape fails the parse loudly via the Diag lane (the T2 lane:
+`labels`-tagged expectations + `farthestFailure` + `renderDiag`),
+never silently skipped (see the parser section's shape contract). The
+parser stays the cheapest module to rebuild: TextKit is import-free
+below `TextKit.Basic`, so new imports cost nothing beyond it.
 
-Pure stdlib + Lean core (Lean.Json) + TestKit.Baseline — which is
-IMPORT-FREE by design (see its header), so this module stays the cheapest
-to rebuild in the package; the machine-driven routing (F3) lives in
+Pure stdlib + Lean core (Lean.Json) + TestKit.Baseline + the TextKit
+lanes (T1 Grammar, T2 Diag) — the machine-driven routing (F3) lives in
 the coverage gate's lane, not here.
 
 F2: the gate is ONE Baseline record (the doctrine). The audited artifact
@@ -47,6 +51,10 @@ computed from the tree every run, nothing is committed to write over
 -/
 import Lean
 import TestKit.Baseline
+import TextKit.Grammar
+import TextKit.Diag
+
+open TextKit
 
 namespace Gates.Manifest
 
@@ -58,16 +66,141 @@ structure Require where
   path : Option String := none
   deriving Inhabited
 
-/-- Strip one layer of double quotes (TOML basic strings in this repo's
-    lakefiles never escape). -/
-def unquote (v : String) : String :=
-  let v := v.trimAscii.toString
-  let v := match v.dropPrefix? "\"" with | some r => r.toString | none => v
-  match v.dropSuffix? "\"" with | some r => r.toString | none => v
+/-! ## the require-block line grammar (the `Grammar`-lane conversion)
+
+The lakefile's `[[require]]` blocks are the rigid line shapes this repo
+writes — ONE Grammar value per shape, recognized over the `TextKit.Parser`
+monad by `Grammar.pOfLift` (the T1 lane):
+
+- `Shape.header`   — `[[require]]` (the block opener, byte-exact);
+- `Shape.keyLine k`— `k = "v"` for the four known keys (the fixed
+  skeleton `k = "` + closing `"` are TOKENS; the VALUE is the `scanTo
+  '"'` gap — consumed, never emitted — so the consumer reads it from
+  the input between the tokens, the `scanTo` consumer-side reading the
+  Grammar module documents);
+- `Shape.anyLine`  — the generic `key = "v"` shape (the unknown-key
+  lane the old parser silently ignored). Consumed directly (never
+  GWF-checked: `scanTo` sits in a `seq` position — the documented
+  exclusion; the shape is applied, not gated).
+
+The OUTER loop stays the line split (`splitOn "\n"`): a line is the
+format's physical unit — the scanner fact, not a Grammar construct. The
+Grammar owns each line's SHAPE; the loop owns the block bookkeeping.
+
+Diagnostics ride the Diag lane: a line matching no shape is the loud
+error (the old text, preserved verbatim) PLUS the farthest-failure
+render (`Diag.labels`-tagged expectations + `farthestFailure` +
+`renderDiag`) — the expected shape the line almost satisfied.
+
+Shape contract (documented divergence from the old split-`" = "`-plus-
+`unquote` parser): the shapes require the literal `key = "v"` spelling
+— the ONLY spelling this repo's lakefiles write (every value quoted,
+none containing a quote). A value containing `" = "` — which the old
+split ERRORS on (>2 parts) — now PARSES (the value runs to the closing
+quote; the TOML truth). The silent-ignore surface (blank, `#`,
+non-require `[…]` sections, unknown-key `key = "v"` lines) is
+unchanged. -/
+
+namespace Shape
+
+/-- The require-block header line, byte-exact. -/
+def header : Grammar.Grammar := Grammar.Grammar.tok "[[require]]"
+
+/-- The opening token of a keyed value line (`key = "`). -/
+def keyOpen (key : String) : String := s!"{key} = \""
+
+/-- One keyed value line: `key = "v"` — the fixed skeleton as tokens,
+    the value as the `scanTo` gap. -/
+def keyLine (key : String) : Grammar.Grammar :=
+  Grammar.Grammar.seq
+    [ Grammar.Grammar.tok (keyOpen key)
+    , Grammar.Grammar.scanTo '"'
+    , Grammar.Grammar.tok "\"" ]
+
+/-- The GENERIC `key = "v"` line (any key) — the unknown-key lane.
+    (`scanTo` in `seq` position: consumer-side only, see the section
+    header.) -/
+def anyLine : Grammar.Grammar :=
+  Grammar.Grammar.seq
+    [ Grammar.Grammar.scanTo ' '
+    , Grammar.Grammar.tok " = \""
+    , Grammar.Grammar.scanTo '"'
+    , Grammar.Grammar.tok "\"" ]
+
+end Shape
+
+/-- The value a `key = "v"` recognition consumed: the chars between the
+    opening token and the closing quote, read from the input between
+    the tokens (`scanTo` records no payload — the consumer reads the
+    gap; the Grammar module's documented consumer lane). -/
+def gapOf (openTok : List Char) (cs rest : List Char) : String :=
+  String.ofList (cs.drop openTok.length |>.take ((cs.length - rest.length) - openTok.length - 1))
+
+/-- The length of the common prefix of `cs` with the shape token `tok`:
+    how far the recognition got before failing (the failure point's
+    depth — the farthest-failure lane's position source). -/
+def prefixDepth (tok : List Char) (cs : List Char) : Nat :=
+  (cs.zip tok).takeWhile (fun (a, b) => a == b) |>.length
+
+/-- Recognize one known key line over the Grammar lane: the value when
+    the shape matched. -/
+def lineValue (key : String) (line : String) : Option String :=
+  match Grammar.pOfLift (Shape.keyLine key) line.toList with
+  | none => none
+  | some (_, rest) => some (gapOf (Shape.keyOpen key).toList line.toList rest)
+
+/-- One key shape on the Diag lane, LABELED: a failure records ITS OWN
+    (deepest) point — the remaining length at the `key = "` common-
+    prefix depth — and `DParser.labels` re-tags the deepest failure's
+    expected set with the shape spelling. -/
+def keyD (key : String) : Diag.DParser (String × String) :=
+  Diag.DParser.labels s!"expected '{key} = \"…\"'"
+    (fun cs => match Grammar.pOfLift (Shape.keyLine key) cs with
+      | some (_, rest) => (some ((key, gapOf (Shape.keyOpen key).toList cs rest), rest), [])
+      | none => (none, [(cs.length - prefixDepth (Shape.keyOpen key).toList cs, [])]))
+
+/-- The generic shape on the Diag lane, LABELED (the unknown-key
+    lane's expectation). -/
+def anyD : Diag.DParser (String × String) :=
+  Diag.DParser.labels "expected 'KEY = \"…\"'"
+    (fun cs =>
+      let run := cs.takeWhile (fun c => c != ' ')
+      match Grammar.pOfLift Shape.anyLine cs with
+      | some (_, rest) => (some (("", String.ofList run), rest), [])
+      | none =>
+          let depth := run.length + prefixDepth (" = \"").toList (cs.drop run.length)
+          (none, [(cs.length - depth, [])]))
+
+/-- The full line recognizer on the Diag lane: the four key shapes plus
+    the generic shape, every failure's record MERGED (the farthest-
+    failure union). Success = the first shape that matched (dispatch
+    order: the old if-chain's). The instrumented lane is the module's
+    `labels`/`farthestFailure`/`renderDiag` consumer — the error path's
+    diag source (real lakefiles never reach it). -/
+def shapeD : Diag.DParser (String × String) := fun cs =>
+  let rec go : List (Diag.DParser (String × String)) →
+        List (Nat × List String) →
+        Option ((String × String) × List Char) × List (Nat × List String)
+    | [], acc => (none, acc)
+    | p :: ps, acc =>
+        let (r, d) := p cs
+        match r with
+        | some _ => (r, d)
+        | none => go ps (Diag.merge acc d)
+  go [keyD "name", keyD "git", keyD "rev", keyD "path", anyD] []
+
+/-- An in-block line matching NO shape: the loud error — the old text
+    verbatim, plus the farthest labeled expectation the line almost
+    satisfied (the Diagnostic's render, position = the furthest the
+    shapes got into the line). -/
+def parseError (lineNo : Nat) (l : String) : String :=
+  s!"line {lineNo}: unparseable line inside [[require]]: '{l}' "
+    ++ "(" ++ Diag.renderDiag lineNo (Diag.farthestFailure shapeD l.toList) ++ ")"
 
 /-- Parse the `[[require]]` blocks of a lakefile.toml (the repo's rigid
-    shape only — see the module header). `.error` = a line inside a
-    require block this parser doesn't know (loud, not skipped). -/
+    shape only — Grammar lane per line, Diag lane for the loud error;
+    see the section header). `.error` = a line inside a require block
+    no shape matches. -/
 def parseRequires (lakefile : String) : Except String (List Require) := Id.run do
   let mut reqs : List Require := []
   let mut cur : Option Require := none
@@ -78,19 +211,24 @@ def parseRequires (lakefile : String) : Except String (List Require) := Id.run d
     if l.isEmpty || l.startsWith "#" then continue
     if l.startsWith "[" then
       if let some r := cur then reqs := r :: reqs
-      cur := if l == "[[require]]" then some { name := "" } else none
+      -- the require opener exactly, byte-exact via the Grammar; any
+      -- other `[…]` section closes the block without opening
+      cur := match Grammar.pOfLift Shape.header l.toList with
+        | some (_, []) => some { name := "" }
+        | _ => none
       continue
     if let some r := cur then
-      match l.splitOn " = " with
-      | [k, v] =>
-        let v := unquote v
-        match k.trimAscii.toString with
-        | "name" => cur := some { r with name := v }
-        | "git"  => cur := some { r with git := some v }
-        | "rev"  => cur := some { r with rev := some v }
-        | "path" => cur := some { r with path := some v }
-        | _ => continue   -- known-extra keys (e.g. none today) are ignored
-      | _ => return .error s!"line {lineNo}: unparseable line inside [[require]]: '{l}'"
+      match lineValue "name" l with
+      | some v => cur := some { r with name := v }
+      | none => match lineValue "git" l with
+        | some v => cur := some { r with git := some v }
+        | none => match lineValue "rev" l with
+          | some v => cur := some { r with rev := some v }
+          | none => match lineValue "path" l with
+            | some v => cur := some { r with path := some v }
+            | none => match Grammar.pOfLift Shape.anyLine l.toList with
+              | some _ => continue   -- unknown key: the old silent-ignore lane
+              | none => return .error (parseError lineNo l)
   if let some r := cur then reqs := r :: reqs
   return .ok reqs.reverse
 

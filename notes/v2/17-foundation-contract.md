@@ -19,6 +19,8 @@ a boundary), the deriving handers emit:
 | 3 | **Effect row** | `HasEffects D` (12 §1: the closed lattice) | composition join; boundary bounds | sessions, async, determinism, GuestBan — one axis |
 | 4 | **Correspondence** | `Iso`/`PartialIso`/`Denotes+ReprOp` (codegen. Kit) | the law IN the type | wire/value/row/dtype crossings |
 | 5 | **Statement + obligation** | `CheckedStatement` + `Obligation` where legality applies (05 §1) | sound (+complete choice), closed evidence | gates, lints, tests, tourist rows |
+| 6 | **Behavior semantics** (machines/processes) | trace set + refinement + fairness + stuttering + contracts (18) | refines⊆, stutter-closed, strong/weak-fair batteries, A/G pairs, requires/ensures (18 §1–§4) | every system-level claim: conformance, compose, spec-vs-impl, boundaries, duels |
+| 7 | **Event semantics** (the fundamental element, 19) | event set + independence (from effect rows) + the poset + trace-equivalence + POR-sound battery + vector clocks + Hasse diagram | `Independent`, the POR soundness theorem (proved ONCE), trace set = linear extensions | causal debugging = the DAG; model checking = reduced reps; what-if = the cone; the inspector + trail render the poset |
 
 The five are generated, not hand-written; the generating handler is the
 record protocol (05 §2) extended — same mechanism as RowBridge/WireCodec/Gen
@@ -57,6 +59,10 @@ the product exists is an R1/R9 violation (10).
 
 ## Acceptance (the contract is real, mechanically)
 
+0. A bare `machine!`/process declaration lands the sixth and seventh products
+   (behavior semantics + event semantics) — trace-set/refinement/stutter/
+   fairness rows AND the poset/independence/POR battery/vector clocks — no
+   hand-written causality, POR, or refinement proofs (18 §5, 19 §4).
 1. A bare `@[schema] record` lands with all five products and their laws —
    no hand-written change structure / effect row / correspondence.
 2. Two unrelated lanes (e.g. EventSourced + the WhatIf inspector) consume the
@@ -66,6 +72,16 @@ the product exists is an R1/R9 violation (10).
    join of export rows (12 §1).
 4. Order-freedom of maps/sets is inherited (Canonical), and no
    wire/guest/decide module carries a `Quot` (16 §2 discipline).
+
+## The inference law (meta; the contract's spine)
+
+- The seven products are DEFINITIONAL VIEWS + THEOREMS of the declaration
+  (02 §3a, 19 §4). Verification objects are inferred and proved — never
+  generated artifacts unless they are product surface (emitters) or a new
+  embedding (the portable verifier reuses the one checker). The smell test:
+  a verification object that needs NEW data (a table, registry, emitted
+  file) instead of being computable from the declaration + theory is a
+  design error (R11).
 
 ## Guard rules
 

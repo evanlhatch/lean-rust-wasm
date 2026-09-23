@@ -41,6 +41,7 @@ module
 public import CodegenCore
 public import SchemaLang.Item
 public import SchemaLang.Emit.GenCtx
+import TextKit.FormatLaws
 
 @[expose] public section
 
@@ -260,14 +261,6 @@ theorem KeyTy.keyFmt_inj {k k' : KeyTy}
   rw [h] at h1
   exact Option.some.inj (h1.symm.trans h2)
 
-theorem Emit.Wit.fmtAppend_inj {a b c d : Std.Format}
-    (h : (a ++ b) = (c ++ d)) : a = c ∧ b = d :=
-  Std.Format.append.injEq .. |>.mp h
-
-theorem Emit.Wit.fmtAppend_inj_eq {a b c d : Std.Format} :
-    ((a ++ b) = (c ++ d)) = (a = c ∧ b = d) :=
-  Std.Format.append.injEq ..
-
 /-- The `.ty` name class's canon (extracted from the lossless flag). -/
 theorem Ty.witLossless_ty_canon (n : String) (hl : Ty.witLossless (.ty n) = true) :
     (kebab n = n ∧ Emit.Wit.atomName? n = false) ∧
@@ -286,36 +279,6 @@ theorem Ty.witLossless_ty_not_atom (n : String) {a : String}
     rw [hnn]; exact ha
   exact Bool.noConfusion (hna.symm.trans hnfa)
 
-/-- text-vs-append: distinct Format constructors, no confusion. -/
-theorem Emit.Wit.fmtText_append_iff {s : String} {a b : Std.Format} :
-    (Std.Format.text s = (a ++ b)) ↔ False :=
-  ⟨fun h => Std.Format.noConfusion h, fun h => h.elim⟩
-
-theorem Emit.Wit.fmtAppend_text_iff {s : String} {a b : Std.Format} :
-    ((a ++ b) = Std.Format.text s) ↔ False :=
-  ⟨fun h => Std.Format.noConfusion h, fun h => h.elim⟩
-
-/-- The text/c coerced-atom injections (the four spelling combinations
-    the renderer's eq-lemmas produce). -/
-theorem Emit.Wit.fmtText_inj_eq {s t : String} :
-    (Std.Format.text s = Std.Format.text t) = (s = t) :=
-  Std.Format.text.injEq ..
-
-theorem Emit.Wit.fmtCoe_inj_eq {s t : String} :
-    (Std.format s = Std.format t) = (s = t) := by
-  show (Std.Format.text s = Std.Format.text t) = (s = t)
-  exact Std.Format.text.injEq ..
-
-theorem Emit.Wit.fmtText_coe_inj_eq {s t : String} :
-    (Std.Format.text s = Std.format t) = (s = t) := by
-  show (Std.Format.text s = Std.Format.text t) = (s = t)
-  exact Std.Format.text.injEq ..
-
-theorem Emit.Wit.fmtCoe_text_inj_eq {s t : String} :
-    (Std.format s = Std.Format.text t) = (s = t) := by
-  show (Std.Format.text s = Std.Format.text t) = (s = t)
-  exact Std.Format.text.injEq ..
-
 /-- The excluded ctors' lossless verdicts (the wit_simp set's
     non-recursive refutations — no decide-on-open). -/
 theorem Ty.witLossless_set (k : KeyTy) : Ty.witLossless (.set k) = false := rfl
@@ -328,9 +291,9 @@ theorem Ty.witLossless_bytes : Ty.witLossless .bytes = false := rfl
 syntax "wit_simp" Lean.Parser.Tactic.location : tactic
 macro_rules
   | `(tactic| wit_simp $loc:location) =>
-    `(tactic| simp [Emit.Wit.tyFmt, Emit.Wit.fmtAppend_inj_eq, Emit.Wit.fmtText_inj_eq,
-        Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_append_iff,
-        Emit.Wit.fmtAppend_text_iff, Ty.witLossless_set, Ty.witLossless_tensor,
+    `(tactic| simp [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtAppend_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+        TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_append_iff,
+        TextKit.FormatLaws.fmtAppend_text_iff, Ty.witLossless_set, Ty.witLossless_tensor,
         Ty.witLossless_bytes] $loc)
 
 /-- THE FRAGMENT LEMMA: the renderer restricted to the lossless
@@ -346,8 +309,8 @@ theorem Ty.witFmt_inj : ∀ (t t' : Ty), t.witLossless = true → t'.witLossless
       intro t' _ hl' h
       cases t' with
       | ty n =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h (fun hc => Ty.witLossless_ty_not_atom _ hl' hc (by rfl))
       | _ =>
           all_goals first
@@ -358,18 +321,18 @@ theorem Ty.witFmt_inj : ∀ (t t' : Ty), t.witLossless = true → t'.witLossless
       intro t' hl hl' h
       cases t' with
       | option b =>
-          obtain ⟨hAB, -⟩ := Emit.Wit.fmtAppend_inj h
-          obtain ⟨-, hAB⟩ := Emit.Wit.fmtAppend_inj hAB
+          obtain ⟨hAB, -⟩ := TextKit.FormatLaws.fmtAppend_inj h
+          obtain ⟨-, hAB⟩ := TextKit.FormatLaws.fmtAppend_inj hAB
           exact congrArg _ (ih b hl hl' hAB)
       | _ => wit_simp at h hl'
   | result ok err ihok iherr =>
       intro t' hl hl' h
       cases t' with
       | result ok' err' =>
-          obtain ⟨h1, -⟩ := Emit.Wit.fmtAppend_inj h
-          obtain ⟨h2, hB⟩ := Emit.Wit.fmtAppend_inj h1
-          obtain ⟨h3, -⟩ := Emit.Wit.fmtAppend_inj h2
-          obtain ⟨-, hA⟩ := Emit.Wit.fmtAppend_inj h3
+          obtain ⟨h1, -⟩ := TextKit.FormatLaws.fmtAppend_inj h
+          obtain ⟨h2, hB⟩ := TextKit.FormatLaws.fmtAppend_inj h1
+          obtain ⟨h3, -⟩ := TextKit.FormatLaws.fmtAppend_inj h2
+          obtain ⟨-, hA⟩ := TextKit.FormatLaws.fmtAppend_inj h3
           have hok : ok = ok' :=
             ihok ok' ((Bool.and_eq_true _ _).mp hl |>.1)
               ((Bool.and_eq_true _ _).mp hl' |>.1) hA
@@ -382,18 +345,18 @@ theorem Ty.witFmt_inj : ∀ (t t' : Ty), t.witLossless = true → t'.witLossless
       intro t' hl hl' h
       cases t' with
       | list b =>
-          obtain ⟨hAB, -⟩ := Emit.Wit.fmtAppend_inj h
-          obtain ⟨-, hAB⟩ := Emit.Wit.fmtAppend_inj hAB
+          obtain ⟨hAB, -⟩ := TextKit.FormatLaws.fmtAppend_inj h
+          obtain ⟨-, hAB⟩ := TextKit.FormatLaws.fmtAppend_inj hAB
           exact congrArg _ (ih b hl hl' hAB)
       | _ => wit_simp at h hl'
   | map k v ih =>
       intro t' hl hl' h
       cases t' with
       | map k' v' =>
-          obtain ⟨h1, -⟩ := Emit.Wit.fmtAppend_inj h
-          obtain ⟨h2, hV⟩ := Emit.Wit.fmtAppend_inj h1
-          obtain ⟨h3, -⟩ := Emit.Wit.fmtAppend_inj h2
-          obtain ⟨-, hK⟩ := Emit.Wit.fmtAppend_inj h3
+          obtain ⟨h1, -⟩ := TextKit.FormatLaws.fmtAppend_inj h
+          obtain ⟨h2, hV⟩ := TextKit.FormatLaws.fmtAppend_inj h1
+          obtain ⟨h3, -⟩ := TextKit.FormatLaws.fmtAppend_inj h2
+          obtain ⟨-, hK⟩ := TextKit.FormatLaws.fmtAppend_inj h3
           have hkk : k = k' := KeyTy.keyFmt_inj hK
           have hvv : v = v' := ih v' hl hl' hV
           exact by rw [hkk, hvv]
@@ -402,73 +365,73 @@ theorem Ty.witFmt_inj : ∀ (t t' : Ty), t.witLossless = true → t'.witLossless
       intro t' hl hl' h
       cases t' with
       | future b =>
-          obtain ⟨hAB, -⟩ := Emit.Wit.fmtAppend_inj h
-          obtain ⟨-, hAB⟩ := Emit.Wit.fmtAppend_inj hAB
+          obtain ⟨hAB, -⟩ := TextKit.FormatLaws.fmtAppend_inj h
+          obtain ⟨-, hAB⟩ := TextKit.FormatLaws.fmtAppend_inj hAB
           exact congrArg _ (ih b hl hl' hAB)
       | _ => wit_simp at h hl'
   | stream a ih =>
       intro t' hl hl' h
       cases t' with
       | stream b =>
-          obtain ⟨hAB, -⟩ := Emit.Wit.fmtAppend_inj h
-          obtain ⟨-, hAB⟩ := Emit.Wit.fmtAppend_inj hAB
+          obtain ⟨hAB, -⟩ := TextKit.FormatLaws.fmtAppend_inj h
+          obtain ⟨-, hAB⟩ := TextKit.FormatLaws.fmtAppend_inj hAB
           exact congrArg _ (ih b hl hl' hAB)
       | _ => wit_simp at h hl'
   | ty n =>
       intro t' hl hl' h
       cases t' with
       | ty n' =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact congrArg _ ((Ty.witLossless_ty_canon n hl |>.1.1.symm.trans h).trans
             (Ty.witLossless_ty_canon n' hl' |>.1.1))
       | bool =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | u8 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | u16 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | u32 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | u64 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | i8 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | i16 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | i32 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | i64 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | f32 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | f64 =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | string =>
-          simp only [Emit.Wit.tyFmt, Emit.Wit.fmtCoe_inj_eq, Emit.Wit.fmtText_inj_eq,
-            Emit.Wit.fmtText_coe_inj_eq, Emit.Wit.fmtCoe_text_inj_eq] at h
+          simp only [Emit.Wit.tyFmt, TextKit.FormatLaws.fmtCoe_inj_eq, TextKit.FormatLaws.fmtText_inj_eq,
+            TextKit.FormatLaws.fmtText_coe_inj_eq, TextKit.FormatLaws.fmtCoe_text_inj_eq] at h
           exact absurd h.symm (fun hc => Ty.witLossless_ty_not_atom _ hl hc (by rfl))
       | _ => wit_simp at h hl'
 

@@ -13,6 +13,16 @@ All behavior is a fold over exactly three closed semantic cores:
 A new surface = pick a kernel + an interpretation instance + a correspondence +
 an emitter row. Never a new world.
 
+## 1a. The roots (20)
+
+Three orthogonal semantics: Universe (what is), Change (what changes,
+reversibly; incl. DeltaSystem), TraceModel (what behaves). Two carriers:
+Statement (provability), Correspondence (crossing). Everything builds as
+INSTANCES of the roots: Machines = a generator whose semantics is TraceModel;
+dbsp = the group instance of Change + stream theory; event sourcing,
+migrations, refinement, model-checking, provenance = instances/compositions.
+Provability inherits: an instance cites the root theorems (20 §4).
+
 ## 2. The cone rule
 
 - C0 core primitives (codegen-core, TextKit, TestKit, LintKit envelope) — zero deps, everything imports.
@@ -23,11 +33,27 @@ an emitter row. Never a new world.
 ## 3. The primitives (four kinds + statement + one generative machine)
 
 1. **Registry** — append + replay + snapshot + member (`declare_registry_member`).
-2. **Interpretation** — one vocabulary per universe, readings as instances (`ExprLang`, `ShapeLang`, `WireLang`).
+2. **Interpretation** — one vocabulary per universe, readings as instances (`ExprLang`, `ShapeLang`, `WireLang`). Reads once, interprets many.
 3. **Correspondence** — every crossing a declared `Iso`/`PartialIso`/`Denotes+ReprOp` with the law in the type.
 4. **Emitter** — fold + law + header + outputs(nodup in type) + byte-tie + self-audit; `runCertified` when lawful.
 5. **Statement** (one checked-fact shape, mounts) + **Obligation** (facts with tier+evidence, evidence closed).
 6. **family!** — the generative engine (tables + name patterns + proof/test templates).
+7. **TraceModel** (19) — THE fundamental model: events + independence + causal
+   order (a poset/DAG). Machines, circuits, cascades, stage schedules,
+   provenance trails, dependency universes denote INTO it; verification
+   (trace sets, POR, vector clocks, fairness, refinement, causal cones) is
+   the theory of the model, inherited by every denotation.
+
+## 3a. The inference law (infer, don't generate)
+
+Verification objects are THEOREMS and DEFINITIONAL VIEWS of what already
+exists — never freshly generated artifacts. The smell test: a verification
+object that needs NEW data (a table, registry, or emitted file) instead of
+being computable from the declaration + theory is a design error. The only
+sanctioned generation: product surface (emitters: WIT/Rust/goldens) and
+genuinely new embeddings (the portable wasm verifier reuses the one
+checker). Everything else — independence, posets, trace sets, clocks, POR
+batteries, causal trails — is proof-over-declaration (19 §6, R11).
 
 ## 4. The One Universe (concrete)
 

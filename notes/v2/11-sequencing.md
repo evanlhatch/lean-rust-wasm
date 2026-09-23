@@ -40,19 +40,28 @@ unknown-field error renders "valid: …" + did-you-mean from the deriving
 handler's curated failure; obligation evidence kinds are CLOSED (compile a
 hostile string-typed evidence test that fails); elab-time delta flat.
 
-## Phase 3 — Finite model-checking + liveness (build in from the outset)
+## Phase 3 — The TraceModel + finite model-checking + liveness (build in from the outset)
 
-**Creates:** `CodegenCore.ModelCheck` (12 §3 — finite enum + transition +
-decidable property → verified-cert or counterexample-trace; budget-bounded);
-`Machines.Trace` liveness predicates (12 §2); the `machine!` entourage
-extension (emits `<m>_liveness` batteries + model-check certificates).
+**Creates:** `CodegenCore.TraceModel` (19: events + independence + causal
+order + the POR-soundness/refinement theorems proved ONCE — the
+fundamental model); `CodegenCore.ModelCheck` (12 §3 — finite enum +
+transition + decidable property → verified-cert or counterexample-trace;
+budget-bounded); `Machines.Trace` liveness predicates (12 §2); the
+`machine!` entourage extension — the DENOTATION (events/independence/poset
+as definitions over the declaration + effect rows) + the liveness/
+fairness/POR-battery rows as `by decide` obligations OVER that denotation
+theorem (never generated files; 02 §3a / R11).
 **Migrates:** the three existing machine batteries (order/feature-flags/
-pipeline) from sampled conformance to exhausted certificates.
+pipeline) from sampled conformance to exhausted, POR-reduced, inferred
+certificates.
 
-**Acceptance (mechanical):** for each machine, a battery theorem states
-"every reachable state satisfies P" with the decision in the kernel; a
-deliberately dead-end machine yields a COUNTEREXAMPLE TRACE that fails loud;
-board truncation is a reported error, never silent (12 §3 guard).
+**Acceptance (mechanical):** for each machine, the battery states "every
+reachable state satisfies P" via the inferred denotation + the POR
+soundness citation; independence is a definition over the effect rows with
+a `by decide` certificate (no emitted verification artifacts); a
+deliberately dead-end machine yields a COUNTEREXAMPLE TRACE that fails
+loud; board truncation is a reported error, never silent (12 §3 guard);
+the causal/trace-set/vector-clock views are definitional, not generated.
 
 ## Phase 4 — The text codegen layer (03)
 
@@ -104,14 +113,19 @@ construction.
 
 **Creates:** `CodegenCore.Trace` (the Trail, 12 §6); TestKit `Shrink.lean`
 (12 §4); the `--affected` filter (12 §5); the conformance engine (duel as an
-instance, 08 §4).
+instance, 08 §4); the systems-semantics kit (18: trace-set refinement,
+stutter/fairness batteries, A/G boundaries, fn contracts) — the machine!
+entropy grows the sixth product and the property-classification rows.
 **Migrates:** oracle `explain` → full causal trails; the oracle's verdict
 machinery → TestKit Verdict; every new engine/frontend gets the conformance
 instance. **Adds:** the bisimulation up-to theory into Fusion (16 §4).
 **Acceptance:** a sabotaged artifact's trail ends in the divergence category +
 the responsible spec row; a one-line spec change re-checks only its package's
 artifacts; a failing suite reports a shrunk minimal case; duplicate duels land
-as conformance instances, not new harnesses.
+as conformance instances, not new harnesses. A two-machine
+  system's trace-set-equality + stutter batteries are green; a livelocked
+  variant fails strong-fairness with the trace; a guest fn's
+  requires/ensures flow boundary+duel (18 §6).
 
 ## Standing rules for every phase
 
