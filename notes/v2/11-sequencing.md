@@ -30,6 +30,9 @@ gates green.
 protocol (first capability: `RowBridge` deriving handler — fields + row +
 `Iso`); the Diag envelope in `CodegenCore.Errors` + did-you-mean suffix ONE
 way; E-code universe extended (every package registers its diagnostic kinds).
+Rides here (12): composite decidability (§10 — one `Decidable` per
+compound judgment), simproc-registered evaluators (§11),
+Traversable/Foldable for the container shapes (§12).
 **Migrates:** CheckedProp/DeclCheck/BareChecker/Wf-idiom converge on Statement
 (first consumers: universe WF, keys legality); five did-you-mean renderers fold
 to one. **Deletes:** the parallel decline of the four carriers; the
@@ -60,7 +63,11 @@ fairness/POR-battery rows as `by decide` obligations OVER that denotation
 theorem (never generated files; 02 §3a / R11).
 **Migrates:** the three existing machine batteries (order/feature-flags/
 pipeline) from sampled conformance to exhausted, POR-reduced, inferred
-certificates.
+certificates. **Adds (12):** capacity/bounded Petri nets (§20 — the
+counted-shared-resource shape; boundedness/deadlock/conservation as
+decide-backed checks over the finite marking space, budget-bounded with
+an unbounded answer LOUD; the machine row is the one-token special
+case).
 
 **Acceptance (mechanical):** for each machine, the battery states "every
 reachable state satisfies P" via the inferred denotation + the POR
@@ -80,6 +87,9 @@ sectioned wire + one manifest); substrait's Decode Parser onto the kit.
 **Acceptance (mechanical):** goldens byte-identical; `parse∘emit` is a
 GENERATED theorem; corrupt/ambiguous rows refused by data; structured
 ParseError with position/expected/context/valid-space; elab-time flat.
+**Adds (12):** routing (§16 — the route table as a TextKit grammar; the
+router = the generated parser; an ambiguous table refuses via the
+`unambiguous` field).
 
 ## Phase 5 — The One Universe + convergence
 
@@ -93,11 +103,17 @@ leftover table (06) executed (wire or delete).
 
 **Acceptance (mechanical):** one snapshot file covers all lanes; new lane =
 one field + snapshot case + emitter rows; R1 sweep green (no parallel tables).
+**Adds (12):** dependency injection (§15 — the provider DAG; instantiation =
+the topological fold; a cycle refuses with the cycle named — the consumer that
+re-earns the deleted `Machines.Foundations.Dag`); caching/memoization (§18 —
+a hit equals recomputation; the coherence obligation discharged per the
+ladder).
 
 ## Phase 6 — The wasm type-first deep work
 
 **Creates:** `Op.lean` (the ONE op table); stack-typed `Sem.Instr` (checker =
-derivation); typed target ASTs (`RustItem : Ty → Type`, …).
+derivation); typed target ASTs (`RustItem : Ty → Type`, …); the boundary's
+args as arity-indexed vectors (12 §13 — `Vector WasmVal (arity f)`).
 **Migrates:** Sem executes Wat.Instr (one AST; the translation seam dies);
 adapters fold from the schema (the five hand shapes replaced).
 **Deletes:** `lower`/`lowerGo`; the per-op hand places; the `rawCount` vestige.
@@ -110,11 +126,21 @@ marker); byte-tie green on the re-emitted artifacts.
 ## Phase 7 — Effects + sessions (the type-driven app stratum)
 
 **Creates:** `Effect` lattice + `HasEffects` (12 §1); `Boundary` session types
-(12 §7). **Migrates:** reads/writes/GuestBan/determinism columns onto the
+(12 §7); contracts in the function types (12 §8 — the in-type `{r // P r}`
+form where the authoring surface carries it; the PrePost lane stays for
+the rest). **Migrates:** reads/writes/GuestBan/determinism columns onto the
 lattice; adapters generated from boundaries.
 **Acceptance:** an over-permissive composition fails to elaborate; the WIT
 capability set = the join of exported rows; a wrong boundary fails
 construction.
+**Adds (12):** middleware (§14 — the ordered chain of effect-row-carrying
+transformers; a cycling precedence poset fails to elaborate; the chain's row
+is the computed join); transport semantics (§17 — delivery as data; an
+at-least-once channel demands the generated idempotence obligation);
+configuration (§19 — schema record + the last-wins override monoid;
+resolution = the fold); the connector library (§21 — connectors as
+first-class with protocol semantics; a miswired pair fails to elaborate
+via the session duality check + the effect rows).
 
 ## Phase 8 — Observability + dev loop (the causal trail, impact gating, shrinking, conformance engine)
 
@@ -145,7 +171,8 @@ as conformance instances, not new harnesses. A two-machine
 ## Phase 9 — The data plane (migrations, what-if, reconciliation, incremental views)
 
 **Creates:** change-derived migrations + per-migration preservation obligations
-(13 §1); the what-if inspector (13 §2); reconciliation + audit-as-integral
+(13 §1); version-indexed journals (12 §9 — `Journal : SchemaVersion → Type`;
+migration = the typed map); the what-if inspector (13 §2); reconciliation + audit-as-integral
 (13 §5); incremental derived views (13 §6).
 **Migrates:** hand-written upcasters onto `Change`-derived folds; the breaking
 gate gains the remedy/obligation rows.

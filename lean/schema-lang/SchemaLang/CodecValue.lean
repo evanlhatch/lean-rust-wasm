@@ -678,275 +678,18 @@ inductive CodecClosed : Ty → Type where
   | future {t : Ty} : CodecClosed t → CodecClosed (.future t)
   | stream {t : Ty} : CodecClosed t → CodecClosed (.stream t)
 
-/-- The VList round trip over an element codec, append form (list arm). -/
-theorem decode_encListVList_append (t : Ty)
-    (ih : ∀ (v : Value t) (rest : List UInt8),
-      decVal? t (encodeValue t v ++ rest) = some (v, rest))
-    (vl : VList t) (rest : List UInt8) :
-    decVal? (.list t)
-        (Codec.encList (encodeValue t) (vListToList vl) ++ rest)
-      = some (.list vl, rest) := by
-  simp only [decVal?]
-  rw [Codec.decList_encList_append (encodeValue t) (decVal? t) ih
-    (vListToList vl) rest]
-  simp [listToVList_vListToList]
-
-/-- The VList round trip over an element codec, append form (stream arm —
-    same wire shape, different `Value` constructor). -/
-theorem decode_encStreamVList_append (t : Ty)
-    (ih : ∀ (v : Value t) (rest : List UInt8),
-      decVal? t (encodeValue t v ++ rest) = some (v, rest))
-    (vl : VList t) (rest : List UInt8) :
-    decVal? (.stream t)
-        (Codec.encList (encodeValue t) (vListToList vl) ++ rest)
-      = some (.stream vl, rest) := by
-  simp only [decVal?]
-  rw [Codec.decList_encList_append (encodeValue t) (decVal? t) ih
-    (vListToList vl) rest]
-  simp [listToVList_vListToList]
-
-/-- The association-list round trip over the key codec + a value codec,
-    append form (map arm): the entry codec is `Codec.encProd`/`Codec.decProd?`, so
-    the list combinator's law instantiates at the pair law (the key half
-    by `decode_encodeKey_append` — keys need no closure hypothesis). -/
-theorem decode_encListVMap_append (k : KeyTy) (v : Ty)
-    (ihV : ∀ (vv : Value v) (rest : List UInt8),
-      decVal? v (encodeValue v vv ++ rest) = some (vv, rest))
-    (m : VMap k v) (rest : List UInt8) :
-    decVal? (.map k v)
-        (Codec.encList (Codec.encProd (encodeKey k) (encodeValue v))
-            (vMapToList m) ++ rest)
-      = some (.map m, rest) := by
-  simp only [decVal?]
-  rw [Codec.decList_encList_append _ _
-    (fun p r => Codec.decProd_encProd_append _ _ _ _ (decode_encodeKey_append k) ihV p r)
-    (vMapToList m) rest]
-  simp [listToVMap_vMapToList]
-
-/-- The VList round trip over the key codec, append form (set arm —
-    same wire shape as `list`, different `Value` constructor). -/
-theorem decode_encSetVList_append (k : KeyTy)
-    (vl : VList k.toTy) (rest : List UInt8) :
-    decVal? (.set k)
-        (Codec.encList (encodeKey k) (vListToList vl) ++ rest)
-      = some (.set vl, rest) := by
-  simp only [decVal?]
-  rw [Codec.decList_encList_append (encodeKey k) (decKey? k)
-    (decode_encodeKey_append k) (vListToList vl) rest]
-  simp [listToVList_vListToList]
-
-/-- THE theorem: over the codec-closed universe, `decode ∘ encode = id`,
-    in append form (the trailing bytes flow through every layer). -/
-theorem decode_encodeValue_append (t : Ty) (h : CodecClosed t) :
-    ∀ (v : Value t) (rest : List UInt8),
-      decVal? t (encodeValue t v ++ rest) = some (v, rest) := by
-  induction h with
-  | bool =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?]
-  | u8 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?]
-  | u16 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, UInt16.toNat_lt _]
-  | u32 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, UInt32.toNat_lt _]
-  | u64 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, UInt64.toNat_lt _]
-  | i8 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, unzigzag_zigzag]
-  | i16 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, unzigzag_zigzag]
-  | i32 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, unzigzag_zigzag]
-  | i64 =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?, unzigzag_zigzag]
-  | string =>
-      intro v rest
-      cases v with
-      | string s =>
-          simp only [encodeValue, decVal?]
-          rw [Codec.decList_encList_append Codec.encVarNat Codec.decNat?
-            Codec.decNat_encVarNat_append (s.toList.map Char.toNat) rest]
-          simp [map_ofNat_toNat_id, String.ofList_toList]
-  | bytes =>
-      intro v rest
-      cases v
-      simp [encodeValue, decVal?]
-  | option _ ih =>
-      intro v rest
-      cases v with
-      | none =>
-          simp [encodeValue, decVal?, valOpt, optVal, Codec.encOpt,
-            Codec.decOpt?]
-      | some x =>
-          simp [encodeValue, decVal?, valOpt, optVal, Codec.encOpt,
-            Codec.decOpt?, ih]
-  | result _ _ ihok iherr =>
-      intro v rest
-      cases v with
-      | ok x =>
-          simp [encodeValue, decVal?, valSum, sumVal, encSum, decSum?,
-            ihok]
-      | err e =>
-          simp [encodeValue, decVal?, valSum, sumVal, encSum, decSum?,
-            iherr]
-  | list _ ih =>
-      intro v rest
-      cases v with
-      | list vl =>
-          simp only [encodeValue]
-          rw [decode_encListVList_append _ ih vl rest]
-  | map _ ihV =>
-      intro v rest
-      cases v with
-      | map m =>
-          simp only [encodeValue]
-          rw [decode_encListVMap_append _ _ ihV m rest]
-  | set =>
-      intro v rest
-      cases v with
-      | set vl =>
-          simp only [encodeValue]
-          rw [decode_encSetVList_append _ vl rest]
-  | future _ ih =>
-      intro v rest
-      cases v with
-      | future x => simp [encodeValue, decVal?, ih x rest]
-  | stream _ ih =>
-      intro v rest
-      cases v with
-      | stream vl =>
-          simp only [encodeValue]
-          rw [decode_encStreamVList_append _ ih vl rest]
-  | @tensor a dims h ih =>
-      intro v rest
-      cases v with
-      | tensor tv =>
-          -- the wire: dims-list ++ flat-elements; both round trip (the
-          -- dims by the combinator, the elements by the ih), the count
-          -- gate reads the flatten's length (the product), and the
-          -- rebuild-inverse assembles the original TVal
-          simp only [encodeValue, decVal?]
-          rw [List.append_assoc, Codec.decList_encList_append Codec.encVarNat
-            Codec.decNat? Codec.decNat_encVarNat_append dims
-            (Codec.encList (encodeValue a) (TVal.toList tv) ++ rest)]
-          -- the match's iota (simp, not rw — the rw-produced scrutinee is
-          -- a `some` ctor the rewriter cannot see through)
-          simp only
-          rw [Codec.decList_encList_append (encodeValue a) (decVal? a) ih
-            (TVal.toList tv) rest]
-          simp only [TVal.toList_length tv, flatLength_eq_prod,
-            if_neg (by simp : ¬((dims != dims) = true)),
-            if_neg (by simp : ¬((dims.prod != dims.prod) = true))]
-          have hApp : tv.toList = tv.toList ++ [] := (List.append_nil _).symm
-          rw [hApp]
-          rw [buildOne?_toList tv _ (by
-            have h1 := needOne_le_len a dims
-            omega) []]
-
-/-- The plain round trip: `decodeValue t (encodeValue t v) = some v`. -/
-theorem decode_encodeValue (t : Ty) (v : Value t) (h : CodecClosed t) :
-    decodeValue t (encodeValue t v) = some v := by
-  simp only [decodeValue]
-  have h2 := decode_encodeValue_append t h v []
-  simp only [List.append_nil] at h2
-  simp [h2]
-
-/-!
-THE VALUE INSTANCES: each `Value t` ctor family riding the class — the
-shape this module's codec-closed story genuinely admits (the honest
-`[CodecClosed t]`-guarded single instance is NOT statable: Lean rejects
-a Type-valued non-`class` inductive as an instance-implicit binder, so
-`[cc : CodecClosed t]` does not compile, and an explicit `(cc : …)`
-parameter would be inert — `CodecClosed`'s ctors carry no instance
-attribute, so typeclass search could never discharge the guard).
-
-- THE LEAVES (`bool`..`string`, `bytes`) cite the master theorem's
-  arms (`decode_encodeValue_append … CodecClosed.X`) — the induction
-already proved each; nothing re-proved.
-- THE COMPOSITES guard on the element/payload class parameter where
-  honest (`[Codec.LawfulCodec (Value a)]` and friends — the task's
-  `[LawfulCodec t]` guard), and their law fields compose through
-  `Codec.LawfulCodec.roundtrip` at the combinator shape
-  (`decOpt_encOpt_append`, `decSum_encSum_append`,
-  `decList_encList_append`) or the module's own key/list lemmas
-  (`decode_encodeKey_append`, `listToVList_vListToList`).
-- `f32`/`f64` stay OUT (no `ofBits ∘ toBits` law — the module's
-  exclusion, unchanged) and `.ty` has no `Value` constructor (no
-  instance is even statable).
--/
-
-instance lawfulCodecValueBool : Codec.LawfulCodec (Value .bool) where
-  enc := encodeValue .bool
-  dec := decVal? .bool
-  roundtrip := decode_encodeValue_append .bool CodecClosed.bool
-
-instance lawfulCodecValueU8 : Codec.LawfulCodec (Value .u8) where
-  enc := encodeValue .u8
-  dec := decVal? .u8
-  roundtrip := decode_encodeValue_append .u8 CodecClosed.u8
-
-instance lawfulCodecValueU16 : Codec.LawfulCodec (Value .u16) where
-  enc := encodeValue .u16
-  dec := decVal? .u16
-  roundtrip := decode_encodeValue_append .u16 CodecClosed.u16
-
-instance lawfulCodecValueU32 : Codec.LawfulCodec (Value .u32) where
-  enc := encodeValue .u32
-  dec := decVal? .u32
-  roundtrip := decode_encodeValue_append .u32 CodecClosed.u32
-
-instance lawfulCodecValueU64 : Codec.LawfulCodec (Value .u64) where
-  enc := encodeValue .u64
-  dec := decVal? .u64
-  roundtrip := decode_encodeValue_append .u64 CodecClosed.u64
-
-instance lawfulCodecValueI8 : Codec.LawfulCodec (Value .i8) where
-  enc := encodeValue .i8
-  dec := decVal? .i8
-  roundtrip := decode_encodeValue_append .i8 CodecClosed.i8
-
-instance lawfulCodecValueI16 : Codec.LawfulCodec (Value .i16) where
-  enc := encodeValue .i16
-  dec := decVal? .i16
-  roundtrip := decode_encodeValue_append .i16 CodecClosed.i16
-
-instance lawfulCodecValueI32 : Codec.LawfulCodec (Value .i32) where
-  enc := encodeValue .i32
-  dec := decVal? .i32
-  roundtrip := decode_encodeValue_append .i32 CodecClosed.i32
-
-instance lawfulCodecValueI64 : Codec.LawfulCodec (Value .i64) where
-  enc := encodeValue .i64
-  dec := decVal? .i64
-  roundtrip := decode_encodeValue_append .i64 CodecClosed.i64
-
-instance lawfulCodecValueString : Codec.LawfulCodec (Value .string) where
-  enc := encodeValue .string
-  dec := decVal? .string
-  roundtrip := decode_encodeValue_append .string CodecClosed.string
-
-instance lawfulCodecValueBytes : Codec.LawfulCodec (Value .bytes) where
-  enc := encodeValue .bytes
-  dec := decVal? .bytes
-  roundtrip := decode_encodeValue_append .bytes CodecClosed.bytes
+/-! THE COMPOSITE VALUE INSTANCES — placed BEFORE the append-form
+theorems (their consumers): Lean's linear elaboration makes an
+instance declared later invisible at an earlier use site, so the
+composites sit above the per-container append theorems, which route
+their round-trips through the class `roundtrip` fields; the LEAVES
+live below the master theorem (they cite its arms). Each composite
+guards on the element/payload class parameter where honest
+(`[Codec.LawfulCodec (Value a)]` and friends), and its law field
+composes through `Codec.LawfulCodec.roundtrip` at the combinator
+shape (`decOpt_encOpt_append`, `decSum_encSum_append`,
+`decList_encList_append`) or the module's own key/list lemmas
+(`decode_encodeKey_append`, `listToVList_vListToList`). -/
 
 instance {a : Ty} [Codec.LawfulCodec (Value a)] :
     Codec.LawfulCodec (Value (.option a)) where
@@ -1150,6 +893,277 @@ instance {dims : List Nat} {a : Ty} [Codec.LawfulCodec (Value a)] :
         rw [buildOne?_toList tv _ (by
           have h1 := needOne_le_len a dims
           omega) []]
+
+/-! ## The append-form per-container theorems
+
+The per-container append statements the master round-trip theorem's
+composite arms consume; each body routes through the composite
+instance's `roundtrip` (the local instance is the closure hypothesis in
+class form — the set arm needs none: its codec is the key codec). -/
+
+
+/-- The VList round trip over an element codec, append form (list arm). -/
+theorem decode_encListVList_append (t : Ty)
+    (ih : ∀ (v : Value t) (rest : List UInt8),
+      decVal? t (encodeValue t v ++ rest) = some (v, rest))
+    (vl : VList t) (rest : List UInt8) :
+    decVal? (.list t)
+        (Codec.encList (encodeValue t) (vListToList vl) ++ rest)
+      = some (.list vl, rest) := by
+  letI : Codec.LawfulCodec (Value t) := ⟨encodeValue t, decVal? t, ih⟩
+  exact Codec.LawfulCodec.roundtrip (α := Value (.list t)) (.list vl) rest
+
+/-- The VList round trip over an element codec, append form (stream arm —
+    same wire shape, different `Value` constructor). -/
+theorem decode_encStreamVList_append (t : Ty)
+    (ih : ∀ (v : Value t) (rest : List UInt8),
+      decVal? t (encodeValue t v ++ rest) = some (v, rest))
+    (vl : VList t) (rest : List UInt8) :
+    decVal? (.stream t)
+        (Codec.encList (encodeValue t) (vListToList vl) ++ rest)
+      = some (.stream vl, rest) := by
+  letI : Codec.LawfulCodec (Value t) := ⟨encodeValue t, decVal? t, ih⟩
+  exact Codec.LawfulCodec.roundtrip (α := Value (.stream t)) (.stream vl) rest
+
+/-- The association-list round trip over the key codec + a value codec,
+    append form (map arm): the entry codec is `Codec.encProd`/`Codec.decProd?`, so
+    the list combinator's law instantiates at the pair law (the key half
+    by `decode_encodeKey_append` — keys need no closure hypothesis). -/
+theorem decode_encListVMap_append (k : KeyTy) (v : Ty)
+    (ihV : ∀ (vv : Value v) (rest : List UInt8),
+      decVal? v (encodeValue v vv ++ rest) = some (vv, rest))
+    (m : VMap k v) (rest : List UInt8) :
+    decVal? (.map k v)
+        (Codec.encList (Codec.encProd (encodeKey k) (encodeValue v))
+            (vMapToList m) ++ rest)
+      = some (.map m, rest) := by
+  letI : Codec.LawfulCodec (Value v) := ⟨encodeValue v, decVal? v, ihV⟩
+  exact Codec.LawfulCodec.roundtrip (α := Value (.map k v)) (.map m) rest
+
+/-- The VList round trip over the key codec, append form (set arm —
+    same wire shape as `list`, different `Value` constructor; the set
+    instance's codec is the KEY codec directly, so no closure hypothesis
+    is needed). -/
+theorem decode_encSetVList_append (k : KeyTy)
+    (vl : VList k.toTy) (rest : List UInt8) :
+    decVal? (.set k)
+        (Codec.encList (encodeKey k) (vListToList vl) ++ rest)
+      = some (.set vl, rest) := by
+  exact Codec.LawfulCodec.roundtrip (α := Value (.set k)) (.set vl) rest
+
+/-- THE theorem: over the codec-closed universe, `decode ∘ encode = id`,
+    in append form (the trailing bytes flow through every layer). -/
+theorem decode_encodeValue_append (t : Ty) (h : CodecClosed t) :
+    ∀ (v : Value t) (rest : List UInt8),
+      decVal? t (encodeValue t v ++ rest) = some (v, rest) := by
+  induction h with
+  | bool =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?]
+  | u8 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?]
+  | u16 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, UInt16.toNat_lt _]
+  | u32 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, UInt32.toNat_lt _]
+  | u64 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, UInt64.toNat_lt _]
+  | i8 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, unzigzag_zigzag]
+  | i16 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, unzigzag_zigzag]
+  | i32 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, unzigzag_zigzag]
+  | i64 =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?, unzigzag_zigzag]
+  | string =>
+      intro v rest
+      cases v with
+      | string s =>
+          simp only [encodeValue, decVal?]
+          rw [Codec.decList_encList_append Codec.encVarNat Codec.decNat?
+            Codec.decNat_encVarNat_append (s.toList.map Char.toNat) rest]
+          simp [map_ofNat_toNat_id, String.ofList_toList]
+  | bytes =>
+      intro v rest
+      cases v
+      simp [encodeValue, decVal?]
+  | option _ ih =>
+      intro v rest
+      cases v with
+      | none =>
+          simp [encodeValue, decVal?, valOpt, optVal, Codec.encOpt,
+            Codec.decOpt?]
+      | some x =>
+          simp [encodeValue, decVal?, valOpt, optVal, Codec.encOpt,
+            Codec.decOpt?, ih]
+  | result _ _ ihok iherr =>
+      intro v rest
+      cases v with
+      | ok x =>
+          simp [encodeValue, decVal?, valSum, sumVal, encSum, decSum?,
+            ihok]
+      | err e =>
+          simp [encodeValue, decVal?, valSum, sumVal, encSum, decSum?,
+            iherr]
+  | list _ ih =>
+      intro v rest
+      cases v with
+      | list vl =>
+          simp only [encodeValue]
+          rw [decode_encListVList_append _ ih vl rest]
+  | map _ ihV =>
+      intro v rest
+      cases v with
+      | map m =>
+          simp only [encodeValue]
+          rw [decode_encListVMap_append _ _ ihV m rest]
+  | set =>
+      intro v rest
+      cases v with
+      | set vl =>
+          simp only [encodeValue]
+          rw [decode_encSetVList_append _ vl rest]
+  | future _ ih =>
+      intro v rest
+      cases v with
+      | future x => simp [encodeValue, decVal?, ih x rest]
+  | stream _ ih =>
+      intro v rest
+      cases v with
+      | stream vl =>
+          simp only [encodeValue]
+          rw [decode_encStreamVList_append _ ih vl rest]
+  | @tensor a dims h ih =>
+      intro v rest
+      cases v with
+      | tensor tv =>
+          -- the wire: dims-list ++ flat-elements; both round trip (the
+          -- dims by the combinator, the elements by the ih), the count
+          -- gate reads the flatten's length (the product), and the
+          -- rebuild-inverse assembles the original TVal
+          simp only [encodeValue, decVal?]
+          rw [List.append_assoc, Codec.decList_encList_append Codec.encVarNat
+            Codec.decNat? Codec.decNat_encVarNat_append dims
+            (Codec.encList (encodeValue a) (TVal.toList tv) ++ rest)]
+          -- the match's iota (simp, not rw — the rw-produced scrutinee is
+          -- a `some` ctor the rewriter cannot see through)
+          simp only
+          rw [Codec.decList_encList_append (encodeValue a) (decVal? a) ih
+            (TVal.toList tv) rest]
+          simp only [TVal.toList_length tv, flatLength_eq_prod,
+            if_neg (by simp : ¬((dims != dims) = true)),
+            if_neg (by simp : ¬((dims.prod != dims.prod) = true))]
+          have hApp : tv.toList = tv.toList ++ [] := (List.append_nil _).symm
+          rw [hApp]
+          rw [buildOne?_toList tv _ (by
+            have h1 := needOne_le_len a dims
+            omega) []]
+
+/-- The plain round trip: `decodeValue t (encodeValue t v) = some v`. -/
+theorem decode_encodeValue (t : Ty) (v : Value t) (h : CodecClosed t) :
+    decodeValue t (encodeValue t v) = some v := by
+  simp only [decodeValue]
+  have h2 := decode_encodeValue_append t h v []
+  simp only [List.append_nil] at h2
+  simp [h2]
+
+/-!
+THE VALUE INSTANCES: each `Value t` ctor family riding the class — the
+shape this module's codec-closed story genuinely admits (the honest
+`[CodecClosed t]`-guarded single instance is NOT statable: Lean rejects
+a Type-valued non-`class` inductive as an instance-implicit binder, so
+`[cc : CodecClosed t]` does not compile, and an explicit `(cc : …)`
+parameter would be inert — `CodecClosed`'s ctors carry no instance
+attribute, so typeclass search could never discharge the guard).
+
+- THE LEAVES (`bool`..`string`, `bytes`) cite the master theorem's
+  arms (`decode_encodeValue_append … CodecClosed.X`) — the induction
+already proved each; nothing re-proved.
+- THE COMPOSITES (`option`..`tensor`) live ABOVE the append-form
+  theorems — the section before them — so those (and, through them,
+  the master theorem's composite arms) can route through the class
+  `roundtrip` fields; THIS section holds the LEAVES only. Each
+  composite guards on the element/payload class parameter where honest
+  (`[Codec.LawfulCodec (Value a)]` and friends — the task's
+  `[LawfulCodec t]` guard).
+- `f32`/`f64` stay OUT (no `ofBits ∘ toBits` law — the module's
+  exclusion, unchanged) and `.ty` has no `Value` constructor (no
+  instance is even statable).
+-/
+
+instance lawfulCodecValueBool : Codec.LawfulCodec (Value .bool) where
+  enc := encodeValue .bool
+  dec := decVal? .bool
+  roundtrip := decode_encodeValue_append .bool CodecClosed.bool
+
+instance lawfulCodecValueU8 : Codec.LawfulCodec (Value .u8) where
+  enc := encodeValue .u8
+  dec := decVal? .u8
+  roundtrip := decode_encodeValue_append .u8 CodecClosed.u8
+
+instance lawfulCodecValueU16 : Codec.LawfulCodec (Value .u16) where
+  enc := encodeValue .u16
+  dec := decVal? .u16
+  roundtrip := decode_encodeValue_append .u16 CodecClosed.u16
+
+instance lawfulCodecValueU32 : Codec.LawfulCodec (Value .u32) where
+  enc := encodeValue .u32
+  dec := decVal? .u32
+  roundtrip := decode_encodeValue_append .u32 CodecClosed.u32
+
+instance lawfulCodecValueU64 : Codec.LawfulCodec (Value .u64) where
+  enc := encodeValue .u64
+  dec := decVal? .u64
+  roundtrip := decode_encodeValue_append .u64 CodecClosed.u64
+
+instance lawfulCodecValueI8 : Codec.LawfulCodec (Value .i8) where
+  enc := encodeValue .i8
+  dec := decVal? .i8
+  roundtrip := decode_encodeValue_append .i8 CodecClosed.i8
+
+instance lawfulCodecValueI16 : Codec.LawfulCodec (Value .i16) where
+  enc := encodeValue .i16
+  dec := decVal? .i16
+  roundtrip := decode_encodeValue_append .i16 CodecClosed.i16
+
+instance lawfulCodecValueI32 : Codec.LawfulCodec (Value .i32) where
+  enc := encodeValue .i32
+  dec := decVal? .i32
+  roundtrip := decode_encodeValue_append .i32 CodecClosed.i32
+
+instance lawfulCodecValueI64 : Codec.LawfulCodec (Value .i64) where
+  enc := encodeValue .i64
+  dec := decVal? .i64
+  roundtrip := decode_encodeValue_append .i64 CodecClosed.i64
+
+instance lawfulCodecValueString : Codec.LawfulCodec (Value .string) where
+  enc := encodeValue .string
+  dec := decVal? .string
+  roundtrip := decode_encodeValue_append .string CodecClosed.string
+
+instance lawfulCodecValueBytes : Codec.LawfulCodec (Value .bytes) where
+  enc := encodeValue .bytes
+  dec := decVal? .bytes
+  roundtrip := decode_encodeValue_append .bytes CodecClosed.bytes
+
 
 
 -- (plain comment: doc comments cannot precede `mutual`. The doc:

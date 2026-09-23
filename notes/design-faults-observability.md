@@ -446,6 +446,26 @@ E-codes from the same Lean rows.
 4. The policy machine's AUTHORING (state/guard/action per circuit) —
    the preset + proofs are the framework's; the instance is the app's.
 
+### 5.1 The observability-inheritance rule (owner decision: maxed out)
+
+Everything inherits observability — including generated code. The rule:
+**every generated host-side artifact carries its fault surface + span
+coverage BY CONSTRUCTION.** The artifact self-audit (the `AuditRule`
+list — `notes/v2/07-tooling.md` §6) gains the rows:
+
+- generated host code WITHOUT span coverage fails the audit;
+- generated error paths reference GENERATED fault codes (no hand-rolled
+  error values outside the registry's projection).
+
+Observability is a derived product of the declaration, not a choice.
+Realization: the span-coverage law (W10.5's `Emitter.law`) and the
+W10.3 one-writer mapping family are the first two instances; the rule
+generalizes over EVERY generated host-side artifact — typestate
+projections, retry configs, adapters, the observability manifest — not
+just the `*_faults_generated.rs` family. A generated artifact whose
+emitter cannot name its fault surface or span coverage is a finding at
+emitter registration (the same gate that rejects `.unsupported`).
+
 ## 6. Work orders — W10.x (dependency order, per-order gates)
 
 Dispatch per the runbook protocol; each order is atomic, gates green
