@@ -13,7 +13,7 @@ is LintKit.AxiomAllowlist's, consumed via LintKit.runLintersOnDecls.
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## TestKit — 369 decls checked
+## TestKit — 376 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -28,7 +28,7 @@ violations: none
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## substrait — 7606 decls checked
+## substrait — 7604 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
@@ -43,7 +43,7 @@ violations: none
 axioms used: Proofkit.u64add_assoc._native.bv_decide.ax_1_5, Quot.sound, Classical.choice, propext
 violations: none
 
-## schema-lang — 10886 decls checked
+## schema-lang — 10952 decls checked
 
 axioms used: Quot.sound, Classical.choice, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalIncr_denote_tick3._native.native_decide.ax_1_1, _private.SchemaLang.Emit.Circuit.0.SchemaLang.Emit.Circuit.orderTotalCkt_denote_tick3._native.native_decide.ax_1_1, propext
 violations: none

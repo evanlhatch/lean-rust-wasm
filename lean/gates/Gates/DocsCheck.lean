@@ -47,6 +47,7 @@ Pure Lean core + Gates.Packages (+ Gates.Common's shared loader).
 import Lean
 import Gates.Packages
 import Gates.Common
+import TestKit.Baseline
 
 open Lean
 
@@ -243,25 +244,40 @@ unsafe def runParent : IO UInt32 := do
     | .error e => loadErrors := loadErrors.push e
     | .ok resolved =>
       pending := pending.filter fun (_, n) => !resolved.contains n
-  -- 4. report
-  let mut failed := false
+  -- 4. report: collect the gate's finding lines (the log), then step
+  --    the gate as ONE Baseline through the shared loop (F2/C5).
+  let mut findings : List String := []
   for f in fences do
     if f.unclosed then
-      failed := true
-      IO.println s!"docs-check: {dispName f.file}:{f.openLine}: UNCLOSED lean fence"
+      findings := findings ++ [s!"docs-check: {dispName f.file}:{f.openLine}: UNCLOSED lean fence"]
   for (loc, n) in pending do
-    failed := true
-    IO.println s!"docs-check: {loc}: fence names '{n}' — no such declaration in \
-      the tree's env (is the fence a sketch? tag it ```lean sketch)"
+    findings := findings ++ [s!"docs-check: {loc}: fence names '{n}' — no such declaration in \
+      the tree's env (is the fence a sketch? tag it ```lean sketch)"]
   for e in loadErrors do
-    failed := true
-    IO.println s!"docs-check: LOAD FAILED — {e} (run `just lean-build` first)"
+    findings := findings ++ [s!"docs-check: LOAD FAILED — {e} (run `just lean-build` first)"]
   let exempt := fences.filter (·.sketch) |>.size
+  for l in findings do IO.println l
   IO.println s!"docs-check: {files.size} notes file(s), {fences.size} lean fence(s) \
     ({exempt} sketch-exempt), {pending.size} unresolved name(s)"
-  if failed then return 1
-  IO.println "docs-check: clean — every non-sketch lean fence's decl names resolve in the tree's env"
-  return 0
+  -- the gate as one Baseline (the COMPUTED-gate pattern, TestKit.Baseline's
+  -- header): `regenerate` renders the finding text; `compare` judges it
+  -- (empty = clean). The audited surface is the notes dir; there is no
+  -- committed artifact to re-baseline — `write` refuses.
+  let base : TestKit.Baseline :=
+    { path := notesDir
+    , regenerate := pure (String.intercalate "\n" findings)
+    , compare := fun _ fresh => fresh == ""
+    , write := fun _ =>
+        throw (IO.userError "docs-check is a resolver, not a writer — there \
+          is no baseline artifact to re-baseline")
+    , evidence := "every non-sketch ```lean fence in notes/*.md declares top-level \
+        names that resolve in the gated packages' envs (one child process \
+        per package; the parent never imports an env)"
+    , name := "docs-check" }
+  let code ← TestKit.runBaselines "docs-check" TestKit.computedVerdict [base]
+  if code == 0 then
+    IO.println "docs-check: clean — every non-sketch lean fence's decl names resolve in the tree's env"
+  return code
 
 /-- Dispatch: no flags = the parent (scan + shard); `--package X
     --resolve n1,n2,…` = the child (ONE env in this process). -/

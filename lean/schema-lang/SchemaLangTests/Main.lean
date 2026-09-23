@@ -48,6 +48,14 @@ def obligationPins {α : Type} (obs : List (CodegenCore.Obligation α))
   _ ← assertEq msgTiers (obs.map (·.tier)) tiers
   _ ← assertEq msgProvs (obs.map (·.provenance)) provs
 
+/-- The fields of the item named `n` in `items` — the projection every
+    fixture universe uses instead of hand re-listing a record's fields
+    (`Item.recordFieldList`; the one-writer rule at the fixture level).
+    Reduces under default transparency (find?/bind/getD over the def
+    universe), so rows and rfl pins over the derived list work unchanged. -/
+def itemFields (items : List Item) (n : String) : List Field :=
+  (items.find? (fun it => it.name == n)).bind Item.recordFieldList |>.getD []
+
 /-! ## Item-algebra fixtures (test data, not spec)
 
 The items below reproduce the old `SchemaLang.Spec.Demo` hand-list verbatim.
@@ -57,13 +65,34 @@ from `Demo` via `importModules`. The names are deliberately lowercase
 (`user`, `role`, …) as the hand-list wrote them; the reflection emits
 Pascal names and the emitters kebab at emission, so nothing drifts. -/
 
+/-- THE USER-SCHEMA SSOT: the Demo `User` record's field list (id, name,
+    email, tags — `Demo.lean`'s structure, spelled as the item algebra
+    sees it). One abbrev, the reducibility rule — the user-schema family
+    derives from this: `demoUser` (the item fixture), and the five
+    term-level mirrors (`valUserFields` / `invUserFields` / `updUserFields` /
+    `dslUserSchema` / `subUserOld`); a shape change is ONE edit, not six
+    hand-synced lists. -/
+abbrev userSchema : List Field :=
+  [ { name := "id", ty := .u64 }
+  , { name := "name", ty := .string }
+  , { name := "email", ty := .string }
+  , { name := "tags", ty := .list .string } ]
+
+/-- The user schema minus its `tags` column — the PRE-TAGS view of the
+    same record (the validator lane's mirror of `GuestImpl.userSchema`'s
+    first three fields; the old consumer's view in the subschema lane).
+    Derived by pattern-match (pure ι-reduction) so it stays reducible for
+    the instance-search lanes (`HasCol`/`VExpr`): the `.take 3` spelling
+    would defeat elaboration-time resolution (the abbrev rule — a plain
+    `take` application never unfolds in synthesis). -/
+abbrev userSchemaOld : List Field :=
+  match userSchema with
+  | a :: b :: c :: _ => [a, b, c]
+  | _ => userSchema
+
 /-- Record fixture: `user`. -/
 def demoUser : Item :=
-  .record "user"
-    [ { name := "id", ty := .u64 }
-    , { name := "name", ty := .string }
-    , { name := "email", ty := .string }
-    , { name := "tags", ty := .list .string } ]
+  .record "user" userSchema
 
 /-- Variant fixture: `role`. -/
 def demoRole : Item :=
@@ -1583,11 +1612,10 @@ def migrationChecks : CheckResult := do
 
 /-! ## SchemaLang.Validate — the schema-INDEXED validator lane -/
 
-/-- The user schema, as the validator tests see it (abbrev — the
-    reducibility rule; mirror of GuestImpl.userSchema's first three
-    fields). -/
-abbrev valUserFields : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩ ]
+/-- The user schema, as the validator tests see it (the pre-tags view —
+    the userSchemaOld projection of the userSchema SSOT; abbrev, the
+    reducibility rule). -/
+abbrev valUserFields : List Field := userSchemaOld
 
 /-- A row with the id filled and the strings dummy (the validator only
     reads the scalar — the strings ride along unopened). -/
@@ -1910,11 +1938,9 @@ verdicts on demo rows and the emitter's discipline; the golden
 group byte-ties the emitted Rust.
 -/
 
-/-- The User schema, as the invariant lane sees it (the registered
-    record's fields — abbrev, the reducibility rule). -/
-abbrev invUserFields : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
-  , ⟨"tags", .list .string⟩ ]
+/-- The User schema, as the invariant lane sees it (the userSchema SSOT -
+    the registered record's fields; abbrev, the reducibility rule). -/
+abbrev invUserFields : List Field := userSchema
 
 /-- A User row: id + name controllable, the rest default (the
     valRowName style — one Value per field, in schema order). -/
@@ -2349,11 +2375,10 @@ runtime group pins `applyRow` semantics on demo rows; the golden group
 byte-ties the emitted Rust.
 -/
 
-/-- The User schema, as the update lane sees it (abbrev — the
-    reducibility rule; the same list the invariant lane mirrors). -/
-abbrev updUserFields : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
-  , ⟨"tags", .list .string⟩ ]
+/-- The User schema, as the update lane sees it (the userSchema SSOT -
+    abbrev, the reducibility rule; the same list the invariant lane
+    mirrors). -/
+abbrev updUserFields : List Field := userSchema
 
 -- The row builder is the invariant lane's `invRow` REUSED (same schema
 -- shape — the dupDefBodies lint enforces the dedup); the extractors are
@@ -2847,16 +2872,13 @@ def diagGoldenChecks : CheckResult := do
 
 /-! ## Subschema — the typed-query lane (FP-lean §7.3) -/
 
-/-- The full user record (the validator lane's schema, REUSED — the
-    old consumer's view). -/
-abbrev subUserOld : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩ ]
+/-- The full user record's OLD view (the validator lane's schema, REUSED
+    — the userSchemaOld member of the userSchema SSOT family). -/
+abbrev subUserOld : List Field := userSchemaOld
 
 /-- The NEW user record: the old schema plus a nickname (the safe
-    change — additions only). -/
-abbrev subUserNew : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
-  , ⟨"nickname", .string⟩ ]
+    change — additions only; the first three fields ride userSchemaOld). -/
+abbrev subUserNew : List Field := userSchemaOld ++ [⟨"nickname", .string⟩]
 
 /-- The book's travelDiary-style evidence over OUR schema: the
     id-only and the (id, name) subschema of the full record — BOTH
@@ -2903,8 +2925,8 @@ def subRowNew (n : UInt64) : RowVals subUserNew :=
 /-- Record fixtures for the migration-tie checks (V1 → V2 adds an
     email; the retype and the shrink are the breaking controls). -/
 def subItemV1 : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩]
-def subItemV2 : Item :=
-  .record "user" [⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩]
+/-- The V2 item rides the userSchemaOld projection (the 3-field view). -/
+def subItemV2 : Item := .record "user" userSchemaOld
 def subItemRetype : Item := .record "user" [⟨"id", .u64⟩, ⟨"name", .u32⟩]
 def subItemShrink : Item := .record "user" [⟨"id", .u64⟩]
 
@@ -3189,11 +3211,10 @@ MIGRATION is demonstrated on the mirror schema (the std module's
 `VExpr.and userCheck userNameLenCheck` reads like the syntax spelling
 below once it lands). -/
 
-/-- The user schema, as the DSL tests see it — the 4-field mirror of
-    `GuestImpl.userSchema` (abbrev — the reducibility rule). -/
-abbrev dslUserSchema : List Field :=
-  [ ⟨"id", .u64⟩, ⟨"name", .string⟩, ⟨"email", .string⟩
-  , ⟨"tags", .list .string⟩ ]
+/-- The user schema, as the DSL tests see it — the userSchema SSOT (the
+    4-field mirror of `GuestImpl.userSchema`; abbrev — the reducibility
+    rule). -/
+abbrev dslUserSchema : List Field := userSchema
 
 /-- THE DEMO: `userCompleteCheck`'s spelling through the syntax — the
     id gate AND the name-length gate in ONE `[inv| … ]` term. -/
@@ -4451,9 +4472,10 @@ def keyItems : List Item :=
   , .record "plain" [⟨"x", .u64⟩]
   , .variant "role" [("admin", none), ("viewer", none)] ]
 
-def userFields : List Field := [⟨"id", .u64⟩, ⟨"name", .string⟩]
-def orderFields : List Field :=
-  [⟨"id", .u64⟩, ⟨"userId", .u64⟩, ⟨"userName", .string⟩, ⟨"total", .f64⟩]
+/-- The fixture records' fields, PROJECTED from the `keyItems` universe
+    (one source — a shape change is one edit). -/
+def userFields : List Field := itemFields keyItems "user"
+def orderFields : List Field := itemFields keyItems "order"
 
 /-- The well-formed fixture declarations. -/
 def userKeys : KeyDecl :=
@@ -4568,8 +4590,10 @@ theorem mismatchReferences_refused :
     first field. -/
 def rekeyedItem : Item :=
   .record "rekeyed" [⟨"label", .string⟩, ⟨"code", .u64⟩]
+/-- The declaration snapshots the record's own field list (projected —
+    the snapshot must equal the record's fields for WF). -/
 def rekeyedDecl : KeyDecl :=
-  { record := "rekeyed", fields := [⟨"label", .string⟩, ⟨"code", .u64⟩]
+  { record := "rekeyed", fields := (Item.recordFieldList rekeyedItem).getD []
   , key := "code" }
 
 /-- The migration equivalence, APPLIED to the fixture: the `user`
@@ -4697,7 +4721,9 @@ def tiItems : List Item :=
   , .record "plain" [⟨"x", .string⟩]
   , .variant "role" [("admin", none), ("viewer", none)] ]
 
-def acctFields : List Field := [⟨"id", .u64⟩, ⟨"nick", .string⟩, ⟨"balance", .u64⟩]
+/-- The fixture records' fields, PROJECTED from the `tiItems` universe
+    (one source — a shape change is one edit). -/
+def acctFields : List Field := itemFields tiItems "acct"
 
 /-- An account row (id + balance controllable, nick default). -/
 def acctRow (i b : UInt64) : RowVals acctFields :=
@@ -4782,7 +4808,7 @@ theorem acctCons_guest_refused :
 theorem acctCons_checkOn : acctConservation.checkOn acctPre = true :=
   (TableInvItem.checkOn_self acctConservation acctPre).trans conservation_pre
 
-def plainFields : List Field := [⟨"x", .string⟩]
+def plainFields : List Field := itemFields tiItems "plain"
 
 /-- The cross-schema refusal, APPLIED: a `plain`-shaped table against
     the acct item refuses (type mismatch = refusal, never a misread). -/

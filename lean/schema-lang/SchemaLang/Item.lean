@@ -156,6 +156,15 @@ def Item.keyOf : Item → Option Field
   | .record _ fields => fields.head?
   | _ => none
 
+/-- The field list of a record item, as DATA: `some fields` for
+    records, `none` for variants/funcs/resources. The one "what are
+    this record's fields?" accessor — consumers that need a record's
+    field list (key declarations, delta lowerings, fixtures) project
+    through this instead of re-listing the fields by hand. -/
+def Item.recordFieldList : Item → Option (List Field)
+  | .record _ fields => some fields
+  | _ => none
+
 /-- The SPEC-SURFACE equality: `FuncSig.body` (6.5.1) is registry
     metadata — the declaring constant, re-attached at `@[schema_fn]`
     time and reconstructed anonymous by the snapshot round-trip — so

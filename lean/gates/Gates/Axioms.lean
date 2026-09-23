@@ -59,6 +59,7 @@ import Lean
 import LintKit
 import Gates.Packages
 import Gates.Common
+import TestKit.Baseline
 
 open Lean
 
@@ -268,8 +269,30 @@ unsafe def run (write acceptDrift : Bool) (pkgName : Option String := none) : IO
     reports := reports.push r
     if ← printReport r then failed := true
   let text := render reports
-  Driver.reportGate "axioms" "report" "the axiom surface changed"
-    reportPath text write acceptDrift failed
-    "axioms: clean — every decl's cone inside the allowlist, report in sync"
+  if write then
+    -- the write lane: reportGate's accept-drift discipline, unchanged
+    Driver.reportGate "axioms" "report" "the axiom surface changed"
+      reportPath text write acceptDrift failed
+      "axioms: clean — every decl's cone inside the allowlist, report in sync"
+  else
+    -- the check lane (F2): the whole-file report as one Baseline — the
+    -- committed notes/axiom-report.md vs the fresh render, stepped through
+    -- the shared loop (C5: run → verdict → count). The sharded
+    -- `--package X` mode above keeps its own section diff (runOne).
+    let axiomBaseline : TestKit.Baseline :=
+      { path := reportPath
+      , regenerate := pure text
+      , compare := fun committed fresh => committed == fresh ++ "\n"
+      , write := fun fresh => IO.FS.writeFile reportPath (fresh ++ "\n")
+      , evidence := "per-decl kernel CollectAxioms cones vs LintKit's allowlist, \
+          whole-file mode; a silent axiom-surface change fails (re-baseline: \
+          `lake exe gates axioms --write` — REFUSES a non-empty diff \
+          without --accept-drift)"
+      , name := "axioms" }
+    let code ← TestKit.runBaselines "axioms" TestKit.baselineVerdict [axiomBaseline]
+    if failed then return 1
+    if code == 0 then
+      IO.println "axioms: clean — every decl's cone inside the allowlist, report in sync"
+    return code
 
 end Gates.Axioms

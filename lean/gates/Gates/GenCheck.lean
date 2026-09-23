@@ -29,6 +29,7 @@ migration constraint: such drivers stay legacy).
 -/
 import Gates.Common
 import Faults.Emit.Registry
+import TestKit.Baseline
 
 open Lean
 open CodegenCore.Emit (Emitter GeneratedFile)
@@ -95,27 +96,54 @@ def checkOne (emitterName : String) (f : GeneratedFile) : IO Result := do
       else .hashDrift
     return ⟨f.path, emitterName, status⟩
 
-/-- The gate: regenerate in memory, compare stripped. Exit 1 on any
-    non-identical artifact; the drifted paths print last (the actionable
-    tail of the log). -/
+/-- One artifact as a Baseline record (the F2 doctrine: a new baseline =
+    one record). The committed artifact AT `path` is the baseline;
+    `regenerate` is the in-memory emitter output; `compare` is `checkOne`'s
+    stripped verdict — body bytes + the header's embedded `content hash`
+    field, with the header's timestamp/spec-sha lines exempt by the
+    byte-tie contract. A CHECKER: `write` refuses (the byte-tie never
+    writes — a drift means run `just gen` and commit). -/
+def baselineOf (emitterName : String) (f : GeneratedFile) : TestKit.Baseline :=
+  { path := f.path
+  , regenerate := pure f.contents
+  , compare := fun committed fresh =>
+      match stripHeader committed with
+      | none => false
+      | some (line2, body) =>
+          body == fresh && contentHashField line2 == some (toString fresh.hash)
+  , write := fun _ =>
+      throw (IO.userError "gen-check is a checker — the stripped byte-tie \
+        never writes (run `just gen` to regenerate)")
+  , evidence := "stripped byte-tie per artifact: committed body bytes + embedded \
+      content hash vs the regenerated content (header timestamp/spec-sha \
+      exempt by contract)"
+  , name := s!"gen-check:{emitterName}:{f.path}" }
+
+/-- The gate: regenerate the certified jobs in memory, then step every
+    artifact through the shared baseline loop (C5: run → verdict → count),
+    and print the drifted-path tail (the actionable part naming each
+    artifact's status). Exit 1 on any non-identical artifact; never writes
+    (every artifact's baseline is a checker). -/
 unsafe def run : IO UInt32 := do
   let ctx ← Gates.loadGenCtx
   let mut results : Array Result := #[]
+  let mut baselines : List TestKit.Baseline := []
   for (e, files) in SchemaLang.Emit.certifiedJobs ctx do
     for f in files do
       results := results.push (← checkOne s!"schema-lang/{e.name}" f)
+      baselines := baselines ++ [baselineOf s!"schema-lang/{e.name}" f]
   for (e, spec) in Faults.Emit.jobs do
     for f in e.run spec do
       results := results.push (← checkOne s!"faults/{e.name}" f)
+      baselines := baselines ++ [baselineOf s!"faults/{e.name}" f]
+  let code ← TestKit.runBaselines "gen-check" TestKit.baselineVerdict baselines
   let bad := results.filter (·.status != .identical)
-  for r in results do
-    IO.println s!"{r.status}  {r.path}  ({r.emitter})"
-  IO.println ""
   if bad.isEmpty then
     IO.println s!"gen-check: {results.size} artifact(s), all identical \
       (stripped compare: body bytes + embedded content hash; header's \
       timestamp/spec-sha exempt by contract)"
     return 0
+  IO.println ""
   IO.println s!"gen-check: {bad.size}/{results.size} artifact(s) drifted:"
   for r in bad do
     IO.println s!"  {r.path} — {r.status}"

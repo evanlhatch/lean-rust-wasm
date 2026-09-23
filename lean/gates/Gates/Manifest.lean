@@ -32,10 +32,21 @@ the `[[require]]` block shapes this repo writes (`name`/`git`/`rev`/
 (scope, subDir, version) appearing in a require block fails the parse
 loudly (listed as an error), never silently skips.
 
-Pure stdlib + Lean core (Lean.Json); no package imports — this module
-stays the cheapest to rebuild in the package.
+Pure stdlib + Lean core (Lean.Json) + TestKit.Baseline — which is
+IMPORT-FREE by design (see its header), so this module stays the cheapest
+to rebuild in the package; the machine-driven routing (F3) lives in
+the coverage gate's lane, not here.
+
+F2: the gate is ONE Baseline record (the doctrine). The audited artifact
+is the root `lake-manifest.json`; `regenerate` runs the structural audit
+and renders its finding text; `compare` judges the finding text (empty =
+the agreement holds) — the COMPUTED-gate pattern in TestKit.Baseline's
+header. There is deliberately NO re-baseline lane: the agreement is
+computed from the tree every run, nothing is committed to write over
+(`write` refuses).
 -/
 import Lean
+import TestKit.Baseline
 
 namespace Gates.Manifest
 
@@ -176,11 +187,11 @@ def checkPkg (dir : System.FilePath) (pkg : String) : IO (Array Finding) := do
       findings := findings.push ⟨pkg, s!"manifest entry '{e.name}' has no lakefile require — zombie, run `lake update`"⟩
   return findings
 
-/-- The gate (single-lake): ONE root lakefile.toml ↔
+/-- The full audit (single-lake): ONE root lakefile.toml ↔
     lake-manifest.json, plus NO stray per-package lakefiles/manifests
     under lean/ (a stray = an un-absorbed package — the inventory rule's
     successor). Run from lean/gates (`../..` = the repo root). -/
-unsafe def run : IO UInt32 := do
+def checkAll : IO (Array Finding) := do
   let root : System.FilePath := "../.."
   let mut findings ← checkPkg root "LeanRoot"
   for entry in ← (root / "lean").readDir do
@@ -191,12 +202,29 @@ unsafe def run : IO UInt32 := do
     if ← (entry.path / "lake-manifest.json").pathExists then
       findings := findings.push ⟨entry.fileName,
         "stray lake-manifest.json — dead pre-monolith artifact (delete it)"⟩
-  for f in findings do
-    IO.println s!"{f.pkg}: {f.msg}"
-  if findings.isEmpty then
-    IO.println "manifest-check: the root manifest agrees with the root lakefile; no strays under lean/"
-    return 0
-  IO.println s!"manifest-check: {findings.size} finding(s)"
-  return 1
+  return findings
+
+/-- The manifest gate as ONE Baseline record (see the module header). -/
+def manifestBaseline : IO TestKit.Baseline := do
+  let findings ← checkAll
+  let report := String.intercalate "\n"
+    (findings.toList.map fun f => s!"{f.pkg}: {f.msg}")
+  pure { path := "../../lake-manifest.json"
+       , regenerate := pure report
+       , compare := fun _ fresh => fresh == ""
+       , write := fun _ =>
+           throw (IO.userError "manifest-check is structural + offline — the \
+             agreement is computed from the tree every run, never re-baselined")
+       , evidence := "lakefile require ↔ manifest entry/rev/checkout agreement \
+           (structural, offline)"
+       , name := "manifest-check" }
+
+/-- The gate: the findings print first (the gate's log), then the shared
+    verdict loop over the one baseline (C5: run → verdict → count). -/
+unsafe def run : IO UInt32 := do
+  let base ← manifestBaseline
+  let report ← base.regenerate
+  if !report.isEmpty then IO.println report
+  TestKit.runBaselines "manifest-check" TestKit.computedVerdict [base]
 
 end Gates.Manifest

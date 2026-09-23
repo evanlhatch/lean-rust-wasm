@@ -311,23 +311,22 @@ def exprControl (name : String) (sabotage : Proto.Expression → Bool) : TestSeq
     (∀ e : Proto.Expression, sabotage e = true)
     .done { numInst := 1000, randomSeed := some 20260909 }
 
-def exprSpecCalls : TestKit.PropSpec :=
+/-- The expression sweep spec: the suite runs ONCE against its THREE
+    controls (TestKit.PropSpec multi-control form). Each control is the
+    coverage witness for one recursive grammar form (calls, if_then,
+    casts); the acceptance is unchanged — property passes AND all three
+    controls are caught — but `exprSuite` samples a single time instead
+    of once per control. -/
+def exprSpec : TestKit.PropSpec :=
   { name := "expr decode∘emit round-trip"
   , suite := exprSuite
-  , control := exprControl "calls" (fun e => match e with | .scalarFunction .. => false | _ => true)
-  , controlName := "reject-all-calls" }
-
-def exprSpecIfThen : TestKit.PropSpec :=
-  { name := "expr decode∘emit round-trip"
-  , suite := exprSuite
-  , control := exprControl "if_then" (fun e => match e with | .ifThen .. => false | _ => true)
-  , controlName := "reject-all-ifthen" }
-
-def exprSpecCast : TestKit.PropSpec :=
-  { name := "expr decode∘emit round-trip"
-  , suite := exprSuite
-  , control := exprControl "casts" (fun e => match e with | .cast .. => false | _ => true)
-  , controlName := "reject-all-casts" }
+  , controls :=
+      [ ("reject-all-calls",
+          exprControl "calls" (fun e => match e with | .scalarFunction .. => false | _ => true))
+      , ("reject-all-ifthen",
+          exprControl "if_then" (fun e => match e with | .ifThen .. => false | _ => true))
+      , ("reject-all-casts",
+          exprControl "casts" (fun e => match e with | .cast .. => false | _ => true)) ] }
 
 end PropSweep
 
@@ -900,20 +899,23 @@ def runChecks : TestKit.CheckM Unit := do
        | _ => false) s!"parse of '{txt}' must recover type {repr ty}")
 
   -- 9.6b. The master type-inversion theorem (parseType_typeText) witnessed on
-  -- the same 14 sweep types: re-emit each type, then parse it back at the
-  -- theorem's exact fuel (`typeDepth ty`), not the convenient `length+1`.
+  -- the SAME table in the SAME loop: re-emit each type, then parse it back at
+  -- the theorem's exact fuel (`typeDepth ty`), not the convenient `length+1`.
   -- The result must be the original type with everything consumed — the
   -- proposition the theorem proves, evaluated.  The emitted text must also
-  -- equal the sweep's hand-written text (the two are definitionally tied at
-  -- the grammar level).
+  -- equal the sweep's golden text (the two are definitionally tied at the
+  -- grammar level).  ONE table, ONE loop — the two rounds were separate
+  -- iterations of the same `testTypes` listing (C2 residue).
   for (txt, ty) in testTypes do
+    TestKit.check s!"type round-trip: {txt}" (TestKit.assert
+      (match Decode.parseType (txt.length + 1) txt.toList with
+       | some (t', []) => t' == ty
+       | _ => false) s!"parse of '{txt}' must recover type {repr ty}")
     TestKit.check s!"type inversion master (golden): {txt}" (TestKit.assert
       (match Emit.Text.typeText ty with
        | .ok b =>
            Decode.parseType (Decode.typeDepth ty) b.toList == some (ty, []) && b == txt
        | .error _ => false) s!"emit(parse) must be identity for '{txt}', typeDepth satisfies fuel bound")
-
-  -- 9.7. Expression round-trip sweep (refs, calls, literals, if_then, cast).
 
   -- 9.7. Expression round-trip sweep (refs, calls, literals, if_then, cast).
   let fnCtx : Decode.FnCtx := [("gt", 1), ("add", 2)]
@@ -968,8 +970,6 @@ def runChecks : TestKit.CheckM Unit := do
          | some (lit', []) => lit' == lit
          | _ => false)
         s!"emit '{txt}' then parse must recover original {repr lit}")
-
-  -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers
 
   -- 10. Typed-rel wire decode (the Rel layer): decode → re-lower recovers
   --    the wire term, for every typed constructor (the proved
@@ -1139,6 +1139,5 @@ def main (args : List String) : IO UInt32 := do
         -- (TestKit.PropSpec: the property must pass AND the sabotaged sibling
         -- must be caught — a sweep whose generator never reaches the failing
         -- fragment is flagged as vacuous)
-        TestKit.runSpecs [PropSweep.spec, PropSweep.exprSpecCalls,
-          PropSweep.exprSpecIfThen, PropSweep.exprSpecCast, RelSweep.relSpec,
+        TestKit.runSpecs [PropSweep.spec, PropSweep.exprSpec, RelSweep.relSpec,
           LiteralSweep.literalSpec]

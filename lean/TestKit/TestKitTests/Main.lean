@@ -3,7 +3,9 @@
 
 1. Harness: assertEq/checkPasses carry failure messages into LSpec output.
 2. PropSpec: a true property passes; its sabotaged sibling is caught —
-   and a VACUOUS control (one the sampler can't reach) is flagged.
+   and a VACUOUS control (one the sampler can't reach) is flagged. The
+   multi-control form runs the suite ONCE against N controls (each must
+   be caught) and flags a partially-caught set as vacuous.
 3. Golden: check/update/mismatch paths against a temp file.
 4. DetSpec: the deterministic +/− discipline — a good pair passes, a
    vacuous control is flagged LOUDER than a failure.
@@ -63,6 +65,14 @@ def vacuousControl : TestSeq :=
   checkPlausibleIO "vacuous control (also passes — must be flagged)"
     (∀ (l : List Nat), l.length < 999)
     .done { numInst := 50, randomSeed := some 7 }
+
+/-- A second, distinct caught control for the multi-control pin: every
+    generated list has length < 2 — false for the length-≥2 lists the
+    reverse involution samples (the same bite class as `revControl`). -/
+def tinyControl : TestSeq :=
+  checkPlausibleIO "sabotaged: length < 2 (must be caught)"
+    (∀ (l : List Nat), l.length < 2)
+    .done { numInst := 200, randomSeed := some 7 }
 
 /-- DetSpec: a good pair — check passes, sabotaged sibling errors. -/
 def detGood : DetSpec :=
@@ -469,15 +479,35 @@ def main : IO UInt32 := do
   if code != 0 then failures := failures + 1
   -- PropSpec: the good pair passes
   let (ok1, v1) ← (PropSpec.mk "reverse involution" revProp revControl
-    "reverse = id").runIO
+    "reverse = id" []).runIO
   IO.println v1
   if !ok1 then failures := failures + 1
   -- PropSpec: the vacuous pair is FLAGGED (property passes, control not caught)
   let (ok2, v2) ← (PropSpec.mk "vacuous demo" vacuousProp vacuousControl
-    "nearly-identical threshold").runIO
+    "nearly-identical threshold" []).runIO
   IO.println v2
   if ok2 then
     IO.println "FAIL: vacuous pair was not flagged"
+    failures := failures + 1
+  -- PropSpec multi-control: ONE suite, TWO caught controls passes
+  let multiGood : PropSpec :=
+    { name := "multi-control demo"
+    , suite := revProp
+    , controls := [("reverse = id (must be caught)", revControl),
+                   ("length < 2 (must be caught)", tinyControl)] }
+  let (ok3, v3) ← multiGood.runIO
+  IO.println v3
+  if !ok3 then failures := failures + 1
+  -- PropSpec multi-control: ONE control of two not caught = VACUOUS flag
+  let multiVacuous : PropSpec :=
+    { name := "multi-control vacuous demo"
+    , suite := revProp
+    , controls := [("reverse = id (must be caught)", revControl),
+                   ("length < 1000 (vacuous — must be flagged)", vacuousControl)] }
+  let (ok4, v4) ← multiVacuous.runIO
+  IO.println v4
+  if ok4 then
+    IO.println "FAIL: partially-vacuous multi-control pair was not flagged"
     failures := failures + 1
   -- golden: write, match, mismatch
   let tmp : System.FilePath := "/tmp/testkit-golden-demo.txt"

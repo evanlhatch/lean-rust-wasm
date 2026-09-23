@@ -48,7 +48,9 @@ LEGACY (non-module) file: meta env-extension access via Gates.Common
 (the module-migration constraint: such drivers stay legacy).
 -/
 import Gates.Common
+import Gates.DriverMachine
 import Oracle
+import TestKit.Baseline
 
 open Lean
 open SchemaLang (Item Ty)
@@ -251,21 +253,57 @@ def render (m : Matrix) (quiet : List String) : String := Id.run do
 /-- The committed baseline this gate diffs against. -/
 def baselinePath : System.FilePath := "../../notes/coverage-matrix.md"
 
+/-- The check lane's Baseline record (the F2 doctrine): the committed
+    matrix at `baselinePath` is the baseline; `regenerate` is the fresh
+    render; `compare` is the byte-tie over the file's contract
+    (`render ++ "\n"` — the final newline is the file's, not the
+    render's, same serialization `Driver.reportGate` diffs). `write`
+    carries the re-baseline lane (the accept-drift REFUSAL stays in the
+    `--write` mode's reportGate — this field is for completeness of the
+    record). -/
+def checkBaseline (text : String) : TestKit.Baseline :=
+  { path := baselinePath
+  , regenerate := pure text
+  , compare := fun committed fresh => committed == fresh ++ "\n"
+  , write := fun fresh => IO.FS.writeFile baselinePath (fresh ++ "\n")
+  , evidence := "Ty ctor × emitter probe-differential matrix + the oracle axis; \
+      drift = a coverage regression or a new ctor (re-baseline: \
+      `lake exe gates coverage --write`)"
+  , name := "coverage" }
+
+/-- The gate. WRITE lane: reportGate's accept-drift discipline, unchanged
+    (the matrix prints first, then the write). CHECK lane: the coverage
+    baseline is driven through the gates MACHINE (F3 — `coverage` is the
+    one subcommand routed through `Gates.DriverMachine.runGate`: the
+    matrix is the regenerated report, the committed baseline is compared,
+    the machine's stage discipline + retry edge host the run). --strict
+    promotes fully-quiet ctors to a failure regardless of the matrix
+    being in sync (the old reportGate `failed` semantics). -/
 unsafe def run (write acceptDrift strict : Bool) : IO UInt32 := do
   let m ← computeMatrix
   let quiet := m.quietCtors
   let text := render m quiet
-  -- stdout: the matrix + the findings (the gate's log is the report)
-  IO.println text
-  let mut failed := false
-  if !quiet.isEmpty then
-    IO.println ""
-    IO.println s!"coverage: {quiet.length} fully-quiet ctor(s) — unexercised members \
-      of the closed universe (findings, not failures; `--strict` promotes): \
-      {String.intercalate ", " quiet}"
-  if strict && !quiet.isEmpty then failed := true
-  Driver.reportGate "coverage" "matrix" "the coverage surface changed"
-    baselinePath text write acceptDrift failed
-    "coverage: matrix in sync with the committed baseline"
+  if write then
+    -- stdout: the matrix + the findings (the gate's log is the report)
+    IO.println text
+    let mut failed := false
+    if !quiet.isEmpty then
+      IO.println ""
+      IO.println s!"coverage: {quiet.length} fully-quiet ctor(s) — unexercised members \
+        of the closed universe (findings, not failures; `--strict` promotes): \
+        {String.intercalate ", " quiet}"
+    if strict && !quiet.isEmpty then failed := true
+    Driver.reportGate "coverage" "matrix" "the coverage surface changed"
+      baselinePath text write acceptDrift failed
+      "coverage: matrix in sync with the committed baseline"
+  else
+    -- the check lane: findings first (the gate's log), then the machine
+    if !quiet.isEmpty then
+      IO.println s!"coverage: {quiet.length} fully-quiet ctor(s) — unexercised members \
+        of the closed universe (findings, not failures; `--strict` promotes): \
+        {String.intercalate ", " quiet}"
+    let code ← Gates.DriverMachine.runGate (checkBaseline text)
+    if strict && !quiet.isEmpty then return 1
+    return code
 
 end Gates.Coverage

@@ -59,6 +59,10 @@ public import SchemaLang.Meta.Register.Schema
 public import SchemaLang.Meta.Register.Funcs
 public import SchemaLang.Meta.Register.Invariants
 public import SchemaLang.Meta.Register.Updates
+-- The S5 meta-toolkit (`declare_registry_member`, the registry-trinity
+-- emitter) — the hub keeps every member of Meta reachable through
+-- `SchemaLang.Meta.Reflect`.
+public import SchemaLang.Meta.RegisterKit
 
 /- The async boundary markers (WASI 0.3): the ONE copy. The reifier
     (`tyOfExpr?`) matches these BY NAME - do not move into a namespace.
