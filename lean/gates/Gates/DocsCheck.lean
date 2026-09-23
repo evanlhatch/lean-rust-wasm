@@ -215,12 +215,18 @@ unsafe def runParent : IO UInt32 := do
     return 1
   -- 1. scan (deterministic file order)
   let mut files : Array System.FilePath := #[]
+  -- walks ONE level of subdirectories (notes/v2/, notes/v3/ — the
+  -- doctrine sets live there; a deeper tree is not expected)
+  let mut dirs : Array System.FilePath := #[notesDir]
   for e in ← notesDir.readDir do
     -- nested `if`s, NOT `&&` over monadic operands (the KernelCheck
     -- lesson: do-notation hoists every `←` out of `&&` eagerly)
-    if ← e.path.isDir then continue
-    if e.path.extension == some "md" then
-      files := files.push e.path
+    if ← e.path.isDir then dirs := dirs.push e.path
+  for d in dirs do
+    for e in ← d.readDir do
+      if ← e.path.isDir then continue
+      if e.path.extension == some "md" then
+        files := files.push e.path
   files := files.qsort (fun a b => a.toString < b.toString)
   let mut fences : Array Fence := #[]
   for f in files do

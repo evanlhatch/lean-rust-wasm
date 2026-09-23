@@ -5,6 +5,16 @@ kit home, the acceptance test, the guard that keeps it honest. This is
 the inventory — the detail lives in the named design docs where they
 exist (notes/design-*.md); this file's version is the contract.
 
+**Status discipline (the leftover rule applied to this file):** every
+entry is exactly one of — LANDED (in the tree, gated), SPEC (designed,
+accepted, scheduled — the full spec above is earned at build time),
+WATCH (one line + its trigger). A SPEC entry that lands moves to LANDED
+in the same commit. Nothing here is "half-built": an in-flight
+capability is SPEC until its gate row is green. The current set:
+everything in §§1–11 is LANDED in the current tree; §§12–28 are SPEC
+(the data-plane/boundary/monitoring additions); §§29–34 are SPEC; the
+watch list is WATCH.
+
 ## The declaration surface (the product core)
 
 1. **Records + the deriving protocol** (05 §3) — the record is the spec;

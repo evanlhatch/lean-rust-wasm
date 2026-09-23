@@ -15,7 +15,8 @@ is explicit, every inherited guarantee is mechanically justified.
 **What the toolkit IS:** formally model an application in Lean — data,
 changes, behavior, protocols, obligations — and generate its
 Rust/WASM/WIT/vortex surfaces with the correctness flowing down by
-construction. Correctness is a code property: wrongness does not
+construction. Built FRESH per this doctrine (14), porting the proven
+content of the current tree — never migrating it in place. Correctness is a code property: wrongness does not
 elaborate, does not synthesize, does not construct, does not typecheck.
 Proofs are the residue the type system cannot reach, and even those are
 generated, decided, or written once at the structure and cited — never
@@ -39,6 +40,15 @@ carried per-instance.
 8. `09-gates-ops.md` — gates, byte-tie, provenance, the dev loop.
 9. `10-sequencing.md` — the work plan: phases + mechanical acceptance.
 10. `decisions.md` — the review corrections as decision records.
+11. `11-system.md` — the CURRENT tree as built (the port source's map).
+12. `12-construction.md` — the construction handbook (the mechanical
+    patterns for building each kind of thing).
+13. `13-interfaces.md` — the wire/protocol/interface specs.
+14. `14-build-map.md` — the from-scratch build process + the per-library
+    port/rework map.
+15. `15-patterns.md` — the pattern catalog: the proven shapes with their
+    canonical instances + WHY they're right + when NOT to use them (the
+    affirmative shield against re-bloat).
 
 ## The execution protocol (every change)
 
