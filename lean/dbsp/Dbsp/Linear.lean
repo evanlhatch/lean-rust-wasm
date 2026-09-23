@@ -255,6 +255,7 @@ theorem derivative_succ (s : Stream a) (t : Nat) : D s (t + 1) = s (t + 1) - s t
     the unique fixpoint. Checkpoints are I applied to the journal. -/
 def I : Operator a a := feedback id
 
+omit [AddCommGroup a] in
 protected theorem id_causal : Causal (@id (Stream a)) := by
   intro s s' t hpre
   exact hpre t (Nat.le_refl t)

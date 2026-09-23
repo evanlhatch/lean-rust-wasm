@@ -66,7 +66,7 @@ inductive Ckt (Func : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] →
 /-- The denotation of a circuit: how it reads and writes streams. -/
 def Ckt.denote (denoteF : CktDenote Func) :
     {a b : Type} → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Stream a → Stream b
-  | a, b, _, _, c =>
+  | a, _b, _, _, c =>
       match c with
       | Ckt.delay => Dbsp.delay
       | Ckt.derivative => D
@@ -239,7 +239,7 @@ def isStrict (f : Ckt Func a b) : { b : Bool // b = true → Strict (Ckt.denote 
     `none`, keep the recursively-optimized children. -/
 def recursiveOpt (opt : (a b : Type) → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Option (Ckt Func a b)) :
     {a b : Type} → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Ckt Func a b
-  | a, b, _, _, c =>
+  | a, _b, _, _, c =>
       match c with
       | Ckt.delay => (opt _ _ Ckt.delay).getD Ckt.delay
       | Ckt.derivative => (opt _ _ Ckt.derivative).getD Ckt.derivative
@@ -338,7 +338,7 @@ theorem recursive_opt_ok (denoteF : CktDenote Func)
     `isLinear`/`isLinearOk` pair is the compiler's linearity oracle. -/
 def incrementalize (isLinear : IsLinearOracle Func) :
     {a b : Type} → [AddCommGroup a] → [AddCommGroup b] → Ckt Func a b → Ckt Func a b
-  | a, b, _, _, c =>
+  | a, _b, _, _, c =>
       match c with
       | Ckt.delay => Ckt.delay
       | Ckt.derivative => Ckt.derivative

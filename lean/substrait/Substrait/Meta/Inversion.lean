@@ -18,7 +18,6 @@ resolution chain cannot drift from the row:
       line := [invtok Grammar.indentUnit "  " invlit "@" invanchor a
                invtok Grammar.colonSpTok ": " invname urn]
       steps := [invreduce parseUrnEntryBody.eq_1 invscan a invexpect colonTok invfinish]
-      cor := parseUrnEntry_urnLine
 
 generates, in the enclosing namespace:
 
@@ -41,11 +40,15 @@ generates, in the enclosing namespace:
       dsimp only
       simp [String.ofList_toList]
 
-    theorem parseUrnEntry_urnLine (a : Nat) (urn : String) :
-        ... := inv_urnLine a urn
-
-The `invcor` corollary keeps the pre-macro theorem name live — the axiom
-gate's `#print axioms` list pins exactly those names.
+The pre-macro theorem names (`parseUrnEntry_urnLine`,
+`parseDeclEntry_declLine`, `parseVersion_versionLines`) are GONE.  The
+W11 fold kept them alive as one-line wrapper corollaries (the `invcor`
+block emits `theorem <oldName> … := inv_<row> …`) only because the axiom
+gate's `#print axioms` list pinned them; the post-W11 deletions wave
+deleted the wrappers and their pins together.  The `invcor` BLOCK remains
+accepted (the `Substrait.Decode.Inversions` entries still write it, and
+the kind stays a registered syntax category) but generates NOTHING —
+`inv_<row>` is the row inversion.
 
 ## The family vocabulary (the row grammar)
 
@@ -98,9 +101,25 @@ replaces), also space-separated:
 
 ## Deliberate exclusions
 
-- The Root-names row (`parseRootNames_emitted`): its proof rides the
-  private `splitTopLevel`/identifier lemma stack in Decode.Plan — not a
-  row-shape twin; it stays hand-written there.
+- The Root-names row (`parseRootNames_emitted`) stays hand-written in
+  Decode.Plan BY DECISION: its proof is not expressible in this command's
+  row grammar.  (1) The row's content has VARIABLE ARITY — `names : List
+  String` is a `sep`-joined fold with a closing `]`, while a `line` is a
+  fixed-position segment list; there is no segment form for a
+  list-quantified row.  (2) The decoder side is not row-lexical:
+  `parseRootNames` drops `kwRoot` by EXACT LENGTH (`cs.drop
+  Grammar.kwRoot.length`), strips the close by `takeWhile (· ≠ ']')`,
+  splits the interior by `splitTopLevel` — the bracket-depth machine
+  (tracking `(`, `<`, `[` against `)`, `>`, `]`), not a separator scan —
+  and maps `scanName` over the items.  (3) None of the step vocabulary
+  (`reduce`/`scan`/`peel`/`expect`/`finish`/`tail`) expresses a
+  length-drop, a takeWhile, a depth-tracked split, or a list map: the
+  proof is an induction over the name list assembled in `have` blocks
+  (`splitTopLevel_identifiers` and its `plainChar` prefix/comma chain,
+  `takeWhile_rbracket_stop`, `scanName_ident_self`) — a different proof
+  SHAPE from the anchored/version rows' linear rw-chains.  The reference
+  `parseRootNames_emitted` corollary stays there beside its private
+  lemma stack.
 - The scalar-type suffix rows (`parseType_scalar_withNull` + the required/
   nullable twins): lexCtor-shaped, not anchor/scan-shaped; their shared
   core lemma stays private in Decode.Types.
@@ -113,14 +132,15 @@ replaces), also space-separated:
 - `@[command_elab]`, not `macro`: the entry fields are parsed pieces
   (binders, line, steps) that the generator re-composes, and the optional
   `cor`/`proof` blocks are named syntax categories (the pattern for
-  keyword-wrapped optionals in `syntax`, probed on v4.33.0).
+  keyword-wrapped optionals in `syntax`, probed on v4.33.0).  The `cor`
+  block is RETIRED (accepted, generates nothing) — the `proof` block is
+  live.
 - Template references are TEXT: the generated body is source text
   (`Parser.runParserCategory` + `elabCommand`, the EnumWire pattern); a
   generator mistake is an internal parse/elab error, never silent drift.
-- The DECLARED names (`inv_urnLine`, the `cor` theorem) are scope-free in
-  the generated text — they resolve in the use-site namespace
-  (`Substrait.Decode`); every other constant is written by the entry and
-  elaborated there.
+- The DECLARED name (`inv_<row>`) is scope-free in the generated text —
+  it resolves in the use-site namespace (`Substrait.Decode`); every other
+  constant is written by the entry and elaborated there.
 - Segment/step contents are extracted POSITIONALLY from the syntax nodes
   (named kinds, `isOfKind`); custom-category QUOTATION patterns and
   category-annotated quotations are deliberately avoided (they mis-parse
@@ -182,7 +202,9 @@ syntax (name := invExpect) "invexpect " ident : inversionStep
 syntax (name := invFinish) "invfinish" : inversionStep
 syntax (name := invTail) "invtail" : inversionStep
 
-/-- The optional `cor <oldName>` corollary block. -/
+/-- The `cor <oldName>` block — RETIRED: accepted so the
+    `Substrait.Decode.Inversions` entries keep parsing, but no corollary
+    is generated (the pre-macro wrapper names are gone). -/
 declare_syntax_cat inversionCor
 syntax (name := invCor) "invcor " " := " ident : inversionCor
 
@@ -202,7 +224,7 @@ declare_inversion <newName> where
   invresult := <the `some` payload>
   invline := [<segment>*]
   invsteps := [<step>*]
-  invcor := <old-name corollary>      (optional)
+  invcor := <old-name corollary>      (RETIRED — accepted, generates nothing)
   invproof := by <tail>               (optional; only read with a `tail` step)
 ```
 -/
@@ -463,23 +485,19 @@ def indent : String → String := fun s =>
 partial def rawAppFn : Syntax → Syntax
   | t => if t.isOfKind `Lean.Parser.Term.app then rawAppFn (t.getArg 0) else t
 
-/-- The two generated declarations: (theorem source, corollary source). -/
+/-- The generated theorem source (the sole declaration — the `invcor`
+    corollary emission is RETIRED, see the module header). -/
 def generated (thmName : String) (parseFn parseHead emitFn res : String) (emitFnName : String)
-    (bt args : String)
+    (bt : String)
     (segs : Array (TSyntax `inversionSeg))
-    (stepTxts : Array String) (corN : Option String) (tailProof : Option String) :
-    Except String (String × String) := do
+    (stepTxts : Array String) (tailProof : Option String) :
+    Except String String := do
   let version := isVersion segs
   let emitted := if version then "(" ++ emitFn ++ ")" else "(" ++ emitFn ++ ").toList"
   let statement := parseFn ++ " " ++ emitted ++ " = " ++ res
   let body ← if version then versionBody segs stepTxts tailProof
     else anchorBody parseHead emitFn emitFnName segs stepTxts
-  let thm := s!"theorem {thmName} {bt} :\n    {statement} := by\n" ++ body ++ "\n"
-  let corS := match corN with
-    | some c =>
-      s!"theorem {c} {bt} :\n    {statement} := {thmName} {args}\n"
-    | none => ""
-  pure (thm, corS)
+  pure (s!"theorem {thmName} {bt} :\n    {statement} := by\n" ++ body ++ "\n")
 
 /-- Elaborate the generated source; parse errors are internal (the
     generator wrote the code). -/
@@ -515,7 +533,6 @@ def elabDeclareInversion : CommandElab := fun stx => do
     let resS ← srcOf resT
     let emitFnS ← srcOf (InversionImpl.rawAppFn emitT)
     let mut binderTxts : Array String := #[]
-    let mut allArgs : Array String := #[]
     for b in bs do
       let (ids, ty) ← match InversionImpl.binderParts b with
         | .ok p => pure p
@@ -523,7 +540,6 @@ def elabDeclareInversion : CommandElab := fun stx => do
       let mut idTxts : Array String := #[]
       for i in ids do
         let is ← srcOf i
-        allArgs := allArgs.push is
         idTxts := idTxts.push is
       match ty with
       | some t =>
@@ -532,7 +548,6 @@ def elabDeclareInversion : CommandElab := fun stx => do
       | none =>
         binderTxts := binderTxts.push (String.intercalate " " idTxts.toList)
     let bt := String.intercalate " " binderTxts.toList
-    let args := String.intercalate " " allArgs.toList
     let stepTxts ← stps.mapM fun stp => do
       if InversionImpl.isKindRoot stp.raw `invReduce then
         pure (s!"  rw [{← srcOf (stp.raw.getArg 1)}]")
@@ -552,9 +567,6 @@ def elabDeclareInversion : CommandElab := fun stx => do
         pure InversionImpl.markTail
       else
         throwError "declare_inversion: unknown step"
-    let corN ← match corB? with
-      | some c => pure (some (s!"{(c.raw.getArg 2).getId}"))
-      | none => pure none
     let tailS ← match proofB? with
       | some p =>
         -- the source of `proof := by <seq>` starts with the `by` line;
@@ -568,11 +580,9 @@ def elabDeclareInversion : CommandElab := fun stx => do
           | [] => src
         pure (some rest)
       | none => pure none
-    match InversionImpl.generated (thm.getId.eraseMacroScopes.toString) parseS parseHeadS emitS resS emitFnS bt args segs stepTxts corN tailS with
-    | .ok (thmSrc, corSrc) =>
-        InversionImpl.elabGenerated thmSrc
-        if corSrc != "" then InversionImpl.elabGenerated corSrc
-    | .error e => throwError e
+    match InversionImpl.generated (thm.getId.eraseMacroScopes.toString) parseS parseHeadS emitS resS emitFnS bt segs stepTxts tailS with
+    | .ok thmSrc => InversionImpl.elabGenerated thmSrc
+    | .error e => throwError e  -- the `invcor` block is parsed but ignored (RETIRED)
   | _ => throwError "declare_inversion: unsupported syntax"
 
 end Substrait.Meta

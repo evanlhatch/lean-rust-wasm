@@ -66,12 +66,13 @@ open EdgePython EdgePython.Py EdgePython.SemExec WasmBackend.Wat WasmBackend.Sem
 -- The compiled fixtures' bodies through the adapter's translator, then
 -- Sem's OWN checker (checkStack over the Sem fragment): double/adder/
 -- dec1/loop_sum are all well-typed — the translation lands INSIDE the
--- proved machine's typed fragment. if_max is REJECTED — the KNOWN
--- no-result-frame gap, pinned (an if branch whose body is a
--- ret-translated localget PUSHES an i64 where the no-result if_ expects
--- the empty net change; WEval's frame machine evaluated the same shape,
--- Sem's checker refuses it). Every local is i64 in the fixtures, so the
--- locals context is constant.
+-- proved machine's typed fragment. if_max IS TOO since the M3
+-- follow-up (the RESULT-FRAME rule in Sem.checkStack's `.if_` arm):
+-- if_max's branches are `ret`-translated localgets — each branch body
+-- Pushes its i64 and FALLS THROUGH (Sem has no `ret`; the value rides
+-- the continuation, branch-free, so the rule admits the frame and the
+-- function's final stack carries the branch value). Every local is
+-- i64 in the fixtures, so the locals context is constant.
 def tyOfLocal (_ : Nat) : WasmBackend.Sem.Ty := .i64
 
 -- The translated body of a named fixture, `none` on a translation
@@ -101,12 +102,14 @@ def transBody (n : String) : Option (List WasmBackend.Sem.Instr) :=
         | some b => (match checkStack tyOfLocal [] b with
             | .ok _ => true | .error _ => false)
         | none => false) = true
--- if_max: the KNOWN no-result-frame gap — REJECTED, pinned (the parity
--- theorems still hold over the executor: the branch fall-through value
--- is where execFn reads it).
+-- if_max: ACCEPTED — the translated value-returning `if_` type-checks
+-- through the result-frame rule to the branch value's type ([i64] on
+-- the final stack, head = top — the value `execFn` reads as the
+-- return). The parity theorems (executor side, `Sem.exec`) were ALWAYS
+-- green on this shape; this guard pins the typing side to match.
 #guard (match transBody "if_max" with
         | some b => (match checkStack tyOfLocal [] b with
-            | .ok _ => false | .error _ => true)
+            | .ok [Ty.i64] => true | _ => false)
         | none => false) = true
 
 /-! ## NEGATIVE CONTROLS — the type checker rejects the out-of-subset -/

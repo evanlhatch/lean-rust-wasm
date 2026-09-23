@@ -98,6 +98,7 @@ import Gates.Packages
 import Gates.Common  -- the shared driver tails; transitively pulls
                      -- schema-lang oleans — import-graph only, the exe
                      -- loads the whole tree anyway
+import TestKit.Baseline
 
 open Lean
 
@@ -283,28 +284,28 @@ def checkPkg (exe : System.FilePath) (pkg : PkgSpec) : IO (Except String PkgOutc
   return .ok { checked := checkMods.size - killed.size - rejected.size
              , skipRoots, killed, rejected }
 
-unsafe def run (pkgName : Option String) : IO UInt32 := do
-  -- --package filter (the NativePolicy pattern): one package's env per
-  -- process — the sharded mode the kernel-check recipe loops (the whole
-  -- sweep in one process exceeds 30 min on this box).
-  let some pkgs ← Driver.selectPackages "kernel-check" pkgName | return 1
+/-- One package's shard (the `--package X` lane; the justfile loops it):
+    replay the package's modules through the pure-Lean kernel and print
+    the full outcome report (skips, import-only roots, known reduceBool
+    gaps, signal-killed, rejections). Exit 0 iff every module replayed
+    clean. -/
+unsafe def runOne (pkg : PkgSpec) : IO UInt32 := do
   let exe ← ensureExe
   let mut failures : Array (String × Name) := #[]
   let mut killed : Array (String × Name) := #[]
   let mut gaps : Array (String × Name) := #[]
   let mut skipped : Array String := #[]
   let mut roots : Array (String × Name) := #[]
-  for pkg in pkgs do
-    match ← checkPkg exe pkg with
-    | .error e => skipped := skipped.push e; IO.println s!"kernel-check: {e}"
-    | .ok o =>
-      for m in o.skipRoots do roots := roots.push (pkg.dir, m)
-      for m in o.killed do killed := killed.push (pkg.dir, m)
-      for m in o.rejected do
-        if knownReduceBoolGaps.contains (pkg.dir, m) then
-          gaps := gaps.push (pkg.dir, m)
-        else
-          failures := failures.push (pkg.dir, m)
+  match ← checkPkg exe pkg with
+  | .error e => skipped := skipped.push e; IO.println s!"kernel-check: {e}"
+  | .ok o =>
+    for m in o.skipRoots do roots := roots.push (pkg.dir, m)
+    for m in o.killed do killed := killed.push (pkg.dir, m)
+    for m in o.rejected do
+      if knownReduceBoolGaps.contains (pkg.dir, m) then
+        gaps := gaps.push (pkg.dir, m)
+      else
+        failures := failures.push (pkg.dir, m)
   IO.println ""
   unless roots.isEmpty do
     IO.println "kernel-check: import-only root aggregates skipped (zero own declarations — \
@@ -328,5 +329,49 @@ unsafe def run (pkgName : Option String) : IO UInt32 := do
       (divergence candidates — ledger in notes/divergences.md):"
     for (d, m) in failures do IO.println s!"  {d}/{m}"
   return 1
+
+/-- The whole-file lane as ONE Baseline with the DOCUMENTED-DEFERRAL
+    outcome (the F2 follow-up shape): the all-packages-in-one-process
+    sweep is env-bound (~26.5GB RSS / 30+ min on this box — the recipe
+    shards), so this lane does NOT regenerate: the record's `deferred`
+    field carries the documented reason, the verdict row prints
+    DEFERRED, and the run COUNTS AS A FAILURE — a green exit must stay
+    unobtainable for a gate that checked nothing. The supported path is
+    the per-package shards (`--package X`; `just kernel-check` loops
+    them). -/
+def runDeferred : IO UInt32 := do
+  let base : TestKit.Baseline :=
+    { path := ".."
+    , regenerate := pure "kernel-check: whole-file sweep deferred (see `deferred`)"
+    , compare := fun _ _ => false
+    , write := fun _ => throw <| IO.userError "kernel-check is a computed gate — no baseline \
+        artifact to re-baseline; run the per-package shards"
+    , deferred := some "the whole-file sweep accumulates every gated package's env in ONE \
+        process (~26.5GB RSS / 30+ min on this box — the caveats in this module's header); \
+        the supported path is the per-package shards: `lake exe gates kernel-check --package \
+        <dir>`, or `just kernel-check` which loops them"
+    , evidence := "documented env-bound deferral — environments are loaded one-per-process \
+        only (the sharded shape); the evidence of a green tree is the per-package shards \
+        (`just kernel-check` / `--package <dir>`); caveats (a)-(d) in this module's header"
+    , name := "kernel-check" }
+  let code ← TestKit.runBaselines "kernel-check" TestKit.baselineVerdict [base]
+  IO.println "kernel-check: the whole-file lane is DEFERRED by design (env-bound); to actually \
+    check the tree run the per-package shards (`--package <dir>` per package, or `just kernel-check`)"
+  return code
+
+/-- Dispatch: `--package X` = one shard (the NativePolicy pattern — the
+    sharded mode the kernel-check recipe loops; the whole sweep in one
+    process exceeds 30 min / OOMs on this box). No flag = the DEFERRED
+    Baseline above (the sweep never runs unsharded). -/
+unsafe def run (pkgName : Option String) : IO UInt32 := do
+  match pkgName with
+  | some d =>
+    let some pkgs ← Driver.selectPackages "kernel-check" (some d) | return 1
+    match pkgs with
+    | #[pkg] => runOne pkg
+    | _ =>
+      IO.eprintln "kernel-check: --package takes exactly one gated package name"
+      return 1
+  | none => runDeferred
 
 end Gates.KernelCheck

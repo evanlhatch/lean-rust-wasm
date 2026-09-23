@@ -18,9 +18,8 @@ Provenance and deliberate scope:
 - The manifest (`internalsModules`) is DATA — one def, extensible by
   one line. Today: schema-lang's core (Item / Diff / Validate / Session),
   the W8+ wave modules (Witness / WitnessCheck / WitnessSpec / Update2 /
-  Refine / PrePost / TableInvariant / Scheduling / Commands /
-  EntityMachine, the Meta elaborator lanes) and Machines' Session / Sim /
-  Fusion.
+  Refine / PrePost / TableInvariant / Commands / EntityMachine, the Meta
+  elaborator lanes) and Machines' Session / Sim / Fusion.
 - WasmBackend's modules are NOT in the manifest: schema-lang cannot
   import wasm-backend (std → schema-lang, wasm-backend → std — a back
   edge would cycle the package graph). Reported to the owning lane.
@@ -68,7 +67,7 @@ public import SchemaLang.Emit.GenCtx
 import all Machines.Session
 import all Machines.Sim
 -- W15-25 waves (the consolidation batch): `import all` stays NON-public
--- (constraint 14 — Update2/Scheduling/Fusion are mathlib-carrying; the
+-- (constraint 14 — Update2/Fusion are mathlib-carrying; the
 -- leak rule forbids public imports of them into a module consumed by
 -- legacy/downstream packages).
 import all SchemaLang.Witness
@@ -78,7 +77,6 @@ import all SchemaLang.Update2
 import all SchemaLang.Refine
 import all SchemaLang.PrePost
 import all SchemaLang.TableInvariant
-import all SchemaLang.Scheduling
 import all SchemaLang.Commands
 import all SchemaLang.EntityMachine
 import all SchemaLang.Meta.EventSourced
@@ -151,7 +149,6 @@ def internalsModules : List Lean.Name :=
   , `SchemaLang.Refine
   , `SchemaLang.PrePost
   , `SchemaLang.TableInvariant
-  , `SchemaLang.Scheduling
   , `SchemaLang.Commands
   , `SchemaLang.EntityMachine
   , `SchemaLang.Meta.EventSourced

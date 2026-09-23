@@ -338,16 +338,6 @@ lane): a table-invariant declaration produces ONE obligation; the
 computed tier is `decidableNow`; the discharge's evidence is the
 kernel's decide over a PROVIDED materialized table. 
 
-## SchemaLang.Scheduling
-
-## Time as input 
-
-## Rates ("every N ticks") 
-
-## Delays ("visible next tick") 
-
-## Deadlines (the comparison) 
-
 ## SchemaLang.Commands
 
 ## The declaration data 

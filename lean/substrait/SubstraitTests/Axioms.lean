@@ -54,7 +54,11 @@ import Substrait
 #print axioms Substrait.Decode.parseType_literalTypeName
 
 -- W5.3 phase 2b: the line-shape grammar (tokens + indent + the bindings
--- and Root inversions)
+-- and Root inversions).  The extension/version row inversions are the
+-- generated `inv_urnLine`/`inv_declLine`/`inv_versionLines` theorems
+-- (Substrait.Decode.Inversions); their pre-macro wrapper names
+-- (`parseUrnEntry_urnLine` & kin, the `invcor` corollaries) were deleted
+-- with the wrappers, so their pins are gone with them.
 #print axioms Substrait.Grammar.ExtKind.ofHeader_self
 #print axioms Substrait.Grammar.ExtKind.ofNum_self
 #print axioms Substrait.Grammar.CastFbCtor.ofBehavior_toBehavior
@@ -62,7 +66,4 @@ import Substrait
 #print axioms Substrait.Decode.splitOnPipe_self
 #print axioms Substrait.Decode.indentOf_indentUnits
 #print axioms Substrait.Decode.drop_indentUnits
-#print axioms Substrait.Decode.parseUrnEntry_urnLine
-#print axioms Substrait.Decode.parseDeclEntry_declLine
-#print axioms Substrait.Decode.parseVersion_versionLines
 #print axioms Substrait.Decode.parseRootNames_emitted

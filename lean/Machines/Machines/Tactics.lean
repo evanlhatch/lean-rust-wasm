@@ -82,7 +82,7 @@ elab "declare_eqns " f:ident " with " names:ident* : command => do
   let names : Array (TSyntax `ident) := names
   if names.size != eqns.size then
     throwError "declare_eqns {fName}: {eqns.size} equation lemmas but\n      {names.size} names given — one name per equation lemma, in order"
-  for h : i in [0:eqns.size] do
+  for _h : i in [0:eqns.size] do
     let eqn := eqns[i]!
     let name := names[i]!
     if env.contains name.getId then

@@ -25,6 +25,9 @@ public meta import SchemaLang.Keys
 public meta import SchemaLang.Update2
 public meta import SchemaLang.Meta.Register.Core
 public meta import SchemaLang.Meta.Register.Quotes
+-- The S5 meta-toolkit (`declare_registry_member` — RegisterKit): the
+-- registry below is its emitted skeleton (plain-rows mode).
+public meta import SchemaLang.Meta.RegisterKit
 
 public meta section
 
@@ -47,17 +50,18 @@ registration (`SchemaLang.checkCitation?` — the `Dbsp.Certs.
 #check_cert` pattern: missing, non-theorem, sorry-tainted, or
 wrong-shape citations fail to elaborate). -/
 
-/-- The invariant registry: append-only, replayed from oleans at import
-    (the `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
-    because `Item` is the closed boundary universe and cannot carry the
-    VExpr family). -/
-initialize invariantItemExt :
-    SimplePersistentEnvExtension InvariantItem (List InvariantItem) ←
-  CodegenCore.mkRegistryExt `invariantItemExt
-
-/-- The registered invariant rows (the emission entry point). -/
-def registeredInvariants (env : Environment) : List InvariantItem :=
-  invariantItemExt.getState env
+/- The invariant registry: append-only, replayed from oleans at import
+   (the `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
+   because `Item` is the closed boundary universe and cannot carry the
+   VExpr family). S5 (the meta-toolkit): the two declarations below
+   are the EMITTED skeleton now (`declare_registry_member` —
+   RegisterKit) — PLAIN rows (`plain!`: the `InvariantItem` IS the row;
+   its own `name` field is the registry key, so the `Name × <kind>`
+   pair would be redundant; the reader keeps replaying
+   `List InvariantItem` exactly as before). The command elaborator
+   below IS the write path (the toolkit emits no writer for form (i)
+   — the consumer's command IS the write path). -/
+declare_registry_member invariantItemExt registeredInvariants : InvariantItem plain!
 
 /-- Registered invariant names (dup detection). -/
 def registeredInvariantNames (env : Environment) : List String :=

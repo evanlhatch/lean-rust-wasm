@@ -61,7 +61,13 @@ public import SchemaLang.Meta.Register.Invariants
 public import SchemaLang.Meta.Register.Updates
 -- The S5 meta-toolkit (`declare_registry_member`, the registry-trinity
 -- emitter) — the hub keeps every member of Meta reachable through
--- `SchemaLang.Meta.Reflect`.
+-- `SchemaLang.Meta.Reflect`. The follow-up state (W12): the toolkit
+-- powers the `templateExt` (Templates), `invariantItemExt`
+-- (Register.Invariants) and `update2ItemExt` (Register.Updates)
+-- registries (the last two in the plain-rows `plain!` mode); the
+-- `schemaItemExt` registry stays hand-owned by `Register.Core` with
+-- ITS lane's seam documented in `Register.Schema` (the `@[schema]`
+-- attribute's registration is richer than the toolkit's mount shape).
 public import SchemaLang.Meta.RegisterKit
 
 /- The async boundary markers (WASI 0.3): the ONE copy. The reifier

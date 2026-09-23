@@ -281,39 +281,6 @@ def tyRustNA : (t : Ty) → NoAsyncTy t → String
   | .stream _, h => nomatch h
   | .ty n, _ => pascal n
 
-/-- The checked and unchecked lowerings coincide — the evidence
-    changes nothing computational (the byte-tie's theorem form). -/
-theorem tyRustNA_eq : ∀ (t : Ty) (h : NoAsyncTy t), tyRustNA t h = tyRust t := by
-  intro t
-  induction t with
-  | bool => intro _; rfl
-  | u8 => intro _; rfl
-  | u16 => intro _; rfl
-  | u32 => intro _; rfl
-  | u64 => intro _; rfl
-  | i8 => intro _; rfl
-  | i16 => intro _; rfl
-  | i32 => intro _; rfl
-  | i64 => intro _; rfl
-  | f32 => intro _; rfl
-  | f64 => intro _; rfl
-  | string => intro _; rfl
-  | bytes => intro _; rfl
-  | tensor _ a ih => intro h; cases h with | tensor ha =>
-      simp only [tyRustNA, NoAsyncTy.invTensor, tyRust]; rw [ih ha]
-  | map _ v ih => intro h; cases h with | map hv =>
-      simp only [tyRustNA, NoAsyncTy.invMap, tyRust]; rw [ih hv]
-  | set _ => intro _; rfl
-  | option a ih => intro h; cases h with | option ha =>
-      simp only [tyRustNA, NoAsyncTy.invOption, tyRust]; rw [ih ha]
-  | result ok err ihok iherr => intro h; cases h with | result hok herr =>
-      simp only [tyRustNA, NoAsyncTy.invResult, tyRust];
-      rw [ihok hok, iherr herr]
-  | list a ih => intro h; cases h with | list ha =>
-      simp only [tyRustNA, NoAsyncTy.invList, tyRust]; rw [ih ha]
-  | future _ ih => intro h; cases h
-  | stream _ ih => intro h; cases h
-  | ty _ => intro _; rfl
 
 /-- The checked struct-field fold: the per-field async evidence rides
     the recursion (the membership wall: a `map` lambda carries no
@@ -328,20 +295,6 @@ def recordFieldsChecked : (fields : List SchemaLang.Field) →
         :: recordFieldsChecked rest
           (fun g hg => h g (List.mem_cons_of_mem _ hg))
 
-/-- The checked and unchecked field folds coincide. -/
-theorem recordFieldsChecked_eq :
-    ∀ (fields : List SchemaLang.Field) (h : ∀ f, f ∈ fields → NoAsyncTy f.ty),
-      recordFieldsChecked fields h =
-        fields.map fun f => ({ name := rustIdent f.name, ty := tyRust f.ty } :
-          CodegenCore.Emit.Rust.Field) := by
-  intro fields
-  induction fields with
-  | nil => intro _; rfl
-  | cons g rest ih =>
-      intro h
-      simp only [recordFieldsChecked, List.map_cons]
-      rw [tyRustNA_eq g.ty (h g List.mem_cons_self),
-        ih (fun k hk => h k (List.mem_cons_of_mem _ hk))]
 
 /-- The checked record item: `recordItem` with the evidence threading
     the field fold. -/
@@ -349,11 +302,6 @@ def recordItemChecked (derives : List String) (n : String)
     (fields : List SchemaLang.Field) (h : ∀ f, f ∈ fields → NoAsyncTy f.ty) :
     CodegenCore.Emit.Rust.Item :=
   .struct (pascal n) derives (recordFieldsChecked fields h)
-
-theorem recordItemChecked_eq (derives : List String) (n : String)
-    (fields : List SchemaLang.Field) (h : ∀ f, f ∈ fields → NoAsyncTy f.ty) :
-    recordItemChecked derives n fields h = recordItem derives n fields := by
-  simp only [recordItemChecked, recordItem, recordFieldsChecked_eq fields h]
 
 /-- The checked enum-payload fold: the per-case async evidence (the
     `ItemWf.variant` arm's payload projection) rides the recursion. -/
@@ -367,29 +315,6 @@ def variantCasesChecked : (cases : List SchemaLang.VariantCase) →
       s!"{pascal c}({tyRustNA t (h c t List.mem_cons_self)})" :: variantCasesChecked rest
         (fun c' t' hct => h c' t' (List.mem_cons_of_mem _ hct))
 
-/-- The checked and unchecked payload folds coincide. -/
-theorem variantCasesChecked_eq :
-    ∀ (cases : List SchemaLang.VariantCase)
-      (h : ∀ c t, (c, some t) ∈ cases → NoAsyncTy t),
-      variantCasesChecked cases h =
-        cases.map fun (c, payload) =>
-          match payload with
-          | some t => s!"{pascal c}({tyRust t})"
-          | none => pascal c := by
-  intro cases
-  induction cases with
-  | nil => intro _; rfl
-  | cons x rest ih =>
-      intro h
-      cases x with
-      | mk c payload =>
-          cases payload with
-          | none =>
-              simp only [variantCasesChecked, List.map_cons, ih]
-          | some t =>
-              simp only [variantCasesChecked, List.map_cons]
-              rw [tyRustNA_eq t (h c t List.mem_cons_self),
-                ih (fun c' t' hct => h c' t' (List.mem_cons_of_mem _ hct))]
 
 /-- The checked variant item: `variantItem` with the evidence threading
     the payload fold. -/
@@ -398,12 +323,6 @@ def variantItemChecked (derives : List String) (n : String)
     (h : ∀ c t, (c, some t) ∈ cases → NoAsyncTy t) :
     CodegenCore.Emit.Rust.Item :=
   .enum (pascal n) derives (variantCasesChecked cases h)
-
-theorem variantItemChecked_eq (derives : List String) (n : String)
-    (cases : List SchemaLang.VariantCase)
-    (h : ∀ c t, (c, some t) ∈ cases → NoAsyncTy t) :
-    variantItemChecked derives n cases h = variantItem derives n cases := by
-  simp only [variantItemChecked, variantItem, variantCasesChecked_eq cases h]
 
 /-- The checked record-table worker: the evidence is projected ONCE
     from the `WellFormed` bundle at `schemaItemsChecked` and threaded
@@ -435,41 +354,6 @@ def schemaItemsCheckedGo (full : List Item) :
       | .func _ => go
       | .resource _ => go
 
-/-- The worker agrees with the shared spine, item list by item list
-    (the spine's own filterMap lambda, with `derivesFor` resolved
-    against the same full universe). -/
-theorem schemaItemsCheckedGo_eq (full : List Item) :
-    ∀ (items : List Item)
-      (hrec : ∀ n fields, Item.record n fields ∈ items →
-        ∀ f, f ∈ fields → NoAsyncTy f.ty)
-      (hvar : ∀ n cases, Item.variant n cases ∈ items →
-        ∀ c t, (c, some t) ∈ cases → NoAsyncTy t),
-      schemaItemsCheckedGo full items hrec hvar =
-        items.filterMap (fun it =>
-          match it with
-          | .record n fields =>
-              some (recordItem (derivesFor full (fields.map (·.ty))) n fields)
-          | .variant n cases =>
-              some (variantItem (derivesFor full (cases.filterMap (·.2))) n cases)
-          | _ => none) := by
-  intro items
-  induction items with
-  | nil => intro _ _; rfl
-  | cons it rest ih =>
-      intro hrec hvar
-      simp only [schemaItemsCheckedGo, List.filterMap_cons]
-      cases it with
-      | record n fields =>
-          simp only [recordItemChecked_eq,
-            ih (fun n' fs hit => hrec n' fs (List.mem_cons_of_mem _ hit))
-              (fun n' cs hit => hvar n' cs (List.mem_cons_of_mem _ hit))]
-      | variant n cases =>
-          simp only [variantItemChecked_eq,
-            ih (fun n' fs hit => hrec n' fs (List.mem_cons_of_mem _ hit))
-              (fun n' cs hit => hvar n' cs (List.mem_cons_of_mem _ hit))]
-      | func _ | resource _ =>
-          simp only [ih (fun n' fs hit => hrec n' fs (List.mem_cons_of_mem _ hit))
-            (fun n' cs hit => hvar n' cs (List.mem_cons_of_mem _ hit))]
 
 /-- Every type item of a CHECKED universe, rendered — the emitter's
     input. The per-field / per-payload async evidence is projected ONCE
@@ -481,10 +365,131 @@ def schemaItemsChecked (cu : CheckedUniverse) : List CodegenCore.Emit.Rust.Item 
 
 /-- BYTES PRESERVED (the theorem half of the byte-tie): the checked
     item table IS the unchecked one — the evidence changes nothing
-    computational. -/
+    computational. The former coincidence chain (`tyRustNA_eq` /
+    `recordFieldsChecked_eq` / `recordItemChecked_eq` /
+    `variantCasesChecked_eq` / `variantItemChecked_eq` /
+    `schemaItemsCheckedGo_eq`) is INLINED as local `have`s — the same
+    case-by-case inductions, one declaration instead of seven. -/
 theorem schemaItemsChecked_eq (cu : CheckedUniverse) :
     schemaItemsChecked cu = schemaItems cu.val := by
-  simp only [schemaItemsChecked, schemaItemsCheckedGo_eq]
+  -- L1: the checked ty lowering IS the raw one (evidence null).
+  have hty : ∀ (t : Ty) (h : NoAsyncTy t), tyRustNA t h = tyRust t := by
+    intro t
+    induction t with
+    | bool => intro _; rfl
+    | u8 => intro _; rfl
+    | u16 => intro _; rfl
+    | u32 => intro _; rfl
+    | u64 => intro _; rfl
+    | i8 => intro _; rfl
+    | i16 => intro _; rfl
+    | i32 => intro _; rfl
+    | i64 => intro _; rfl
+    | f32 => intro _; rfl
+    | f64 => intro _; rfl
+    | string => intro _; rfl
+    | bytes => intro _; rfl
+    | tensor _ a ih => intro h; cases h with | tensor ha =>
+        simp only [tyRustNA, NoAsyncTy.invTensor, tyRust]; rw [ih ha]
+    | map _ v ih => intro h; cases h with | map hv =>
+        simp only [tyRustNA, NoAsyncTy.invMap, tyRust]; rw [ih hv]
+    | set _ => intro _; rfl
+    | option a ih => intro h; cases h with | option ha =>
+        simp only [tyRustNA, NoAsyncTy.invOption, tyRust]; rw [ih ha]
+    | result ok err ihok iherr => intro h; cases h with | result hok herr =>
+        simp only [tyRustNA, NoAsyncTy.invResult, tyRust];
+        rw [ihok hok, iherr herr]
+    | list a ih => intro h; cases h with | list ha =>
+        simp only [tyRustNA, NoAsyncTy.invList, tyRust]; rw [ih ha]
+    | future _ ih => intro h; cases h
+    | stream _ ih => intro h; cases h
+    | ty _ => intro _; rfl
+  -- L2a: the checked field fold IS `fields.map` (hty at every field).
+  have hrec : ∀ (fields : List SchemaLang.Field)
+      (h : ∀ f, f ∈ fields → NoAsyncTy f.ty),
+      recordFieldsChecked fields h =
+        fields.map fun f => ({ name := rustIdent f.name, ty := tyRust f.ty } :
+          CodegenCore.Emit.Rust.Field) := by
+    intro fields
+    induction fields with
+    | nil => intro _; rfl
+    | cons g rest ih =>
+        intro h
+        simp only [recordFieldsChecked, List.map_cons]
+        rw [hty g.ty (h g List.mem_cons_self),
+          ih (fun k hk => h k (List.mem_cons_of_mem _ hk))]
+  -- L2b: the checked record item IS `recordItem` (L2a at the fields).
+  have hrecItem : ∀ (derives : List String) (n : String)
+      (fields : List SchemaLang.Field) (h : ∀ f, f ∈ fields → NoAsyncTy f.ty),
+      recordItemChecked derives n fields h = recordItem derives n fields := by
+    intro derives n fields h
+    simp only [recordItemChecked, recordItem, hrec fields h]
+  -- L3a: the checked payload fold IS the case map (hty at each payload).
+  have hcas : ∀ (cases : List SchemaLang.VariantCase)
+      (h : ∀ c t, (c, some t) ∈ cases → NoAsyncTy t),
+      variantCasesChecked cases h =
+        cases.map fun (c, payload) =>
+          match payload with
+          | some t => s!"{pascal c}({tyRust t})"
+          | none => pascal c := by
+    intro cases
+    induction cases with
+    | nil => intro _; rfl
+    | cons x rest ih =>
+        intro h
+        cases x with
+        | mk c payload =>
+            cases payload with
+            | none =>
+                simp only [variantCasesChecked, List.map_cons, ih]
+            | some t =>
+                simp only [variantCasesChecked, List.map_cons]
+                rw [hty t (h c t List.mem_cons_self),
+                  ih (fun c' t' hct => h c' t' (List.mem_cons_of_mem _ hct))]
+  -- L3b: the checked variant item IS `variantItem` (L3a at the cases).
+  have hcasItem : ∀ (derives : List String) (n : String)
+      (cases : List SchemaLang.VariantCase)
+      (h : ∀ c t, (c, some t) ∈ cases → NoAsyncTy t),
+      variantItemChecked derives n cases h = variantItem derives n cases := by
+    intro derives n cases h
+    simp only [variantItemChecked, variantItem, hcas cases h]
+  -- L4: the checked fold agrees with the shared spine, item by item
+  -- (L2b/L3b at the record/variant arms; `derivesFor` resolved against
+  -- this universe `cu.val` throughout).
+  have hgo : ∀ (items : List Item)
+      (hrec : ∀ n fields, Item.record n fields ∈ items →
+        ∀ f, f ∈ fields → NoAsyncTy f.ty)
+      (hvar : ∀ n cases, Item.variant n cases ∈ items →
+        ∀ c t, (c, some t) ∈ cases → NoAsyncTy t),
+      schemaItemsCheckedGo cu.val items hrec hvar =
+        items.filterMap (fun it =>
+          match it with
+          | .record n fields =>
+              some (recordItem (derivesFor cu.val (fields.map (·.ty))) n fields)
+          | .variant n cases =>
+              some (variantItem (derivesFor cu.val (cases.filterMap (·.2))) n cases)
+          | _ => none) := by
+    intro items
+    induction items with
+    | nil => intro _ _; rfl
+    | cons it rest ih =>
+        intro hrec hvar
+        simp only [schemaItemsCheckedGo, List.filterMap_cons]
+        cases it with
+        | record n fields =>
+            simp only [hrecItem,
+              ih (fun n' fs hit => hrec n' fs (List.mem_cons_of_mem _ hit))
+                (fun n' cs hit => hvar n' cs (List.mem_cons_of_mem _ hit))]
+        | variant n cases =>
+            simp only [hcasItem,
+              ih (fun n' fs hit => hrec n' fs (List.mem_cons_of_mem _ hit))
+                (fun n' cs hit => hvar n' cs (List.mem_cons_of_mem _ hit))]
+        | func _ | resource _ =>
+            simp only [ih (fun n' fs hit => hrec n' fs (List.mem_cons_of_mem _ hit))
+              (fun n' cs hit => hvar n' cs (List.mem_cons_of_mem _ hit))]
+  -- the witnessed folding (`schemaItemsChecked`) is `hgo` at `cu.val`
+  -- with the WellFormed evidence projected once — the goal closes.
+  simp only [schemaItemsChecked, hgo]
   rfl
 
 /-! ## The emission law (the vortex lane's `vortexLaw` shape) -/
@@ -526,10 +531,11 @@ end SchemaLang.Emit.Rust
     checked-path sweep: the `none` arm is GONE — the emitter is TOTAL
     over the checked view (an uncheckable ctx emits nothing, loud via
     the EMPTY artifact). The raw folds (`schemaItems`/`tyRust`/
-    `recordItem`/`variantItem`) and the `*_eq` coincidence theorems
-    STAY: the raw folds are external test/seam surfaces (Tests over
-    synthetic universes, Faults/Delta's `tyRust`), and the `*_eq` laws
-    pin the checked fold to the raw one's bytes.
+    `recordItem`/`variantItem`) STAY: they are external test/seam
+    surfaces (Tests over synthetic universes, Delta's `tyRust` change
+    envelope). The checked↔raw byte pin is ONE theorem,
+    `schemaItemsChecked_eq` (the former `*_eq` coincidence chain is
+    inlined into its proof).
 
     W7.3 phase 2: `law` is POPULATED (`rustLaw` — the field/payload
     async-freedom as the emission contract), discharged by

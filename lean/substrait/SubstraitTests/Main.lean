@@ -84,13 +84,43 @@ def genNull : Gen Nullability := do
   pure (if n % 2 == 0 then .nullable else .required)
 
 /-- Sized random PType over the emit-able grammar (no userDefined — Emit.Text
-    hard-errors there by design; the sweep stays inside the supported fragment). -/
+    hard-errors there by design; the sweep stays inside the supported
+    fragment).  The scalar base case is THE grammar scalar-ctor table —
+    `Grammar.scalarGrammar`, the same table `Emit.Text`'s prefix renderer
+    and `Decode.parseScalarType` fold — mapped through `ScalarCtor.toPType`
+    (`genScalarType`): row order IS the branch order (head row default,
+    rest uniform — the pre-table generator's exact distribution).  The
+    literal base case consumes the same table for the LiteralType view
+    (`LiteralSweep.genScalarLiteral`); the deep-fuel leaf fallback is the
+    same table with a mask (`genLeafScalarType`). -/
+def genScalarType (n : Nullability) : Gen PType :=
+  match Substrait.Grammar.scalarGrammar with
+  | [] => pure (Substrait.Grammar.ScalarCtor.toPType Substrait.Grammar.ScalarCtor.bool n)  -- dead: closed table
+  | d :: rest =>
+    Gen.oneOfWithDefault (pure (Substrait.Grammar.ScalarCtor.toPType d n))
+      (rest.map (fun c => pure (Substrait.Grammar.ScalarCtor.toPType c n)))
+
+/-- The recursion-leaf MASK on the shared table (the deep-fuel fallback
+    subset: the four short repeatable binaries — `bool`, `i32`, `i64`,
+    `string`; no floats).  A filter on `scalarGrammar`, not a second list,
+    so the branch order and the default are the table's own. -/
+def isLeafTag : Substrait.Grammar.ScalarCtor → Bool
+  | .bool | .i32 | .i64 | .string => true
+  | .i8 | .i16 | .fp32 | .fp64 | .binary => false
+
+/-- The leaf-fallback selection over the masked table (same shape as
+    `genScalarType`: head row default, rest uniform). -/
+def genLeafScalarType (n : Nullability) : Gen PType :=
+  match (Substrait.Grammar.scalarGrammar.filter isLeafTag) with
+  | [] => pure (Substrait.Grammar.ScalarCtor.toPType Substrait.Grammar.ScalarCtor.bool n)  -- dead: four leaf rows
+  | d :: rest =>
+    Gen.oneOfWithDefault (pure (Substrait.Grammar.ScalarCtor.toPType d n))
+      (rest.map (fun c => pure (Substrait.Grammar.ScalarCtor.toPType c n)))
+
 def genType : Nat → Gen PType
   | 0 => do
     let n ← genNull
-    Gen.oneOfWithDefault (pure (.bool n))
-      [pure (.i8 n), pure (.i16 n), pure (.i32 n), pure (.i64 n),
-       pure (.fp32 n), pure (.fp64 n), pure (.string n), pure (.binary n)]
+    genScalarType n
   | fuel + 1 => do
     let n ← genNull
     let branch ← Gen.chooseNat
@@ -107,9 +137,7 @@ def genType : Nat → Gen PType
       let p ← Gen.chooseNat
       let s ← Gen.chooseNat
       pure (.decimal (p % 30 + 1) (s % 10) n)
-    | _ =>
-      Gen.oneOfWithDefault (pure (.bool n))
-        [pure (.i32 n), pure (.i64 n), pure (.string n)]
+    | _ => genLeafScalarType n
 
 /-- The plausible instance: fueled generation driven by the size parameter. -/
 instance : ArbitraryFueled PType where
@@ -181,12 +209,17 @@ domain is shrunk to the fragment, the property is not weakened:
   `::type` form — `unspecified` is unemittable by design).
 - subqueries are unemittable; excluded. -/
 
-/-- The fixed function table: emitter `Ctx` and decoder `FnCtx` agree on
-    these anchors; colon-free unique names mean the emitter suppresses the
-    `#anchor` and the parse resolves by bare name. -/
+/-- **THE fn-name tuple table** — `(name, anchor)` rows, the ONE table the
+    expr layer both reads and writes through.  The decode side IS this
+    list (`parseExpr`'s `FnCtx`); the emit side is the derived view
+    `exprEmitCtx` below; the 9.7b tie check asserts the two agree on every
+    row.  Colon-free unique names mean the emitter suppresses the
+    `#anchor` and the parser resolves by bare name. -/
 def fnNames : FnCtx := [("add", 1), ("gt", 2), ("sub", 3)]
 
-/-- The emitter-side view of `fnNames` (kind 0 = function). -/
+/-- The emitter-side view of `fnNames` (kind 0 = function) — DERIVED,
+    never written by hand, so it cannot drift from the table.  Tuple
+    shape: (urnRef, kind, anchor, name). -/
 def exprEmitCtx : Substrait.Emit.Text.Ctx :=
   { urns := [], extensions := fnNames.map fun (n, a) => (1, 0, a, n) }
 
@@ -616,6 +649,29 @@ def genStr : Nat → Gen String
     let cs ← genStr k
     pure (toString c ++ cs)
 
+/-- **The scalar base case** (genLiteral role on the SAME table as
+    `PropSweep.genScalarType` — `Grammar.scalarGrammar`): each row mapped
+    to its LiteralType ctor with LiteralSweep's own payload generators.
+    Two role carve-outs live here, never in the table:
+    - `binary` — EXCLUDED (the table's LAST row): `Emit.Text.literal`
+      renders every binary payload as the `{{binary}}` one-way sentinel
+      (the doc above), so the branch count `% 9` slices the first 8 rows
+      for scalars and gives the extra row to `null`.
+    - `null` — not a scalar PType row at all (its payload IS a PType), so
+      `genLiteral` builds it separately below.
+    The `.binary` arm is unreachable by construction (row 8 is never
+    indexed); it exists to keep the mapping total. -/
+def genScalarLiteral : Substrait.Grammar.ScalarCtor → Gen Proto.LiteralType
+  | .bool => do let v ← Gen.chooseNat; pure (.bool (v % 2 == 0))
+  | .i8 => do let v ← genInt8; pure (.i8 v)
+  | .i16 => do let v ← genInt16; pure (.i16 v)
+  | .i32 => do let v ← genInt32; pure (.i32 v)
+  | .i64 => do let v ← genInt64; pure (.i64 v)
+  | .fp32 => do let v ← genFloatVal; pure (.fp32 v)
+  | .fp64 => do let v ← genFloatVal; pure (.fp64 v)
+  | .string => do let s ← genStr 5; pure (.string s)
+  | .binary => pure (.binary [])
+
 /-- Random literal over the round-trippable fragment.
     Binary EXCLUDED by design: Emit.Text.literal always writes `{{binary}}`
     (the `show_literal_binaries=false` sentinel from Substrait.Grammar),
@@ -624,31 +680,7 @@ def genLiteral (_tfuel : Nat) : Gen Proto.Literal := do
   let branch ← Gen.chooseNat
   let n ← PropSweep.genNull
   let b := branch % 9
-  if b == 0 then
-    let v ← Gen.chooseNat
-    pure { literalType := .bool (v % 2 == 0), nullable := n == .nullable }
-  else if b == 1 then
-    let v ← genInt8
-    pure { literalType := .i8 v, nullable := n == .nullable }
-  else if b == 2 then
-    let v ← genInt16
-    pure { literalType := .i16 v, nullable := n == .nullable }
-  else if b == 3 then
-    let v ← genInt32
-    pure { literalType := .i32 v, nullable := n == .nullable }
-  else if b == 4 then
-    let v ← genInt64
-    pure { literalType := .i64 v, nullable := n == .nullable }
-  else if b == 5 then
-    let v ← genFloatVal
-    pure { literalType := .fp32 v, nullable := n == .nullable }
-  else if b == 6 then
-    let v ← genFloatVal
-    pure { literalType := .fp64 v, nullable := n == .nullable }
-  else if b == 7 then
-    let s ← genStr 5
-    pure { literalType := .string s, nullable := n == .nullable }
-  else do
+  if b == 8 then do
     -- null: emitter writes `null:t`, parser always sets nullable := true
     -- (the generator matches by forcing nullable).  Vary the nulled type
     -- across i32/i64/string so the type-text arm is exercised.
@@ -656,6 +688,15 @@ def genLiteral (_tfuel : Nat) : Gen Proto.Literal := do
     let t : Proto.PType := match ty % 3 with
       | 0 => .i32 .nullable | 1 => .string .nullable | _ => .i64 .nullable
     pure { literalType := .null t, nullable := true }
+  else do
+    -- b < 8: the scalar rows of the shared table — `binary` is its LAST
+    -- row, so the 0-7 slice is exactly the 8 literal-able scalars (see
+    -- `genScalarLiteral`'s role notes).  The `.getD` default is a dead
+    -- corner (`b < scalarGrammar.length` by the `% 9` bound).
+    let tag : Substrait.Grammar.ScalarCtor :=
+      (Substrait.Grammar.scalarGrammar[b]?).getD Substrait.Grammar.ScalarCtor.bool
+    let litType ← genScalarLiteral tag
+    pure { literalType := litType, nullable := n == .nullable }
 
 /-- The plausible instance: fueled generation. -/
 instance : ArbitraryFueled Proto.Literal where
@@ -918,7 +959,10 @@ def runChecks : TestKit.CheckM Unit := do
        | .error _ => false) s!"emit(parse) must be identity for '{txt}', typeDepth satisfies fuel bound")
 
   -- 9.7. Expression round-trip sweep (refs, calls, literals, if_then, cast).
-  let fnCtx : Decode.FnCtx := [("gt", 1), ("add", 2)]
+  --    The parse context is `PropSweep.fnNames` itself — the ONE fn-name
+  --    table (its call names `add`/`gt` are the rows below); the separate
+  --    hand-written twin listing is gone.
+  let fnCtx : Decode.FnCtx := PropSweep.fnNames
   let testExprs : List String :=
     [ "$0", "add($0, $1):i32?", "gt($0, 0:i32):boolean?"
     , "if_then(gt($0, 0:i32):boolean? -> $1, _ -> 0:i32)"
@@ -927,6 +971,14 @@ def runChecks : TestKit.CheckM Unit := do
     TestKit.check s!"expr parses: {txt}" (TestKit.assert
       ((Decode.parseExpr (txt.length + 1) fnCtx txt.toList).isSome)
       s!"expression '{txt}' must parse with given fnCtx")
+
+  -- 9.7b. The fn-table tie: the emitter's DERIVED ctx must resolve every
+  --    (name, anchor) row of the decoder table back to its name — a row
+  --    edited on one side without the other fails here, before any sweep
+  --    samples it.
+  TestKit.check "fnNames ↔ exprEmitCtx tie" (TestKit.assert
+    (PropSweep.fnNames.all fun (n, a) => PropSweep.exprEmitCtx.nameOf 0 a == some n)
+    "every (name, anchor) of fnNames must resolve through the derived emitter ctx")
 
   -- 9.8. Float literal round-trip (W5.3 phase-2a fp-literal fix).
   --    Previously `parseLiteral` had no float arm — `toString 1.5` scanned

@@ -5,6 +5,15 @@ Extracted from `SchemaLang.Meta.Reflect` (pure code motion — every
 declaration keeps its exact statement and name): the provenance
 registry (`schemaItemDocsExt`), the schema/ctor/param naming helpers,
 and the partial reifier (`tyOfExpr?`) + `ctorArgTypes`.
+
+The DOC-STRING registry (the extension, its reader, the lookup, and
+the write `registerSchemaItemDoc`) now lives in the Core-free
+`Register.ProvenanceDocs` — split out at W12+ so `RegisterKit`'s
+lower cone (the emitted mount's provenance hookup) never reaches
+this module's Core import; see there. This module re-exports it
+(public meta import); consumers see the same names via
+`SchemaLang.Meta.Reflect`. `provenanceOf` below reads the lookup
+(`itemDoc?`) from the split module.
 -/
 module
 
@@ -24,6 +33,10 @@ public meta import SchemaLang.Keys
 -- Update/Keys/CodegenCore only.
 public meta import SchemaLang.Update2
 public meta import SchemaLang.Meta.Register.Core
+-- The Core-free doc-string registry (the toolkit's lower cone — see
+-- the header; this import re-exports `schemaItemDocsExt` /
+-- `registeredItemDocs` / `itemDoc?` / `registerSchemaItemDoc`).
+public meta import SchemaLang.Meta.Register.ProvenanceDocs
 
 public meta section
 
@@ -37,35 +50,11 @@ open Qq
 The declaring Lean constant's doc string is stored in a SEPARATE
 persistent extension, NOT on `Item` — `Item` is the closed boundary
 universe, and a provenance field would poison its BEq/specEq/snapshot
-surface (`FuncSig.body`'s precedent, extended to all item kinds). -/
-
-/-- Provenance extension: Lean declaration name ↦ doc string (the ONE
-    doc string for the declaring constant). -/
-initialize schemaItemDocsExt :
-    SimplePersistentEnvExtension (Name × String) (List (Name × String)) ←
-  CodegenCore.mkRegistryExt `schemaItemDocsExt
-
-/-- All registered doc strings from an environment (the emitter entry
-    point). -/
-def registeredItemDocs (env : Environment) : List (Name × String) :=
-  schemaItemDocsExt.getState env
-
-/-- Look up the doc string for one declared schema item. Returns the
-    empty string when no doc string was written (not all declarations
-    carry one). -/
-def itemDoc? (env : Environment) (leanName : Name) : String :=
-  match (registeredItemDocs env).find? (fun (n, _) => n == leanName) with
-  | some (_, doc) => doc
-  | none => ""
-
-/-- Register the doc string for one reflected item. Silent when the
-    declaration carries no doc string. -/
-def registerSchemaItemDoc (leanName : Name) : CoreM Unit := do
-  let env ← getEnv
-  let doc? ← liftM <| findDocString? env leanName
-  if let some doc := doc? then
-    modifyEnv fun env =>
-      schemaItemDocsExt.addEntry env (leanName, doc)
+surface (`FuncSig.body`'s precedent, extended to all item kinds). The
+registry itself (`schemaItemDocsExt` / `registeredItemDocs` /
+`itemDoc?` / `registerSchemaItemDoc`) lives in the Core-free
+`Register.ProvenanceDocs` (split out for the toolkit's lower cone —
+the module header); this module re-exports it and reads it here. -/
 
 /-- Provenance summary for ONE registered item: `"declName: docString"`
     (the first line of the doc string; empty when undocumented). The

@@ -106,11 +106,13 @@ theorem distinct_incremental_ok :
 
 /-! ## Linear operators incrementalize for free -/
 
+omit [DecidableEq A] [DecidableEq B] in
 /-- Map is LTI, hence its own incremental form. -/
 @[simp] theorem map_incremental (f : A → B) :
     incremental (lifting (ZSet.map f)) = lifting (ZSet.map f) :=
   lti_incremental _ (lifting_lti _ (fun _ _ => ZSet.map_linear f _ _))
 
+omit [DecidableEq A] [DecidableEq B] in
 /-- The twice-lifted form (map as a stream-of-streams operator). -/
 @[simp] theorem lifting_map_incremental (f : A → B) :
     incremental (lifting (lifting (ZSet.map f))) = lifting (lifting (ZSet.map f)) := by
@@ -120,11 +122,13 @@ theorem distinct_incremental_ok :
   funext t
   exact ZSet.map_linear f (x t) (y t)
 
+omit [DecidableEq A] [DecidableEq B] in
 /-- The unfolded content: differentiating mapped states is mapping deltas. -/
 theorem map_incremental_unfolded (f : A → B) (s : Stream (ZSet A)) :
     D (lifting (ZSet.map f) (I s)) = lifting (ZSet.map f) s :=
   congr_fun (map_incremental f) s
 
+omit [DecidableEq A] in
 /-- Filter is LTI, hence its own incremental form. -/
 @[simp] theorem filter_incremental (p : A → Prop) [DecidablePred p] :
     incremental (lifting (ZSet.filter p)) = lifting (ZSet.filter p) :=
@@ -132,6 +136,7 @@ theorem map_incremental_unfolded (f : A → B) (s : Stream (ZSet A)) :
 
 /-! ## The incremental join -/
 
+omit [DecidableEq A] [DecidableEq B] in
 /-- **The incremental join**: for the equi-join (a time-invariant bilinear
     operator), the delta form is the three-term expansion
     `ΔA ⋈ B + A(prev) ⋈ ΔB + ΔA ⋈ ΔB`-via-`timesIncremental`

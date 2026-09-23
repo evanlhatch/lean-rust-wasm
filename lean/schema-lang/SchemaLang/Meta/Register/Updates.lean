@@ -27,6 +27,9 @@ public meta import SchemaLang.Update2
 public meta import SchemaLang.Meta.Register.Core
 public meta import SchemaLang.Meta.Register.Keys
 public meta import SchemaLang.Meta.Register.Quotes
+-- The S5 meta-toolkit (`declare_registry_member` — RegisterKit): the
+-- registry below is its emitted skeleton (plain-rows mode).
+public meta import SchemaLang.Meta.RegisterKit
 
 public meta section
 
@@ -67,19 +70,20 @@ Gates at elaboration (the invariant lane's pattern):
   extracting its `.col` constructor path (data, the `ColPath` doctrine).
 -/
 
-/-- The v2 update registry (W8.3; the v1→v2 migration — the ONE
-    update registry): append-only, replayed from oleans at import (the
-    `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
-    because `Item` cannot carry the VExpr family). Every `schema_update`
-    registers HERE — the emitter and the trace batches' source; the
-    v1 registry was DELETED with the v1 surface. -/
-initialize update2ItemExt :
-    SimplePersistentEnvExtension SomeUpdate2 (List SomeUpdate2) ←
-  CodegenCore.mkRegistryExt `update2ItemExt
-
-/-- The registered v2 update rows. -/
-def registeredUpdates2 (env : Environment) : List SomeUpdate2 :=
-  update2ItemExt.getState env
+/- The v2 update registry (W8.3; the v1→v2 migration — the ONE
+   update registry): append-only, replayed from oleans at import (the
+   `CodegenCore.mkRegistryExt` semantics — a SEPARATE extension
+   because `Item` cannot carry the VExpr family). Every `schema_update`
+   registers HERE — the emitter and the trace batches' source; the
+   v1 registry was DELETED with the v1 surface. S5 (the meta-toolkit):
+   the two declarations below are the EMITTED skeleton now
+   (`declare_registry_member` — RegisterKit) — PLAIN rows (`plain!`: the
+   `SomeUpdate2` IS the row; its own `name` field is the registry key,
+   so the `Name × <kind>` pair would be redundant; the reader keeps
+   replaying `List SomeUpdate2` exactly as before). The command
+   elaborator below IS the write path (the toolkit emits no writer
+   for form (i) — the consumer's command IS the write path). -/
+declare_registry_member update2ItemExt registeredUpdates2 : SomeUpdate2 plain!
 
 /-- Registered v2 update names (dup detection). -/
 def registeredUpdate2Names (env : Environment) : List String :=

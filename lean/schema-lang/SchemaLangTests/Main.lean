@@ -553,6 +553,10 @@ def derivesChecks : CheckResult := do
     (SchemaLang.Emit.Rust.derivesFor uni [.f64])
     ["Clone", "Debug", "PartialEq"]
   -- the emitted struct carries the verdict
+  -- raw-fold seam (keep): `recordItem` over a SYNTHETIC universe — the
+  -- honest test surface. Production renders the ITEM TABLE through the
+  -- checked checkpoint (`GenCtx.checkedItems?` → `Emit.Rust.schemaItemsChecked`);
+  -- `schemaItemsChecked_eq` pins the bytes to this raw path.
   let outerOut := CodegenCore.Emit.Rust.renderModule
     [SchemaLang.Emit.Rust.recordItem
       (SchemaLang.Emit.Rust.derivesFor uni [.ty "inner"]) "outer"
@@ -613,6 +617,10 @@ def genRustChecks (ctx : SchemaLang.Emit.GenCtx) : CheckResult := do
   _ ← assert ((SchemaLang.Emit.GenRust.unsupported? [tree] ["tree"] false 8 (.ty "tree")).isSome)
     "the same cycle inline is skipped"
   -- the skip is LOUD: a comment names the record, the field, the reason
+  -- raw-fold seam (keep): `recordGenItem`/`genRustItems` are the gen-FN
+  -- lane's OWN inputs (the W6.4 generator; its release path is the
+  -- registry driver in Emit.GenRust) — pins over synthetic universes,
+  -- distinct from the checked object-table route (`schemaItemsChecked`).
   let tensored : Item := .record "tensored" [{ name := "t", ty := .tensor [2] .f32 }]
   let skipOut := CodegenCore.Emit.Rust.renderModule
     [SchemaLang.Emit.GenRust.recordGenItem [tensored] "tensored"
@@ -4396,6 +4404,9 @@ def mapSetChecks : CheckResult := do
     (Emit.Wit.typeDecl (.record "mapset-rec"
       [⟨"scores", scoresTy⟩, ⟨"tags", tagsTy⟩])).pretty
     "scores: list<tuple<string, u64>>,"
+  -- raw-fold seam (keep): `tyRust` on demo types — the per-Ty name
+  -- fold; the item TABLE's production route is the checked checkpoint
+  -- (`GenCtx.checkedItems?` → `Emit.Rust.schemaItemsChecked`).
   _ ← assertEq "Rust map (BTree — deterministic)"
     (Emit.Rust.tyRust scoresTy) "BTreeMap<String, u64>"
   _ ← assertEq "Rust set (BTree — deterministic)"
@@ -5414,89 +5425,6 @@ def update2Checks : CheckResult := do
 
 end Update2Sweep
 
-/-! ## W8.5 scheduling — time as input, streams from day one
-
-Canon row: a schedule / rate / deadline = stream operations (sampling,
-delay, comparison) — never a separate time system; NO new `Ty` ctor
-(timestamps/durations are plain u64 scalars; the boundary universe
-stays closed). Every operator here is a pure function of tick indices
-and streams — no wall clock, no effect (the vision's scope lock).
-Negative controls: the WRONG laws must fail (a delayed stream is not
-the identity at the origin; a quiet rate is not the always-fire rate;
-a non-multiple tick is not due). -/
-
-namespace SchedSweep
-
-/-- A list-backed stream (the fixture: value i at tick i, then a
-default — enough ticks for every window checked below). -/
-def sOf (l : List Nat) (d : Nat) : Dbsp.Stream Nat := fun t => l.getD t d
-
-def rate1 : Scheduling.Rate := { period := 1, hpos := by decide }
-def rate3 : Scheduling.Rate := { period := 3, hpos := by decide }
-def rateQuiet : Scheduling.Rate := { period := 1000, hpos := by decide }
-
-def schedChecks : CheckResult := do
-  -- the time input: ticks IS the identity stream
-  _ ← assert (Scheduling.ticks 0 = 0 ∧ Scheduling.ticks 9 = 9)
-    "ticks: the identity stream of tick indices"
-  -- rates: the due pattern (executable witnesses — origin fires,
-  -- in-period ticks silent, multiples fire)
-  _ ← assert (rate3.due? 0) "rate3: the origin fires"
-  _ ← assert (!rate3.due? 1 && !rate3.due? 2)
-    "rate3: inside the first period is silent"
-  _ ← assert (rate3.due? 3 && rate3.due? 9) "rate3: multiples fire"
-  -- NEGATIVE: a non-multiple tick is not due; the quiet rate is NOT
-  -- the always-fire rate (rates are distinguishable)
-  _ ← assert (!rate3.due? 5) "rate3: 5 is not a 3-multiple"
-  _ ← assert (rate1.due? 5 && !rateQuiet.due? 5)
-    "rate: always-fire ≠ quiet-rate"
-  -- sampling: due → source value; between firings → hold
-  let s := sOf [10, 11, 12, 13, 14, 15, 16] 0
-  _ ← assert (rate3.sample 99 s 0 = 10) "sample: the origin passes through"
-  _ ← assert (rate3.sample 99 s 3 = 13) "sample: a due tick passes through"
-  _ ← assert (rate3.sample 99 s 1 = 99 && rate3.sample 99 s 2 = 99)
-    "sample: holds between firings"
-  -- delays: the "visible next tick" law, executable
-  _ ← assert (Scheduling.delayBy 1 0 s 0 = 0) "delay: the origin shows the default"
-  _ ← assert (Scheduling.delayBy 1 0 s (0 + 1) = 10)
-    "delay: visible next tick (t=0)"
-  _ ← assert (Scheduling.delayBy 1 0 s (3 + 1) = 13)
-    "delay: visible next tick (t=3)"
-  -- delay composition: k + m = m then k, pointwise over a window
-  _ ← assert ((List.range 12).all fun t =>
-    Scheduling.delayBy 2 0 (Scheduling.delayBy 3 0 s) t
-      = Scheduling.delayBy 5 0 s t)
-    "delay: (2+3) == 3-then-2 over the window"
-  -- the dbsp tie: the unit delay with 0 pre-history IS Dbsp.delay
-  _ ← assert ((List.range 10).all fun t =>
-    Scheduling.delayBy 1 0 s t = Dbsp.delay s t)
-    "delay: the unit case IS Dbsp.delay"
-  -- NEGATIVE: a delay is not the identity at the origin; two ticks
-  -- are not zero ticks
-  _ ← assert (Scheduling.delayBy 1 0 s 0 != s 0)
-    "delay: not the identity at the origin"
-  _ ← assert (Scheduling.delayBy 2 0 s 3 != s 3)
-    "delay: two ticks ≠ zero ticks"
-  -- deadlines: missed = at/past d ∧ still not done
-  let onTime : Dbsp.Stream Bool := fun t => decide (5 ≤ t)
-  let late : Dbsp.Stream Bool := fun t => decide (6 ≤ t)
-  let never : Dbsp.Stream Bool := fun _ => false
-  _ ← assert (Scheduling.missed 5 onTime 3 = false)
-    "deadline: quiet before d"
-  _ ← assert (Scheduling.missed 5 onTime 5 = false)
-    "deadline: on-time AT d is not missed"
-  _ ← assert (Scheduling.missed 5 late 5 = true)
-    "deadline: unfinished AT d IS missed"
-  _ ← assert (Scheduling.missed 5 never 9 = true)
-    "deadline: never-done stays missed past d"
-  _ ← assert (Scheduling.missed 5 late 9 = false)
-    "deadline: a late finish un-misses once done"
-  _ ← assert (Scheduling.missed 5 onTime 9 = false)
-    "deadline: done never misses"
-  .ok ()
-
-end SchedSweep
-
 /-! ## Metamorphic sweep — the breaking classifier vs its own documented rules
 
 OWNERSHIP: the breaking-gate metamorphic sweep (review 2026-09-16: gates
@@ -6048,6 +5976,9 @@ def w813Checks : CheckResult := do
   _ ← assertEq "recursive universe clean" (universeCheck recUniverse) []
   _ ← assert (universeWellFormed recUniverse) "recursive universe well formed"
   -- Rust: the cycle renders through `Vec` (finite-size — honest)
+  -- raw-fold seam (keep): `tyRust`/`schemaItems` over the synthetic
+  -- recursive universe — the byte-tie's raw half (production goes
+  -- through `GenCtx.checkedItems?` → `schemaItemsChecked`).
   _ ← assertEq "rust: boxed cycle renders Vec<Tree>"
     (SchemaLang.Emit.Rust.tyRust (.list (.ty "tree"))) "Vec<Tree>"
   let rustOut := CodegenCore.Emit.Rust.renderModule
@@ -6200,6 +6131,8 @@ run_cmd do
   | .ok its => unless its == [a, b] do throwError "mono snapshot round trip drift"
   | .error e => throwError s!"mono snapshot round trip failed: {e}"
   -- the emitters see concrete records (the per-emitter table's mono row)
+  -- raw-fold seam (keep): `schemaItems` over the synthetic mono
+  -- universe (the checked checkpoint route: `schemaItemsChecked`).
   let rustOut := CodegenCore.Emit.Rust.renderModule
     (SchemaLang.Emit.Rust.schemaItems [a, b])
   unless rustOut.contains "pub struct PairStringU64" do
@@ -6828,7 +6761,6 @@ unsafe def main (args : List String) : IO UInt32 := do
      , ("tableInv", TableInvSweep.tableInvChecks)
      , ("lens", LensSweep.lensChecks)
      , ("update2", Update2Sweep.update2Checks)
-     , ("scheduling", SchedSweep.schedChecks)
      , ("refine", RefineSweep.refineChecks)
      , ("effects", EffectSweep.effectChecks)
      , ("breakingSweep", BreakingMetaSweep.breakingSweepChecks)

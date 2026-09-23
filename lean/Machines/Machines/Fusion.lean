@@ -117,6 +117,7 @@ def settleMachine_convergent (R : B → A → A) (i : B) :
     (by intro s l _h; cases l; omega)
     (by intro s l h; cases l; have := of_decide_eq_true h; omega)
 
+omit [AddCommGroup A] [AddCommGroup B] in
 /-- The settle machine's run: `f` settle passes from value `x` with
 budget `f` reach `(R i)^[f] x` with the budget spent — the cascade IS
 the iterate sequence `Dbsp.approxs` tracks (`approxs_apply`). -/

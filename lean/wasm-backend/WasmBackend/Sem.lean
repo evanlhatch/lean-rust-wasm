@@ -33,8 +33,11 @@ THE FRAGMENT vs REAL WEBASSEMBLY (the honesty ledger):
   `The calls layer` section, v1 = CALLS as FUNCTION-COMPOSITION, no
   call-frames), integer div/rem (their `trap` is the only missing
   trap),
-  multi-value blocks (frames are no-result: a frame body must END at
-  the frame's entry type — `checkFrame`), memory beyond one byte per
+  multi-value blocks and loops (block/loop frames are no-result: a
+  frame body must END at the frame's entry type — `checkFrame`;
+  value-RETURNING `if_` frames — a branch-free if whose chosen branch
+  ends at `entry ++ [resTy]` — ARE accepted since the M3 follow-up,
+  see `checkStack`'s `.if_` arm), memory beyond one byte per
   access, data segments, globals, static branch-DEPTH validation (a
   `br n` deeper than the label stack surfaces as a top-level return
   signal here; wasm's validator rejects it statically).
@@ -43,7 +46,13 @@ THE FRAGMENT vs REAL WEBASSEMBLY (the honesty ledger):
   the unreachable tail; a `br` executed with values pushed inside the
   frame since entry is therefore REJECTED statically where wasm would
   accept it (the dynamic semantics would still be safe — the branch
-  restores the frame-entry stack).
+  restores the frame-entry stack). The value-returning if's soundness
+  gate is the same rule at the FRAME level: a branch that can raise
+  the frame-absorbed `branch 0` signal (contains a `br`/`brif`
+  anywhere — `hasBranch`) may only end a NO-RESULT frame, because the
+  handler runs the continuation from the ENTRY stack; branch-free
+  branches have only the fall-through path live, so their
+  value-returning continuation type is sound (`execList_noBranch`).
 * MODEL ARTIFACTS (not wasm behavior): execution is fuel-bounded
   (`outOfFuel` — every flat step and every frame entry, including each
   loop restart, consumes one unit). The memory is a total function
@@ -547,6 +556,24 @@ theorem execList_ok_unique {f1 f2 : Nat} {s s1 s2 : State} {p : List Instr}
     injection h1 with h1''
     exact h1''.symm
 
+/-- The br/brif-FREEDOM probe (the value-returning-if soundness gate).
+    `true` iff the body contains a `br`/`brif` at ANY depth — nested
+    frame bodies INCLUDED: a branch signal raised in a nested frame is
+    DECREMENTED as it crosses each absorbing frame (`branch (n+1)` →
+    `branch n`), so only a completely branch-free body is provably
+    unable to raise the `branch 0` signal THIS frame's handler absorbs
+    (the absorbed case restores the frame-ENTRY stack, a type the
+    value-returning continuation does not cover; `unreach` needs no
+    gate — the trap never reaches the continuation). -/
+def hasBranch : List Instr → Bool
+  | [] => false
+  | .br _ :: _ => true
+  | .brif _ :: _ => true
+  | .block b :: rest => hasBranch b || hasBranch rest
+  | .loop b :: rest => hasBranch b || hasBranch rest
+  | .if_ t e :: rest => hasBranch t || hasBranch e || hasBranch rest
+  | _ :: rest => hasBranch rest
+
 /-! ## checkStack — the instruction-level stack typing -/
 
 mutual
@@ -557,6 +584,11 @@ mutual
     UNREACHABLE — unchecked, statically ending at the CURRENT type
     (`base`); combined with `checkFrame`'s mid = entry rule this is
     sound (the branch/trap never reaches the tail) and conservative.
+    The `.if_` arm admits TWO frame shapes (the M3 follow-up): the
+    no-result frame (both branches end at the ENTRY type — the old
+    `checkFrame` rule) and the VALUE-RETURNING frame (both branches
+    end at the same `mid ≠ entry`, gated on `hasBranch` — see the
+    arm), so the edgepython `if`-with-`return` shape translates.
     Mutually recursive with `checkFrame` (a frame body is a subterm, so
     the structural recursion terminates). -/
 def checkStack (locals : Nat → Ty) : List Ty → List Instr → Except String (List Ty)
@@ -621,12 +653,35 @@ def checkStack (locals : Nat → Ty) : List Ty → List Instr → Except String 
   | base, .if_ t e :: is =>
       match base with
       | .i32 :: ts =>
-          match checkFrame locals ts t with
-          | .ok _ =>
-              match checkFrame locals ts e with
-              | .ok _ => checkStack locals ts is
-              | .error err => .error err
+          match checkStack locals ts t with
           | .error err => .error err
+          | .ok mid1 =>
+              match checkStack locals ts e with
+              | .error err => .error err
+              | .ok mid2 =>
+                  if mid1 = mid2 then
+                    -- THE RESULT-FRAME RULE (the M3 follow-up): both
+                    -- branches end at the SAME type `mid1` — the if_'s
+                    -- net stack change, so the continuation types from
+                    -- `mid1`. Two shapes fall out, both backward
+                    -- compatible with the old `checkFrame` rule (both
+                    -- branches END at the entry `ts`): the NO-RESULT
+                    -- frame (mid1 = ts) and the VALUE-RETURNING frame
+                    -- (mid1 = ts with the branch result pushed — head
+                    -- = top). SOUNDNESS GATE: a branch that can raise
+                    -- the frame-absorbed `branch 0` signal (contains a
+                    -- `br`/`brif` anywhere — `hasBranch`) is only
+                    -- admitted as a NO-RESULT frame — the handler
+                    -- restores the ENTRY stack on that path, which the
+                    -- value-returning continuation type does not
+                    -- cover; branch-free branches have only the
+                    -- fall-through path live, so the continuation
+                    -- types from `mid1` soundly (`execList_noBranch`).
+                    if hasBranch t = true ∨ hasBranch e = true then
+                      if mid1 = ts then checkStack locals ts is
+                      else .error "frame stack mismatch"
+                    else checkStack locals mid1 is
+                  else .error "frame stack mismatch"
       | _ => .error "operand type mismatch"
   | base, .unreach :: _ => .ok base
   | base, .i32store8 :: is =>
@@ -660,6 +715,301 @@ theorem checkFrame_ok (locals : Nat → Ty) (base : List Ty) (body : List Instr)
     by_cases hmid : mid = base
     . rw [hmid]
     . rw [hc] at h; simp [hmid] at h
+
+/-! ### The branch-freedom machinery (the result-frame soundness gate)
+
+The value-returning `if_` admits a continuation type the frame's
+`branch 0` restore does not cover (the restore runs the tail from the
+ENTRY stack). The checker therefore requires the branches of such
+frames to be `br`/`brif`-free; these two theorems are what make that
+SYNTACTIC gate SOUND at the type-safety theorem's level: a
+branch-free body cannot raise the branch-0 signal, so the restore
+path is dynamically dead. -/
+
+/-- The FLAT-STEP half: a `br`/`brif`-free instruction (`hasBranch`
+    false) never raises a branch signal from its ONE step — the step
+    either completes or fails with a non-branch error. The case tree
+    is `step`'s own operand-stack shapes (head = top); kernel-checked. -/
+theorem or_eq_false {a b : Bool} : (a || b) = false → a = false ∧ b = false := by
+  intro h
+  cases a <;> cases b <;> simp at h ⊢
+
+theorem step_noBranch (s : State) (i : Instr) (h : hasBranch [i] = false) :
+    ∀ n ls, step s i ≠ .error (.branch n ls) := by
+  intro n ls
+  cases s with | mk loc' stk mem' msz' =>
+  cases i with
+  | br _ => simp [hasBranch] at h
+  | brif _ => simp [hasBranch] at h
+  | block _ => simp [step]
+  | loop _ => simp [step]
+  | if_ _ _ => simp [step]
+  | i32const _ => simp [step]
+  | i64const _ => simp [step]
+  | localget _ => simp [step]
+  | localset n0 =>
+      cases stk with
+      | nil => simp [step]
+      | cons v rest => simp [step]
+  | i32add =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i64 _ => simp [step]
+          | i32 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i64 _ => simp [step]
+                  | i32 b => simp [step]
+  | i64add =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i32 _ => simp [step]
+          | i64 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i32 _ => simp [step]
+                  | i64 b => simp [step]
+  | i64sub =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i32 _ => simp [step]
+          | i64 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i32 _ => simp [step]
+                  | i64 b => simp [step]
+  | i64mul =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i32 _ => simp [step]
+          | i64 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i32 _ => simp [step]
+                  | i64 b => simp [step]
+  | i64ltu =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i32 _ => simp [step]
+          | i64 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i32 _ => simp [step]
+                  | i64 b => simp [step]
+  | i64eq =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i32 _ => simp [step]
+          | i64 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i32 _ => simp [step]
+                  | i64 b => simp [step]
+  | i32eq =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i64 _ => simp [step]
+          | i32 a =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i64 _ => simp [step]
+                  | i32 b => simp [step]
+  | i32eqz =>
+      cases stk with
+      | nil => simp [step]
+      | cons v vs =>
+          cases v with
+          | i64 _ => simp [step]
+          | i32 b => simp [step]
+  | drop =>
+      cases stk with
+      | nil => simp [step]
+      | cons v rest => simp [step]
+  | unreach => simp [step]
+  | i32store8 =>
+      cases stk with
+      | nil => simp [step]
+      | cons v1 vs1 =>
+          cases v1 with
+          | i64 _ => simp [step]
+          | i32 v =>
+              cases vs1 with
+              | nil => simp [step]
+              | cons v2 vs2 =>
+                  cases v2 with
+                  | i64 _ => simp [step]
+                  | i32 a =>
+                      by_cases hlt : a.toNat < msz'
+                      · simp [step, hlt]
+                      · simp [step, hlt]
+  | i32load8u off =>
+      cases stk with
+      | nil => simp [step]
+      | cons v vs =>
+          cases v with
+          | i64 _ => simp [step]
+          | i32 a =>
+              by_cases hlt : a.toNat + off < msz'
+              · simp [step, hlt]
+              · simp [step, hlt]
+
+set_option hygiene false in
+local macro "br_flat" I:term : tactic =>
+  `(tactic| (have hp' : hasBranch is = false := by simpa only [hasBranch] using hp;
+             simp only [execList];
+             cases hx : step s $I with
+             | ok s' => exact ih s' is n ls hp'
+             | error e =>
+               cases e with
+               | branch k ls' => exact absurd hx (step_noBranch s $I (by simp [hasBranch]) k ls')
+               | trap => simp [hx]
+               | underflow => simp [hx]
+               | outOfFuel => simp [hx]
+               | structural => simp [hx]))
+
+theorem execList_noBranch : ∀ (fuel : Nat) (s : State) (p : List Instr)
+    (n : Nat) (ls : Nat → Val), hasBranch p = false →
+    execList fuel s p ≠ .error (.branch n ls) := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro s p n ls hp
+    simp [execList]
+  | succ fuel ih =>
+    intro s p n ls hp
+    cases p with
+    | nil => simp [execList]
+    | cons i is =>
+      cases i with
+      | br _ => simp [hasBranch] at hp
+      | brif _ => simp [hasBranch] at hp
+      | block body =>
+          have hb : hasBranch body = false ∧ hasBranch is = false := by
+            exact (or_eq_false (by simpa only [hasBranch] using hp))
+          simp only [execList]
+          cases hx : execList fuel s body with
+          | ok s' => exact ih s' is n ls hb.2
+          | error e =>
+              cases e with
+              | branch k ls' =>
+                  cases k with
+                  | zero =>
+                                simp only [hx]
+                                exact ih { s with locals := ls', stack := s.stack } is n ls hb.2
+                  | succ k' =>
+                      exact absurd hx (ih s body (k' + 1) ls' hb.1)
+              | underflow => simp [hx]
+              | trap => simp [hx]
+              | outOfFuel => simp [hx]
+              | structural => simp [hx]
+      | loop body =>
+          have hb : hasBranch body = false ∧ hasBranch is = false := by
+            exact (or_eq_false (by simpa only [hasBranch] using hp))
+          simp only [execList]
+          cases hx : execList fuel s body with
+          | ok s' => exact ih s' is n ls hb.2
+          | error e =>
+              cases e with
+              | branch k ls' =>
+                  cases k with
+                  | zero =>
+                                simp only [hx]
+                                exact ih { s with locals := ls', stack := s.stack } (.loop body :: is) n ls hp
+                  | succ k' =>
+                      exact absurd hx (ih s body (k' + 1) ls' hb.1)
+              | underflow => simp [hx]
+              | trap => simp [hx]
+              | outOfFuel => simp [hx]
+              | structural => simp [hx]
+      | if_ t e =>
+          have hb : hasBranch t = false ∧ hasBranch e = false ∧ hasBranch is = false := by
+            have hbe := or_eq_false (by simpa only [hasBranch] using hp)
+            have hb0 := or_eq_false hbe.1
+            exact ⟨hb0.1, hb0.2, hbe.2⟩
+          simp only [execList]
+          cases hstk : s.stack with
+          | nil => simp [hstk]
+          | cons v vs =>
+              cases v with
+              | i64 _ => simp [hstk]
+              | i32 b =>
+                  by_cases hb0 : b != 0
+                  · simp only [hstk, if_pos hb0]
+                    cases hx : execList fuel { s with stack := vs } t with
+                    | ok s' => exact ih s' is n ls hb.2.2
+                    | error e =>
+                        cases e with
+                        | branch k ls' =>
+                            cases k with
+                            | zero =>
+                                         simp only [hx]
+                                         exact ih { s with locals := ls', stack := vs } is n ls hb.2.2
+                            | succ k' =>
+                                exact absurd hx (ih { s with stack := vs } t (k' + 1) ls' hb.1)
+                        | underflow => simp [hx]
+                        | trap => simp [hx]
+                        | outOfFuel => simp [hx]
+                        | structural => simp [hx]
+                  · simp only [hstk, if_neg hb0]
+                    cases hx : execList fuel { s with stack := vs } e with
+                    | ok s' => exact ih s' is n ls hb.2.2
+                    | error e =>
+                        cases e with
+                        | branch k ls' =>
+                            cases k with
+                            | zero =>
+                                         simp only [hx]
+                                         exact ih { s with locals := ls', stack := vs } is n ls hb.2.2
+                            | succ k' =>
+                                exact absurd hx (ih { s with stack := vs } e (k' + 1) ls' hb.2.1)
+                        | underflow => simp [hx]
+                        | trap => simp [hx]
+                        | outOfFuel => simp [hx]
+                        | structural => simp [hx]
+      | i32const c => br_flat (.i32const c)
+      | i64const c => br_flat (.i64const c)
+      | localget m => br_flat (.localget m)
+      | localset m => br_flat (.localset m)
+      | i32add => br_flat .i32add
+      | i64add => br_flat .i64add
+      | i64sub => br_flat .i64sub
+      | i64mul => br_flat .i64mul
+      | i64ltu => br_flat .i64ltu
+      | i64eq => br_flat .i64eq
+      | i32eq => br_flat .i32eq
+      | i32eqz => br_flat .i32eqz
+      | drop => br_flat .drop
+      | unreach => br_flat .unreach
+      | i32store8 => br_flat .i32store8
+      | i32load8u o => br_flat (.i32load8u o)
 
 /-! ## Type safety -/
 
@@ -984,20 +1334,58 @@ theorem exec_typed (locals : Nat → Ty) :
             cases t1 with
             | i64 => simp [checkStack] at hcheck
             | i32 =>
-              have hcks : checkStack locals ts1 is = .ok final
-                  ∧ checkStack locals ts1 t = .ok ts1
-                  ∧ checkStack locals ts1 e = .ok ts1 := by
+              -- THE RESULT-FRAME FACTS (the M3 follow-up): both
+              -- branches check from `ts1` to the SAME `mid`, and the
+              -- continuation `is` is checked from `mid` — the
+              -- no-result frame's `mid = ts1` (the old `checkFrame`
+              -- rule) and the value-returning frame's `mid` with the
+              -- branch result pushed are one shape. The br-carrying
+              -- restriction: `hasBranch … = true` forces `mid = ts1`
+              -- (the frame handler's branch-0 restore is only typed
+              -- from the ENTRY stack); branch-free branches make the
+              -- restore path dynamically dead (`execList_noBranch`).
+              have hmid : ∃ mid : List Ty,
+                  checkStack locals ts1 t = .ok mid
+                  ∧ checkStack locals ts1 e = .ok mid
+                  ∧ checkStack locals mid is = .ok final
+                  ∧ (hasBranch t = true → mid = ts1)
+                  ∧ (hasBranch e = true → mid = ts1) := by
                 simp only [checkStack] at hcheck
-                cases hf1 : checkFrame locals ts1 t with
-                | error _ => rw [hf1] at hcheck; simp at hcheck
-                | ok _ =>
-                    rw [hf1] at hcheck
-                    cases hf2 : checkFrame locals ts1 e with
-                    | error _ => rw [hf2] at hcheck; simp at hcheck
-                    | ok _ =>
-                        rw [hf2] at hcheck; simp at hcheck
-                        exact ⟨hcheck, checkFrame_ok locals ts1 t hf1,
-                               checkFrame_ok locals ts1 e hf2⟩
+                cases hc1 : checkStack locals ts1 t with
+                | error _ => rw [hc1] at hcheck; simp at hcheck
+                | ok mid =>
+                    cases hc2 : checkStack locals ts1 e with
+                    | error _ => rw [hc1, hc2] at hcheck; simp at hcheck
+                    | ok mid2 =>
+                        -- NOTE: the `cases` on the checker's scrutinees
+                        -- SUBSTITUTED the goal's own LHS conjuncts
+                        -- (`checkStack locals ts1 t` ≈ `.ok mid`), so the
+                        -- construction proves the SUBSTITUTED shapes: the
+                        -- first conjunct by rfl and the second from the
+                        -- equality (`hEq`), not from `hc1`/`hc2`. The
+                        -- existential's binder is pinned by the first
+                        -- component, keeping `mid` everywhere else.
+                        simp only [hc1, hc2] at hcheck
+                        by_cases hEq : mid = mid2
+                        · rw [if_pos hEq] at hcheck
+                          by_cases hbr : hasBranch t = true ∨ hasBranch e = true
+                          · by_cases hm : mid = ts1
+                            · have htail : checkStack locals mid is = .ok final := by
+                                rw [if_pos hbr, if_pos hm] at hcheck
+                                simpa [hm] using hcheck
+                              exact ⟨mid, rfl, by simpa [hEq], htail,
+                                (fun _ => hm), (fun _ => hm)⟩
+                            · rw [if_pos hbr, if_neg hm] at hcheck
+                              simp at hcheck
+                          · have htail : checkStack locals mid is = .ok final := by
+                              rw [if_neg hbr] at hcheck
+                              exact hcheck
+                            exact ⟨mid, rfl, by simpa [hEq], htail,
+                              (fun ht => by exfalso; exact hbr (Or.inl ht)),
+                              (fun he => by exfalso; exact hbr (Or.inr he))⟩
+                        · rw [if_neg hEq] at hcheck
+                          simp at hcheck
+              obtain ⟨mid, hmt, hme, htail, hbrt, hbre⟩ := hmid
               cases stk with
               | nil => simp [stackTys] at hstack
               | cons v vs =>
@@ -1007,19 +1395,33 @@ theorem exec_typed (locals : Nat → Ty) :
                   have hts : stackTys vs = ts1 := by
                     simp [stackTys] at hstack
                     exact hstack
-                  have hthen := ih.1 t ts1 ts1 ⟨loc, vs, mem, msz⟩ hcks.2.1 hts hloc'
-                  have helse := ih.1 e ts1 ts1 ⟨loc, vs, mem, msz⟩ hcks.2.2 hts hloc'
+                  have hthen := ih.1 t ts1 mid ⟨loc, vs, mem, msz⟩ hmt hts hloc'
+                  have helse := ih.1 e ts1 mid ⟨loc, vs, mem, msz⟩ hme hts hloc'
                   by_cases hb : b != 0
                   . sub_case_if hthen ⟨loc, vs, mem, msz⟩, t, (simp only [execList, if_pos hb])
-                      (exact ih.1 is ts1 final s'' hcks.1 (hthen.2.1 s'' hx).1
+                      (exact ih.1 is mid final s'' htail (hthen.2.1 s'' hx).1
                         (hthen.2.1 s'' hx).2)
-                      (exact ih.1 is ts1 final ⟨ls, vs, mem, msz⟩ hcks.1 hts
-                        (fun m => hthen.2.2 0 ls hx m))
+                      (by_cases ht0 : hasBranch t = true
+                       · -- br-carrying branch: no-result (mid = ts1) — the
+                         -- restore runs the tail from the ENTRY stack.
+                         have hmidTs : mid = ts1 := hbrt ht0
+                         exact ih.1 is mid final ⟨ls, vs, mem, msz⟩ htail
+                           (by simpa [hmidTs] using hts)
+                           (fun m => hthen.2.2 0 ls hx m)
+                       · -- branch-free branch: the branch-0 signal is
+                         -- dynamically impossible — the restore is dead.
+                         exact absurd hx (execList_noBranch fuel
+                           ⟨loc, vs, mem, msz⟩ t 0 ls (Bool.eq_false_iff.mpr ht0)))
                   . sub_case_if helse ⟨loc, vs, mem, msz⟩, e, (simp only [execList, if_neg hb])
-                      (exact ih.1 is ts1 final s'' hcks.1 (helse.2.1 s'' hx).1
+                      (exact ih.1 is mid final s'' htail (helse.2.1 s'' hx).1
                         (helse.2.1 s'' hx).2)
-                      (exact ih.1 is ts1 final ⟨ls, vs, mem, msz⟩ hcks.1 hts
-                        (fun m => helse.2.2 0 ls hx m))
+                      (by_cases he0 : hasBranch e = true
+                       · have hmidEs : mid = ts1 := hbre he0
+                         exact ih.1 is mid final ⟨ls, vs, mem, msz⟩ htail
+                           (by simpa [hmidEs] using hts)
+                           (fun m => helse.2.2 0 ls hx m)
+                       · exact absurd hx (execList_noBranch fuel
+                           ⟨loc, vs, mem, msz⟩ e 0 ls (Bool.eq_false_iff.mpr he0)))
         | unreach =>
           simp only [execList, step]
           refine ⟨?_, ?_, ?_⟩
@@ -1220,6 +1622,10 @@ def initState : State := ⟨fun _ => .i32 0, [], fun _ => (0 : UInt8), 64⟩
 /-- The locals' type context matching `initState` (all i32). -/
 def localsI32 : Nat → Ty := fun _ => Ty.i32
 
+/-- The i64 locals' type context (the edgepython fixtures' locals — the
+    M3 slice guards' context, mirrored here). -/
+def localsI64 : Nat → Ty := fun _ => Ty.i64
+
 /-- The final stack, if execution succeeds. -/
 def finalStack (s : State) (body : List Instr) : Except Err (List Val) :=
   match exec s body with
@@ -1359,6 +1765,35 @@ def progEqz : List Instr := [.i32const 0, .i32eqz]
         | .ok _ => false | .error _ => true) = true
 #guard (match exec initState [.i32eqz] with
         | .error .underflow => true | _ => false) = true
+
+-- 18. THE RESULT FRAME (the M3 follow-up): a BRANCH-FREE value-
+--     returning if_ — both branches end at entry ++ [i64], the value
+--     rides the continuation — type-checks and executes (the guard's
+--     disabled-branch is the `if_` with the cond = 1 taking the first
+--     branch, leaving 5).
+def progIfRes : List Instr := [.i32const 1, .if_ [.i64const 5] [.i64const 7]]
+#guard (match checkStack localsI32 [] progIfRes with
+        | .ok [Ty.i64] => true | _ => false) = true
+#guard (match finalStack initState progIfRes with
+        | .ok [.i64 5] => true | _ => false) = true
+-- the if_max translation shape (the edgepython fixtures' use): the
+-- branch bodies are single localgets (the ret-truncation), the i32
+-- condition dropped by the frame, the i64 value left on top.
+#guard (match checkStack localsI64 [] [.localget 0, .localget 1, .i64ltu,
+          .if_ [.localget 1] [.localget 0]] with
+        | .ok [Ty.i64] => true | _ => false) = true
+
+-- 19. THE RESULT-FRAME NEGATIVE CONTROLS (soundness of the gate): a
+--     br-CARRYING branch may only end a NO-RESULT frame — a branch
+--     that PUSHES then `br 0` (where the frame handler would restore
+--     the ENTRY stack, dropping the pushed value under a continuation
+--     typed for it) is REJECTED, as is a mismatched-push pair.
+#guard (match checkStack localsI32 [] [.i32const 1,
+          .if_ [.i64const 5, .br 0] [.i64const 7, .br 0]] with
+        | .ok _ => false | .error _ => true) = true
+#guard (match checkStack localsI32 [] [.i32const 1,
+          .if_ [] [.i64const 7]] with
+        | .ok _ => false | .error _ => true) = true
 
 end Tests
 

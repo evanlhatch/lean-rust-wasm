@@ -389,6 +389,7 @@ theorem cycle_body_incremental_strict2 (T : Operator2 a (Stream b) (Stream b)) (
   exact hseq n₄ (Nat.le_trans (Nat.le_trans (Nat.le_trans hn₄ hn₃) hn₂) hn₁) t₄
     (Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le ht₄ ht₃) (Nat.le_trans ht₂ ht₁))
 
+omit [AddCommGroup a] in
 /-- **The lifted cycle is the nested cycle**: lifting the one-input
     feedback loop is running its two-input version one level deeper. -/
 theorem lifting_cycle (T : Operator2 a b b) (hcausal : Causal (uncurryOp T)) :

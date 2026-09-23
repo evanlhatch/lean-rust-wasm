@@ -60,6 +60,7 @@ namespace ZSet
 
 /-! ## Distinct -/
 
+omit [DecidableEq A] in
 theorem distinct_isSet (m : ZSet A) : ZSet.isSet (ZSet.distinct m) := by
   intro a ha
   rw [ZSet.distinct_apply]
@@ -69,9 +70,11 @@ theorem distinct_isSet (m : ZSet A) : ZSet.isSet (ZSet.distinct m) := by
   · exfalso
     exact ha (by simp [hm])
 
+omit [DecidableEq A] in
 theorem distinct_isBag (m : ZSet A) : ZSet.isBag (ZSet.distinct m) :=
   ZSet.setIsBag _ (ZSet.distinct_isSet m)
 
+omit [DecidableEq A] in
 /-- Distinct of a set is the set itself. -/
 theorem distinct_set_id (m : ZSet A) : ZSet.isSet m → ZSet.distinct m = m := by
   intro h
@@ -80,6 +83,7 @@ theorem distinct_set_id (m : ZSet A) : ZSet.isSet m → ZSet.distinct m = m := b
   · simp [ZSet.distinct_apply, hma0]
   · simp [ZSet.distinct_apply, hma1]
 
+omit [DecidableEq A] in
 /-- For a bag, distinct preserves membership. -/
 theorem distinct_elem {m : ZSet A} {a : A} :
     ZSet.isBag m → (a ∈ ZSet.distinct m ↔ a ∈ m) := by
@@ -92,6 +96,7 @@ theorem distinct_elem {m : ZSet A} {a : A} :
   · have hgt : 0 < m a := lt_of_le_of_ne (hpos a) (Ne.symm hm)
     simp [hgt, hm]
 
+omit [DecidableEq A] in
 /-- Distinct is positive (bags to bags). -/
 theorem distinct_pos : ZSet.funPositive (fun m : ZSet A => ZSet.distinct m) := by
   unfold ZSet.funPositive ZSet.isBag
@@ -100,15 +105,17 @@ theorem distinct_pos : ZSet.funPositive (fun m : ZSet A => ZSet.distinct m) := b
   simp [ZSet.distinct_apply]
   grind
 
+omit [DecidableEq A] in
 @[simp]
 theorem distinct_0 : ZSet.distinct (0 : ZSet A) = 0 := by
   ext a
   simp [ZSet.distinct_apply]
 
+omit [DecidableEq A] in
 /-- Distinct is idempotent. -/
 theorem distinct_idem (i : ZSet A) : ZSet.distinct (ZSet.distinct i) = ZSet.distinct i := by
   ext a
-  by_cases h : 0 < i a <;> simp [ZSet.distinct_apply, h] <;> norm_num
+  by_cases h : 0 < i a <;> simp [ZSet.distinct_apply, h]
 
 /-! ## Union -/
 
@@ -117,8 +124,10 @@ def union (m1 m2 : ZSet A) : ZSet A := ZSet.distinct (m1 + m2)
 
 instance instUnion : Union (ZSet A) := ⟨ZSet.union⟩
 
+omit [DecidableEq A] in
 theorem union_eq (m1 m2 : ZSet A) : m1 ∪ m2 = ZSet.union m1 m2 := rfl
 
+omit [DecidableEq A] in
 @[simp]
 theorem union_apply (m1 m2 : ZSet A) (a : A) :
     ZSet.union m1 m2 a = if 0 < m1 a + m2 a then 1 else 0 := by
@@ -133,6 +142,7 @@ theorem union_ok (s1 s2 : Finset A) :
   by_cases h1 : a ∈ s1 <;> by_cases h2 : a ∈ s2 <;>
     simp [ZSet.fromSet_apply, h1, h2]
 
+omit [DecidableEq A] in
 theorem union_pos : ZSet.funPositive2 (fun m1 m2 : ZSet A => ZSet.union m1 m2) := by
   unfold ZSet.funPositive2 ZSet.isBag
   intro m1 m2 h1 h2 a
@@ -143,6 +153,7 @@ theorem union_pos : ZSet.funPositive2 (fun m1 m2 : ZSet A => ZSet.union m1 m2) :
 
 /-! ## Map -/
 
+omit [DecidableEq A] in
 /-- The value of `map f (fromSet s)` at `b` is the size of the preimage. -/
 theorem map_is_card (f : A → B) (s : Finset A) (b : B) :
     ZSet.map f (ZSet.fromSet s) b = (s.filter (fun a => f a = b)).card := by
@@ -154,6 +165,7 @@ theorem map_is_card (f : A → B) (s : Finset A) (b : B) :
   · rw [Finset.card_filter]
     simp
 
+omit [DecidableEq A] in
 /-- Map reflects finset image through `fromSet`. -/
 theorem map_ok (f : A → B) (s : Finset A) :
     (ZSet.map f (ZSet.fromSet s)).support = s.image f := by
@@ -169,6 +181,7 @@ theorem map_ok (f : A → B) (s : Finset A) :
     rw [Nat.cast_ne_zero (R := ℤ), ← Nat.pos_iff_ne_zero, Finset.card_pos]
     exact Finset.filter_nonempty_iff.mpr ⟨a, ha, rfl⟩
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem map_pos (f : A → B) : ZSet.funPositive (ZSet.map f) := by
   intro m hm b
   exact ZSet.map_at_nonneg f m b hm
@@ -181,9 +194,11 @@ variable (p : A → Prop) [DecidablePred p]
 /-- Keep the elements satisfying `p`, multiplicities unchanged. -/
 def filter (p : A → Prop) [DecidablePred p] (m : ZSet A) : ZSet A := Finsupp.filter p m
 
+omit [DecidableEq A] in
 @[simp]
 lemma filter_apply (m : ZSet A) (a : A) : ZSet.filter p m a = if p a then m a else 0 := rfl
 
+omit [DecidableEq A] in
 @[simp]
 lemma filter_support (m : ZSet A) : (ZSet.filter p m).support = m.support.filter p := rfl
 
@@ -196,10 +211,12 @@ theorem filter_ok (s : Finset A) :
   by_cases hpa : p a <;> by_cases has : a ∈ s <;>
     simp [ZSet.filter_apply, ZSet.fromSet_apply, hpa, has]
 
+omit [DecidableEq A] in
 theorem filter_linear (m1 m2 : ZSet A) :
     ZSet.filter p (m1 + m2) = ZSet.filter p m1 + ZSet.filter p m2 :=
   Finsupp.filter_add
 
+omit [DecidableEq A] in
 theorem filter_pos : ZSet.funPositive (ZSet.filter p) := by
   unfold ZSet.funPositive ZSet.isBag
   intro m hm a
@@ -207,6 +224,7 @@ theorem filter_pos : ZSet.funPositive (ZSet.filter p) := by
   simp [ZSet.filter_apply]
   grind
 
+omit [DecidableEq A] in
 theorem filter_0 : ZSet.filter p 0 = 0 := by
   ext a
   simp [ZSet.filter_apply]
@@ -228,6 +246,7 @@ def product (m1 : ZSet A) (m2 : ZSet B) : ZSet (A × B) :=
       rw [Finsupp.mem_support_iff, Finsupp.mem_support_iff]
       exact Iff.symm (mul_ne_zero_iff (M₀ := ℤ)) }
 
+omit [DecidableEq A] [DecidableEq B] in
 @[simp]
 theorem product_apply (m1 : ZSet A) (m2 : ZSet B) (ab : A × B) :
     product m1 m2 ab = m1 ab.1 * m2 ab.2 := rfl
@@ -245,6 +264,7 @@ theorem product_ok (s1 : Finset A) (s2 : Finset B) :
     by_cases has1 : a ∈ s1 <;> by_cases has2 : b ∈ s2 <;>
       simp [has1, has2]
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem product_bilinear : Bilinear (@ZSet.product A B) := by
   constructor
   · intro x1 x2 y
@@ -254,6 +274,7 @@ theorem product_bilinear : Bilinear (@ZSet.product A B) := by
     ext ab <;> cases ab with
     | mk a b => simp; ring
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem product_pos : ZSet.funPositive2 (@ZSet.product A B) := by
   intro m1 m2 hpos1 hpos2 ab
   cases ab with
@@ -261,6 +282,7 @@ theorem product_pos : ZSet.funPositive2 (@ZSet.product A B) := by
     rw [ZSet.product_apply]
     exact mul_nonneg (hpos1 a) (hpos2 b)
 
+omit [DecidableEq A] [DecidableEq B] in
 @[simp]
 theorem product_0 : ZSet.product (0 : ZSet A) (0 : ZSet B) = 0 := by
   ext ab
@@ -274,11 +296,13 @@ variable (π1 : A → C) (π2 : B → C)
 def equiJoin (m1 : ZSet A) (m2 : ZSet B) : ZSet (A × B) :=
   ZSet.filter (fun t : A × B => π1 t.1 = π2 t.2) (ZSet.product m1 m2)
 
+omit [DecidableEq A] [DecidableEq B] in
 @[simp]
 theorem equiJoin_apply (m1 : ZSet A) (m2 : ZSet B) (t : A × B) :
     equiJoin π1 π2 m1 m2 t = if π1 t.1 = π2 t.2 then m1 t.1 * m2 t.2 else 0 := by
   simp [ZSet.equiJoin, ZSet.filter_apply]
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem equiJoin_bilinear : Bilinear (ZSet.equiJoin π1 π2) := by
   constructor
   · intro x1 x2 y
@@ -288,6 +312,7 @@ theorem equiJoin_bilinear : Bilinear (ZSet.equiJoin π1 π2) := by
     unfold ZSet.equiJoin
     rw [product_bilinear.2, filter_linear]
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem equiJoin_pos : ZSet.funPositive2 (ZSet.equiJoin π1 π2) := by
   unfold ZSet.funPositive2 ZSet.isBag
   intro m1 m2 hpos1 hpos2 t
@@ -296,11 +321,13 @@ theorem equiJoin_pos : ZSet.funPositive2 (ZSet.equiJoin π1 π2) := by
     ZSet.filter_pos (fun t' : A × B => π1 t'.1 = π2 t'.2) (ZSet.product m1 m2) hp
   exact hf t
 
+omit [DecidableEq A] [DecidableEq B] in
 @[simp]
 theorem equiJoin_0_l (b : ZSet B) : equiJoin π1 π2 0 b = 0 := by
   ext ab
   simp
 
+omit [DecidableEq A] [DecidableEq B] in
 @[simp]
 theorem equiJoin_0_r (a : ZSet A) : equiJoin π1 π2 a 0 = 0 := by
   ext ab
@@ -411,20 +438,24 @@ def groupBy (m : ZSet A) : K →₀ ZSet A :=
         · exact Finset.mem_image.mpr ⟨a, (Finsupp.mem_support_iff.mpr (by simpa [hpa] using ha)), hpa⟩
         · exact False.elim (by simpa [hpa] using ha) }
 
+omit [DecidableEq A] in
 @[simp]
 theorem groupBy_apply (m : ZSet A) (k : K) (a : A) :
     groupBy p m k a = if p a = k then m a else 0 := by
   simp [ZSet.groupBy, ZSet.filter_apply]
 
+omit [DecidableEq A] in
 theorem groupBy_support (m : ZSet A) (k : K) :
     (groupBy p m k).support = m.support.filter (fun a => p a = k) := by
   rfl
 
+omit [DecidableEq A] in
 theorem elem_groupBy (m : ZSet A) (k : K) (a : A) :
     a ∈ groupBy p m k ↔ p a = k ∧ a ∈ m := by
   rw [ZSet.elem_mp, ZSet.elem_mp]
   by_cases hpa : p a = k <;> simp [ZSet.groupBy_apply, hpa]
 
+omit [DecidableEq A] in
 theorem groupBy_linear (m1 m2 : ZSet A) :
     groupBy p (m1 + m2) = groupBy p m1 + groupBy p m2 := by
   ext k a
@@ -458,7 +489,7 @@ private theorem distinct_add {x y : ℤ} (hx : 0 ≤ x) (hy : 0 ≤ y) :
       = if 0 < x + y then 1 else 0 := by
   by_cases h1p : 0 < x <;> by_cases h2p : 0 < y
   · have hsum : 0 < x + y := add_pos h1p h2p
-    simp [h1p, h2p, hsum] <;> norm_num
+    simp [h1p, h2p, hsum]
   · have h2z : y = 0 := le_antisymm (le_of_not_gt h2p) hy
     simp [h1p, h2z]
   · have h1z : x = 0 := le_antisymm (le_of_not_gt h1p) hx
@@ -467,12 +498,14 @@ private theorem distinct_add {x y : ℤ} (hx : 0 ≤ x) (hy : 0 ≤ y) :
     have h2z : y = 0 := le_antisymm (le_of_not_gt h2p) hy
     simp [h1z, h2z]
 
+omit [DecidableEq A] in
 /-- Filtering commutes with distinct (no `is_bag` hypothesis needed). -/
 theorem filter_distinct_comm (p : A → Prop) [DecidablePred p] (i : ZSet A) :
     ZSet.filter p (ZSet.distinct i) = ZSet.distinct (ZSet.filter p i) := by
   ext a
   by_cases hpa : p a <;> simp [ZSet.filter_apply, ZSet.distinct_apply, hpa]
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem product_distinct_comm (i1 : ZSet A) (i2 : ZSet B) :
     ZSet.isBag i1 → ZSet.isBag i2 →
     ZSet.product (ZSet.distinct i1) (ZSet.distinct i2) = ZSet.distinct (ZSet.product i1 i2) := by
@@ -482,6 +515,7 @@ theorem product_distinct_comm (i1 : ZSet A) (i2 : ZSet B) :
     simp only [product_apply, distinct_apply, mul_ite, mul_one, mul_zero, ← ite_and]
     exact distinct_mul (hpos1 a) (hpos2 b)
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem join_distinct_comm (π1 : A → C) (π2 : B → C) (i1 : ZSet A) (i2 : ZSet B) :
     ZSet.isBag i1 → ZSet.isBag i2 →
     ZSet.equiJoin π1 π2 (ZSet.distinct i1) (ZSet.distinct i2) = ZSet.distinct (ZSet.equiJoin π1 π2 i1 i2) := by
@@ -498,6 +532,7 @@ theorem intersect_distinct_comm (i1 i2 : ZSet A) :
   simp only [intersect_apply, distinct_apply, mul_ite, mul_one, mul_zero, ← ite_and]
   exact distinct_mul (hpos1 a) (hpos2 a)
 
+omit [DecidableEq A] [DecidableEq B] in
 /-- Distinct commutes with `map` when the function is injective (source
     `map_inj_distinct_comm`). -/
 theorem map_inj_distinct_comm (f : A → B) (hf : Function.Injective f) (i : ZSet A) :
@@ -542,10 +577,12 @@ theorem map_inj_distinct_comm (f : A → B) (hf : Function.Injective f) (i : ZSe
     intro a hai hfa
     exact hgt ((ZSet.map_at_pos f i b hpos).mpr ⟨a, hai, hfa⟩)
 
+omit [DecidableEq A] in
 theorem filter_distinct_dedup (p : A → Prop) [DecidablePred p] (i : ZSet A) :
     ZSet.distinct (ZSet.filter p (ZSet.distinct i)) = ZSet.distinct (ZSet.filter p i) := by
   rw [ZSet.filter_distinct_comm, ZSet.distinct_idem]
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem map_distinct_dedup (f : A → B) (i : ZSet A) :
     ZSet.isBag i →
     ZSet.distinct (ZSet.map f (ZSet.distinct i)) = ZSet.distinct (ZSet.map f i) := by
@@ -558,6 +595,7 @@ theorem map_distinct_dedup (f : A → B) (i : ZSet A) :
   · simp
   · simp
 
+omit [DecidableEq A] in
 theorem add_distinct_dedup (i1 i2 : ZSet A) :
     ZSet.isBag i1 → ZSet.isBag i2 →
     ZSet.distinct (ZSet.distinct i1 + ZSet.distinct i2) = ZSet.distinct (i1 + i2) := by
@@ -566,6 +604,7 @@ theorem add_distinct_dedup (i1 i2 : ZSet A) :
   simp only [zset]
   exact distinct_add (hpos1 a) (hpos2 a)
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem product_distinct_dedup (i1 : ZSet A) (i2 : ZSet B) :
     ZSet.isBag i1 → ZSet.isBag i2 →
     ZSet.distinct (ZSet.product (ZSet.distinct i1) (ZSet.distinct i2)) = ZSet.distinct (ZSet.product i1 i2) := by
@@ -573,6 +612,7 @@ theorem product_distinct_dedup (i1 : ZSet A) (i2 : ZSet B) :
   rw [ZSet.product_distinct_comm _ _ hpos1 hpos2]
   exact ZSet.distinct_idem (ZSet.product i1 i2)
 
+omit [DecidableEq A] [DecidableEq B] in
 theorem join_distinct_dedup (π1 : A → C) (π2 : B → C) (i1 : ZSet A) (i2 : ZSet B) :
     ZSet.isBag i1 → ZSet.isBag i2 →
     ZSet.distinct (ZSet.equiJoin π1 π2 (ZSet.distinct i1) (ZSet.distinct i2)) = ZSet.distinct (ZSet.equiJoin π1 π2 i1 i2) := by

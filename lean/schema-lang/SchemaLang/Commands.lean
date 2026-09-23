@@ -36,7 +36,7 @@ This module is the declaration + derivation core, pure data end to end:
   error the runtime cannot skip).
 
 Deliberate exclusions (no consumer yet; the module grows with the first
-one, the Scheduling-lane discipline): the `schema_command` elaboration
+one): the `schema_command` elaboration
 surface + registry (the meta lane — the pure lane is the spec of
 record); the host EXECUTION semantics and the oracle's host simulation
 (W8.10's command-executor generation consumes the same declaration);

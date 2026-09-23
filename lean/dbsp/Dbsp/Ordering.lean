@@ -43,6 +43,7 @@ def StreamMonotone (s : Stream a) : Prop := ∀ t, s t ≤ s (t + 1)
 /-- An operator preserving positivity. -/
 def IsPositive (f : Stream a → Stream b) : Prop := ∀ s, positive s → positive (f s)
 
+omit [AddCommGroup a] [IsOrderedAddMonoid a] in
 /-- Stepwise monotonicity is order preservation. -/
 theorem stream_monotone_order (s : Stream a) :
     StreamMonotone s ↔ ∀ t1 t2, t1 ≤ t2 → s t1 ≤ s t2 := by
@@ -79,6 +80,7 @@ theorem derivative_pos (s : Stream a) (h0 : 0 ≤ s 0) (hm : StreamMonotone s) :
     rw [delay_succ, sub_nonneg]
     exact hm n
 
+omit [IsOrderedAddMonoid a] in
 /-- **The landmine, proved negative.** Monotone does NOT imply nonneg
     derivative in general: a constant negative stream is monotone, and its
     derivative at t=0 is negative. Stock-flow clamping (the resolve phase,

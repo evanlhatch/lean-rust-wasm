@@ -32,7 +32,8 @@ namespace Substrait.Decode
 /-- The `'@'`-headed URN entry body — top-level so the equation lemmas
     exist (the `withNull` discipline: the inversion proofs reduce it via
     `parseUrnEntryBody.eq_1`). The row shape is the emitter's
-    `Emit.Text.urnLine` (inverted by `parseUrnEntry_urnLine` below). -/
+    `Emit.Text.urnLine` (inverted by the generated `inv_urnLine` in
+    `Substrait.Decode.Inversions`). -/
 def parseUrnEntryBody : List Char → Option Proto.SimpleExtensionUrn
   | '@' :: rest =>
       match scanNat (rest.dropWhile (· == ' ')) with
@@ -62,7 +63,8 @@ def parseDeclEntryAt (kind : Grammar.ExtKind) (anchor : Nat) :
   | _ => none
 
 /-- The `'#'`-headed declaration entry body — top-level for the equation
-    lemmas (inverted by `parseDeclEntry_declLine` below). -/
+    lemmas (inverted by the generated `inv_declLine` in
+    `Substrait.Decode.Inversions`). -/
 def parseDeclEntryBody (kind : Grammar.ExtKind) :
     List Char → Option Proto.ExtensionDeclaration
   | '#' :: rest =>

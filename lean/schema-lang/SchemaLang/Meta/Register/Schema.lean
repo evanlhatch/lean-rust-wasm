@@ -5,6 +5,31 @@ Extracted from `SchemaLang.Meta.Reflect` (pure code motion — every
 declaration keeps its exact statement and name): the Records and
 Variants sections (pure checks + registration handlers) and the
 `@[schema]` attribute itself.
+
+S5 SEAM (the meta-toolkit follow-up — documented): this lane's
+REGISTRY (`schemaItemExt`/`registeredItems`, the `Name × Item` pair —
+the default `declare_registry_member` shape) lives in `Register.Core`
+and is the EMITTED skeleton now (`declare_registry_member
+schemaItemExt registeredItems : Item` — decls byte-identical, the
+write path `registerSchemaItem` stays hand-written; see there). The
+`@[schema]` ATTRIBUTE below stays HAND-ROLLED — a deliberate seam: it
+is richer than the toolkit's form-(ii) builder shape
+(`Name → CoreM <kind>`): (1) the optional `key.<field>` argument is
+parsed from the ATTRIBUTE SYNTAX (`schemaKeyArgOfStx stx`) — the
+toolkit's emitted mount passes `_stx`; (2) the structure/inductive
+dispatch with the per-item checks (`checkStruct`/`checkInductive` —
+the SchemaDiag diagnostics, the pinned messages); (3) the DUAL-
+extension write: the item into `schemaItemExt` AND the declared key
+into `keysExt` (`registerSchemaKeys` — which READS `schemaItemExt` at
+registration, so the key write must come AFTER the item's, i.e. the
+mount needs a post-registration hook, not a side effect in the
+builder); (4) the wire-name dup gate lives IN the checks
+(`SchemaDiag.dupName`), where the toolkit's `freshNameCheck` would
+spell the rejection differently (the pinned messages). Migrating the
+ATTRIBUTE needs a stx-threaded builder + a post-registration hook for
+`registerSchemaKeys` — a toolkit v2, not a minimal parameterization;
+the seam stands (the attribute below stays hand-rolled, behavior and
+messages identical).
 -/
 module
 
@@ -146,7 +171,10 @@ def registerSchemaVariant (declName : Name) : CoreM Unit := do
     (`@[schema key.code, event_sourced]` — the declared key WINS over
     the first-field convention, `Item.keyOfWith`); the `schema_keys`
     command (Meta.Keys) is the full surface (primary + foreign keys)
-    for records whose consumers run later. -/
+    for records whose consumers run later. The registration below
+    stays HAND-ROLLED (the S5 seam — see the module header): richer
+    than the toolkit's mount (the stx-carried `key.<field>` arg, the
+    dual-extension write, the own diagnostics). -/
 register_check_attribute `schema : "register a structure or inductive as a schema item (the boundary universe); optional arg `key.<field>` declares the primary key (W8.2)" := fun decl stx _kind => do
     let keyArg? ← match schemaKeyArgOfStx stx with
       | .ok k => pure k

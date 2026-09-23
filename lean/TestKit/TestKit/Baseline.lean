@@ -11,7 +11,7 @@ without dragging in LSpec or the sweep machinery.
 
 The `compare` contract: `compare committed fresh` answers "does the
 committed artifact satisfy the gate, given the fresh regeneration?".
-Two gate classes:
+Three gate classes:
 
 - ARTIFACT gates (gen-check per artifact, coverage, axiom report): the
   committed side is read from `path` by `runBaseline` and compared
@@ -23,6 +23,13 @@ Two gate classes:
   e.g. "empty findings = clean"). These route through `runComputed`,
   which skips the `path` read; `path` still names the audited surface
   for the report.
+- DEFERRED gates (a heavy sweep that is env-bound — the whole-file
+  kernel check is the charter member): the gate does NOT regenerate.
+  The record's `deferred` field carries the documented reason; the
+  verdict row prints `DEFERRED — <reason>` and the run COUNTS AS A
+  FAILURE — a green exit must stay unavailable for a gate that checked
+  nothing. The supported (sharded) path is documented on the record's
+  `evidence`; `runBaseline`/`runComputed` short-circuit on it.
 
 `write` is the deliberate re-baseline lane. The checkers (gen-check,
 manifest-check, docs-check) refuse it with a descriptive `IO.userError`;
@@ -41,11 +48,13 @@ module
 
 namespace TestKit
 
-/-- One gate, as a baseline record (the F2 doctrine). The six fields the
+/-- One gate, as a baseline record (the F2 doctrine). The seven fields the
     gates share: the committed artifact path, the fresh regeneration, the
     acceptance predicate over (committed, regenerated), the deliberate
-    re-baseline lane, the typed digest-ish evidence, and the gate's name
-    (the report rows and count lines key on it). -/
+    re-baseline lane, the typed digest-ish evidence, the gate's name
+    (the report rows and count lines key on it), and the OPTIONAL
+    documented-deferral reason (a deferred gate never regenerates; see
+    the DEFERRED class above). -/
 structure Baseline where
   path : System.FilePath
   regenerate : IO String
@@ -53,6 +62,13 @@ structure Baseline where
   write : String → IO Unit
   evidence : String
   name : String
+  /-- The DOCUMENTED-DEFERRAL outcome (env-bound sweeps whose supported
+      path is the sharded one): when set, the gate does NOT run — the
+      verdict row prints `DEFERRED — <reason>` and the run counts as a
+      failure (a deferral verified nothing; the sharded path is the
+      `evidence`-documented way to actually check). Absent by default —
+      the plain ARTIFACT/COMPUTED classes. -/
+  deferred : Option String := none
 
 /-- The pure check core: apply the gate's acceptance predicate to a
     (committed, fresh) pair. Tests and drivers call this directly; the
@@ -60,11 +76,13 @@ structure Baseline where
 def Baseline.check (b : Baseline) (committed fresh : String) : Bool :=
   b.compare committed fresh
 
-/-- Check semantics: run the regeneration, read the committed artifact at
-    `path`, and apply `compare`. A missing or directory `path` is a
-    FAILED verdict — a gate whose baseline vanished (or never existed)
-    verifies nothing. Never writes. -/
+/-- Check semantics: a DEFERRED gate is short-circuited (it never runs —
+    the verdict row owns its outcome). Otherwise run the regeneration,
+    read the committed artifact at `path`, and apply `compare`. A missing
+    or directory `path` is a FAILED verdict — a gate whose baseline
+    vanished (or never existed) verifies nothing. Never writes. -/
 def runBaseline (b : Baseline) : IO Bool := do
+  if b.deferred.isSome then return false
   unless ← b.path.pathExists do return false
   if ← b.path.isDir then return false
   let fresh ← b.regenerate
@@ -74,8 +92,9 @@ def runBaseline (b : Baseline) : IO Bool := do
 /-- The COMPUTED-gate check: a gate with no committed artifact runs its
     regeneration and lets `compare` judge the finding text (the committed
     side is empty — there is no on-disk baseline to read; `path` names
-    the audited surface only). -/
+    the audited surface only). A DEFERRED gate is short-circuited. -/
 def runComputed (b : Baseline) : IO Bool := do
+  if b.deferred.isSome then return false
   let fresh ← b.regenerate
   pure (b.compare "" fresh)
 
@@ -86,33 +105,51 @@ def verdictLine (b : Baseline) (ok : Bool) (detail : String) : String :=
   else s!"✗ {b.name}: run — {detail} ({b.evidence})"
 
 /-- The artifact-gate verdict row: `runBaseline` + its one-line verdict
-    (a missing/absent baseline names itself in the row). -/
+    (a missing/absent baseline names itself in the row). A DEFERRED gate
+    prints its own row and never regenerates. -/
 def baselineVerdict (b : Baseline) : IO (Bool × String) := do
-  let ok ← runBaseline b
-  pure (ok, verdictLine b ok
-    (if ok then "in sync"
-     else s!"DIFFERS/absent at {b.path}"))
+  match b.deferred with
+  | some d => pure (false, s!"✗ {b.name}: run — DEFERRED — {d} ({b.evidence})")
+  | none => do
+    let ok ← runBaseline b
+    pure (ok, verdictLine b ok
+      (if ok then "in sync"
+       else s!"DIFFERS/absent at {b.path}"))
 
-/-- The COMPUTED-gate verdict row (see `runComputed`). -/
+/-- The COMPUTED-gate verdict row (see `runComputed`). A DEFERRED gate
+    prints its own row and never regenerates. -/
 def computedVerdict (b : Baseline) : IO (Bool × String) := do
-  let ok ← runComputed b
-  pure (ok, verdictLine b ok
-    (if ok then "clean"
-     else "findings — see the gate's report"))
+  match b.deferred with
+  | some d => pure (false, s!"✗ {b.name}: run — DEFERRED — {d} ({b.evidence})")
+  | none => do
+    let ok ← runComputed b
+    pure (ok, verdictLine b ok
+      (if ok then "clean"
+       else "findings — see the gate's report"))
 
 /-- The shared gates loop (C5): step every baseline through its check,
-    print each "run → verdict" row, count the failures, print the count
-    line, and return the exit code. Same shape as `runVerdicts` (specs ×
-    verdict getter → rows → exit code); the baseline rows carry the
-    record's evidence instead of a per-spec message. -/
+    print each "run → verdict" row, count the failures (deferred gates
+    are counted separately AND as failures — a deferral is not a pass),
+    print the count line, and return the exit code. Same shape as
+    `runVerdicts` (specs × verdict getter → rows → exit code); the
+    baseline rows carry the record's evidence instead of a per-spec
+    message. The count line gains its DEFERRED tally only when a
+    deferred baseline is present (existing gates' lines stay
+    byte-identical). -/
 def runBaselines (what : String) (get : Baseline → IO (Bool × String))
     (bs : List Baseline) : IO UInt32 := do
   let mut failures := 0
+  let mut deferred := 0
   for b in bs do
     let (ok, verdict) ← get b
     IO.println verdict
     if !ok then failures := failures + 1
-  IO.println s!"{what}: {bs.length} baseline(s) run, {failures} failed"
+    if b.deferred.isSome then deferred := deferred + 1
+  if deferred > 0 then
+    IO.println s!"{what}: {bs.length} baseline(s) run, {deferred} DEFERRED (env-bound — \
+      not run; a deferral is a failure — the sharded path is the check), {failures} failed"
+  else
+    IO.println s!"{what}: {bs.length} baseline(s) run, {failures} failed"
   return if failures == 0 then 0 else 1
 
 end TestKit

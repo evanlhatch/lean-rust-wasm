@@ -139,12 +139,12 @@ def stagedStrict : (n : Nat) → (F : Fin n → (Fin n → Stream A) → Stream 
     monolithic operator. H2–H5 are engine-side: they are WHY the engine's
     per-pass operator satisfies these strictness hypotheses. -/
 @[cert] theorem stagedN_eq_jointN : ∀ (n : Nat) (F : Fin n → (Fin n → Stream A) → Stream A)
-    (htri : ∀ (i : Fin n) (γ₁ γ₂ : Fin n → Stream A),
+    (_htri : ∀ (i : Fin n) (γ₁ γ₂ : Fin n → Stream A),
       (∀ j : Fin n, j ≤ i → γ₁ j = γ₂ j) → F i γ₁ = F i γ₂)
-    (hloops : ∀ (i : Fin n) (fixed : Fin n → Stream A),
+    (_hloops : ∀ (i : Fin n) (fixed : Fin n → Stream A),
       Strict (fun α => F i (Function.update fixed i α)))
-    (hstaged : stagedStrict n F)
-    (hjoint : Strict (jointOpN F)),
+    (_hstaged : stagedStrict n F)
+    (_hjoint : Strict (jointOpN F)),
     fix (jointOpN F) = fun t i => stagedN n F i t := by
   intro n
   induction n with

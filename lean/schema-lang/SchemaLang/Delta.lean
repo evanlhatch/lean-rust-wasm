@@ -95,7 +95,14 @@ def Item.changeWitDecl : Item → List String
     `derivesFor` fold `schemaItems` uses (refs resolved against the
     universe `items`, so a float behind a named ref blocks `Eq` here
     too). The full record is the payload, so the checked parts are the
-    record's own field types. -/
+    record's own field types.
+
+    Raw-fold seam (keep): the change envelope names its types via the
+    RAW `Emit.Rust.tyRust` (a per-`Ty` name fold — out-of-band here,
+    not the item table). The item TABLE's production route is the
+    checked checkpoint (`GenCtx.checkedItems?` →
+    `Emit.Rust.schemaItemsChecked`); the byte-tie pins the pages
+    (`schemaItemsChecked_eq`). -/
 def Item.changeRustItems (items : List Item) : Item → List CodegenCore.Emit.Rust.Item
   | it@(.record n fields) =>
       match Item.keyOf it with

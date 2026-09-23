@@ -51,6 +51,7 @@ import Lean
 import LintKit
 import Gates.Packages
 import Gates.Common
+import TestKit.Baseline
 
 open Lean
 
@@ -115,39 +116,36 @@ unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
     let ((decls, native), _) ← (analyzeEnv modRoots).toIO ctx { env := env }
     return { dir := pkg.dir, decls := decls.size, native := native }
 
-/-- The `--package` filter lives in Gates.Driver.selectPackages (the
-    sharded mode: one env per PROCESS — the full sweep in one process
-    accumulates every package's environment and OOMs (the axiom gate's
-    lesson); the justfile loops). The stale-entry check is scoped to
-    the selected packages. -/
-unsafe def run (pkgName : Option String) : IO UInt32 := do
-  Lean.initSearchPath (← Lean.findSysroot)
-  let base ← Lean.searchPathRef.get
-  let some pkgs ← Driver.selectPackages "native-policy" pkgName | return 1
+/-- One package's shard (the `--package X` lane; the justfile loops it):
+    load the package's env, flag every decl on the native_decide trust
+    base outside the grandfathered exile set (fail-closed), and check
+    the package's own grandfather entries for staleness (fail-closed the
+    other way — a done exile must be removed). The stale check is scoped
+    to this package. Exit 0 iff clean. -/
+unsafe def runOne (base : SearchPath) (pkg : PkgSpec) : IO UInt32 := do
   let mut violations : Array (String × Name × Name) := #[]
   let mut stale : Array (String × Name) :=
-    grandfatheredNative.filter (fun (d, _) => pkgs.any (fun p : PkgSpec => p.dir == d))
+    grandfatheredNative.filter (fun (d, _) => pkg.dir == d)
   let mut failed := false
-  for pkg in pkgs do
-    let r ← analyzePkg base pkg
-    match r.loadError with
-    | some e =>
-      IO.println s!"{pkg.dir}: LOAD FAILED — {e}"
-      failed := true
-    | none =>
-      let mut exiled : Nat := 0
-      for (m, d) in r.native do
-        if grandfatheredNative.contains (pkg.dir, m) then
-          stale := stale.erase (pkg.dir, m)
-          exiled := exiled + 1
-          IO.println s!"{pkg.dir}: {d} — on the native_decide trust base, \
-            GRANDFATHERED ({m} is a checked-set exile, §6.3)"
-        else
-          violations := violations.push (pkg.dir, m, d)
-          IO.println s!"{pkg.dir}: VIOLATION — {d} (module {m}) depends on \
-            the native_decide trust base outside the grandfathered set"
-      IO.println s!"{pkg.dir}: {r.decls} decls checked, {r.native.size} on \
-        the trust base ({exiled} grandfathered)"
+  let r ← analyzePkg base pkg
+  match r.loadError with
+  | some e =>
+    IO.println s!"{pkg.dir}: LOAD FAILED — {e}"
+    failed := true
+  | none =>
+    let mut exiled : Nat := 0
+    for (m, d) in r.native do
+      if grandfatheredNative.contains (pkg.dir, m) then
+        stale := stale.erase (pkg.dir, m)
+        exiled := exiled + 1
+        IO.println s!"{pkg.dir}: {d} — on the native_decide trust base, \
+          GRANDFATHERED ({m} is a checked-set exile, §6.3)"
+      else
+        violations := violations.push (pkg.dir, m, d)
+        IO.println s!"{pkg.dir}: VIOLATION — {d} (module {m}) depends on \
+          the native_decide trust base outside the grandfathered set"
+    IO.println s!"{pkg.dir}: {r.decls} decls checked, {r.native.size} on \
+      the trust base ({exiled} grandfathered)"
   unless stale.isEmpty do
     failed := true
     IO.println "native-policy: STALE grandfather entries — these modules no \
@@ -162,5 +160,55 @@ unsafe def run (pkgName : Option String) : IO UInt32 := do
   IO.println "native-policy: clean — the grandfathered three are the only \
     native_decide deps tree-wide"
   return 0
+
+/-- The whole sweep as ONE Baseline (the F2 follow-up shape — a
+    COMPUTED gate): the regenerate runs the per-package SHARDS — one
+    child process per gated package (`--package X`, one env per process;
+    the all-envs-in-one-process sweep accumulates every package's
+    environment and OOMs — the axiom gate's lesson; the justfile loops
+    the same shards) — and `compare` judges the violation set against
+    the expected 0 (empty findings = clean). This process never imports
+    an environment; every child loads exactly one. -/
+def runWhole : IO UInt32 := do
+  let mut findings : List String := []
+  for pkg in gatedPackages do
+    let out ← IO.Process.output
+      { cmd := "lake", args := #["--dir", "../..", "exe", "gates", "native-policy", "--package", pkg.dir]
+      , cwd := some ("." : System.FilePath) }
+    IO.print out.stdout
+    if out.exitCode != 0 then
+      findings := findings ++ [s!"{pkg.dir}: shard failed (exit {out.exitCode}) — findings in the shard's report above"]
+  let npBaseline : TestKit.Baseline :=
+    { path := ".."
+    , regenerate := pure (String.intercalate "\n" findings)
+    , compare := fun _ fresh => fresh == ""
+    , write := fun _ => throw <| IO.userError "native-policy is a computed gate — neither \
+        grandfathering nor the violation set is re-baselineable; the allowlist is additive \
+        only with a disclosed justification in the same commit (notes/lean-doctrine.md §3)"
+    , evidence := "per-package shards (one child = one env) replay the CollectAxioms cone \
+        scan; expected violation set = 0 — grandfatheredNative is the 2 exile modules \
+        (edgepython/EdgePython.Parity, schema-lang/SchemaLang.Emit.Circuit); a new \
+        _native.native_decide. dep outside them fails; a STALE entry fails"
+    , name := "native-policy" }
+  let code ← TestKit.runBaselines "native-policy" TestKit.computedVerdict [npBaseline]
+  if code == 0 then
+    IO.println "native-policy: clean — the grandfathered three are the only native_decide deps tree-wide"
+  return code
+
+/-- Dispatch: `--package X` = one shard (the justfile loops it); no
+    flag = the COMPUTED Baseline whose regenerate is the shard loop. -/
+unsafe def run (pkgName : Option String) : IO UInt32 := do
+  match pkgName with
+  | some d =>
+    let some pkgs ← Driver.selectPackages "native-policy" (some d) | return 1
+    match pkgs with
+    | #[pkg] =>
+      Lean.initSearchPath (← Lean.findSysroot)
+      let base ← Lean.searchPathRef.get
+      runOne base pkg
+    | _ =>
+      IO.eprintln "native-policy: --package takes exactly one gated package name"
+      return 1
+  | none => runWhole
 
 end Gates.NativePolicy

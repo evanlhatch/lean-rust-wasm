@@ -60,5 +60,4 @@ public import SchemaLang.Debug
 public import SchemaLang.Witness
 public import SchemaLang.WitnessCheck
 public import SchemaLang.WitnessSpec
-public import SchemaLang.Scheduling
 public import SchemaLang.Lens

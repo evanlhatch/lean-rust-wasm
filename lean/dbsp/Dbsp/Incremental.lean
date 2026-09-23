@@ -138,6 +138,7 @@ theorem delay_lti : Lti (@delay a _) := ⟨delay_linear, delay_time_invariant⟩
 
 /-! ## Recursion incrementalizes -/
 
+omit [AddCommGroup a] in
 /-- The cycle body (feedback through a two-input causal operator) is
     strict, hence has a unique fixpoint. -/
 theorem cycle_body_strict (T : Operator2 a b b) (hcausal : Causal (uncurryOp T))

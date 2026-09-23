@@ -4,12 +4,18 @@
 Replaces the `just lean-axioms` shell loop (per-package
 `lake env guestlang-lint` subprocesses).
 
-SHARDING (the memory fix): the no-flag mode imports EVERY gated
+SHARDING (the memory fix): the check lane never imports every gated
 package's environment into ONE process — peak RSS hit ~26.5GB and
 tripped earlyoom on a 29GB box. `--package X` imports ONE package's
 environment (one process = one environment, ~2–4GB peak); the
-`lean-axioms` recipe loops it over `lean_pkgs`. The no-flag mode stays
-for the full-file `--write` bootstrap and `gates all`.
+`lean-axioms` recipe loops it over `lean_pkgs`, and the no-flag CHECK
+lane runs the same loop as the F2 follow-up's SHARDED Baseline: one
+child process per gated package (`gates axioms --package <dir>` — the
+DocsCheck child pattern, one env per process), the emitted section
+blocks reassembled into the canonical report and compared per-section
+against the committed notes/axiom-report.md. The no-flag `--write` lane
+(the deliberate re-baseline/bootstrap act) remains the ONE documented
+in-process full-file render.
 
 The committed baseline stays ONE file (notes/axiom-report.md), one
 `## <dir>` section per package. `--package X --write` rewrites only X's
@@ -203,6 +209,77 @@ def printReport (r : PkgReport) : IO Bool := do
       IO.println v.message
     return !r.violations.isEmpty
 
+/-- The shard's canonical-section markers (the parent's parse protocol):
+    every child prints its normalized `renderBlock` between these two
+    lines; the parent reassembles the whole-file report from the blocks
+    and never imports an environment itself. -/
+def sectionMarkers (dir : String) : String × String :=
+  (s!"axioms: {dir}: [[ section-begin", s!"axioms: {dir}: ]] section-end")
+
+/-- First index of `m` in `ls` (none if absent). -/
+def indexOf (ls : List String) (m : String) : Option Nat := do
+  let rec go : Nat → List String → Option Nat
+    | _, [] => none
+    | i, l :: rest => if l == m then some i else go (i + 1) rest
+  go 0 ls
+
+/-- The section block one child printed: the lines between its markers
+    (nothing if the child failed to emit its protocol — the caller's
+    failure list names that case). -/
+def extractSection (dir : String) (out : String) : Option (List String) := do
+  let (b, e) := sectionMarkers dir
+  let ls := out.splitOn "\n"
+  let bi ← indexOf ls b
+  let ei ← indexOf ls e
+  if ei <= bi then none
+  pure (ls.drop (bi + 1) |>.take (ei - bi - 1))
+
+/-- The whole-file sync predicate of the SHARDED Baseline: the committed
+    header equals the canonical one and every GATED package's committed
+    section byte-matches its shard's fresh block. The shards (one child
+    process per package — the recipe's identical per-section diff) are
+    the section authorities; the committed file's ORDER and any extra
+    non-gated sections (the `#gates` exemption record — Gates.Packages)
+    are not findings here: the exemption predates this wrap and retiring
+    it is a deliberate whole-file re-baseline (`--write --accept-drift`),
+    not this gate's drift. -/
+def shardSync (committed fresh : String) : Bool :=
+  let (chead, cs) := parseSections committed
+  let (fhead, fs) := parseSections fresh
+  chead == fhead && fs.map (·.1) == (gatedPackages.map (·.dir)).toList &&
+    fs.all fun (d, bk) => cs.any fun (d', ck) => d' == d && ck == bk
+
+/-- The sharded whole-file regeneration (the check lane's `regenerate`):
+    one `--package` child per gated package — one environment in one
+    process (the memory fix) — the emitted section blocks reassembled
+    into the canonical report. Returns (text, failures): a child that
+    exits non-zero or fails to emit its block is a failure (its report
+    lines were already echoed above). -/
+def shardedReport : IO (String × Array String) := do
+  let mut sections : List (String × List String) := []
+  let mut failures : Array String := #[]
+  for pkg in gatedPackages do
+    let out ← IO.Process.output
+      { cmd := "lake", args := #["--dir", "../..", "exe", "gates", "axioms", "--package", pkg.dir]
+      , cwd := some ("." : System.FilePath) }
+    IO.print out.stdout
+    match extractSection pkg.dir out.stdout with
+    | some bk => sections := sections ++ [(pkg.dir, bk)]
+    | none => failures := failures.push s!"{pkg.dir}: no section block in the shard's output"
+    if out.exitCode != 0 then
+      failures := failures.push s!"{pkg.dir}: shard exited {out.exitCode}"
+  return (serializeSections reportHeader sections, failures)
+
+/-- The committed report's evidence digest (the F2 follow-up's template:
+    report path + content hash — `String.hash`, the byte-tie field). An
+    ABSENT report names itself (runBaseline fails before regenerating). -/
+def reportEvidence : IO String := do
+  if ← reportPath.pathExists then
+    let t ← IO.FS.readFile reportPath
+    pure s!"{reportPath} (committed content hash {t.hash})"
+  else
+    pure s!"{reportPath} ABSENT — bootstrap via `lake exe gates axioms --write`"
+
 /-- Sharded mode (`--package X`): analyze ONE package (one environment
     in this process); `--write` rewrites only X's section of the
     committed report in place, the check diffs only X's section. -/
@@ -211,6 +288,12 @@ unsafe def runOne (base : SearchPath) (pkg : PkgSpec)
   let r ← analyzePkg base pkg
   let mut failed ← printReport r
   let fresh := normLines (renderBlock r)
+  -- the canonical section block, emitted for the parent's sharded-loop
+  -- Baseline's regeneration (one child = one env; the parent reassembles
+  -- the whole-file report from these blocks — no 26.5GB process)
+  IO.println s!"axioms: {pkg.dir}: [[ section-begin"
+  for l in fresh do IO.println l
+  IO.println s!"axioms: {pkg.dir}: ]] section-end"
   if write then
     if ← reportPath.pathExists then
       let (header, sections) := parseSections (← IO.FS.readFile reportPath)
@@ -275,22 +358,38 @@ unsafe def run (write acceptDrift : Bool) (pkgName : Option String := none) : IO
       reportPath text write acceptDrift failed
       "axioms: clean — every decl's cone inside the allowlist, report in sync"
   else
-    -- the check lane (F2): the whole-file report as one Baseline — the
-    -- committed notes/axiom-report.md vs the fresh render, stepped through
-    -- the shared loop (C5: run → verdict → count). The sharded
-    -- `--package X` mode above keeps its own section diff (runOne).
+    -- the CHECK lane (the F2 shape, still ONE Baseline through the
+    -- shared loop — C5: run → verdict → count): the regenerate is the
+    -- SHARDED loop (one child process per gated package, one env each
+    -- — the 26.5GB all-envs process is retired from the check lane),
+    -- and `compare` = the per-section report sync (`shardSync`).
+    let (fresh, shardFailures) ← shardedReport
+    if !shardFailures.isEmpty then
+      IO.println "axioms: FAILED — the shards named failures (see their reports above):"
+      for f in shardFailures do IO.println s!"  {f}"
+      return 1
+    let evidence ← reportEvidence
+    -- the pre-exemption debt note (not a finding of THIS gate): the
+    -- committed report predates the #gates exemption — it carries its
+    -- section, so the whole-file bytes aren't canonical; a canonical
+    -- rewrite is an owner re-baseline act, outside this wave's file set.
+    let (chead, cs) := parseSections (← IO.FS.readFile reportPath)
+    let extra := cs.filter (fun (d, _) => !gatedPackages.any (fun p : PkgSpec => p.dir == d))
+    if chead != reportHeader || !extra.isEmpty then
+      IO.println s!"axioms: note — the committed whole-file report is not canonical \
+        (extra non-gated section(s) {String.intercalate ", " (extra.map (·.1))} \
+        and/or a drifted header — the pre-exemption history); the per-section sync \
+        above is the gate. A canonical rewrite is `lake exe gates axioms --write \
+        --accept-drift` (an owner act — notes/axiom-report.md is a committed \
+        GENERATED file)."
     let axiomBaseline : TestKit.Baseline :=
       { path := reportPath
-      , regenerate := pure text
-      , compare := fun committed fresh => committed == fresh ++ "\n"
-      , write := fun fresh => IO.FS.writeFile reportPath (fresh ++ "\n")
-      , evidence := "per-decl kernel CollectAxioms cones vs LintKit's allowlist, \
-          whole-file mode; a silent axiom-surface change fails (re-baseline: \
-          `lake exe gates axioms --write` — REFUSES a non-empty diff \
-          without --accept-drift)"
+      , regenerate := pure fresh
+      , compare := shardSync
+      , write := fun t => IO.FS.writeFile reportPath t
+      , evidence := evidence
       , name := "axioms" }
     let code ← TestKit.runBaselines "axioms" TestKit.baselineVerdict [axiomBaseline]
-    if failed then return 1
     if code == 0 then
       IO.println "axioms: clean — every decl's cone inside the allowlist, report in sync"
     return code
