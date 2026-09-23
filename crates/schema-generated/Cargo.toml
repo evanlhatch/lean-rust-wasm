@@ -1,0 +1,18 @@
+# schema-generated — the GENERATED Rust crate (the Rust emitter's artifact).
+#
+# Hand-written and minimal (the ONE hand file in this crate): the emitter
+# owns `src/lib.rs` and `tests/differential.rs` — both GENERATED, both
+# byte-tied (`lake exe gates gen-check`; never hand-edit a generated file,
+# `just gen` restores). No workspace root yet (single crate, no siblings);
+# no dependencies beyond std (the Rust host discipline: no unsafe, no
+# external crates — the wire runtime is generated inline, so there is no
+# schema-codec crate to share).
+#
+# The wire is SchemaCore.Codec's (Lean) — the differential over that wire
+# lives in tests/differential.rs.
+
+[package]
+name = "schema-generated"
+version = "0.1.0"
+edition = "2021"
+publish = false

@@ -1,0 +1,2 @@
+item Example field ready bool field count u64 field delta i64 field label string field note option(string) field tags list(string)
+item ExampleEx field status result(u64,string) field counts map(string,u64) field small bounded(42)

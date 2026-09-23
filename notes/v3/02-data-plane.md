@@ -24,7 +24,7 @@ Order: customerId : CustomerId → existing Customer
 
 The primary object:
 
-```lean
+```lean sketch
 structure ValidDatabase (S : Schema) where
   db   : DatabaseInstance S
   ok   : ConstraintsHold S db      -- the proof field

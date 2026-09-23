@@ -1,19 +1,20 @@
-# Build artifacts
+# Lean
+/.lake/
+lake-manifest.json
+
+# Rust
 /target/
+/crates/target/
+/crates/*/target/
 target-fix/
-lean/*/artifact/
-crates/*/target/
 
 # Nix / devenv
 .devenv*/
 .direnv/
 result*
-/.pre-commit-config.yaml
-devenv.local.nix
 
-# Local env + secrets
-.env
-.secrets/
+# Node
+node_modules/
 
 # Editor / OS
 *.swp
@@ -22,16 +23,6 @@ devenv.local.nix
 .idea/
 .vscode/
 
-# Node (if tooling needs it)
-node_modules/
-
-# Scratch
-/scratch/
-/cache/
-
-# Vendored crates (patches/) — drop cargo registry metadata
-.cargo-ok
-.cargo_vcs_info.json
-patches/*/target/
-.lake/
-lake-manifest.json
+# Local env + secrets
+.env
+.secrets/

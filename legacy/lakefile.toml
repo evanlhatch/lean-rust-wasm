@@ -1,0 +1,438 @@
+# THE MONOLITH SPIKE (notes/single-lake-migration.md): one root package,
+# many [[lean_lib]]/[[lean_exe]] targets, per-target srcDir/roots. Pilot =
+# edgepython absorbed; its modules stay in lean/edgepython/ (srcDir
+# mount), its old lakefile.toml is DEAD. Downstream packages require this
+# root package (path = "../..") and import any of its libs' modules.
+
+name = "LeanRoot"
+
+# LSpec-free: the #guard blocks gate at BUILD time (the Sem.lean
+# convention); this exe is the driver `lake test` runs.
+testDriver = "EdgePythonTests"
+
+defaultTargets = ["EdgePython", "EdgeGen", "EdgePythonTests", "py-gen",
+  "Ledger", "LedgerFn", "LedgerES", "LedgerTests",
+  "FeatureFlags", "FeatureFlagsFn", "FeatureFlagsTests",
+  "Proofkit", "ProofkitTests", "QLang", "QLangTests",
+  "TextKit", "TextKitTests",
+  "Substrait", "SubstraitTests",
+  "Faults", "FaultsSpec", "FaultsTests", "faults-gen",
+  "GuestlangStd", "GuestlangStdTests",
+  "SchemaLang", "Demo", "SchemaLangTests", "schema", "snapshot-fixtures",
+  # NOTE: WasmBackendTestsLib stays OUT of defaultTargets (guide 2.4, the
+  # old package's shape): its root module `WasmBackendTests` has no file of
+  # its own — only the exe's `WasmBackendTests.Main` pulls the modules.
+  "WasmBackend", "DemoFn", "Oracle", "wasm-gen", "oracle", "WasmBackendTests",
+  "Dbsp", "DbspTests", "Machines", "MachinesTests",
+  "CodegenCore", "CodegenCoreTests", "TestKit", "TestKitTests",
+  "LintKit", "LintKitFixtures", "LintKitTests", "guestlang-lint",
+  "Gates", "gates"]
+
+# SINGLE-LAKE MIGRATION (notes/single-lake-migration.md): every lean/
+# package absorbed (clusters A+B); the requires are down to the GIT deps
+# the old packages pinned — materialized ONCE in the root's
+# .lake/packages (the cone-duplication kill). Only the gates bridge
+# remains (gates itself absorbs last).
+# TOML ORDER: every top-level key (name/testDriver/defaultTargets) must sit
+# ABOVE the first [[*]] table — keys after a table header join that table.
+
+# The mathlib cone (dbsp/Machines) — builds ONCE here (the win).
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4"
+rev = "v4.33.0"
+
+# D12: gonzalgo — vendored for the impact-gating order (gates phase 2 —
+# lean-dump/lean-impact recipes to be restored); unused until then.
+# The bundle path is root-relative (the old packages' `../../vendor` was
+# relative to THEIR dirs).
+[[require]]
+name = "gonzalgo"
+git = "vendor/gonzalgo.bundle"
+rev = "7e67f77292685c0e295027b530349e3c664a2758"
+
+# schema-lang's generators-lane dep (direct, not riding mathlib's manifest).
+[[require]]
+name = "plausible"
+git = "https://github.com/leanprover-community/plausible"
+rev = "b7eb3304aeae834b12dda98993a37f6a41f6f0bb"
+
+# The test-harness dep (core + LSpec only) — the pinned rev every old
+# package carried.
+[[require]]
+name = "LSpec"
+git = "https://github.com/argumentcomputer/LSpec"
+rev = "e780f4188c9649aef988270f4d126651460ca9c4"
+
+# ── The gates driver's deps (gates absorbed last — cluster C) ─────────
+
+# Cli for argv parsing. v4.33.0 = the exact rev the tree already vendors
+# transitively (mathlib's closure).
+[[require]]
+name = "Cli"
+git = "https://github.com/leanprover/lean4-cli"
+rev = "6130a47896ce867c6a4a55373441e59e565bad0f"
+
+# batteries at the TREE's rev (v4.33.0 = 4488d40, what mathlib's closure
+# already vendors). This ROOT require deliberately overrides lean4lean's
+# own batteries pin (v4.33.0-rc2): lean4lean builds green under the
+# v4.33.0 RELEASE toolchain with batteries v4.33.0 (probe-built before
+# pinning; see Gates/KernelCheck.lean's header).
+[[require]]
+name = "batteries"
+git = "https://github.com/leanprover-community/batteries"
+rev = "4488d40d070b9700d4d5a6aa342f0d40c31b2a2d"
+
+# lean4lean — the pure-Lean kernel, the independent double-check behind
+# `gates kernel-check`. Master @ 8223d22 targets leanprover/lean4:v4.33.0-rc2;
+# pinned here after verifying it builds under the v4.33.0 release toolchain
+# (with the batteries override above). Only its `lean4lean` exe target is
+# built (on demand by kernel-check) — gates' own code imports nothing from
+# it, so the gates exe's iteration cost is unaffected.
+[[require]]
+name = "lean4lean"
+git = "https://github.com/digama0/lean4lean"
+rev = "8223d223ed98661882e95d9d6a7126df7097cd76"
+
+# The Python-subset frontend over the WAT seam.
+[[lean_lib]]
+name = "EdgePython"
+srcDir = "lean/edgepython"
+roots = ["EdgePython", "EdgePython.Parity"]
+
+# The FROZEN target-IR mount (EdgeWat) DIED at phase 3: wasm-backend is
+# absorbed — WasmBackend is a plain root lib (below), and EdgePython's
+# import of WasmBackend.Wat resolves through the workspace.
+# The artifact writer: target/py.wat (the justfile drives wasm-tools).
+[[lean_lib]]
+name = "EdgeGen"
+srcDir = "lean/edgepython"
+roots = ["EdgeGenMain"]
+
+[[lean_exe]]
+name = "EdgePythonTests"
+srcDir = "lean/edgepython"
+root = "EdgePythonTests.Main"
+
+[[lean_exe]]
+name = "py-gen"
+srcDir = "lean/edgepython"
+root = "EdgeGenMain"
+
+# The ledger package (absorbed, phase 1 — notes/single-lake-migration.md):
+# schema-registered event-sourced ledger + the dogfood ES model.
+[[lean_lib]]
+name = "Ledger"
+srcDir = "lean/ledger"
+roots = ["Ledger"]
+[[lean_lib]]
+name = "LedgerFn"
+srcDir = "lean/ledger"
+roots = ["LedgerFn"]
+
+[[lean_lib]]
+name = "LedgerES"
+srcDir = "lean/ledger"
+roots = ["LedgerES"]
+
+[[lean_exe]]
+name = "LedgerTests"
+srcDir = "lean/ledger"
+root = "LedgerTests.Main"
+# Registry replay needs the interpreter (the initializers' unsafe init
+# path) — same as schema-lang's test/gen exes.
+supportInterpreter = true
+
+# ── Phase 2: feature-flags, proofkit, qlang (absorbed) ────────────────
+
+# feature-flags: the @[schema] spec surface + its impl module + the
+# W8.10 template/slot machinery. The stress-lane module is a lib root so
+# the test exe can import it (the wasm-backend WasmBackendTestsLib
+# pattern), renamed to the package's test root (§5).
+[[lean_lib]]
+name = "FeatureFlags"
+srcDir = "lean/feature-flags"
+roots = ["FeatureFlags", "Machine", "Templates"]
+
+[[lean_lib]]
+name = "FeatureFlagsFn"
+srcDir = "lean/feature-flags"
+roots = ["FeatureFlagsFn"]
+
+[[lean_lib]]
+name = "FeatureFlagsTestsLib"
+srcDir = "lean/feature-flags"
+roots = ["FeatureFlagsTests.Stress"]
+
+[[lean_exe]]
+name = "FeatureFlagsTests"
+srcDir = "lean/feature-flags"
+root = "FeatureFlagsTests.Main"
+# Registry replay needs the interpreter (the initializers' unsafe init
+# path) — same as schema-lang's test/gen exes.
+supportInterpreter = true
+
+# proofkit: the proof-flow smalls (PO ladder, bv_decide contract,
+# @[implemented_by] pattern).
+[[lean_lib]]
+name = "Proofkit"
+srcDir = "lean/proofkit"
+roots = ["Proofkit"]
+
+[[lean_exe]]
+name = "ProofkitTests"
+srcDir = "lean/proofkit"
+root = "ProofkitTests.Main"
+supportInterpreter = true
+
+# qlang: the two-surface authoring layer over Substrait (core-only).
+[[lean_lib]]
+name = "QLang"
+srcDir = "lean/qlang"
+roots = ["QLang"]
+
+[[lean_exe]]
+name = "QLangTests"
+srcDir = "lean/qlang"
+root = "QLangTests.Main"
+
+# ── Phase 3 (cluster A): substrait, faults, std, schema-lang, wasm-backend
+
+# TextKit: the CORE-ONLY parser foundation lifted out of substrait's
+# Decode/Basic (the Parser monad, the scanners, the escape/unescape +
+# name/prefix inversion kit) + Emit.Text's four text primitives. Sits BELOW
+# substrait; substrait re-exports both surfaces under their historical
+# names (zero downstream churn). Zero imports — kernel-package discipline.
+[[lean_lib]]
+name = "TextKit"
+srcDir = "lean/TextKit"
+roots = ["TextKit"]
+
+[[lean_exe]]
+name = "TextKitTests"
+srcDir = "lean/TextKit"
+root = "TextKitTests.Main"
+
+# substrait: the typed query language + canonical text emitter
+# (text-only surface; the binary protobuf codec stays excluded).
+[[lean_lib]]
+name = "Substrait"
+srcDir = "lean/substrait"
+roots = ["Substrait"]
+
+[[lean_exe]]
+name = "SubstraitTests"
+srcDir = "lean/substrait"
+root = "SubstraitTests.Main"
+
+# faults: the failure-mode registry + fast-observe emitter. The core lib
+# keeps its explicit globs (`Faults.Spec.*` and `Faults.Emit.Registry`
+# stay out of `import Faults` — the schema-lang Demo/Spec split mirrored).
+[[lean_lib]]
+name = "Faults"
+srcDir = "lean/faults"
+globs = ["Faults", "Faults.Category", "Faults.Registry", "Faults.Emit.Rust"]
+
+[[lean_lib]]
+name = "FaultsSpec"
+srcDir = "lean/faults"
+roots = ["Faults.Spec.Demo", "Faults.Spec.Host", "Faults.Emit.Registry"]
+
+[[lean_exe]]
+name = "FaultsTests"
+srcDir = "lean/faults"
+root = "FaultsTests.Main"
+# The knownTypes tie-check replays schema-lang Demo's `@[schema]`
+# registrations via importModules + enableInitializersExecution.
+supportInterpreter = true
+
+[[lean_exe]]
+name = "faults-gen"
+srcDir = "lean/faults"
+root = "FaultsGenMain"
+
+# std: the COMPILED stdlib + the guest impls of the schema's functions.
+[[lean_lib]]
+name = "GuestlangStd"
+srcDir = "lean/std"
+roots = ["GuestlangStd"]
+
+[[lean_exe]]
+name = "GuestlangStdTests"
+srcDir = "lean/std"
+root = "GuestlangStdTests.Main"
+
+# schema-lang: the schema language + the demo authoring surface (separate
+# Demo root so `lake exe schema gen` can importModules #[`Demo]) + the
+# unified driver + the snapshot-fixture writer. The SnapshotRT support
+# module rides the lib under the renamed test root (§5).
+[[lean_lib]]
+name = "SchemaLang"
+srcDir = "lean/schema-lang"
+roots = ["SchemaLang", "SchemaGenMain", "CheckMain", "BreakingMain", "SchemaLangTests.SnapshotRT"]
+# RenderTie is a standalone scalar-spelling pin (NOT imported by the
+# SchemaLang root — the WasmBackend.Correct precedent: explicitly globbed
+# so `lake build` gates it). The roots stay in the globs so the
+# root-prefix buildability rule keeps covering every submodule.
+globs = ["SchemaLang", "SchemaGenMain", "CheckMain", "BreakingMain", "SchemaLangTests.SnapshotRT", "SchemaLang.RenderTie"]
+
+[[lean_lib]]
+name = "Demo"
+srcDir = "lean/schema-lang"
+roots = ["Demo"]
+
+[[lean_exe]]
+name = "SchemaLangTests"
+srcDir = "lean/schema-lang"
+root = "SchemaLangTests.Main"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "schema"
+srcDir = "lean/schema-lang"
+root = "SchemaMain"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "snapshot-fixtures"
+srcDir = "lean/schema-lang"
+root = "SnapshotFixturesMain"
+supportInterpreter = true
+
+# wasm-backend: the compiler line (LCNF → WASM). Correct.lean is not
+# imported by the root module (the emitter) — globbed so `lake build`
+# gates it. The audit test module is a lib root (renamed per §5) so the
+# test exe can import it.
+[[lean_lib]]
+name = "WasmBackend"
+srcDir = "lean/wasm-backend"
+roots = ["WasmBackend"]
+globs = ["WasmBackend", "WasmBackend.Correct", "WasmBackend.Audit", "WasmBackend.Sem", "WasmBackend.SemOp"]
+
+[[lean_lib]]
+name = "WasmBackendTestsLib"
+srcDir = "lean/wasm-backend"
+roots = ["WasmBackendTests"]
+
+[[lean_lib]]
+name = "DemoFn"
+srcDir = "lean/wasm-backend"
+roots = ["DemoFn"]
+
+[[lean_lib]]
+name = "Oracle"
+srcDir = "lean/wasm-backend"
+roots = ["Oracle"]
+
+[[lean_exe]]
+name = "wasm-gen"
+srcDir = "lean/wasm-backend"
+root = "WasmGenMain"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "oracle"
+srcDir = "lean/wasm-backend"
+root = "OracleMain"
+
+[[lean_exe]]
+name = "WasmBackendTests"
+srcDir = "lean/wasm-backend"
+root = "WasmBackendTests.Main"
+
+# ── Phase 4 (cluster B): dbsp, Machines, codegen-core, TestKit, LintKit —
+# the mathlib cone builds ONCE (the disk/time win of the whole migration).
+
+# dbsp: the delta-theory package (streams, operators, D/I, linearity,
+# fixpoints). mathlib accepted per notes/lean/lean-v3.md D1.
+[[lean_lib]]
+name = "Dbsp"
+srcDir = "lean/dbsp"
+roots = ["Dbsp"]
+# doctrine lints on for library code; weak so Tests can override
+weakLeanArgs = ["-Dweak.linter.flexible=true"]
+
+[[lean_exe]]
+name = "DbspTests"
+srcDir = "lean/dbsp"
+root = "DbspTests.Main"
+
+# Machines: guarded state machines (executable + proof relation,
+# convergence, refinement, composition, traces, rewind).
+[[lean_lib]]
+name = "Machines"
+srcDir = "lean/Machines"
+roots = ["Machines"]
+weakLeanArgs = ["-Dweak.linter.flexible=true"]
+
+[[lean_exe]]
+name = "MachinesTests"
+srcDir = "lean/Machines"
+root = "MachinesTests.Main"
+
+# codegen-core: the registry/emitter core (core-only per D1 — imported by
+# every downstream package's internals; the importBan rows now hold that).
+[[lean_lib]]
+name = "CodegenCore"
+srcDir = "lean/codegen-core"
+roots = ["CodegenCore"]
+
+[[lean_exe]]
+name = "CodegenCoreTests"
+srcDir = "lean/codegen-core"
+root = "CodegenCoreTests.Main"
+
+# TestKit: the shared test harness (core + LSpec only).
+[[lean_lib]]
+name = "TestKit"
+srcDir = "lean/TestKit"
+roots = ["TestKit"]
+
+[[lean_exe]]
+name = "TestKitTests"
+srcDir = "lean/TestKit"
+root = "TestKitTests.Main"
+
+# LintKit: the guestlang linter layer (core-only). The fixtures lib is NOT
+# imported by the LintKit umbrella (the lint gate must never see them).
+# The guestlang-lint exe = the lean-lint gate's driver.
+[[lean_lib]]
+name = "LintKit"
+srcDir = "lean/LintKit"
+roots = ["LintKit"]
+
+[[lean_lib]]
+name = "LintKitFixtures"
+srcDir = "lean/LintKit"
+roots = ["LintKit.TestFixtures"]
+
+[[lean_exe]]
+name = "LintKitTests"
+srcDir = "lean/LintKit"
+root = "LintKitTests.Main"
+# Tests replay the fixtures' oleans via importModules +
+# enableInitializersExecution (the GenMain recipe).
+supportInterpreter = true
+
+[[lean_exe]]
+name = "guestlang-lint"
+srcDir = "lean/LintKit"
+root = "LintMain"
+supportInterpreter = true
+
+# ── Phase 5 (cluster C): gates — the driver absorbs LAST (its requires
+# all dead; the bridges retire). The exe runs from the REPO ROOT now: the
+# justfile recipes dropped their `cd lean/gates`, and the code's
+# cwd-relative paths (notes/, lean/, .lake/) spell the root layout.
+[[lean_lib]]
+name = "Gates"
+srcDir = "lean/gates"
+roots = ["Gates"]
+
+[[lean_exe]]
+name = "gates"
+srcDir = "lean/gates"
+root = "Main"
+# Registry replay (importModules + loadExts) runs imported initializers
+# through the interpreter — the GenMain/LintMain pattern.
+supportInterpreter = true

@@ -29,7 +29,7 @@ Rust runs under `devenv shell --profile wasm` with the CC export
 
 ## 1. A new schema item (record / variant / function)
 
-```lean
+```lean sketch
 @[schema]               -- registers the item in the universe's extension
 structure Order where   -- a record: fields are the schema
   id : UInt64
@@ -73,7 +73,7 @@ TableInvariant.lean are the references):
 
 ## 3. A new emitter
 
-```lean
+```lean sketch
 def myEmitter : Emitter MySpec where
   name := "myEmitter"
   outputs := ["src/my_generated.rs"]        -- nodup in the type

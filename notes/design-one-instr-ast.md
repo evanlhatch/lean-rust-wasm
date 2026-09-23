@@ -340,7 +340,7 @@ Deletion, exact:
   `Sem.exec` over the compiled `Wat.Instr` bodies, denoted into the
   Python reference's `Int` world:
 
-```lean
+```lean sketch
 -- shape (one per fixture; the wasm_* pins keep their exact form with
 -- `Sem` in place of `WEval` and a Val-denotation in place of WVal):
 theorem parity_double_21 :

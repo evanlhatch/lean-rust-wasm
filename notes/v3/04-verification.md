@@ -30,7 +30,7 @@ failure; an invariant checked only by a test is a violation.
 One shape: label + computed tier + payload + provenance + evidence.
 The tier set is CLOSED; the evidence kinds are CLOSED:
 
-```lean
+```lean sketch
 inductive Tier where
   | provedAtElab | decidableNow | generatedCheck | oracleSwept | guestVerified
 inductive Evidence where
@@ -66,7 +66,7 @@ ARTIFACT as a second authority (a certificate file nobody re-checks).
 "Same behavior" is meaningless without naming the observer. Every
 equivalence/refinement claim carries one:
 
-```lean
+```lean sketch
 structure Observer where
   see : Execution → Observation
 
