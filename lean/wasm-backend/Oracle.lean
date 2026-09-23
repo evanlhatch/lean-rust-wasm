@@ -254,6 +254,18 @@ def gridBatch : ProbeBatch where
   ++ [("verify-witness", ["1,0,18,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,43,1"])]
   ++ [("verify-witness", ["1,0,18,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,42,0"])]
   ++ [("verify-witness", ["1,0,19,9,100,101,109,111,47,101,113,52,50,1,0,42,0,42,0,42,1"])]
+  -- THE W10.2 ERROR CHANNEL (the first result<T, fault> duel rows):
+  -- the ok path (a plain u64 id → ok(id)) + both fault paths — id 0 →
+  -- err(empty-cart) (the payload-free fault), the 9e9+ sentinel →
+  -- err(invalid-item(id)) (the payload-CARRYING fault — the payload
+  -- round-trips the id). The ser forms = the mirror's Val::Result /
+  -- Val::Variant arms (ok(v)/err(case(payload)) — OracleMirror's
+  -- constants); no insufficient-funds row (the f64 ser form is the
+  -- orderErrorValid precedent's unread arm — no Lean/Rust f64-render
+  -- tie exists to pin it against).
+  ++ [("place-order", ["0"])]
+  ++ [("place-order", ["9000000001"])]
+  ++ (u64s.map fun a => ("place-order", [toString a]))
 
 /-- The manifest rows: (fn, args) pairs the differential gate replays
     (the grid batch's probes — the byte-tie surface, unchanged). -/
@@ -769,6 +781,16 @@ derive_oracle_arms
 --  - `verify-witness`: the byte-row convention (comma-joined decimal u8s)
 --    + the decode lane (`decWitness?` at the artifact's own fuel over the
 --    v1 empty certification context — DemoFn.verifyWitness's exact shape).
+/-- The W10.2 ser form of the OrderError variant's cases (the wire
+    spelling the mirror's Val::Variant arm renders: kebab case, the
+    payload in parens — absent for the payload-free case). The f64
+    arm's render is Lean's Float toString — deliberately unused by the
+    duel rows (no Lean/Rust f64-render tie; see the place-order rows). -/
+def orderErrorSer : OrderError → String
+  | .emptyCart => "empty-cart"
+  | .invalidItem id => s!"invalid-item({id})"
+  | .insufficientFunds f => s!"insufficient-funds({f})"
+
 def resultOfHand (fn : String) (args : List String) : String :=
   match fn, args with
   | "get-user", [a] => match GuestImpl.getUser a.toNat!.toUInt64 with
@@ -807,6 +829,14 @@ def resultOfHand (fn : String) (args : List String) : String :=
       | some w =>
           if SchemaLang.WitnessCheck.checkWitness w.fuel w.claim w.proof [] .nil []
             then "1" else "0"
+  -- THE W10.2 ERROR CHANNEL's oracle: the fault-typed result — the
+  -- ser form = the mirror's Val::Result/Val::Variant rendering
+  -- (ok(payload) / err(case) / err(case(payload))).
+  | "place-order", [a] =>
+    let id : UInt64 := a.toNat!.toUInt64
+    match GuestImpl.placeOrder id with
+    | .inl v => s!"ok({v})"
+    | .inr e => s!"err({orderErrorSer e})"
   | "watch-users", [_a] =>
     -- the ser_val's forms: the list = the comma-NO-space joins; the
     -- record = "{ k=v, ... }" with the comma-space joins
@@ -851,7 +881,7 @@ def schemaSigs : List (String × Nat) :=
   , ("run-paps", 1), ("total", 3), ("pick", 3), ("str-len-demo", 1)
   , ("greet", 1), ("get-user", 1), ("watch-counts", 1), ("watch-users", 1)
   , ("user-valid", 4), ("order-error-valid", 2), ("user-complete", 4)
-  , ("verify-witness", 1) ]
+  , ("verify-witness", 1), ("place-order", 1) ]
 
 /-- The manifest's fn surface with arities (must agree with `resultOf`'s
     patterns — the DiffSpec's arity corruption pins this). The lookup
@@ -1091,13 +1121,14 @@ def featuresOf : String → List String
   | "user-complete" => ["record-arg", "validator", "strlen-gate", "tags-count-gate"]
   | "order-error-valid" => ["variant-arg", "validator", "negative-empty-cart", "f64-payload-arm"]
   | "verify-witness" => ["witness-decode", "guest-checker", "negative-tampered", "fuel-refusal", "witness-ctor-sweep"]
+  | "place-order" => ["result-err-channel", "fault-typed-error", "variant-result", "negative-empty-cart"]
   | _ => []
 
 /-- The batch table for COVERAGE.md: name, probe count, the feature the
     batch adds BEYOND the grid. -/
 def batchTable : List (String × Nat × String) :=
   [ ("grid", gridBatch.probes.length,
-     "the fixed u64s grid × all 16 exports + the pinned validator negatives + the W9.6 witness fixtures")
+     "the fixed u64s grid × all 17 exports + the pinned validator negatives + the W9.6 witness fixtures")
   , ("fuzz", (fuzzBatch 200 0x5EED).probes.length,
      "LCG-driven off-grid scalars — the engines must agree on inputs the grid never visits (wrap boundary)")
   , ("boundary", boundaryBatch.probes.length,

@@ -848,10 +848,12 @@ def dedupTramps : List (Name × Nat) → List (Name × Nat)
 /-! ## The adapter SHAPES (the canonical-ABI lowering table)
 
 The adapter generator needs each export's RESULT SHAPE (how to flatten
-the guest object into the canonical layout). `adapterShape?` is the
-registry; the five record shapes' BODIES are the SCHEMA-TYPED
-generator's instantiations (each pinned ≡ the hand shape it replaced —
-the `legacy*` fixtures). The shapes' authority: the WIT world
+the guest object into the canonical layout). W10.2: the registry is a
+FOLD over the registered `FuncSig` (`adapterShapeOf` — was the
+String-keyed hand list `adapterShape?`, the audit's last hand mirror);
+the five record shapes' BODIES are the SCHEMA-TYPED generator's
+instantiations (each pinned ≡ the hand shape it replaced — the
+`legacy*` fixtures). The shapes' authority: the WIT world
 (byte-tied); a wrong shape = a differential failure (the host
 misreads).
 
@@ -864,24 +866,50 @@ misreads).
   unbox).
 -/
 
--- The ASYNC-marked exports: NOT hand-listed here — `emitModule` takes
--- them as `asyncFns`, DERIVED by the driver from the schema registry
--- (`WasmGenMain.asyncExportsOf`). A hand list drifted by construction
--- (a new async `@[schema_fn]` needed a second site here). Recipe:
+-- The ASYNC-marked exports: NOT hand-listed anywhere — `emitModule`
+-- takes them as `asyncFns`, DERIVED by the driver from the schema
+-- registry (`WasmGenMain.asyncExportsOf`). Recipe:
 -- notes/wasm-backend-notes.md §async-lift.
 
-def adapterShape? : String → Option String
-  | "get-user" => some "optionUser"
-  | "watch-orders" => some "listUser"
-  | "watch-counts" => some "streamU64"
-  | "watch-users" => some "streamUser"
-  | "user-valid" => some "userParam"
-  | "user-complete" => some "userParam"
-  | "order-error-valid" => some "variantParam"
-  -- the witness export: bytes in (the canonical list<u8> = the (ptr,
-  -- len) pair), verdict out (the raw i32 Bool)
-  | "verify-witness" => some "bytesParam"
-  | _ => none
+/-- W10.2: the ADAPTER SHAPE, FOLDED from the registered `FuncSig` —
+    was `adapterShape?`, the String-keyed hand list (the audit's last
+    hand mirror: a new export with a shaped ret needed a second site
+    here). The shape is a function of the SIGNATURE: the ret decides
+    the result-side shape (the canonical-ABI return lowering); a
+    scalar ret falls through to the PARAM-side arms (the single
+    record/variant/bytes param reboxes). The arms are the CLOSED shape
+    set — `emitAdapter`'s arms mirror them 1:1; a signature outside
+    the set folds to `none` = the default scalar lowering (a drifted
+    shape surfaces at the differential gate, never silently). The
+    record/variant param distinction rides the REGISTERED type name
+    (the sig carries the `.ty` ref; the record/variant KIND lives in
+    the universe, which a pure sig fold cannot see — the name is the
+    sig-local witness; a renamed schema type fails loudly at the
+    differential gate, the same authority the hand list had). -/
+def adapterShapeOf : SchemaLang.FuncSig → Option String
+  | s =>
+    match s.ret with
+    | .future (.list .u64) => some "streamU64"
+    | .future (.list _) =>
+        if s.sem.delivery == (.stream : SchemaLang.Delivery)
+          then some "streamUser" else some "listUser"
+    | .option _ => some "optionUser"
+    | .list _ => some "listUser"
+    -- the W10.2 error channel: the result<T, fault> export's return
+    -- lowering. The CLOSED arm is the demo's result<u64, order-error>
+    -- (emitAdapter's resultOrderError arm — the ok payload u64, the err
+    -- payload the scalar-joined order-error variant); another result
+    -- shape joins here only by growing the arm, never by reusing this
+    -- one (the differential gate + the flat-form pin catch a drift).
+    | .result _ _ => some "resultOrderError"
+    | _ =>
+        match s.params with
+        | [(_, .ty "User")] => some "userParam"
+        | [(_, .ty "OrderError")] => some "variantParam"
+        -- the witness export: bytes in (the canonical list<u8> = the
+        -- (ptr, len) pair), verdict out (the raw i32 Bool)
+        | [(_, .list .u8)] => some "bytesParam"
+        | _ => none
 
 /-- Walking a guest List cons chain into a canonical (array-ptr, count)
     pair: COUNT the cons cells, `$alloc(n × elemSize)`, then FILL each
@@ -1437,6 +1465,9 @@ def shapeTys? : String → Option (List SchemaLang.Ty)
   | "optionUser" | "userParam" | "listUser" | "streamUser" => some Layout.userTys
   | "streamU64" => some [.u64]
   | "bytesParam" => some [.list .u8]
+  -- the W10.2 error channel: the ok payload's scalar (the err side is
+  -- the scalar-joined variant rebox, not a record shape — no fields)
+  | "resultOrderError" => some [.u64]
   | _ => none
 
 /-- The record shapes' DIRECTION: `true` = param (flat → guest). The
@@ -1760,6 +1791,43 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
                           , ("e", "i32"), ("p2", "i32"), ("curT", "i32"), ("nT", "i32")
                           , ("arrT", "i32"), ("wT", "i32")])
       body }
+  else if shape == "resultOrderError" then
+    -- W10.2: the RESULT<T, FAULT> return lowering — the first
+    -- result<T, fault> in the committed world (place-order:
+    -- result<u64, order-error>). The canonical flat form = [i32
+    -- result-discr, i64, i64]: the ok case's u64 and the err case's
+    -- variant discr join per position, the err case's joined payload
+    -- rides the third slot; 3 flat results > MAX_FLAT_RESULTS=1 → the
+    -- return-area-POINTER convention (the callee writes the lowered
+    -- results and returns the area ptr — the string shape's; the canon
+    -- lift copies out of guest memory). Area @56: the result discr
+    -- i32 @56 (ok=0/inl, err=1/inr — Sum's ctor order = the WIT
+    -- result's {ok, err} case order); ok → the u64 is BOXED (the LCNF
+    -- boxes the Sum.inl scalar field — the ctor keeps it as a REF arg):
+    -- the box ptr @8, the raw i64 at box+8; err → the OrderError box
+    -- @8 (the ctor-SPLIT form): its discr i32 @4, its joined payload
+    -- i64 @8 (raw — the invalidItem sset convention). Pinned
+    -- end-to-end: the duel's place-order rows (Lean's eval) + the
+    -- host's result_channel round-trip.
+    let body : List Wat.Instr :=
+      pass ++ [ .call d.name.toString, .localset "r"
+      , .localget "r", .mem .i32load8u 4 none, .localset "tag"
+      , .i32const 56, .localget "tag", .mem .i32store 0 none
+      , .localget "tag", .i32const 0, .op .i32eq
+      , .if_ none
+          [ .localget "r", .mem .i32load 8 none, .localset "p"
+          , .i32const 64, .localget "p", .mem .i64load 8 none
+          , .mem .i64store 0 none ]
+          [ .localget "r", .mem .i32load 8 none, .localset "e"
+          , .i32const 64, .localget "e", .mem .i32load 4 none
+          , .mem .i32store 0 none
+          , .i32const 72, .localget "e", .mem .i64load 8 none
+          , .mem .i64store 0 none ]
+      , .i32const 56 ]
+    { name := s!"{d.name.toString}_abi"
+      params := paramsOf, result := some "i32"
+      locals := [("r", "i32"), ("tag", "i32"), ("e", "i32"), ("p", "i32")]
+      body }
   else if shape == "bytesParam" then
     -- The BYTES-PARAM adapter (verify-witness, the decode lane): the
     -- generator's listRebox .u8 instantiation (bytesParamBody) — the
@@ -1814,12 +1882,15 @@ def emitAdapter (certLayout : WasmBackend.Layout.offsets WasmBackend.Layout.user
 exports; the state THREADS across decls (tramps accumulate).
 `asyncFns` = the ASYNC-marked exports, DERIVED by the driver from the
 schema registry (a hand list could drift: a new async `@[schema_fn]`
-needed a second site). Full async-lift recipe
+needed a second site). `sigOf?` = the registered FuncSig per decl name
+(W10.2: the adapter shapes FOLD from it — `adapterShapeOf`; the driver
+builds it from `worldExportsOf`). Full async-lift recipe
 (wasmparser-derived): notes/wasm-backend-notes.md §async-lift. -/
 def emitModule (decls : List (Decl .impure))
     (exportTargets : List (String × Name))
     (stringResult? : Name → Bool := fun _ => false)
-    (asyncFns : List String := []) : M String := do
+    (asyncFns : List String := [])
+    (sigOf? : Name → Option SchemaLang.FuncSig := fun _ => none) : M String := do
   -- decl signatures FIRST (the fap emitter needs the callee's wasm
   -- result type during the decls' emit)
   let sigs : Std.HashMap Name (Array String × String) :=
@@ -1924,12 +1995,18 @@ def emitModule (decls : List (Decl .impure))
     .ty { name := s!"sig_{nF}box"
         , params := (List.range (nF + 1)).map fun _ => { name := none, ty := "i32" }
         , result := some "i32" }
-  -- canonical-ABI adapters for the export targets
+  -- canonical-ABI adapters for the export targets. THE SHAPE: the
+  -- W10.2 FOLD (adapterShapeOf over the registered FuncSig — was the
+  -- String-keyed hand list), the string result special-cased first
+  -- (its shape comes from the ORIGINAL def type, not the sig).
+  let shapeOfName (_kebab : String) (n : Name) : Option String :=
+    if stringResult? n then some "string"
+    else match sigOf? n with | some s => adapterShapeOf s | none => none
   let mut abiFuncs : List Wat.Func := []
   for (kebab, n) in exportTargets do
     for d in decls do
       if d.name.toString == n.toString then
-        let shape := if stringResult? n then "string" else adapterShape? kebab |>.getD "default"
+        let shape := (shapeOfName kebab n).getD "default"
         -- THE SCHEMA-TYPED GATE: a record shape's schema must sit
         -- in the generator's field universe (lowered?/reboxed? by
         -- direction) — outside it, THROW (the robustness rule), never
@@ -1963,10 +2040,10 @@ def emitModule (decls : List (Decl .impure))
   -- kebab; the plain-name export is INVISIBLE to the async encoder),
   -- the callback = `[callback][async-lift]{name}`, sig (i32 ordinal,
   -- i32 handle, i32 result) -> i32.
-  let cbFuncs : List Wat.Func := asyncTargets.map fun (kebab, _) =>
+  let cbFuncs : List Wat.Func := asyncTargets.map fun (kebab, n) =>
     let sig3 : List Wat.Param :=
       [{ name := none, ty := "i32" }, { name := none, ty := "i32" }, { name := none, ty := "i32" }]
-    match adapterShape? kebab with
+    match shapeOfName kebab n with
     | some "streamU64" | some "streamUser" =>
       -- the write SITE: the writer's resumption (the reader = ready)
       -- re-enters here; write the stashed (wr, arr, n) into the
@@ -2007,9 +2084,10 @@ def emitModule (decls : List (Decl .impure))
            , params := [], result := none }
     , .imp { module := "$root", name := "[waitable-set-drop]", id := none
            , params := [{ name := none, ty := "i32" }], result := none } ]
-  let perExport : String → List Wat.Item := fun kebab =>
-    match adapterShape? kebab with
-    | some "streamU64" | some "streamUser" =>
+  let isStreamShape : Option String → Bool :=
+    fun sh => match sh with | some "streamU64" | some "streamUser" => true | _ => false
+  let perExport : String → Bool → List Wat.Item := fun kebab stream =>
+    if stream then
       [ .imp { module := "[export]$root", name := s!"[task-return]{kebab}"
              , id := some s!"tr_{kebab}", params := [{ name := none, ty := "i32" }]
              , result := none }
@@ -2023,14 +2101,15 @@ def emitModule (decls : List (Decl .impure))
       , .imp { module := "[export]$root", name := s!"[stream-drop-writable-0]{kebab}"
              , id := some s!"sdw_{kebab}", params := [{ name := none, ty := "i32" }]
              , result := none } ]
-    | _ =>
+    else
       [ .imp { module := "[export]$root", name := s!"[task-return]{kebab}"
              , id := some s!"tr_{kebab}"
              , params := [{ name := none, ty := "i32" }, { name := none, ty := "i32" }]
              , result := none } ]
   let asyncImports : List Wat.Item :=
     if asyncTargets.isEmpty then []
-    else waitables ++ asyncTargets.flatMap fun (kebab, _) => perExport kebab
+    else waitables ++ asyncTargets.flatMap fun (kebab, n) =>
+      perExport kebab (isStreamShape (shapeOfName kebab n))
   -- the canon lift's indirect calls go through the table + the async
   -- shims realloc through cabi_realloc (the bump alloc ignores the
   -- old-ptr/old-size/align args)
@@ -2049,9 +2128,8 @@ def emitModule (decls : List (Decl .impure))
   -- the canon lift reads guest memory (string/list results are copied
   -- out of it) — the memory MUST be exported under the canonical name
   let memExport : List Wat.Item := [ .export { name := "memory", desc := .memory 0 } ]
-  let isStream : String → Bool := fun k =>
-    match adapterShape? k with | some "streamU64" | some "streamUser" => true | _ => false
-  let streamGlobals : List Wat.Item := if asyncFns.iter.any isStream
+  let streamGlobals : List Wat.Item := if asyncTargets.any fun (k, n) =>
+    isStreamShape (shapeOfName k n)
     then [ .global { name := "wr_g", ty := "i32", isMut := true, init := .i32const 0 }
          , .global { name := "arr_g", ty := "i32", isMut := true, init := .i32const 0 }
          , .global { name := "n_g", ty := "i32", isMut := true, init := .i32const 0 } ]

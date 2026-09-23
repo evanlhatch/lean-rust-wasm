@@ -263,7 +263,8 @@ private def collectUndefinedCallees (decls : List (Lean.Compiler.LCNF.Decl .impu
     runtime-spliced WAT body WITHOUT the GENERATED header — the header
     is the driver's prepend (`watEmitter` + `runEmitters`, W7.12); this
     function's result joins the `WasmGenSpec` as spec data. -/
-def emitModuleWasm (targetDecls : Array Name) (asyncFns : List String := []) : CoreM String := do
+def emitModuleWasm (targetDecls : Array Name) (asyncFns : List String := [])
+    (sigOf? : Name → Option SchemaLang.FuncSig := fun _ => none) : CoreM String := do
   -- THE CLOSURE COMPLETION FIXPOINT (see collectUndefinedCallees): each
   -- round runs the pipeline, scans the local decls for undefined fap
   -- callees, and re-runs with them added (their roots exist in the env;
@@ -365,7 +366,8 @@ def emitModuleWasm (targetDecls : Array Name) (asyncFns : List String := []) : C
         | _ => false
     | _ => false
   let res : Except String String := do
-    let (wat, _) := ← StateT.run (WasmBackend.emitModule decls2 exportTargets stringResult? asyncFns) {}
+    let (wat, _) := ← StateT.run
+      (WasmBackend.emitModule decls2 exportTargets stringResult? asyncFns sigOf?) {}
     pure wat
   match res with
   | .ok wat =>
@@ -658,13 +660,17 @@ unsafe def main : IO Unit := do
   -- (3.4): the oracle's rows must cover fns the world actually exports
   -- — checked BEFORE any artifact write (the emitters run after).
   let worldExports := worldExportsOf env targetDecls
+  -- the W10.2 adapter-shape fold's lookup: the registered FuncSig per
+  -- decl name (emitModule's shapeOfName consults it per export).
+  let sigOf? : Name → Option SchemaLang.FuncSig := fun n =>
+    (worldExports.find? fun (_, s) => s.body == n).map (·.2)
   -- the async exports = the registry's `.future` rets (the derivation
   -- that replaced WasmBackend's hand list — the wasm-compile byte-tie
   -- pins the set).
   let asyncExports := asyncExportsOf worldExports
   -- The LCNF re-run + the runtime splice stay in the DRIVER (monadic);
   -- the wat emitter receives the RESULT as spec data.
-  let (watBody, _) ← (emitModuleWasm targetDecls asyncExports).toIO ctx state
+  let (watBody, _) ← (emitModuleWasm targetDecls asyncExports sigOf?).toIO ctx state
   for f in oracleFns do
     unless worldExports.any fun (w, _) => w == f do
       -- the closed-world suggestion (CodegenCore.didYouMean — the

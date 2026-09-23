@@ -24,15 +24,16 @@ open Faults TestKit
 The registry's well-formedness is in the TYPE now, so the controls are
 elaboration failures, not Bool checks. -/
 
--- Attribute-level dup rejection: `notFound` is already registered by
--- `Faults.Spec.Demo` (the extension replays imports, so the cross-module
--- duplicate is caught HERE, at this def's elaboration).
+-- Attribute-level dup rejection: `invalidItem` is already registered
+-- by `Demo` (the rows moved there at W10.1 — the fold's SSOT home;
+-- the extension replays imports, so the cross-module duplicate is
+-- caught HERE, at this def's elaboration).
 /--
-error: `fault`: failure-mode name `notFound` already registered at `Faults.Spec.notFound` — names must be unique
+error: `fault`: failure-mode name `invalidItem` already registered at `faultInvalidItem` — names must be unique
 -/
 #guard_msgs (error) in
-@[fault] def dupNotFound : FailureModeItem :=
-  { name := "notFound", display := "d", category := .content
+@[fault] def dupInvalidItem : FailureModeItem :=
+  { name := "invalidItem", display := "d", category := .content
   , advice := "a", payload := [] }
 
 -- The decide-default dup rejection: a coded-registry literal with a
@@ -43,8 +44,8 @@ error: `fault`: failure-mode name `notFound` already registered at `Faults.Spec.
 /-- error: Tactic `decide` proved that the proposition -/
 #guard_msgs (error, substring := true) in
 example : CodegenCore.CodedRegistry FailureModeItem :=
-  { items := [Spec.notFound, Spec.notFound], nameOf := (·.name)
-  , codePrefix := "E", start := 100 }
+  { items := [Spec.apiFaults.items.head!, Spec.apiFaults.items.head!]
+  , nameOf := (·.name), codePrefix := "E", start := 100 }
 
 -- The diag-kind derive rejects a non-inductive target (a structure IS
 -- an inductive, so the control uses a theorem).
@@ -128,11 +129,17 @@ def emitChecks : CheckResult := do
   -- codes from the registry, never hand-set
   _ ← assertEq "code attr" (out.contains "#[code = \"E100\", category = Content,") true
   _ ← assertEq "code attr 2" (out.contains "#[code = \"E101\", category = Content,") true
-  _ ← assertEq "transient attr" (out.contains "category = Transient") true
+  -- the TRANSIENT row rides the HOST registry now (the guest rows are
+  -- the wire variant's cases — all content); the host's `engine` row
+  -- carries the transient policy
+  let hostOut := CodegenCore.Emit.Rust.renderModule
+    (Emit.Rust.faultModule "HostFault" Spec.hostFaults.codes (guest? := false))
+  _ ← assertEq "transient attr (host registry)" (hostOut.contains "category = Transient") true
   -- advice flows through
   _ ← assertEq "advice" (out.contains "advice = \"check cart state\"") true
   -- payload fields via schema Ty lowering
-  _ ← assertEq "payload field" (out.contains "NotFound { id: u64 },") true
+  _ ← assertEq "payload field" (out.contains "InvalidItem { id: u64 },") true
+  _ ← assertEq "unit variant (the fold's empty-payload row)" (out.contains "EmptyCart,") true
   -- wasm init hook (linkme unavailable on wasm)
   _ ← assertEq "init_guest" (out.contains "register_statics(OrderError::ENTRIES)") true
   -- no raw escape hatches
@@ -247,23 +254,58 @@ def diagCodeChecks : CheckResult := do
     Faults.Emit.schemaDiagKinds.length 24
   _ ← assertEq "schema-diag allocation keys = derived kind order"
     (Faults.Emit.schemaDiagCodes.map (·.1)) Faults.Emit.schemaDiagKinds
-  -- the schema-diag block: allocated AFTER the fault registries (4 + 4)
-  _ ← assertEq "schema-diag codes start E108"
-    ((Faults.Emit.schemaDiagCodes.map (·.2)).head?.getD "") "E108"
+  -- the schema-diag block: allocated AFTER the fault registries (3 + 4)
+  _ ← assertEq "schema-diag codes start E107"
+    ((Faults.Emit.schemaDiagCodes.map (·.2)).head?.getD "") "E107"
   _ ← assertEq "schema-diag block size"
     Faults.Emit.schemaDiagCodes.length Faults.Emit.schemaDiagKinds.length
-  -- the LAST ctor's code (position 23 → E131): a mid-list insert that
+  -- the LAST ctor's code (position 23 → E130): a mid-list insert that
   -- shifts any later ctor's code goes red on this pin
-  _ ← assertEq "tail ctor code E131"
-    ((Faults.Emit.schemaDiagCodes.map (·.2)).getLast?.getD "") "E131"
+  _ ← assertEq "tail ctor code E130"
+    ((Faults.Emit.schemaDiagCodes.map (·.2)).getLast?.getD "") "E130"
   -- the cross-ref: single-lookup coded render
   _ ← assertEq "coded render"
     (Faults.Emit.renderDiagCoded (.dupName "user"))
-    "[E109] duplicate name `user` — names must be unique"
+    "[E108] duplicate name `user` — names must be unique"
   -- negative control: the lookup is kind-keyed — a bogus kind misses
   _ ← assertEq "kind-keyed lookup misses bogus (control)"
     (Faults.Emit.schemaDiagCodes.lookup "bogus") (none : Option String)
   .ok ()
+
+/-! ## The variant-projection fold (W10.1 — the one-fault unification)
+
+The fold (`Faults.Registry.derive_fault_variant`) is the wire
+variant's SSOT mechanism; the gate lives at elaboration. The positive
+control: re-running the fold over the REPLAYED demo registry agrees
+with its own registration (idempotence). The negative controls: a
+planted fault row the registered variant hasn't got fails the fold
+(the fault row / schema-variant disagreement refusal), and a
+multi-field payload row is rejected at the fold (the WIT case shape).
+-/
+
+-- positive: the fold agrees with itself (the registration stands)
+derive_fault_variant OrderError
+
+-- negative: a planted row the variant hasn't got — the disagreement
+-- refusal (a case-payload drift takes the SAME equality to the same
+-- error)
+@[fault] def foldSabotageRow : FailureModeItem :=
+  { name := "foldSabotage", display := "sabotage", category := .content
+  , advice := "a", payload := [("x", .string)] }
+
+/-- error: derive_fault_variant `OrderError`: the fault registry's fold disagrees with the registered schema variant -/
+#guard_msgs (error, substring := true) in
+derive_fault_variant OrderError
+
+-- negative: the WIT case shape — a multi-field payload row is refused
+-- AT THE FOLD (the `multiPayload` diagnostic), not downstream
+@[fault] def foldMultiPayloadRow : FailureModeItem :=
+  { name := "foldMulti", display := "m", category := .content
+  , advice := "a", payload := [("x", .u64), ("y", .string)] }
+
+/-- error: derive_fault_variant `OrderError`: `foldMulti`: variant cases carry at most one payload type (v1 — WIT case shape) -/
+#guard_msgs (error, substring := true) in
+derive_fault_variant OrderError
 
 unsafe def main : IO UInt32 := do
   let typeNames ← loadDemoTypeNames

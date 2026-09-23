@@ -21,6 +21,7 @@ public import SchemaLang.Meta.Derive
 public import SchemaLang.Migration
 public import SchemaLang.Validate
 public import SchemaLang.WitnessSpec
+public import Faults.Registry
 
 @[expose] public section
 
@@ -59,11 +60,48 @@ inductive Role where
   | editor
   | viewer
 
-@[schema]
+-- The order-fault variant's Lean carrier. The SCHEMA registration is
+-- the fault registry's fold below (`derive_fault_variant` — W10.1's
+-- one-fault unification): the registry IS the wire variant's SSOT, so
+-- there is no `@[schema]` hand-pairing here to drift from it. The
+-- carrier stays a plain inductive — the compiled guest impls
+-- (`GuestImpl.orderErrorValid`) match these constructors.
 inductive OrderError where
   | emptyCart
   | invalidItem (id : UInt64)
   | insufficientFunds (amount : Float)
+
+-- The fault rows — ONE declaration per failure mode (the design doc's
+-- §2.2): the wire case, the fast-observe enum case, the E-code, and
+-- the advice all project from the registry row. The rows live HERE
+-- (not in `Faults.Spec.Demo`) because `watchOrders`' `@[schema_fn]`
+-- reifies the `OrderError` reference at THIS module's elaboration —
+-- the rows + the fold must precede it; the spec snapshot downstream
+-- replays the extension. `meta`: the attribute's `.afterCompilation`
+-- handler evaluates the compiled value — the module system's phase
+-- rule demands the mark here (the plain-file spec modules got it for
+-- free).
+@[fault] meta def faultEmptyCart : Faults.FailureModeItem :=
+  { name := "emptyCart", display := "the cart is empty"
+  , category := .content, advice := "add an item before checkout"
+  , payload := [] }
+
+@[fault] meta def faultInvalidItem : Faults.FailureModeItem :=
+  { name := "invalidItem", display := "invalid cart item: {id}"
+  , category := .content, advice := "check cart state"
+  , payload := [("id", .u64)] }
+
+@[fault] meta def faultInsufficientFunds : Faults.FailureModeItem :=
+  { name := "insufficientFunds", display := "insufficient funds: {amount}"
+  , category := .content, advice := "top up the balance"
+  , payload := [("amount", .f64)] }
+
+-- THE FOLD: the rows project into the schema universe as the wire
+-- variant, registered under the carrier's name. Re-running the fold
+-- agrees with itself; a fault row and a registered schema variant
+-- DISAGREEING on a case (name or payload) fails right here — the
+-- negative control lives in FaultsTests.
+derive_fault_variant OrderError
 
 /-! ## Async markers (WASI 0.3 at the boundary) -/
 

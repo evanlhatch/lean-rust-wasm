@@ -32,6 +32,15 @@ registry order; `diff` is order-insensitive over names), item-kind
 migrations (a kind change parses as a different shape → `changed`,
 which is the honest breaking verdict).
 
+W-C2 (grammar lane): the `<ty>` word language gains a `Grammar`-as-data
+ledger (`TyG` below — heads/openers/flat applications) + a Diag-labeled
+head recognizer (`tyStepD`), and the parse-fold's errors gain their line
+number (`line N: …`, Diag-rendered notes). `parseTyText`'s RECOGNITION is
+untouched (a closed `Grammar` cannot own the recursive ty language — see
+the `TyG` section header for the finding); only the error lane rides the
+available grammar surface. `namesEncodable`/`render`/`decode_encodeValue`
+are untouched — behavior byte-identical on the success paths.
+
 Ownership: the ONLY encoder/decoder of the snapshot format. The
 `schema-breaking` exe and the Tests negative controls consume this;
 nothing else writes `goldens/universe.snapshot`.
@@ -41,6 +50,8 @@ module
 
 public import SchemaLang.Diff
 public import CodegenCore.GenKit
+public import TextKit.Grammar
+public import TextKit.Diag
 
 @[expose] public section
 
@@ -102,15 +113,155 @@ namespace Snapshot
 def nameOk (s : String) : Bool :=
   !s.isEmpty && s.all fun c => c.isAlphanum || c == '-' || c == '_' || c == '.'
 
+/-! ## The <ty> grammar as data (W-C2) +
+
+The `<ty>` language is RECURSIVE (a `Ty` nests arbitrarily deep), and
+`TextKit.Grammar`'s `.named` reference node is deferred (recognition
+fails) — so no single CLOSED `Grammar` VALUE can own the whole ty
+language, and `parseTyText`'s recursion stays the authority (a DParser
+twin would be a second recognizer and a drift class — the W-C2 fallback
+lane, taken). What the closed type CAN own, it owns here, honestly:
+
+- `TyG.words` — the ONE head-token ledger (the same words `parseTy`
+  dispatches on; `tyTokenLegals` derives from it), feeding both the
+  value grammar and the Diag lane;
+- `TyG.heads` — the head alternation as a VALUE. NOT GWF: the raw
+  format lexes WHOLE words (`span Char.isAlphanum`), and word tokens
+  collide at the first character (`bool`/`bytes`, `string`/`set`,
+  `u8`/`u16`/…) — GWF's disjointness is char-level, so it cannot type
+  the word language. A genuine finding (word lexing and char-first-set
+  GWF live at different granularities), pinned by `heads_not_gwf`;
+- `TyG.appOpen` — the parameterized opener `head(` (GWF-valid for a
+  nonempty head);
+- `TyG.refApp`/`TyG.dims` — the FLAT non-recursive applications
+  (`ty(<name>)`, the tensor dim prefix) as CONSUMER-SIDE grammars
+  (`scanTo` sits in a seq/rep position — the module's documented
+  exclusion, never GWF-checked).
+
+The Diag lane (`tyStepD`/`tyDiagNote`) wraps the head recognition with
+`Diag.DParser.labels`, giving the farthest-failure render for a corrupt
+type token (`line N, col M: expected '…'`) — the error lane the goal's
+`line N: expected '('` shape lands in, WITHOUT touching `parseTyText`'s
+recognition. Behavior on the success paths is byte-identical.
+-/
+
+namespace TyG
+
+/-- The head tokens of the word language (`parseTy` dispatches on exactly
+    these words). -/
+def words : List String :=
+  ["bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
+   "f32", "f64", "string", "bytes", "option", "list", "set", "map",
+   "future", "stream", "result", "tensor", "ty"]
+
+/-- The head alternation as data (see the section header: NOT GWF — the
+    word lexing defeats char-level disjointness). -/
+def heads : TextKit.Grammar.Grammar :=
+  TextKit.Grammar.Grammar.alt (words.map TextKit.Grammar.Grammar.tok)
+
+/-- The parameterized opener `head(` (GWF: both parts consume). -/
+def appOpen (head : String) : TextKit.Grammar.Grammar :=
+  TextKit.Grammar.Grammar.seq
+    [ TextKit.Grammar.Grammar.tok head
+    , TextKit.Grammar.Grammar.tok "(" ]
+
+/-- The `ty(<name>)` ref application: the name is a `scanTo ')'` gap
+    (consumer-side — never GWF-checked, per the module's documented
+    exclusion). -/
+def refApp : TextKit.Grammar.Grammar :=
+  TextKit.Grammar.Grammar.seq
+    [ TextKit.Grammar.Grammar.tok "ty"
+    , TextKit.Grammar.Grammar.tok "("
+    , TextKit.Grammar.Grammar.scanTo ')'
+    , TextKit.Grammar.Grammar.tok ")" ]
+
+/-- The tensor dim prefix `(2;3;` — each dim run is a `scanTo ';'` then
+    a `';'` token (consumer-side). -/
+def dims : TextKit.Grammar.Grammar :=
+  TextKit.Grammar.Grammar.rep
+    (TextKit.Grammar.Grammar.seq
+      [ TextKit.Grammar.Grammar.scanTo ';'
+      , TextKit.Grammar.Grammar.tok ";" ])
+
+/-- The opener skeleton is GWF (both parts consume) for a nonempty head. -/
+theorem appOpen_gwf {head : String} (hne : head ≠ "") :
+    TextKit.Grammar.checkGWF (appOpen head) = true := by
+  unfold appOpen
+  simp only [TextKit.Grammar.checkGWF, TextKit.Grammar.nonemptyFS]
+  cases hs : head.toList with
+  | nil =>
+      have h0 : head = "" := String.toList_inj.mp (by simpa using hs)
+      exact (hne h0).elim
+  | cons c cs =>
+      simp [TextKit.Grammar.firstSet, TextKit.Grammar.nonemptyFS, hs]
+
+/-- `heads` is NOT GWF (pinned finding): the word tokens collide at the
+    first character (`bool`/`bytes`, `string`/`set`, `u8`/`u16`/…) —
+    GWF's char-level disjointness cannot type a word-lexed language. -/
+theorem heads_not_gwf : TextKit.Grammar.checkGWF heads = false := by
+  unfold heads words
+  -- the && chain reduces word-by-word; the pair clashes (bool/bytes,
+  -- string/set, …) falsify the disjointness at the first clash — the
+  -- char-level GWF discipline cannot type the word-lexed language
+  simp [TextKit.Grammar.checkGWF, TextKit.Grammar.nonemptyFS, TextKit.Grammar.firstSet,
+    TextKit.Grammar.pairwiseDisjoint, TextKit.Grammar.disjoint]
+
+/-- `dims` is NOT GWF (consumer-side: `scanTo` reports an empty first
+    set, the documented exclusion from seq/rep positions). -/
+theorem dims_not_gwf : TextKit.Grammar.checkGWF dims = false := by
+  unfold dims
+  simp [TextKit.Grammar.checkGWF, TextKit.Grammar.nonemptyFS, TextKit.Grammar.firstSet]
+
+end TyG
+
+/-! ### The Diag lane (the labeled head recognizer) -/
+
+/-- One head word on the Diag lane: the opener (`head` + `(`) first, the
+    bare word as fallback; the expectation is labeled with the word's
+    spelling. -/
+def wordStepD (w : String) : TextKit.Diag.DParser String :=
+  TextKit.Diag.DParser.labels w (fun cs =>
+    match TextKit.Grammar.pOfLift (TyG.appOpen w) cs with
+    | some (_, rest) => (some (w, rest), [])
+    | none =>
+        match TextKit.Grammar.pOfLift (TextKit.Grammar.Grammar.tok w) cs with
+        | some (_, rest) => (some (w, rest), [])
+        | none => (none, []))
+
+/-- The full head-or-opener recognizer: every head word's failure record
+    MERGED (the farthest-failure union); success = the first word whose
+    opener (or bare word) matched. A corrupt token (`optn(`) fails at
+    column 1 with the whole head set expected — the `span`-lexed word
+    language's honest diag (the pOf's first-char matcher cannot say
+    "almost option"). -/
+def tyStepD : TextKit.Diag.DParser String := fun cs =>
+  let rec go : List String → List (Nat × List String) →
+        Option (String × List Char) × List (Nat × List String)
+    | [], acc => (none, acc)
+    | w :: ws, acc =>
+        let (r, d) := wordStepD w cs
+        match r with
+        | some _ => (r, d)
+        | none => go ws (TextKit.Diag.merge acc d)
+  go TyG.words []
+
+/-- The failure lane's appendix: the farthest labeled expectation of a
+    corrupt type token (empty on a head success — the recursion then
+    owns the error). -/
+def tyDiagNote (lineNo : Nat) (s : String) : String :=
+  match TextKit.Diag.farthestFailure tyStepD s.toList with
+  | .ok _ => ""
+  | .fail pos es => " — " ++ TextKit.Diag.renderDiag lineNo
+      (TextKit.Diag.Diag.fail pos es : TextKit.Diag.Diag String)
+
 /-! ## The Ty parser -/
 
 /-- The legal `<ty>` tokens — the unknown-type-token rejection's
-    did-you-mean candidates (every `Ty` constructor's snapshot spelling,
-    `Ty.toSnapshot` above). -/
-def tyTokenLegals : List String :=
-  ["bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
-   "f32", "f64", "string", "bytes", "option", "list", "set", "map",
-   "future", "stream", "result", "tensor"]
+    did-you-mean candidates. DERIVED from the W-C2 head ledger
+    (`TyG.words`) minus the raw `ty` reference marker (a bare `ty` is the
+    ref head, not a suggestion): the ledger and the did-you-mean lane
+    cannot drift. -/
+def tyTokenLegals : List String := TyG.words.filter (fun w => w != "ty")
 
 /-- The legal `sem` nullSem tokens — the unknown-nullSem-token
     rejection's did-you-mean candidates (`NullSem.toToken`, Item.lean). -/
@@ -235,12 +386,22 @@ def parseTy : Nat → List Char → Except String (Ty × List Char)
       | other => .error (s!"snapshot: unknown type token `{other}`" ++
           CodegenCore.didYouMeanSuffix other tyTokenLegals)
 
-/-- Parse a whole type token; trailing garbage is an error. -/
+/-- Parse a whole type token; trailing garbage is an error (the
+    authority's recursion — W-C2 keeps it intact). -/
 def parseTyText (s : String) : Except String Ty :=
   match parseTy (s.length + 1) s.toList with
   | .ok (t, []) => .ok t
   | .ok (_, rest) => .error s!"snapshot: trailing garbage `{String.ofList rest}`"
   | .error e => .error e
+
+/-- The parse-fold's ty entry: `parseTyText` with the error lane extended
+    to `line N: …` plus the Diag lane's farthest-failure note (the W-C2
+    error shape; recognition unchanged — the same `parseTyText` recursion
+    decides, so the SUCCESS behavior is byte-identical). -/
+def parseTyTextAt (lineNo : Nat) (s : String) : Except String Ty :=
+  match parseTyText s with
+  | .ok t => .ok t
+  | .error e => .error (s!"line {lineNo}: {e}" ++ tyDiagNote lineNo s)
 
 /-! ## The item codec -/
 
@@ -295,8 +456,9 @@ def Open.close : Open → Except String Item
     item, if any. -/
 abbrev State := Except String (List Item × Option Open)
 
-/-- One line onto the fold state; the first error sticks. -/
-def parseLine (st : State) (line : String) : State := do
+/-- One line onto the fold state (with its line number — the W-C2 error
+    lane: every failure reports `line N: …`); the first error sticks. -/
+def parseLine (lineNo : Nat) (st : State) (line : String) : State := do
   let (done, cur?) ← st
   -- close the open item (if any) and start `o`
   let restart (o : Open) : State := do
@@ -311,56 +473,56 @@ def parseLine (st : State) (line : String) : State := do
   | ["field", n, tyText] =>
       match cur? with
       | some (.record rn fs) => do
-          let t ← parseTyText tyText
+          let t ← parseTyTextAt lineNo tyText
           pure (done, some (.record rn (⟨n, t⟩ :: fs)))
-      | _ => throw s!"snapshot: `field` outside a record (line `{line}`)"
+      | _ => throw s!"line {lineNo}: `field` outside a record"
   | ["case", n] =>
       match cur? with
       | some (.variant vn cs) => pure (done, some (.variant vn ((n, none) :: cs)))
-      | _ => throw s!"snapshot: `case` outside a variant (line `{line}`)"
+      | _ => throw s!"line {lineNo}: `case` outside a variant"
   | ["case", n, tyText] =>
       match cur? with
       | some (.variant vn cs) => do
-          let t ← parseTyText tyText
+          let t ← parseTyTextAt lineNo tyText
           pure (done, some (.variant vn ((n, some t) :: cs)))
-      | _ => throw s!"snapshot: `case` outside a variant (line `{line}`)"
+      | _ => throw s!"line {lineNo}: `case` outside a variant"
   | ["param", n, tyText] =>
       match cur? with
       | some (.func fn ps none sem?) => do
-          let t ← parseTyText tyText
+          let t ← parseTyTextAt lineNo tyText
           pure (done, some (.func fn ((n, t) :: ps) none sem?))
       | some (.func _ _ (some _) _) =>
-          throw s!"snapshot: `param` after `ret` (line `{line}`)"
-      | _ => throw s!"snapshot: `param` outside a func (line `{line}`)"
+          throw s!"line {lineNo}: `param` after `ret`"
+      | _ => throw s!"line {lineNo}: `param` outside a func"
   | ["ret", tyText] =>
       match cur? with
       | some (.func fn ps none sem?) => do
-          let t ← parseTyText tyText
+          let t ← parseTyTextAt lineNo tyText
           pure (done, some (.func fn ps (some t) sem?))
       | some (.func _ _ (some _) _) =>
-          throw s!"snapshot: duplicate `ret` (line `{line}`)"
-      | _ => throw s!"snapshot: `ret` outside a func (line `{line}`)"
+          throw s!"line {lineNo}: duplicate `ret`"
+      | _ => throw s!"line {lineNo}: `ret` outside a func"
   | ["sem", nsTok, dsTok] | ["sem", nsTok, dsTok, "stream"] =>
       match cur? with
       | some (.func fn ps (some r) none) => do
           let ns ← match NullSem.ofToken? nsTok with
             | some v => pure v
-            | none => throw (s!"snapshot: unknown nullSem token `{nsTok}` — valid: " ++
+            | none => throw (s!"line {lineNo}: unknown nullSem token `{nsTok}` — valid: " ++
                 "strict, propagate, custom" ++ CodegenCore.didYouMeanSuffix nsTok nullSemTokenLegals)
           let ds ← match Determinism.ofToken? dsTok with
             | some v => pure v
-            | none => throw (s!"snapshot: unknown determinism token `{dsTok}` — valid: " ++
+            | none => throw (s!"line {lineNo}: unknown determinism token `{dsTok}` — valid: " ++
                 "pure, stable, volatile" ++ CodegenCore.didYouMeanSuffix dsTok detTokenLegals)
           -- the OPTIONAL 4th token: the delivery (`stream`; its absence =
           -- `once` — the default, keeping old baselines parsable)
           let del : Delivery := if (line.splitOn " ").getLast! == "stream" then .stream else .once
           pure (done, some (.func fn ps (some r) (some ⟨ns, ds, del⟩)))
       | some (.func _ _ (some _) (some _)) =>
-          throw s!"snapshot: duplicate `sem` (line `{line}`)"
+          throw s!"line {lineNo}: duplicate `sem`"
       | some (.func _ _ none _) =>
-          throw s!"snapshot: `sem` before `ret` (line `{line}`)"
-      | _ => throw s!"snapshot: `sem` outside a func (line `{line}`)"
-  | _ => throw s!"snapshot: unrecognized line `{line}`"
+          throw s!"line {lineNo}: `sem` before `ret`"
+      | _ => throw s!"line {lineNo}: `sem` outside a func"
+  | _ => throw s!"line {lineNo}: unrecognized line `{line}`"
 
 /-- Parse snapshot text back to a universe. The empty snapshot is the
     empty universe (a brand-new project has no baseline).
@@ -369,13 +531,23 @@ def parseLine (st : State) (line : String) : State := do
     below joins on `"\n"` alone), so a `\r` is corruption: it sticks to
     the last token of its line and fails loud (unrecognized line or
     trailing garbage). The Rust twin parses the same law — both parsers
-    REJECT CRLF (the snapshot-codec differential's pin). -/
-def parse (text : String) : Except String (List Item) := do
-  let lines := text.splitOn "\n" |>.filter (!·.isEmpty)
-  let (done, cur?) ← lines.foldl parseLine (.ok ([], none))
-  match cur? with
-  | some cur => pure ((← cur.close) :: done).reverse
-  | none => pure done.reverse
+    REJECT CRLF (the snapshot-codec differential's pin).
+
+    Errors carry their line number (`line N: …` — the W-C2 lane); the
+    empty-line filter keeps `N` aligned with the writer's physics (the
+    format never emits blank lines). -/
+def parse (text : String) : Except String (List Item) := Id.run do
+  let mut st : State := .ok ([], none)
+  let mut lineNo : Nat := 0
+  for line in text.splitOn "\n" |>.filter (!·.isEmpty) do
+    lineNo := lineNo + 1
+    st := parseLine lineNo st line
+  match st with
+  | .error e => return .error e
+  | .ok (done, cur?) =>
+      match cur? with
+      | some cur => return (match cur.close with | .ok c => .ok (c :: done).reverse | .error e => .error e)
+      | none => return .ok done.reverse
 
 /-! ## Write-side validation -/
 

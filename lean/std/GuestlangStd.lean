@@ -215,6 +215,27 @@ def orderErrorValid (e : OrderError) : Bool :=
 -- included); the list cannot drift because it is not written.
 derive_variant_cases orderErrorCases from OrderError
 
+/-- W10.2 — THE ERROR-CARRYING EXPORT (the first `result<T, fault>` in
+    the committed world): a u64 order id in, `result<u64, order-error>`
+    out. The error path RETURNS THE FAULT (a typed `Sum.inr` — the
+    OrderError variant object), never a trap: the adapter lowers the
+    box to the canonical flat [discr, payload] form and the host lifts
+    a typed `Result::Err` with the fault's case + payload. Sentinels:
+    id 0 → empty-cart (the no-information fault — the validator's
+    negative-control case); id above the 9e9 sentinel line →
+    invalid-item(id) (the payload-carrying fault). The ok payload =
+    the u64 box (raw i64 @8 — the sset convention the adapter reads).
+    DEPENDENCY NOTE: the err type is the CURRENT hand-authored
+    `@[schema] inductive OrderError` (lean/schema-lang/Demo.lean) —
+    W10.1's registry fold of the fault variant had not landed when
+    this export did; the design-faults §W10.1 unification re-points
+    this type when it does. -/
+@[guest_std, schema_fn, nolint linter.guestlang.packageNamespace "guest-impl surface: the backend maps these BY NAME as the demo world's function impls — the namespace is the contract"]
+def placeOrder (id : UInt64) : Sum UInt64 OrderError :=
+  if id == 0 then .inr .emptyCart
+  else if id > 9000000000 then .inr (.invalidItem id)
+  else .inl id
+
 /-- The variant-row builder: the adapter's re-box — the canonical ABI's
     [i32 discr, i64 joined-payload] flattening turned back into the
     typed row (the fired tag's position + the payload at it). The f64

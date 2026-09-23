@@ -239,6 +239,10 @@ fn default_val(ty: Type) -> HostResult<Val> {
         // must still be ACCEPTED here (the stream arm = the watch-counts
         // landing; the host drains the real Val::Stream after the call).
         Type::Stream(_) | Type::Future(_) => Val::List(Vec::new()),
+        // the W10.2 error channel: `result<T, fault>` results — the lift
+        // fills the slot (the ok arm's placeholder shape only needs the
+        // right variant; the payload rides underneath it).
+        Type::Result(_) => Val::Result(Ok(None)),
         other => {
             return Err(HostFault::UnsupportedResult(UnsupportedResult {
                 ty: format!("{other:?}"),

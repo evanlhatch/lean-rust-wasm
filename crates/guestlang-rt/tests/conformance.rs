@@ -178,6 +178,10 @@ const COMPONENT_ONLY: &[&str] = &[
     // the flat (ptr, len) the lift copies into guest memory), verdict
     // out; the bytesParam adapter builds the guest cons chain
     "verify-witness",
+    // the W10.2 error channel: the result<u64, order-error> return —
+    // the return-area-pointer form (flat [discr, i64, i64]) the core-ABI
+    // invoke cannot lift; the wasmtime host lifts the typed Result::Err
+    "place-order",
 ];
 
 /// The manifest's fn names, deduped + sorted (stable key order).

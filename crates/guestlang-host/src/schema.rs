@@ -43,7 +43,7 @@ use crate::valves::HostFault;
 /// pin: Lean's committed rendering in lean/wasm-backend/COVERAGE.md ==
 /// this constant == the surface derived from the built
 /// demo.component.wasm).
-pub const EXPECTED_DEMO_SURFACE: &str = "double/1,is-big/1,adder/2,double-area/1,run-paps/1,total/3,pick/3,str-len-demo/1,greet/1,get-user/1,watch-counts/1,watch-users/1,user-valid/4,order-error-valid/2,user-complete/4,verify-witness/1";
+pub const EXPECTED_DEMO_SURFACE: &str = "double/1,is-big/1,adder/2,double-area/1,run-paps/1,total/3,pick/3,str-len-demo/1,greet/1,get-user/1,watch-counts/1,watch-users/1,user-valid/4,order-error-valid/2,user-complete/4,verify-witness/1,place-order/1";
 
 /// sha256 of the surface string, lowercase hex (64 chars).
 /// Twin: oracle-runner's `schema_hash` — see the module header.

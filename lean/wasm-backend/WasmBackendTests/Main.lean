@@ -158,7 +158,7 @@ feature AND ≥1 manifest row. -/
 #guard arityOf "user-valid" == some 4
 #guard arityOf "watch-users" == some 1
 #guard arityOf "doble" == none
-#guard schemaSigs.length == 16  -- W9.6: + verify-witness (the witness export)
+#guard schemaSigs.length == 17  -- W9.6: + verify-witness; W10.2: + place-order
 #guard schemaSigs.eraseDups.length == schemaSigs.length
 
 -- VERDICT truth arms: pass → no divergence; fail → the class names
@@ -197,7 +197,7 @@ feature AND ≥1 manifest row. -/
 
 -- The schema surface is canonical: fn/arity, comma-joined, WIT order.
 #guard schemaSurface.takeWhile (· != ',') == "double/1"
-#guard (schemaSurface.splitOn ",").length == 16  -- W9.6: + verify-witness
+#guard (schemaSurface.splitOn ",").length == 17  -- W9.6: + verify-witness; W10.2: + place-order
 
 -- THE COVERAGE DISCIPLINE (verified-ledger: every feature row has a
 -- test): every export has ≥1 feature AND ≥1 manifest row; every row's
@@ -380,6 +380,67 @@ def watPropSpec : TestKit.PropSpec :=
 -- #guard-driven (elab-time) for the `@[guest]` predicate; the exe entry
 -- point runs the oracle DiffSpec (plus its own vacuous-control demo), and
 -- the WAT printer PropSpec.
+
+/-! ## W10.2 — the error channel's flat form + the adapter-shape fold
+
+The flat-form pin (the canonical flatTyOf `.result` arm — the
+place-order channel's param-direction flattening) + the FOLD pins
+(`adapterShapeOf` reproduces the retired hand table row for row on the
+demo's registered signatures, and folds `none` — the default lowering
+— for a signature outside the closed shape set: the negative control). -/
+
+namespace W10
+open SchemaLang
+
+/-- The demo's registered sigs, AS THE REGISTRY folds them (the
+    FuncSig values `@[schema_fn]` reifies — reconstructed here as data;
+    the end-to-end authority is the byte-tied demo-world.wit + the
+    duel). -/
+def sigOf (name : String) (params : List (String × Ty)) (ret : Ty) : FuncSig :=
+  { name := name, params := params, ret := ret }
+
+def sigGetUser := sigOf "getUser" [("id", .u64)] (.option (.ty "User"))
+def sigWatchOrders := sigOf "watchOrders" [("into", .ty "OrderError")]
+  (.future (.list (.ty "User")))
+def sigWatchCounts := sigOf "watchCounts" [("n", .u64)] (.future (.list .u64))
+def sigWatchUsers : FuncSig :=
+  { name := "watchUsers", params := [("n", .u64)], ret := .future (.list (.ty "User"))
+  , sem := { delivery := .stream } }
+def sigUserValid := sigOf "userValid" [("u", .ty "User")] .bool
+def sigUserComplete := sigOf "userComplete" [("u", .ty "User")] .bool
+def sigOrderErrorValid := sigOf "orderErrorValid" [("e", .ty "OrderError")] .bool
+def sigVerifyWitness := sigOf "verifyWitness" [("bs", .list .u8)] .bool
+/-- THE ERROR CHANNEL: the first result<T, fault> sig. -/
+def sigPlaceOrder := sigOf "placeOrder" [("id", .u64)] (.result .u64 (.ty "OrderError"))
+/-- The NEGATIVE CONTROL: a sig outside the closed shape set (a
+    non-future stream ret — no result-side arm) folds to `none` = the
+    default lowering. -/
+def sigOutOfSet := sigOf "weird" [("x", .u64)] (.stream .u64)
+
+-- THE FOLD PINS: each registered sig folds to EXACTLY the hand row it
+-- replaced (adapterShape? is gone — these pins ARE the tie).
+#guard (WasmBackend.adapterShapeOf sigGetUser) == some "optionUser"
+#guard (WasmBackend.adapterShapeOf sigWatchOrders) == some "listUser"
+#guard (WasmBackend.adapterShapeOf sigWatchCounts) == some "streamU64"
+#guard (WasmBackend.adapterShapeOf sigWatchUsers) == some "streamUser"
+#guard (WasmBackend.adapterShapeOf sigUserValid) == some "userParam"
+#guard (WasmBackend.adapterShapeOf sigUserComplete) == some "userParam"
+#guard (WasmBackend.adapterShapeOf sigOrderErrorValid) == some "variantParam"
+#guard (WasmBackend.adapterShapeOf sigVerifyWitness) == some "bytesParam"
+-- THE ERROR CHANNEL's row: the result ret folds to the resultOrderError
+-- lowering.
+#guard (WasmBackend.adapterShapeOf sigPlaceOrder) == some "resultOrderError"
+-- The negative control FIRES: an out-of-set sig folds to none.
+#guard (WasmBackend.adapterShapeOf sigOutOfSet) == none
+
+-- THE FLAT-FORM PIN: the canonical flatTyOf `.result` arm — the
+-- result<T, fault> channel's param-direction flattening is the generic
+-- (ptr, len) box pair (the return direction's return-area form is the
+-- resultOrderError adapter's, pinned by the duel + the host round-trip).
+#guard (WasmBackend.flatTyOf (.result .u64 (.ty "OrderError"))) == ["i32", "i32"]
+
+end W10
+
 def main : IO UInt32 := do
   let code ← runDiffs [oracleDiffSpec, oracleIdentitySpec, witnessDiffSpec]
   if code != 0 then return code

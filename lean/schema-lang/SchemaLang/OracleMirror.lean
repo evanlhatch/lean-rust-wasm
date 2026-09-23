@@ -178,6 +178,12 @@ def serFormListClose := ")"
 def serFormListSep := ","
 /-- The stream form (the collected list is the value — the drain's). -/
 def serFormStream := "<stream>"
+/-- The W10.2 result channel's forms — `ok(v)` / `err(v)` (the
+    fault-typed result's rendering; the payload = ser_val of the inner
+    value — a variant renders `case` / `case(payload)`). -/
+def serFormOkOpen := "ok("
+def serFormErrOpen := "err("
+def serFormResultClose := ")"
 
 -- ── the Rust renderer ───────────────────────────────────────────────
 
@@ -298,6 +304,12 @@ def serValArmLines : List String :=
   , "            format!(" ++ rustFormatLiteral serFormListOpen serFormListClose ++ ", inner.join(\"" ++ serFormListSep ++ "\"))"
   , "        }"
   , "        Val::Stream(_) => \"" ++ serFormStream ++ "\".into(),"
+  , "        Val::Result(Ok(None)) => \"ok\".into(),"
+  , "        Val::Result(Ok(Some(inner))) => format!(" ++ rustFormatLiteral serFormOkOpen serFormResultClose ++ ", ser_val(inner)),"
+  , "        Val::Result(Err(None)) => \"err\".into(),"
+  , "        Val::Result(Err(Some(inner))) => format!(" ++ rustFormatLiteral serFormErrOpen serFormResultClose ++ ", ser_val(inner)),"
+  , "        Val::Variant(name, None) => name.to_string(),"
+  , "        Val::Variant(name, Some(payload)) => format!(\"{}({})\", name, ser_val(payload)),"
   , "        other => format!(\"{other:?}\")," ]
 
 /-- THE GENERATED MODULE BODY (the driver prepends the GENERATED

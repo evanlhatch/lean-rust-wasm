@@ -4,21 +4,10 @@
 Lifted from flatland's `Codegen.Registry.FailureModeItem` and COMPLETED:
 flatland's registry had no emitter (the fast-observe integration was
 designed in TOOLKIT §11.1, never built). This package is that emitter.
-
-Item shape (flatland base + the fields the emission contract requires):
-- `name`     — registry identifier, mangled to the Rust variant
-- `display`  — the `#[error("…")]` message (may interpolate payload
-               fields, fast-observe format syntax)
-- `category` — policy axis (see `Faults.Category`)
-- `advice`   — the `#[advice]` attribute; the fix, in domain vocabulary
-- `payload`  — structured fields, typed by the SCHEMA language's `Ty`
-               (schema-lang is the type authority; no second universe)
-
-Codes are NEVER hand-set: they derive from registry position via
-`CodegenCore.allocateCodes`, surfaced through `CodedRegistry.codes` —
-name uniqueness AND code collision-freedom are proof fields with
-`by decide` defaults (W7.4's CodedItem mixin), so an illegal registry
-literal fails to ELABORATE; there is no runtime rejection path.
+The ITEM SHAPE + its pure helpers + the kernel-checked obligation
+theorems live in `Faults.Item` (the phase split — see that module's
+header); this module is the META machinery: the env extensions, the
+attribute registrations, the snapshot derive, and the fold.
 
 Registration (W7.4): specs are per-item attribute registrations —
 `@[fault]` (guest) / `@[host_fault]` (host) on a `FailureModeItem` def —
@@ -28,71 +17,43 @@ extension split IS the guest/host code-space split. `derive_fault_registry`
 snapshots an extension into a `CodedRegistry` def at elaboration — the
 hand list mirror is gone.
 
-wellFormed: payload types resolve against the schema universe's type
-names. Name uniqueness is NOT a Bool check — it is in the type.
+MODULE + the variant-projection fold (W10.1 — the one-fault
+unification): this file is a `module` now — the fold's consumer
+(`Demo.lean`, the schema authoring surface) is itself a module, and
+the module system refuses `module ← non-module` imports. The plain-
+file importers consumed the plain file's transitive visibility, so the
+imports stay `public` (plus the `public meta import`s the phase rule
+demands for the meta surface), and the data decls stay exposed.
 -/
 
-import Lean
-import CodegenCore
-import CodegenCore.CodedRegistry
-import SchemaLang
-import SchemaLang.Meta.Derive
-import Faults.Category
+module
+
+-- NOTE (W10.1): the import cone stops at the schema-lang SUBMODULES +
+-- the Meta chain — never the `SchemaLang` root, whose cone reaches
+-- back to `Demo` (`SchemaLang.Emit.Witness` reads the demo witness
+-- registry); Demo imports this module (the fold's elaboration-order
+-- constraint), and the cycle would be a build error.
+public import Lean
+public import CodegenCore
+public import CodegenCore.CodedRegistry
+public import SchemaLang.Item
+public import SchemaLang.Meta.Derive
+public import Faults.Category
+public import Faults.Item
+public meta import Faults.Category
+public meta import Faults.Item
 
 namespace Faults
 
 open Lean Elab Command
 open SchemaLang (Ty)
 
-/-- A failure mode: spec data. -/
-structure FailureModeItem where
-  name : String
-  display : String
-  category : Category
-  advice : String
-  payload : List (String × Ty)
-deriving Repr, BEq, Inhabited
+public meta section
 
-/-- Payload type references resolve against `known` (the schema
-    universe's type names; scalars need no universe). Uses the diagnostic
-    authority (`Ty.check`) — one resolver, shared with SchemaLang. -/
-def FailureModeItem.wellFormed (known : List String) (m : FailureModeItem) : Bool :=
-  m.payload.all (fun (_, t) => (t.check known).isEmpty)
-
-/-- The registry's diagnostic authority (wellFormed is the Bool
-    projection; this NAMES the failure). Rides `Ty.check` — the ONE
-    resolver shared with SchemaLang — whose `unknownRef` render carries
-    the closed-world suggestion (`CodegenCore.didYouMean`, moved here-
-    adjacent so every error path reaches it core-only). -/
-def FailureModeItem.diagnose (known : List String) (m : FailureModeItem) :
-    List String :=
-  m.payload.flatMap fun (fname, t) =>
-    (t.check known).map fun d => s!"`{m.name}` payload `{fname}`: {d}"
-
-/-- The faults-local bridge, composed (the `universeWellFormed_iff`
-    family's transport — the Wf lane's `tyCheck_eq_nil_iff` applied
-    pointwise over the payload): the Bool projection's `true` means
-    every payload type's references resolve against `known`. -/
-theorem FailureModeItem.wellFormed_iff {known : List String}
-    (m : FailureModeItem) :
-    m.wellFormed known = true ↔
-      ∀ (f : String × Ty), f ∈ m.payload → SchemaLang.TyRefsOk known f.2 := by
-  simp only [FailureModeItem.wellFormed, List.all_eq_true, List.isEmpty_iff,
-    SchemaLang.tyCheck_eq_nil_iff]
-
-/-- The universe check: every mode well formed. Name uniqueness is the
-    `DataRegistry.nodup` proof field — subsumed by the framework (W7.4),
-    no longer a Bool check here. -/
-def universeWellFormed (known : List String)
-    (reg : CodegenCore.DataRegistry FailureModeItem) : Bool :=
-  reg.items.all (fun m => m.wellFormed known)
-
-/-- Code allocation preserves count — the kernel-checked obligation,
-    now the framework's theorem (`CodedRegistry.codes_length`). Kept
-    under the stable name: the axiom gate prints it. -/
-theorem allocate_length (reg : CodegenCore.CodedRegistry FailureModeItem) :
-    reg.codes.length = reg.items.length :=
-  reg.codes_length
+/-! ## The elab-time machinery (meta — the phase check's boundary: the
+schema registry's `Meta` walkers are meta, and the env extensions
+follow the `declare_registry_member` pattern — meta-initialized, meta-
+consumed). -/
 
 /-! ## Attribute registration (W7.4)
 
@@ -213,4 +174,97 @@ def deriveFaultRegistryImpl : CommandElab := fun stx => do
     { items := [$itemTerms,*], nameOf := (·.name)
     , codePrefix := "E", start := $(quote start) }))
 
+/-! ## The variant-projection fold (W10.1 — the one-fault unification)
+
+The registry IS the wire variant's SSOT (the design doc's §2.2
+decision): the guest registry's items fold into a schema
+`Item.variant` — one wire case per row, the row's payload the case
+payload — registered into the SAME universe the WIT world folds from,
+under the carrier type's name. A fault is declared ONCE; the wire
+type, the fast-observe enum, the codes, and the doctor entries are
+projections of the one row. The hand-paired `@[schema] inductive
+OrderError` registration DIES (the duplicate seam), and the
+disagreement gate below is the unification's negative control: a
+fault row and a registered schema variant disagreeing on a case (name
+or payload) fails ELABORATION.
+
+The fold lives HERE (the faults package owns the projection) but is
+INVOKED in the schema module — the elaboration-order constraint: the
+`@[schema_fn]` reifying the variant reference runs at the SCHEMA
+module's elaboration, before this package's spec snapshot replays, so
+the rows + the fold must precede it there (`Demo.lean`). The stored
+case names are the rows' registry names verbatim — the emitters'
+kebab mangling applies downstream, unchanged, so the folded item is
+byte-identical to the registration it replaces (the wire variant is
+unchanged byte-wise; the `universe.snapshot` baseline holds). -/
+
+/-- One registry row → its wire case: the row's registry name + the
+    payload type. WIT variant cases carry at most one payload (v1 —
+    the schema lane's case shape); a multi-field payload row is the
+    `multiPayload` diagnostic, AT THE FOLD (registration-time
+    rejection, the `@[schema]` discipline — not a downstream
+    emitter's surprise). -/
+def faultCaseOf (m : FailureModeItem) :
+    Except String SchemaLang.VariantCase :=
+  match m.payload with
+  | [] => .ok (m.name, none)
+  | [(_, t)] => .ok (m.name, some t)
+  | _ :: _ :: _ =>
+      .error ((SchemaLang.SchemaDiag.multiPayload m.name).render ++
+        s!" — fault row `{m.name}` (the fold's v1 case shape)")
+
+/-- The fold's case list, rendered for the disagreement diagnostic. -/
+def renderCases (cs : List SchemaLang.VariantCase) : String :=
+  String.intercalate ", " (cs.map fun
+    | (c, none) => c
+    | (c, some t) => s!"{c}({repr t})")
+
+/-- `derive_fault_variant <carrierName>` — fold the guest registry's
+    rows into the schema `Item.variant` named `carrierName`,
+    registering it when absent. The gate: a registration under the
+    same name must AGREE with the fold (idempotent re-run) — a
+    disagreement (a case the registry hasn't got, or a case payload
+    the row doesn't carry) fails elaboration. A non-variant squatter
+    is a named error too. -/
+syntax (name := deriveFaultVariant) "derive_fault_variant " ident : command
+
+@[command_elab deriveFaultVariant]
+def deriveFaultVariantImpl : CommandElab := fun stx => do
+  let target := stx[1].getId
+  let env ← getEnv
+  let items := (guestFaultExt.getState env).map (·.2)
+  if items.isEmpty then
+    throwError s!"derive_fault_variant `{target}`: no `@[fault]` rows \
+      registered — the fold has nothing to project"
+  match items.foldl (fun acc m => do
+      let cs ← acc
+      let c ← faultCaseOf m
+      .ok (cs ++ [c])) (.ok []) with
+  | .error msg => throwError s!"derive_fault_variant `{target}`: {msg}"
+  | .ok folded =>
+    match SchemaLang.Meta.registeredItem? env target with
+    | some (.variant _ existing) =>
+        if existing != folded then
+          throwError s!"derive_fault_variant `{target}`: the fault registry's \
+            fold disagrees with the registered schema variant — the registry is \
+            the wire variant's SSOT (one fault concept per failure mode). \
+            registry folds to: [{renderCases folded}] | schema has: \
+            [{renderCases existing}] — fix the `@[fault]` rows or delete the \
+            hand variant"
+        -- agreement: the fold is idempotent — the registration stands
+    | some it =>
+        throwError s!"derive_fault_variant `{target}`: `{it.name}` is already \
+          registered as `{repr it}` — not a variant; the fault fold owns \
+          this name"
+    | none =>
+      -- the same registration-time identifier hygiene the `@[schema]`
+      -- path applies (a reserved word would emit invalid WIT/Rust)
+      for (c, _) in folded do
+        for d in SchemaLang.checkSchemaIdent (s!"case of `{target}`") c do
+          throwError s!"derive_fault_variant `{target}`: {d.render}"
+      liftCoreM (SchemaLang.Meta.registerSchemaItem target
+        (.variant target.toString folded))
+      liftCoreM (SchemaLang.Meta.registerSchemaItemDoc target)
+
+end -- public meta section
 end Faults

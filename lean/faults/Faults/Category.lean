@@ -26,9 +26,22 @@ expressible category (e.g. `Content` = fix-the-caller's-input) changes
 policy semantics and is a deliberate decision, not emitter default —
 until that decision lands, the ctor stays taxonomic-only (no spec may
 use it).
+
+MODULE (W10.1): this file is a `module` now — the variant-projection
+fold's consumer (`Demo.lean`, the schema authoring surface) is itself
+a module, and the module system refuses `module ← non-module` imports.
+Everything here is public + exposed: the plain-file importers
+(`Faults.Spec.*`, `Faults.Emit.*`, the tests) consumed the transitive
+visibility the plain file used to provide, so the imports stay
+`public` and the decls stay exposed (the structure/ctor transparency
+the spec literals and the `evalConst` registration path need).
 -/
 
+module
+
 namespace Faults
+
+@[expose] public section
 
 inductive Category where
   | fatal | content | transient | invariant | unsupported
@@ -42,11 +55,12 @@ def Category.retryable : Category → Bool
   | _ => false
 
 /-- The fast-observe attribute identifier (PascalCase). -/
-def Category.rustName : Category → String
+public def Category.rustName : Category → String
   | .fatal => "Fatal"
   | .content => "Content"
   | .transient => "Transient"
   | .invariant => "Invariant"
   | .unsupported => "Unsupported"
 
+end -- public section
 end Faults
