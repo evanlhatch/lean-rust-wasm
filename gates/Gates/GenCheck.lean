@@ -9,6 +9,15 @@ regen is `SchemaCore.regen` — the SAME semantics the `schema` writer
 runs (one copy, never two; a gate that re-encodes the writer would tie
 two encodings, not the artifact to the spec).
 
+THE BINARY LANE (Emit.lean's named follow-up, landed with the first
+committed binary artifact — `gen/wasm-slice.wasm`): the same regen
+semantics over `WasmCore.regen` (the writer `wasmgen`'s ONE copy; the
+validator rides it — an invalid module is a regen failure, never an
+artifact), compared through `Kit.Emit.tieBytes` — the kit-side binary
+compare the gate ADOPTS (never re-encodes): the bytes tie EXACTLY (a
+binary has no volatile region) and the committed `.hdr` sidecar must
+name the fresh bytes' hash. The text lane's `tieOf` is untouched.
+
 The teeth: hand-edit the committed artifact → gen-check fails →
 `just gen` restores. A gate without teeth is decoration (09).
 
@@ -29,6 +38,7 @@ import Lean
 import Gates.Packages
 import Gates.Common
 import SchemaCore
+import WasmCore
 
 open Lean
 
@@ -61,40 +71,83 @@ def tieOf (committed fresh : String) : Tie :=
     artifact's committed bytes. Exit 1 on any drift/absence/load
     failure; the clean line names the tied artifact count. -/
 unsafe def run : IO UInt32 := do
-  Lean.initSearchPath (← Lean.findSysroot)
-  let base ← Lean.searchPathRef.get
   -- The registration module's olean carries the `@[schema]` appends;
-  -- loadPkgEnv replays the extensions (loadExts := true).
+  -- withPkgEnv replays the extensions (loadExts := true) and absorbs the
+  -- sysroot init + the LOAD FAILED exit (this gate's name kept in the
+  -- failure line).
   let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
-  let env ←
-    match ← Gates.loadPkgEnv base pkg with
-    | .error e => do
-      IO.eprintln s!"gen-check: LOAD FAILED — {e}"
+  Gates.withPkgEnv "gen-check" pkg fun env => do
+    match SchemaCore.regen env with
+    | .error e =>
+      IO.eprintln s!"gen-check: REGEN FAILED — {e}"
       return 1
-    | .ok env => pure env
-  match SchemaCore.regen env with
-  | .error e =>
-    IO.eprintln s!"gen-check: REGEN FAILED — {e}"
-    return 1
-  | .ok r => do
-    let mut failed := false
-    let mut tied := 0
-    for f in r.files do
-      let path : System.FilePath := f.path
-      unless ← path.pathExists do
-        IO.eprintln s!"gen-check: {f.path} ABSENT — run `just gen` and commit"
-        failed := true
-        continue
-      let committed ← IO.FS.readFile path
-      match tieOf committed f.contents with
-      | .tied => tied := tied + 1
-      | .drifted why => do
-        IO.eprintln s!"gen-check: {f.path} DRIFTED ({why}) — \
-          run `just gen` and commit (never hand-edit a generated file)"
-        failed := true
-      | .absent => pure ()
-    if failed then return 1
-    IO.println s!"gen-check: clean — {tied} artifact(s) byte-tied"
-    return 0
+    | .ok r => do
+      let mut failed := false
+      let mut tied := 0
+      -- THE WASM SLICE's regen (pure, env-free — the module fixture is
+      -- a constant): the writer (`wasmgen`) and the gate share this ONE
+      -- regen; the validator rides it, so a regen failure here is the
+      -- validator's refusal, not a gate bug.
+      let mut wasmFresh :
+          List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile := ([], [])
+      match WasmCore.regen WasmCore.wasmSliceModule with
+      | .error e =>
+          IO.eprintln s!"gen-check: WASM REGEN FAILED — {e}"
+          failed := true
+      | .ok fb => wasmFresh := fb
+      -- THE DUEL's regen (the same ONE copy the `wasmgen` writer runs;
+      -- the validator + the executor's computed expectations ride it):
+      -- the manifest joins the text compare, the vectors the binary
+      -- loop (each vector's own `.hdr` sidecar).
+      let mut duelFresh :
+          List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile := ([], [])
+      match WasmCore.Duel.regen with
+      | .error e =>
+          IO.eprintln s!"gen-check: DUEL REGEN FAILED — {e}"
+          failed := true
+      | .ok db => duelFresh := db
+      for f in r.files ++ wasmFresh.1 ++ duelFresh.1 do
+        let path : System.FilePath := f.path
+        unless ← path.pathExists do
+          IO.eprintln s!"gen-check: {f.path} ABSENT — run `just gen` and commit"
+          failed := true
+          continue
+        let committed ← IO.FS.readFile path
+        match tieOf committed f.contents with
+        | .tied => tied := tied + 1
+        | .drifted why => do
+          IO.eprintln s!"gen-check: {f.path} DRIFTED ({why}) — \
+            run `just gen` and commit (never hand-edit a generated file)"
+          failed := true
+        | .absent => pure ()
+      -- THE BINARY LANE (Kit.Emit's named follow-up): the committed
+      -- `.wasm` bytes vs the fresh regen — `tieBytes` IS the compare
+      -- (no volatile region; the bytes tie EXACTLY) — and the committed
+      -- `.hdr` sidecar must name the fresh bytes' hash (the sidecar's
+      -- own hash check rides the same verdict).
+      for f in wasmFresh.2 ++ duelFresh.2 do
+        let path : System.FilePath := f.path
+        unless ← path.pathExists do
+          IO.eprintln s!"gen-check: {f.path} ABSENT — run `just wasmgen` and commit"
+          failed := true
+          continue
+        let committed ← IO.FS.readBinFile path
+        let sidecar : System.FilePath := Kit.Emit.sidecarPath f.path
+        unless ← sidecar.pathExists do
+          IO.eprintln s!"gen-check: {sidecar} ABSENT — the binary lane's \
+            header sidecar; run `just wasmgen` and commit"
+          failed := true
+          continue
+        let sidecarText ← IO.FS.readFile sidecar
+        match Kit.Emit.tieBytes sidecarText committed f.contents with
+        | .tied => tied := tied + 1
+        | .drifted why => do
+          IO.eprintln s!"gen-check: {f.path} DRIFTED ({why}) — \
+            run `just wasmgen` and commit (never hand-edit a generated file)"
+          failed := true
+      if failed then return 1
+      IO.println s!"gen-check: clean — {tied} artifact(s) byte-tied \
+        (text + binary lanes; the duel's manifest + vectors included)"
+      return 0
 
 end Gates.GenCheck

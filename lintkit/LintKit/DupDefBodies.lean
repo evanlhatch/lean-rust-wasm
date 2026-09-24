@@ -63,7 +63,9 @@ namespace LintKit
 
 /-- Erase binder names so alpha-equivalent bodies compare (and hash)
 equal. -/
-partial def stripBinderNames : Expr → Expr
+-- Total (structural recursion on the Expr subterm) — noNewPartial's
+-- ratchet: LintKit itself carries zero `partial def`.
+def stripBinderNames : Expr → Expr
   | .bvar i => .bvar i
   | .fvar id => .fvar id
   | .mvar id => .mvar id

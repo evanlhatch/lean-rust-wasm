@@ -21,15 +21,22 @@ refusal:
    real old→new verdicts arrive with the registration-site consumers —
    the faults lane).
 5. CANONICAL BYTES — `print (parse file)` ties the committed bytes.
+6. THE COVERAGE TOOTH — every code-shaped string literal in the
+   tree's Lean sources (the declared families' prefix + 4 digits;
+   `Kit.CodeRegistry.codeShape`) must name a LIVE row of the registry
+   (`Kit.CodeRegistry.coverageOffenders`): a hand-strung code outside
+   the persisted registry is a gate refusal — the envelope discipline
+   (05 §4) lands at the source, not in a convention.
 
 `--write` is the deliberate allocation/normalization step: it
 bootstraps an absent file (the empty allocation history) and
 canonicalizes formatting — but ONLY after parse + well-formedness +
 replay pass, so it can never launder an ill-formed or hand-edited
-registry. (Divergence from `Driver.reportGate`'s accept-drift tail,
-deliberate: here the committed file IS the data, not a rendered
-baseline — there is no fresh-vs-committed duality to re-baseline; the
-content checks above run identically in both modes.)
+registry. (The canonical-bytes tail is `Driver.byteTieGate`'s core —
+not `reportGate`'s accept-drift tail, deliberately: here the committed
+file IS the data, not a rendered baseline — there is no
+fresh-vs-committed duality to re-baseline; the content checks above
+run identically in both modes.)
 
 The registration-site consumers (recomputing the allocation from the
 Diag/fault call sites against this file) arrive with the faults lane.
@@ -46,11 +53,53 @@ the honesty bit.
 - gate row: the code-registry-check row itself.
 -/
 import Kit.CodeRegistry
+import Gates.Common
 
 namespace Gates.CodeRegistryCheck
 
 /-- The committed registry (the exe runs from the repo root). -/
 def registryPath : System.FilePath := "notes/code-registry.txt"
+
+/-- The directories the coverage walk skips: the VCS/build internals
+    and the LEGACY tree (read-only pre-v3 reference with its own
+    pre-registry spellings — never this gate's jurisdiction). -/
+def skipDirs : List String := [".git", ".lake", "legacy", "node_modules"]
+
+/-- The string-literal spans of a Lean text (a conservative scan:
+    double-quoted runs, `\`-escapes respected; no raw-string or comment
+    awareness — an over-approximation is safe, the tooth only fires on
+    code-SHAPED spans). -/
+private def stringLiterals : List Char → Option (List Char) → List String → List String
+  | [], some acc, out => String.ofList acc.reverse :: out
+  | [], none, out => out
+  | '\\' :: c :: rest, some acc, out => stringLiterals rest (some (c :: acc)) out
+  | '"' :: rest, some acc, out => stringLiterals rest none (String.ofList acc.reverse :: out)
+  | '"' :: rest, none, out => stringLiterals rest (some []) out
+  | c :: rest, some acc, out => stringLiterals rest (some (c :: acc)) out
+  | _c :: rest, none, out => stringLiterals rest none out
+
+/-- The coverage walk: the `.lean` sources under `root`, their string
+    literals as `(path, literal)` hits (the IO half of the coverage
+    tooth; the verdict is `Kit.CodeRegistry.coverageOffenders`). The
+    worklist loop is the walk — the skip list guards the non-source
+    dirs (the LEGACY tree is read-only reference, never this gate's
+    jurisdiction). -/
+def collectHits (root : System.FilePath) :
+    IO (List (String × String)) := do
+  let mut hits : List (String × String) := []
+  let mut queue : List System.FilePath := [root]
+  while !queue.isEmpty do
+    let dir := queue.head!
+    queue := queue.tail!
+    for e in ← dir.readDir do
+      let p := dir / e.fileName
+      if ← p.isDir then
+        unless skipDirs.contains e.fileName do
+          queue := p :: queue
+      else if e.fileName.endsWith ".lean" then
+        hits := (stringLiterals (← IO.FS.readFile p).toList none []).map
+          (fun lit => (p.toString, lit)) ++ hits
+  return hits
 
 /-- `gates code-registry-check [--write]` — exit 1 on any refusal. -/
 def run (write : Bool) : IO UInt32 := do
@@ -84,19 +133,32 @@ def run (write : Bool) : IO UInt32 := do
             IO.println "code-registry-check: REFUSED — the registry is unstable \
 against itself"
             return 1
+          -- 6. THE COVERAGE TOOTH: every code-shaped string literal in
+          -- the tree's Lean sources names a LIVE row (a tombstone's
+          -- spelling refuses too — a spent code is not a live code).
+          let offenders := Kit.CodeRegistry.coverageOffenders r
+            (← collectHits ".")
+          unless offenders.isEmpty do
+            for o in offenders.take 20 do
+              IO.println s!"code-registry-check: REFUSED — {o}"
+            if offenders.length > 20 then
+              IO.println s!"code-registry-check: ... and \
+{offenders.length - 20} more"
+            return 1
           let canonical := Kit.CodeRegistry.print r
-          if canonical != bytes then
-            if write then
-              IO.FS.writeFile registryPath canonical
-              IO.println s!"wrote {registryPath} (canonicalized)"
-            else
-              IO.println s!"code-registry-check: {registryPath} is not canonical — \
-run `lake exe gates code-registry-check --write` and commit"
-              return 1
-          else if write then
-            IO.println s!"wrote {registryPath} (in sync)"
-          IO.println "code-registry-check: clean — well-formed, the allocation \
-replays, stable, canonical bytes"
-          return 0
+          -- the canonical-bytes tail (the Driver.byteTieGate core; the
+          -- parse/wf/replay/stability refusals above run first in both
+          -- modes, so a write can never launder an ill-formed registry)
+          Driver.byteTieGate bytes canonical write
+            (IO.FS.writeFile registryPath)
+            (inSyncWrite := some s!"wrote {registryPath} (in sync)")
+            (driftWriteMsg := s!"wrote {registryPath} (canonicalized)")
+            (cleanAfterWrite := true)
+            (cleanMsg :=
+              "code-registry-check: clean — well-formed, the allocation \
+replays, stable, canonical bytes")
+            (driftMsg :=
+              s!"code-registry-check: {registryPath} is not canonical — \
+run `lake exe gates code-registry-check --write` and commit")
 
 end Gates.CodeRegistryCheck

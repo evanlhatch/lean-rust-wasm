@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Emit.Rust — the Rust target (the codec's consumer lane)
 
-Owner: the Rust-consumer lane (the macht tree, `schemacore/`).
+Owner: the Rust-consumer lane (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/03-bidirectional.md (Lean owns meaning —
 THE WIRE IS `SchemaCore.Codec`'s; Rust owns implementation; generated
 Rust is never a second spec); notes/v3/12-construction.md §3 (the
@@ -68,6 +68,9 @@ SchemaCore.Item — the cone rule).
 import SchemaCore.Describe
 import SchemaCore.Codec
 import SchemaCore.Item
+import SchemaCore.Commit
+import Kit.Duel
+import Kit.Text
 
 open Kit
 open Kit.Emit
@@ -95,54 +98,23 @@ def itemDescr (item : Item) : Descr :=
 /-! ## The Rust rendering — types through the description, codecs
      through the boundary's wire folds -/
 
-/-- The recursion measure for the text templates: the type's NODE COUNT.
-    Every recursive call lands on a smaller count — in particular a
-    key's `toTy` injection lands BELOW the map/set node that carried it
-    (a key reifies to one of the four scalar nodes). -/
-def tyNodeCount : Ty → Nat
-  | .bool => 1
-  | .u64 => 1
-  | .i64 => 1
-  | .string => 1
-  | .option t => tyNodeCount t + 1
-  | .list t => tyNodeCount t + 1
-  | .result ok err => tyNodeCount ok + tyNodeCount err + 1
-  | .map _ v => tyNodeCount v + 2
-  | .set _ => 2
-  | .bounded _ => 1
+/- The closed universe's Rust text: MIGRATED to the ONE fold —
+    `SchemaCore.tyRustPrim = foldTy rustAlg` (SchemaCore.Fold; 01-core
+    §1's initial-algebra side, 07 R1's lowering instance). The algebra's
+    rows are verbatim from this module's pre-fold hand walk; the
+    wf-recursion machinery that walk needed (`tyNodeCount` +
+    `termination_by` + the `keyTy_toTy_nodeCount` leg) is GONE — the
+    fold is structural, so the kernel SEES the reduction (06 §2's
+    opacity trap: the wf form blocked the golden theorems' kernel
+    discharge). The codec template folds below are algebras too now
+    (`encAlg`/`decAlg` over `String → String`), rows verbatim. The
+    migration's proof is the byte-tie: `gates gen-check` holds the
+    generated crate byte-identical. -/
 
-/-- The key injection is a scalar node (the measure's key-slot leg). -/
-theorem keyTy_toTy_nodeCount (k : KeyTy) : tyNodeCount k.toTy = 1 := by
-  cases k <;> rfl
-
-/-- The closed universe's Rust text (total over `Ty` — the compiler
-    drives a new ctor here). The option/list arms are unreachable
-    through `descrOfTy` (the lift takes them as wrappers) but kept
-    correct for totality. The map/set KEY positions ride the scalar
-    sub-universe through the `KeyTy.toTy` injection (Ty.lean's route —
-    the same one `renderTy` takes; unlike the codec lane there is no
-    structural-recursion break to dodge, so ONE scalar table serves
-    both — no parallel key rows). -/
-def tyRustPrim : Ty → String
-  | .bool => "bool"
-  | .u64 => "u64"
-  | .i64 => "i64"
-  | .string => "String"
-  | .option t => "Option<" ++ tyRustPrim t ++ ">"
-  | .list t => "Vec<" ++ tyRustPrim t ++ ">"
-  | .result ok err =>
-      "Result<" ++ tyRustPrim ok ++ ", " ++ tyRustPrim err ++ ">"
-  -- order-preserving payload containers (see the module header)
-  | .map k v => "Vec<(" ++ tyRustPrim k.toTy ++ ", " ++ tyRustPrim v ++ ")>"
-  | .set k => "Vec<" ++ tyRustPrim k.toTy ++ ">"
-  | .bounded _ => "u64"
-termination_by t => tyNodeCount t
-decreasing_by all_goals (simp [tyNodeCount, keyTy_toTy_nodeCount] <;> try omega)
-
-/-- The map/set KEY rendering: the key sub-universe's slice of
-    `tyRustPrim` through the `KeyTy.toTy` injection (the coherence
-    pattern `renderKeyTy_toTy` proves for the WIT lane — here the
-    delegation IS the definition). -/
+/-- The map/set KEY rendering: the key sub-universe's slice through
+    the `KeyTy.toTy` injection (the delegation IS the definition —
+    `tyRustPrim` reads the scalar rows via the fold's coherence,
+    `keyRustPrim`'s table in SchemaCore.Fold). -/
 def keyRust (k : KeyTy) : String := tyRustPrim k.toTy
 
 /-- The description's Rust text: wrappers nest, leaves delegate. A
@@ -167,91 +139,109 @@ def pascalName (s : String) : String :=
         else
           let c' := if up then Char.toUpper c else c
           c' :: go cs false
-  String.ofList (go ((s.splitOn ".").getLast!).toList true)
+  String.ofList (go (lastName s).toList true)
 
 /-! ## The codec generation — the wire's Rust face
 
-The templates are `++` concatenations (the interpolation braces do not
-survive this Lean's format strings; the plain-concat form is also the
-mechanically safer one — every Rust brace is literal). -/
+The LEAF templates are `++` concatenations (the interpolation braces do
+not survive this Lean's format strings; the plain-concat form is also
+the mechanically safer one — every Rust brace is literal). The
+STRUCTURE above the leaves — statement sequences, blocks, the file
+itself — rides `Kit.Text` (the rope rule, 06 §7b): O(1) `cat`/`sepBy`
+assembly, ONE render at the consumer. The byte-exactness is the
+`Kit.Text.render_cat_strs` / `render_sepBy_strs` bridge laws, proved
+tree-side; `gates gen-check` is the artifact-side proof the rewire
+moved no bytes. -/
 
-/-- The ENCODE statements for a value of schema type `t`, where `e` is
-    the Rust expression HOLDING A REFERENCE to it (`e : &T` throughout
-    — the uniform convention lets the recursion compose). The bytes are
-    `SchemaCore.Codec`'s wire, arm by arm. -/
-def encStmts : Ty → String → String
-  | .bool, e => "out.push(if *" ++ e ++ " { 1u8 } else { 0u8 });"
-  | .u64, e => "enc_varint(*" ++ e ++ ", out);"
-  | .i64, e => "enc_varint(zigzag_i64(*" ++ e ++ "), out);"
-  | .string, e => "enc_str(" ++ e ++ ".as_str(), out);"
-  | .option t', e =>
+/-- The KEY position's encode statements: the scalar templates as the
+    key fold's algebra (one template table — the rows are `encAlg`'s
+    scalars verbatim). -/
+def keyEncAlg : KeyTyAlg (String → String) where
+  bool e := "out.push(if *" ++ e ++ " { 1u8 } else { 0u8 });"
+  u64 e := "enc_varint(*" ++ e ++ ", out);"
+  i64 e := "enc_varint(zigzag_i64(*" ++ e ++ "), out);"
+  string e := "enc_str(" ++ e ++ ".as_str(), out);"
+
+/-- THE ENCODE STATEMENTS = the fold (migrated from wf-recursion to the
+    ONE walk — the rows verbatim, the recursion structural and
+    kernel-visible). `e` is the Rust expression HOLDING A REFERENCE to
+    the value (`e : &T` throughout — the uniform convention lets the
+    recursion compose). The bytes are `SchemaCore.Codec`'s wire, arm by
+    arm. -/
+def encAlg : TyAlg (String → String) where
+  bool := keyEncAlg.bool
+  u64 := keyEncAlg.u64
+  i64 := keyEncAlg.i64
+  string := keyEncAlg.string
+  option a := fun e =>
       "match " ++ e ++ " { None => out.push(0u8), Some(inner) => " ++
-      "{ out.push(1u8); " ++ encStmts t' "inner" ++ " } };"
-  | .list t', e =>
+      "{ out.push(1u8); " ++ a "inner" ++ " } };"
+  list a := fun e =>
       "enc_varint((" ++ e ++ ").len() as u64, out); " ++
-      "for inner in (" ++ e ++ ").iter() { " ++ encStmts t' "inner" ++ " }"
-  | .result ok err, e =>
+      "for inner in (" ++ e ++ ").iter() { " ++ a "inner" ++ " }"
+  result ok err := fun e =>
       "match " ++ e ++ " { Ok(inner) => { out.push(0u8); " ++
-      encStmts ok "inner" ++ " }, Err(inner) => { out.push(1u8); " ++
-      encStmts err "inner" ++ " } };"
-  | .map k v, e =>
+      ok "inner" ++ " }, Err(inner) => { out.push(1u8); " ++
+      err "inner" ++ " } };"
+  map k v := fun e =>
       "enc_varint((" ++ e ++ ").len() as u64, out); " ++
       "for (innerk, innerv) in (" ++ e ++ ").iter() { " ++
-      encStmts k.toTy "innerk" ++ " " ++ encStmts v "innerv" ++ " }"
-  | .set k, e =>
+      foldKeyTy keyEncAlg k "innerk" ++ " " ++ v "innerv" ++ " }"
+  set k := fun e =>
       "enc_varint((" ++ e ++ ").len() as u64, out); " ++
       "for innerk in (" ++ e ++ ").iter() { " ++
-      encStmts k.toTy "innerk" ++ " }"
-  | .bounded _, e => "enc_varint(*" ++ e ++ ", out);"
-termination_by t _ => tyNodeCount t
-decreasing_by all_goals (simp [tyNodeCount, keyTy_toTy_nodeCount] <;> try omega)
+      foldKeyTy keyEncAlg k "innerk" ++ " }"
+  bounded _ := fun e => "enc_varint(*" ++ e ++ ", out);"
 
-/-- The KEY position's encode statements: the scalar templates through
-    the `KeyTy.toTy` injection (one template table — the key rows were
-    verbatim copies of `encStmts`' scalars). -/
-def keyEncStmts (k : KeyTy) (e : String) : String := encStmts k.toTy e
+/-- The encode statements for a value of schema type `t`. -/
+def encStmts (t : Ty) (e : String) : String := foldTy encAlg t e
 
-/-- The DECODE statements for a schema type `t` binding the Rust
-    identifier `n`: after them, `n : T` is in scope and the cursor `bs`
-    (a `&mut &[u8]`) has consumed exactly the value's bytes. Every
-    out-of-policy shape refuses through the helpers' typed errors —
-    never a silent misparse, never a panic. -/
-def decStmts : Ty → String → String
-  | .bool, n => "let " ++ n ++ " = dec_bool(bs)?;"
-  | .u64, n => "let " ++ n ++ " = dec_u64(bs)?;"
-  | .i64, n => "let " ++ n ++ " = dec_i64(bs)?;"
-  | .string, n => "let " ++ n ++ " = dec_string(bs)?;"
-  | .option t', n =>
+/-- The KEY position's decode statements: the scalar templates as the
+    key fold's algebra (one template table, mirroring `keyEncAlg`). -/
+def keyDecAlg : KeyTyAlg (String → String) where
+  bool n := "let " ++ n ++ " = dec_bool(bs)?;"
+  u64 n := "let " ++ n ++ " = dec_u64(bs)?;"
+  i64 n := "let " ++ n ++ " = dec_i64(bs)?;"
+  string n := "let " ++ n ++ " = dec_string(bs)?;"
+
+/-- THE DECODE STATEMENTS = the fold (the encode side's migration
+    mirrored). For a schema type `t` binding the Rust identifier `n`:
+    after them, `n : T` is in scope and the cursor `bs` (a `&mut &[u8]`)
+    has consumed exactly the value's bytes. Every out-of-policy shape
+    refuses through the helpers' typed errors — never a silent misparse,
+    never a panic. -/
+def decAlg : TyAlg (String → String) where
+  bool := keyDecAlg.bool
+  u64 := keyDecAlg.u64
+  i64 := keyDecAlg.i64
+  string := keyDecAlg.string
+  option a := fun n =>
       "let " ++ n ++ " = { let tag = dec_byte(bs)?; match tag " ++
-      "{ 0u8 => None, 1u8 => { " ++ decStmts t' "inner" ++
+      "{ 0u8 => None, 1u8 => { " ++ a "inner" ++
       " Some(inner) }, _ => return Err(CodecError::InvalidTag(tag)) } };"
-  | .list t', n =>
+  list a := fun n =>
       "let " ++ n ++ " = { let count = dec_varint(bs)?; " ++
       "let mut acc = Vec::new(); for _ in 0..count { " ++
-      decStmts t' "inner" ++ " acc.push(inner); } acc };"
-  | .result ok err, n =>
+      a "inner" ++ " acc.push(inner); } acc };"
+  result ok err := fun n =>
       "let " ++ n ++ " = { let tag = dec_byte(bs)?; match tag " ++
-      "{ 0u8 => { " ++ decStmts ok "inner" ++ " Ok(inner) }, " ++
-      "1u8 => { " ++ decStmts err "inner" ++
+      "{ 0u8 => { " ++ ok "inner" ++ " Ok(inner) }, " ++
+      "1u8 => { " ++ err "inner" ++
       " Err(inner) }, _ => return Err(CodecError::InvalidTag(tag)) } };"
-  | .map k v, n =>
+  map k v := fun n =>
       "let " ++ n ++ " = { let count = dec_varint(bs)?; " ++
       "let mut acc = Vec::new(); for _ in 0..count { " ++
-      decStmts k.toTy "innerk" ++ " " ++ decStmts v "innerv" ++
+      foldKeyTy keyDecAlg k "innerk" ++ " " ++ v "innerv" ++
       " acc.push((innerk, innerv)); } acc };"
-  | .set k, n =>
+  set k := fun n =>
       "let " ++ n ++ " = { let count = dec_varint(bs)?; " ++
       "let mut acc = Vec::new(); for _ in 0..count { " ++
-      decStmts k.toTy "innerk" ++ " acc.push(innerk); } acc };"
-  | .bounded cap, n =>
+      foldKeyTy keyDecAlg k "innerk" ++ " acc.push(innerk); } acc };"
+  bounded cap := fun n =>
       "let " ++ n ++ " = dec_bounded(" ++ toString cap ++ "u64, bs)?;"
-termination_by t _ => tyNodeCount t
-decreasing_by all_goals (simp [tyNodeCount, keyTy_toTy_nodeCount] <;> try omega)
 
-/-- The KEY position's decode statements: the scalar templates through
-    the `KeyTy.toTy` injection (one template table, mirroring
-    `keyEncStmts`). -/
-def keyDecStmts (k : KeyTy) (n : String) : String := decStmts k.toTy n
+/-- The decode statements for a schema type `t`. -/
+def decStmts (t : Ty) (n : String) : String := foldTy decAlg t n
 
 /-! ## The generated runtime (the helpers the codecs call) -/
 
@@ -435,55 +425,88 @@ pub fn dec_bounded(cap: u64, bs: &mut &[u8]) -> Result<u64, CodecError> {
 
 /-- One item → one Rust struct + its codec impl (pure, total). The
     item-level `#[rustfmt::skip]` covers struct + impl; the codecs are
-    generated code, never hand-formatted. -/
-def renderRecord (item : Item) : String :=
+    generated code, never hand-formatted.
+
+    STRUCTURE on the rope (`Kit.Text.cat`/`sepBy` — the leaf templates
+    stay string-exact): the leaf strings here are IDENTICAL to the
+    `++`-chain form this replaced, in the same order — the
+    `render_cat_strs`/`render_sepBy_strs` bridge laws make the rendered
+    bytes a theorem-side match for the old template (and gen-check
+    proves it on the artifact). -/
+def renderRecord (item : Item) : Text :=
   let name := pascalName item.name
   let fieldDecls := item.fields.map fun f =>
-    "    pub " ++ f.name ++ ": " ++ tyRust (descrOfTy f.ty) ++ ","
+    .str ("    pub " ++ f.name ++ ": " ++ tyRust (descrOfTy f.ty) ++ ",")
   let encLines := item.fields.map fun f =>
-    "        " ++ encStmts f.ty ("&self." ++ f.name)
+    .str ("        " ++ encStmts f.ty ("&self." ++ f.name))
   let decLines := item.fields.map fun f =>
-    "        " ++ decStmts f.ty f.name
+    .str ("        " ++ decStmts f.ty f.name)
   let shorthand := String.intercalate ", " (item.fields.map (·.name))
-  "#[rustfmt::skip]\n#[derive(Clone, Debug, PartialEq, Eq)]\n" ++
-  "pub struct " ++ name ++ " {\n" ++
-  String.intercalate "\n" fieldDecls ++ "\n}\n\n" ++
-  "#[rustfmt::skip]\nimpl " ++ name ++ " {\n" ++
-  "    /// Encode in SchemaCore.Codec's wire form (fields in schema order).\n" ++
-  "    pub fn encode(&self, out: &mut Vec<u8>) {\n" ++
-  String.intercalate "\n" encLines ++ "\n" ++
-  "    }\n\n" ++
-  "    /// Decode in SchemaCore.Codec's wire form (append-form: the\n" ++
-  "    /// unconsumed suffix stays on the cursor). Out-of-policy bytes\n" ++
-  "    /// are a typed CodecError, never a panic, never a silent misparse.\n" ++
-  "    pub fn decode(bs: &mut &[u8]) -> Result<" ++ name ++ ", CodecError> {\n" ++
-  String.intercalate "\n" decLines ++ "\n" ++
-  "        Ok(" ++ name ++ " { " ++ shorthand ++ " })\n" ++
-  "    }\n\n" ++
-  "    /// The exact-image form: decode and require the whole input.\n" ++
-  "    pub fn decode_full(bs: &[u8]) -> Result<" ++ name ++ ", CodecError> {\n" ++
-  "        let mut rest = bs;\n" ++
-  "        let value = Self::decode(&mut rest)?;\n" ++
-  "        if !rest.is_empty() {\n" ++
-  "            return Err(CodecError::TrailingBytes);\n" ++
-  "        }\n" ++
-  "        Ok(value)\n" ++
-  "    }\n" ++
-  "}\n"
+  Text.cat
+    [ .str "#[rustfmt::skip]\n#[derive(Clone, Debug, PartialEq, Eq)]\n"
+    , .str ("pub struct " ++ name ++ " {\n")
+    , Text.sepBy "\n" fieldDecls
+    , .str "\n}\n\n"
+    , .str ("#[rustfmt::skip]\nimpl " ++ name ++ " {\n")
+    , .str "    /// Encode in SchemaCore.Codec's wire form (fields in schema order).\n"
+    , .str "    pub fn encode(&self, out: &mut Vec<u8>) {\n"
+    , Text.sepBy "\n" encLines
+    , .str "\n    }\n\n"
+    , .str "    /// Decode in SchemaCore.Codec's wire form (append-form: the\n"
+    , .str "    /// unconsumed suffix stays on the cursor). Out-of-policy bytes\n"
+    , .str "    /// are a typed CodecError, never a panic, never a silent misparse.\n"
+    , .str ("    pub fn decode(bs: &mut &[u8]) -> Result<" ++ name ++ ", CodecError> {\n")
+    , Text.sepBy "\n" decLines
+    , .str ("\n        Ok(" ++ name ++ " { " ++ shorthand ++ " })\n")
+    , .str "    }\n\n"
+    , .str "    /// The exact-image form: decode and require the whole input.\n"
+    , .str ("    pub fn decode_full(bs: &[u8]) -> Result<" ++ name ++ ", CodecError> {\n")
+    , .str "        let mut rest = bs;\n"
+    , .str "        let value = Self::decode(&mut rest)?;\n"
+    , .str "        if !rest.is_empty() {\n"
+    , .str "            return Err(CodecError::TrailingBytes);\n"
+    , .str "        }\n"
+    , .str "        Ok(value)\n"
+    , .str "    }\n"
+    , .str "}\n" ]
 
-/-- The registry → the lib.rs body (pure, total; the fold over the
-    universe). -/
+/-- The registry → the lib.rs body's ROPE (pure, total; the fold over
+    the universe). The record blocks are ONE `sepBy` join — O(1) per
+    block. The rope is EXPOSED (not folded into a String): the golden
+    module's chunk literals ride `Text.chunks` of THIS — the goldens
+    theorems compare chunk-wise (the kernel never executes the join;
+    the monolithic-string whnf is quadratic in the body and blows the
+    elaboration budget — measured 5min for the differential alone). -/
+def libRope (reg : DataRegistry Item) : Text :=
+  Text.cat
+    [ .str libPrelude
+    , .str "\n\n"
+    , Text.sepBy "\n\n" (reg.items.map renderRecord)
+    , .str "\n" ]
+
+/-- The lib.rs body: ONE render at the file boundary. -/
 def renderLib (reg : DataRegistry Item) : String :=
-  libPrelude ++ "\n\n" ++
-  String.intercalate "\n\n" (reg.items.map renderRecord) ++ "\n"
+  Text.render (libRope reg)
 
 /-! ## The differential — the correspondence's evidence (03 §3)
 
 The vectors' bytes are COMPUTED by `SchemaCore.Codec`'s `encVal` over
 the pinned fixture values (never hand-written) and committed through
-the byte-tie; the generated Rust test decodes them, re-encodes
-byte-identically (BOTH directions), and the tampered vectors REFUSE
-(typed `CodecError`, no panic). -/
+the byte-tie.
+
+UPDATE (the duel migration — the named follow-up, landed): the vectors
+ride `Kit.Duel`'s vector-set convention now — ONE directory per duel,
+the vector files as the BINARY lane's artifacts, plus a committed text
+manifest (the generator row + one `<path>\t<expectation>` row per
+vector: `decode <note>` / `refuse`). The generated Rust test is the
+duel's consumer (Kit.Duel's contract: read the manifest, skip the
+2-line GENERATED header, split each row on the tab); the vectors'
+bytes stay `encVal`'s, and the atoms' value-level pins ride the
+manifest's `decode` notes — a drift still fails the
+decode-then-compare loudly. The manifest byte-ties through `regen`
+(the text lane); the binary lane's byte-tie (`Kit.Emit.tieBytes` wired
+into the gen-check gate) is the named follow-up — the first binary
+artifacts committed through `just gen` land here. -/
 
 /-- The pinned Example row: the fixture's fields in schema order, each
     field's `encVal` bytes concatenated — the wire contract the
@@ -497,17 +520,18 @@ def goldenExample : List UInt8 :=
     ++ encVal (.list .string)
         (.list (.cons (.string "a") (.cons (.string "b") .nil)))
 
-/-- The ATOM rows: (name, the Rust expected-value constructor, the
-    `encVal` bytes). The value literal is a deliberate COPY — if it
-    drifts from the bytes, the differential's decode-then-compare
+/-- The ATOM rows: (name, the duel manifest's `decode` note — the
+    value-level pin the Rust consumer parses, not a second encoding —
+    the `encVal` bytes). The value literal is a deliberate COPY — if
+    it drifts from the bytes, the differential's decode-then-compare
     FAILS loudly (that is the check). -/
 def atomGoldens : List (String × String × List UInt8) :=
-  [ ("bool_false", "Atom::Bool(false)", encVal .bool (.bool false))
-  , ("bool_true", "Atom::Bool(true)", encVal .bool (.bool true))
-  , ("u64_varint", "Atom::U64(300)", encVal .u64 (.u64 300))
-  , ("i64_negative", "Atom::I64(-1)", encVal .i64 (.i64 (-1)))
-  , ("i64_positive", "Atom::I64(1)", encVal .i64 (.i64 1))
-  , ("string_chars", "Atom::Str(\"hi\")", encVal .string (.string "hi")) ]
+  [ ("bool_false", "atom bool false", encVal .bool (.bool false))
+  , ("bool_true", "atom bool true", encVal .bool (.bool true))
+  , ("u64_varint", "atom u64 300", encVal .u64 (.u64 300))
+  , ("i64_negative", "atom i64 -1", encVal .i64 (.i64 (-1)))
+  , ("i64_positive", "atom i64 1", encVal .i64 (.i64 1))
+  , ("string_chars", "atom str hi", encVal .string (.string "hi")) ]
 
 /-- The RECORD rows: the full Example value's bytes (the generated
     struct's codec is the consumer). -/
@@ -524,65 +548,136 @@ def tamperVectors : List (String × List UInt8) :=
   , ("non_canonical_count",
       goldenExample.take 1 ++ [0x80, 0x00] ++ goldenExample.drop 3) ]
 
-/-- The hex byte literal (stable, width-2). -/
-def byteLit (b : UInt8) : String :=
-  let hexDigit : Nat → String
-    | 0 => "0" | 1 => "1" | 2 => "2" | 3 => "3" | 4 => "4"
-    | 5 => "5" | 6 => "6" | 7 => "7" | 8 => "8" | 9 => "9"
-    | 10 => "a" | 11 => "b" | 12 => "c" | 13 => "d" | 14 => "e" | 15 => "f"
-    | _ => "?"
-  "0x" ++ hexDigit (b.toNat / 16) ++ hexDigit (b.toNat % 16)
+/-- The duel's directory: ONE directory per duel (Kit.Duel's
+    committed convention — the manifest + the vectors live there). -/
+def duelDir : String := "crates/schema-generated/tests/duel"
 
-/-- The byte-literal list body. -/
-def bytesLit : List UInt8 → String
-  | [] => ""
-  | [b] => byteLit b
-  | b :: bs => byteLit b ++ ", " ++ bytesLit bs
+/-- The duel's vector path for one row name. -/
+def duelPath (name : String) : String := duelDir ++ "/" ++ name ++ ".bin"
 
-/-- The generated integration test: the differential's Rust half. The
+/-- THE DUEL VECTOR SET (Kit.Duel's convention): the differential's
+    vectors as the binary lane's files + the manifest as the text
+    lane's. The vectors' bytes are `encVal`'s (the ONE source — the
+    same defs the SchemaTests pins ride); the atoms' value-level pins
+    are the `decode` notes (parsed by the Rust consumer, never
+    re-encoded Lean-side); the record row decodes to the pinned
+    Example; the tamper vectors REFUSE. -/
+def duelVectors : Kit.Duel.VectorSet where
+  dir := duelDir
+  name := "schema-codec"
+  generator := "SchemaCore.Emit.Rust"
+  vectors :=
+    (atomGoldens.map fun p =>
+      { path := duelPath p.1, contents := p.2.2.toByteArray }) ++
+    (rowGoldens.map fun p =>
+      { path := duelPath p.1, contents := p.2.toByteArray }) ++
+    (tamperVectors.map fun p =>
+      { path := duelPath p.1, contents := p.2.toByteArray })
+  expects :=
+    (atomGoldens.map fun p =>
+      (duelPath p.1, Kit.Duel.Expect.decode p.2.1)) ++
+    (rowGoldens.map fun p =>
+      (duelPath p.1, Kit.Duel.Expect.decode "example")) ++
+    (tamperVectors.map fun p => (duelPath p.1, Kit.Duel.Expect.refuse))
+
+/-- THE DUEL EMITTER: the manifest rides the TEXT lane, the vectors
+    the BINARY lane (Kit.Duel's emitter shape over the schema regen's
+    spec — the seed's `Kit.Duel.emitter` is the `Unit`-spec face of
+    exactly this). Style is `.doubleSlash`, not the seed's `.hash`:
+    the manifest sits next to the generated Rust surface and the
+    artifact-headers gate's shape contract checks the `//` spelling. -/
+def duelEmitter : Emitter (DataRegistry Item) where
+  name := s!"duel:{duelVectors.name}"
+  style := .doubleSlash
+  specSource := "SchemaCore.Slice"
+  outputs := [duelVectors.dir ++ "/manifest.txt"]
+  binaryOutputs := duelVectors.vectors.map (·.path)
+  binaryOutputs_nodup := duelVectors.vectors_nodup
+  run _ :=
+    [ { path := duelVectors.dir ++ "/manifest.txt"
+      , contents := Kit.Duel.manifestBody duelVectors } ]
+  runBinary := some fun _ => duelVectors.vectors
+  law := some fun reg => (reg.items.map reg.nameOf).Nodup
+
+/-- The generated integration test's ROPE — the duel's Rust CONSUMER
+    (Kit.Duel's contract: the manifest is read, never re-encoded; the
+    vector bytes live in the duel directory's committed files). The
     pinned-value fixture (`pinned_example`) is the slice fixture's —
-    see the module header's honest gap. -/
-def renderDifferential : String :=
-  let atomLines := atomGoldens.map fun p =>
-    "    (\"" ++ p.1 ++ "\", " ++ p.2.1 ++ ", &[" ++ bytesLit p.2.2 ++ "]),"
-  let rowLines := rowGoldens.map fun p =>
-    "    (\"" ++ p.1 ++ "\", &[" ++ bytesLit p.2 ++ "]),"
-  let tamperLines := tamperVectors.map fun p =>
-    "    (\"" ++ p.1 ++ "\", &[" ++ bytesLit p.2 ++ "]),"
-"//! GENERATED differential vectors + the Rust half of the Lean<->Rust
+    see the module header's honest gap. The rope is EXPOSED for the
+    golden module's chunk literals (libRope's note). -/
+def differentialRope : Text :=
+  .str "//! GENERATED differential vectors + the Rust half of the Lean<->Rust
 //! codec correspondence (notes/v3/03 section 3's differential level).
-//! The vectors' bytes are computed by SchemaCore.Codec's encVal on the
-//! pinned fixture values (SchemaCore.Emit.Rust.atomGoldens /
-//! .rowGoldens / .tamperVectors) and committed through the byte-tie —
-//! never hand-written, never hand-edited.
+//! The vectors ride Kit.Duel's vector-set convention: the duel
+//! directory tests/duel/ carries the vector files plus manifest.txt
+//! (the generator row + one `<path>\t<expectation>` row per vector),
+//! all emitted by SchemaCore.Emit.Rust's duel emitter and committed
+//! through the byte-tie — never hand-written, never hand-edited.
 
 use schema_generated::{dec_bool, dec_i64, dec_string, dec_u64, enc_str,
   enc_varint, zigzag_i64, Example};
 
-/// The typed expected value per atom vector (the value-level pin — a
-/// drift from the bytes fails the decode-then-compare below).
+/// The duel manifest, compile-time pinned to the committed artifact.
+const MANIFEST: &str = include_str!(\"duel/manifest.txt\");
+
+/// The generated crate's repo-root prefix (the manifest's rows are
+/// repo-root-relative; the test binary's cwd is the crate root).
+const CRATE_PREFIX: &str = \"crates/schema-generated/\";
+
+/// One parsed manifest row: the vector path + the decode note (None =
+/// the row expects a typed refusal).
+struct Row {
+    path: String,
+    note: Option<String>,
+}
+
+/// Kit.Duel's consumer contract: skip the 2-line GENERATED header and
+/// the `generator` provenance row, split each row on the tab.
+fn manifest_rows() -> Vec<Row> {
+    MANIFEST
+        .lines()
+        .skip(2)
+        .filter(|line| !line.is_empty() && !line.starts_with(\"generator\\t\"))
+        .map(|line| {
+            let mut parts = line.split('\\t');
+            let path = parts.next().expect(\"manifest row: path\").to_string();
+            let expect = parts.next().expect(\"manifest row: expectation\");
+            Row { path, note: expect.strip_prefix(\"decode \").map(str::to_string) }
+        })
+        .collect()
+}
+
+/// Re-base a manifest row's repo-root-relative path to the crate root.
+fn crate_path(row_path: &str) -> &str {
+    match row_path.strip_prefix(CRATE_PREFIX) {
+        Some(p) => p,
+        None => row_path,
+    }
+}
+
+/// The parsed atom pin (the manifest's `decode atom ...` note IS the
+/// value-level pin — a drift from the bytes fails the test loudly).
 #[derive(Debug, PartialEq, Eq)]
 enum Atom {
     Bool(bool),
     U64(u64),
     I64(i64),
-    Str(&'static str),
+    Str(String),
 }
 
-// The atom vectors (both directions: decode + re-encode).
-static GOLDEN: &[(&str, Atom, &[u8])] = &[
-" ++ String.intercalate "\n" atomLines ++ "
-];
-
-// The record rows (the generated struct's codec, both directions).
-static EXAMPLES: &[(&str, &[u8])] = &[
-" ++ String.intercalate "\n" rowLines ++ "
-];
-
-// The tamper vectors (every one must REFUSE — typed error, no panic).
-static TAMPER: &[(&str, &[u8])] = &[
-" ++ String.intercalate "\n" tamperLines ++ "
-];
+fn parse_atom(note: &str) -> Option<Atom> {
+    let rest = note.strip_prefix(\"atom \")?;
+    let mut parts = rest.splitn(2, ' ');
+    let kind = parts.next()?;
+    let value = parts.next()?;
+    match kind {
+        \"bool\" => Some(Atom::Bool(value == \"true\")),
+        \"u64\" => Some(Atom::U64(value.parse().ok()?)),
+        \"i64\" => Some(Atom::I64(value.parse().ok()?)),
+        \"str\" => Some(Atom::Str(value.to_string())),
+        _ => None,
+    }
+}
 
 /// The pinned Example row (the value the example_row bytes denote).
 fn pinned_example() -> Example {
@@ -596,64 +691,67 @@ fn pinned_example() -> Example {
     }
 }
 
-/// BOTH directions on every pinned atom: bytes -> value (decode,
-/// against the typed pin), value -> bytes (re-encode, byte-identical).
+/// BOTH directions on every `decode atom ...` row: bytes -> value
+/// (decode, against the manifest's parsed pin), value -> bytes
+/// (re-encode, byte-identical).
 #[test]
-fn golden_atoms_decode_and_reencode() {
-    for (name, expect, bytes) in GOLDEN {
-        let bytes: &[u8] = bytes;
-        let mut rest: &[u8] = bytes;
+fn manifest_atoms_decode_and_reencode() {
+    for row in manifest_rows() {
+        let note = match &row.note { Some(n) => n, None => continue };
+        let pin = match parse_atom(note) { Some(a) => a, None => continue };
+        let bytes = std::fs::read(crate_path(&row.path))
+            .expect(\"duel vector file present\");
+        let mut rest: &[u8] = &bytes;
         let mut out = Vec::new();
-        match expect {
+        match pin {
             Atom::Bool(v) => {
                 let got = dec_bool(&mut rest)
-                    .unwrap_or_else(|e| panic!(\"atom {name} refused: {e:?}\"));
-                assert_eq!(&got, v, \"atom {name} value drifted\");
+                    .unwrap_or_else(|e| panic!(\"atom {} refused: {e:?}\", row.path));
+                assert_eq!(got, v, \"atom {} value drifted\", row.path);
                 out.push(if got { 1u8 } else { 0u8 });
             }
             Atom::U64(v) => {
                 let got = dec_u64(&mut rest)
-                    .unwrap_or_else(|e| panic!(\"atom {name} refused: {e:?}\"));
-                assert_eq!(&got, v, \"atom {name} value drifted\");
+                    .unwrap_or_else(|e| panic!(\"atom {} refused: {e:?}\", row.path));
+                assert_eq!(got, v, \"atom {} value drifted\", row.path);
                 enc_varint(got, &mut out);
             }
             Atom::I64(v) => {
                 let got = dec_i64(&mut rest)
-                    .unwrap_or_else(|e| panic!(\"atom {name} refused: {e:?}\"));
-                assert_eq!(&got, v, \"atom {name} value drifted\");
+                    .unwrap_or_else(|e| panic!(\"atom {} refused: {e:?}\", row.path));
+                assert_eq!(got, v, \"atom {} value drifted\", row.path);
                 enc_varint(zigzag_i64(got), &mut out);
             }
             Atom::Str(v) => {
                 let got = dec_string(&mut rest)
-                    .unwrap_or_else(|e| panic!(\"atom {name} refused: {e:?}\"));
-                assert_eq!(&got, v, \"atom {name} value drifted\");
+                    .unwrap_or_else(|e| panic!(\"atom {} refused: {e:?}\", row.path));
+                assert_eq!(&got, &v, \"atom {} value drifted\", row.path);
                 enc_str(got.as_str(), &mut out);
             }
         }
-        assert!(
-            rest.is_empty(),
-            \"atom {name} left {rest:?} unconsumed\"
-        );
-        assert_eq!(out, bytes, \"re-encode drifted for {name}\");
+        assert!(rest.is_empty(), \"atom {} left {rest:?} unconsumed\", row.path);
+        assert_eq!(out, bytes, \"re-encode drifted for {}\", row.path);
     }
 }
 
-/// BOTH directions on every pinned record row: bytes -> Example
+/// BOTH directions on the `decode example` row: bytes -> Example
 /// (decode), Example -> bytes (re-encode, byte-identical).
 #[test]
-fn golden_rows_decode_and_reencode() {
-    for (name, bytes) in EXAMPLES {
-        let bytes: &[u8] = bytes;
-        let mut rest: &[u8] = bytes;
+fn manifest_rows_decode_and_reencode() {
+    for row in manifest_rows() {
+        if row.note.as_deref() != Some(\"example\") { continue; }
+        let bytes = std::fs::read(crate_path(&row.path))
+            .expect(\"duel vector file present\");
+        let mut rest: &[u8] = &bytes;
         let value = Example::decode(&mut rest)
-            .unwrap_or_else(|e| panic!(\"golden vector {name} refused: {e:?}\"));
+            .unwrap_or_else(|e| panic!(\"golden vector {} refused: {e:?}\", row.path));
         assert!(
             rest.is_empty(),
-            \"golden vector {name} left {rest:?} unconsumed\"
+            \"golden vector {} left {rest:?} unconsumed\", row.path
         );
         let mut out = Vec::new();
         value.encode(&mut out);
-        assert_eq!(out, bytes, \"re-encode drifted for {name}\");
+        assert_eq!(out, bytes, \"re-encode drifted for {}\", row.path);
     }
 }
 
@@ -661,7 +759,13 @@ fn golden_rows_decode_and_reencode() {
 /// direction at the value level, not just shape).
 #[test]
 fn example_row_denotes_the_pinned_value() {
-    let mut rest: &[u8] = EXAMPLES[EXAMPLES.len() - 1].1;
+    let row = manifest_rows()
+        .into_iter()
+        .find(|r| r.note.as_deref() == Some(\"example\"))
+        .expect(\"the manifest carries the example row\");
+    let bytes = std::fs::read(crate_path(&row.path))
+        .expect(\"duel vector file present\");
+    let mut rest: &[u8] = &bytes;
     let value = Example::decode(&mut rest).expect(\"example_row decodes\");
     assert_eq!(value, pinned_example());
 }
@@ -670,30 +774,40 @@ fn example_row_denotes_the_pinned_value() {
 /// decodes to the value plus the suffix (Pattern #2's composition).
 #[test]
 fn decode_is_append_form() {
-    let suffixed: Vec<u8> = {
-        let mut v = EXAMPLES[EXAMPLES.len() - 1].1.to_vec();
-        v.push(0xFF);
-        v
-    };
-    let mut rest: &[u8] = &suffixed;
+    let row = manifest_rows()
+        .into_iter()
+        .find(|r| r.note.as_deref() == Some(\"example\"))
+        .expect(\"the manifest carries the example row\");
+    let mut bytes = std::fs::read(crate_path(&row.path))
+        .expect(\"duel vector file present\");
+    bytes.push(0xFF);
+    let mut rest: &[u8] = &bytes;
     let value = Example::decode(&mut rest)
         .unwrap_or_else(|e| panic!(\"append-form failed: {e:?}\"));
     assert_eq!(value, pinned_example());
     assert_eq!(rest, &[0xFFu8]);
 }
 
-/// THE NEGATIVE CONTROL: every tampered vector REFUSES — a typed
+/// THE NEGATIVE CONTROL: every `refuse` row REFUSES — a typed
 /// CodecError, never a panic, never a silent misparse.
 #[test]
-fn tampered_vectors_refuse() {
-    for (name, bytes) in TAMPER {
-        match Example::decode_full(bytes) {
-            Ok(_) => panic!(\"tampered vector {name} decoded — the wire gate has a hole\"),
+fn manifest_refuse_rows_refuse() {
+    for row in manifest_rows() {
+        if row.note.is_some() { continue; }
+        let bytes = std::fs::read(crate_path(&row.path))
+            .expect(\"duel vector file present\");
+        match Example::decode_full(&bytes) {
+            Ok(_) => panic!(\"tampered vector {} decoded — the wire gate has a hole\", row.path),
             Err(_) => {} // the typed refusal is the pass
         }
     }
 }
 "
+
+/-- The differential's body: ONE render at the file boundary. -/
+def renderDifferential : String :=
+  Text.render differentialRope
+
 /-! ## The emitter -/
 
 /-- The Rust lane's emitter: the SECOND emitter over the ONE regen
@@ -712,6 +826,23 @@ def rustEmitter : Emitter (DataRegistry Item) where
         contents := renderLib reg }
     , { path := "crates/schema-generated/tests/differential.rs"
         contents := renderDifferential } ]
+  law := some fun reg => (reg.items.map reg.nameOf).Nodup
+
+/-- The COMMIT-SLICE consumer's emitter (the bidirectional slice's
+    differential — SchemaCore.Commit's duel's Rust side). Its OWN
+    emitter: the golden-theorem channel stays at the two codec
+    artifacts (the three-rope kernel crack exceeded the
+    kernel-check's budget — the monolithic-literal whnf's quadratic
+    shape); this artifact's ONE tie is `gates gen-check` (the duel
+    manifest's channel — one tie per artifact, 09's rule). -/
+def commitSliceEmitter : Emitter (DataRegistry Item) where
+  name := "schema-commit-slice"
+  style := .doubleSlash
+  specSource := "SchemaCore.Commit"
+  outputs := ["crates/schema-generated/tests/commit_slice.rs"]
+  run _ :=
+    [ { path := "crates/schema-generated/tests/commit_slice.rs"
+        contents := commitSliceRust } ]
   law := some fun reg => (reg.items.map reg.nameOf).Nodup
 
 end SchemaCore.Emit.Rust

@@ -1,6 +1,6 @@
 /- # SchemaCore.Register — `@[schema]`: the registration
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/15-patterns.md #7 (the env extension as the
 compile-time event log: registration = append, replay = the
 materialization); notes/v3/12-construction.md §1 (the authoring surface

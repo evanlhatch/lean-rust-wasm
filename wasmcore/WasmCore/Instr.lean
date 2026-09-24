@@ -25,6 +25,11 @@ machine's input). The design doc's shape decisions applied:
   string literals — Wat.lean's header).
 - **Explicit arms everywhere**: no wildcard matches over `Op`/`MemOp`
   (design doc R7 — the fail-loud discipline, compiler-enforced).
+- **Where ops get their meaning**: `WasmCore.OpTable` — the ONE op
+  table (07-extensibility R6): name (WAT spelling), opcode, stack
+  signature, sem note — one row per ctor, the exhaustive match is the
+  completeness authority. Adding an op = ONE ctor here + ONE row
+  there; every consumer folds the row (no parallel tables).
 
 The subset is MINED from `legacy/lean/wasm-backend/WasmBackend/Wat.lean`
 (the emitter AST) narrowed to the honest seed: consts, arithmetic
@@ -58,8 +63,17 @@ import WasmCore.Types
 
 namespace WasmCore
 
+-- MEMORY OPS + OPS GET THEIR MEANING from `WasmCore.OpTable` — the
+-- ONE op table (notes/v3/07-extensibility.md R6: name/opcode/sig/sem
+-- per row; the exhaustive match there is the completeness authority).
+-- Adding a ctor here REQUIRES its row there; no other place may key
+-- off a ctor (no parallel tables).
+
 /-- Memory load/store ops (mined verbatim from legacy `Wat.MemOp`).
-    The `offset`/`align` operands are structured fields on `Instr.mem`. -/
+    The `offset`/`align` operands are structured fields on `Instr.mem`.
+    Meaning (spelling, opcode, sig, sem) lives in `WasmCore.OpTable` —
+    the ONE op table (07-extensibility R6): a ctor here needs its row
+    there. -/
 inductive MemOp where
   | i32load8u | i32load | i64load
   | i32store | i64store | i32store8 | i64store8
@@ -67,7 +81,9 @@ deriving BEq, DecidableEq, Repr, Inhabited
 
 /-- The plain (stack-machine) operations the legacy backend emits —
     binops, comparisons, conversions (mined verbatim from legacy
-    `Wat.Op`, all 19 ctors). -/
+    `Wat.Op`, all 19 ctors). Meaning (spelling, opcode, sig, sem) lives
+    in `WasmCore.OpTable` — the ONE op table (07-extensibility R6): a
+    ctor here needs its row there. -/
 inductive Op where
   | i64add | i64sub | i64mul | i64ltu | i64leu | i64eq
   | i32add | i32sub | i32mul | i32and | i32xor | i32shru | i64shru

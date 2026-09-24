@@ -114,7 +114,7 @@ Canon rows this lane names (Part 2/3/4 of `notes/canon.md`):
   `derive_schema_type_names knownTypes` (the payload universe, derived).
 - `FaultsTests/Main.lean`: elaboration-time negative controls (duplicate
   fault, colliding allocation scheme, rogue emitter output, stale
-  knownTypes, sabotaged diag-code lookup) — the TestKit discipline.
+  knownTypes, sabotaged diag-code lookup) — the TestingKit discipline.
 
 ### 1.3 The consumption (crates/guestlang-host, src/)
 

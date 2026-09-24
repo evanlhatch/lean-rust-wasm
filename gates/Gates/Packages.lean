@@ -52,7 +52,10 @@ unsafe def loadPkgEnv (base : Lean.SearchPath) (pkg : PkgSpec) :
 def gatedPackages : Array PkgSpec := #[
   { dir := "LintKit", roots := #[`LintKit] },
   { dir := "Gates",   roots := #[`Gates] },
-  { dir := "SchemaCore", roots := #[`SchemaCore, `SchemaCore.Slice] }
+  { dir := "Wit",     roots := #[`Wit] },
+  { dir := "SchemaCore", roots := #[`SchemaCore, `SchemaCore.Slice] },
+  { dir := "ZSet",    roots := #[`ZSet] },
+  { dir := "Machines", roots := #[`Machines] }
 ]
 
 end Gates

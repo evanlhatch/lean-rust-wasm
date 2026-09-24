@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Describe — the typed description universe (D19's meta-universe)
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/05-codegen.md §3 (the deriving protocol:
 reflect ONCE into the typed description — "a small typed universe of
 supported structure — primitive / product / sum / optional / sequence /
@@ -86,6 +86,7 @@ The five questions (notes/v3/01-core.md):
 import Lean
 import Kit
 import SchemaCore.Ty
+import SchemaCore.Fold
 import SchemaCore.Item
 
 namespace SchemaCore
@@ -110,26 +111,31 @@ deriving Repr, BEq, Inhabited
 
 /-! ## The interpretation — the meta-universe's denotation -/
 
-/-- `Descr.Ty` — the description's denotation: the Lean type the
-    description describes. The leaf delegates to `Ty.toType` (ONE
-    reification family); the product's denotation is the canonical
-    TUPLE shape (the record↔tuple bridge is the row-iso lane —
-    SchemaCore.RowVals + the SchemaTests fixture's `Kit.Iso`).
-
-    STRUCTURAL (verified): the nested-list field walk is the
-    `where`-clause auxiliary; a mutual block over a sibling cons
-    chain could NOT infer structural recursion here. -/
-def Descr.Ty : Descr → Type
-  | .prim t => t.toType
-  | .option d => Option d.Ty
-  | .list d => List d.Ty
-  | .product _ fs => prodTyOf fs
-where
+mutual
   /-- The product arm's denotation: the field tuple, right-nested,
-      `Unit`-terminated. -/
-  prodTyOf : List (String × Descr) → Type
+      `Unit`-terminated. REDUCIBLE: the dependent matches over
+      `Descr.Ty`'s product rows (the deriving layer's codecs/bridges)
+      unify against this at instances transparency — a semireducible
+      spelling defeats the index unification. -/
+  @[reducible]
+  def prodTyOf : List (String × Descr) → Type
     | [] => Unit
-    | (_, d) :: rest => d.Ty × prodTyOf rest
+    | (_, d) :: rest => Descr.Ty d × prodTyOf rest
+
+  /-- `Descr.Ty` — the description's denotation: the Lean type the
+      description describes. The leaf delegates to `Ty.toType` (ONE
+      reification family); the product's denotation is the canonical
+      TUPLE shape (the record↔tuple bridge is the row-iso lane —
+      SchemaCore.RowVals + the SchemaTests fixture's `Kit.Iso`),
+      computed by `prodTyOf` (the structural field walk; a mutual
+      block over a sibling cons chain could not infer structural
+      recursion here). -/
+  def Descr.Ty : Descr → Type
+    | .prim t => t.toType
+    | .option d => Option d.Ty
+    | .list d => List d.Ty
+    | .product _ fs => prodTyOf fs
+end
 
 /-- The denotation reduces over concrete descriptions (structural,
     kernel-visible — no wf opacity). -/

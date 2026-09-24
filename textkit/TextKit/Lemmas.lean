@@ -86,6 +86,31 @@ theorem scanNat_none_of_not_digit (c : Char) (rest : List Char)
   rw [htake]
   rfl
 
+/-! ## the takeWhile scanner's inversion -/
+
+/-- A list whose head fails `p` has an empty `takeWhile` and a full
+    `dropWhile` (the maximal scan's break condition). -/
+theorem takeDrop_head {p : Char → Bool} {r : List Char}
+    (hr : r.head?.all (fun c => !p c)) :
+    r.takeWhile p = [] ∧ r.dropWhile p = r := by
+  cases r with
+  | nil => simp
+  | cons c cs =>
+      have h1 : ¬ p c := by simpa using hr
+      simp [h1]
+
+/-- The token-scan round trip: the maximal `Parser.takeWhile` scan of
+    `w ++ r` stops exactly at `w` (all of `w` passes `p`, `r`'s head
+    fails it) — it returns the token `w` and hands back the rest `r`. -/
+theorem takeWhile_stop {p : Char → Bool} {w r : List Char}
+    (hw : w.all p) (hr : r.head?.all (fun c => !p c)) :
+    Parser.takeWhile p (w ++ r) = (String.ofList w, r) := by
+  show some (String.ofList ((w ++ r).takeWhile p), (w ++ r).dropWhile p) = _
+  rw [List.takeWhile_append_of_pos (List.all_eq_true.mp hw),
+      List.dropWhile_append_of_pos (List.all_eq_true.mp hw)]
+  have hd := takeDrop_head (p := p) hr
+  rw [hd.1, List.append_nil, hd.2]
+
 /-! ## the bare-name inversion -/
 
 /-- Bare-name inversion: an identifier scans back to itself, provided the

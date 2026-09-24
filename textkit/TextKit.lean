@@ -8,8 +8,15 @@ Module map:
   definitions (equation-lemma-friendly).
 - `TextKit.Lemmas` — the inversion kit: `startsWith_self`/`expect_self`,
   the head-predicate exclusions, the bare-name inversion.
-- `TextKit.Error` — `ParseError` (position + expected-set + label stack +
-  did-you-mean field) and the positioned lane (`Cursor`/`GParser`).
+- `TextKit.Suggest` — the ONE did-you-mean engine (the ranked
+  bounded edit distance + the one tree-wide suffix, as data) + the ONE
+  diagnostic envelope `Diag` (05 §4's seven fields + `closedWorld`,
+  the engine's route). Kit's Diag/Suggest re-export these (the
+  interface-preserved shim) — the envelope has ONE home.
+- `TextKit.Error` — `ParseError` = a `Diag` with position
+  (`extends TextKit.Diag`: the expected set → `valid`, the label
+  stack → `context`, the did-you-mean → `suggest`, the parse-side
+  E-code slot) and the positioned lane (`Cursor`/`GParser`).
 - `TextKit.Combinators` — the total positioned combinator surface:
   `<|>` (best-error by farthest position, order-stable),
   `many`/`some`/`sepBy`/`optional`/`between`/`lookAhead`-as-`peek`,
@@ -29,5 +36,7 @@ module
 
 public import TextKit.Basic
 public import TextKit.Lemmas
+public import TextKit.Suggest
+public import TextKit.Diag
 public import TextKit.Error
 public import TextKit.Combinators

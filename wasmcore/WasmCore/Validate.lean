@@ -20,11 +20,21 @@ tail is statically dead) and everything else continues; `checkFlow` is
 the fold, `checkBody` forgets the flag. Stacks are HEAD = TOP;
 `Ctx.resRev` is the enclosing function's results REVERSED, because
 pushing r1..rn leaves `[rn; …; r1]` — the return's expected shape.
-Per-op effects are DATA — the ONE op table (`opSig : Op → pops ×
-pushes`, `memSig : MemOp → …`; 07-extensibility R6: a row in the ONE
-op table, never parallel semantics tables) with `opPop`/`opPush`/
-`memPop`/`memPush` as its rfl-eliminable projections (design doc §2;
-the full row lands with the semantics order).
+Per-op effects are DATA — the ONE op table lives in `WasmCore.OpTable`
+(07-extensibility R6: a row per op — name, opcode, sig, sem note —
+never parallel semantics tables); this module folds its `opPop`/
+`opPush`/`memPop`/`memPush` projections (rfl-eliminable, design doc
+§2).
+
+The refusal surface is the envelope discipline (05 §4): the checker's
+errors are DATA — a closed `ValidateError` inductive whose ctors are
+the failure KINDS with their payload (the expected vs got stacks, the
+need, the index), never a bare string; the rendering is `toDiag` into
+the ONE diagnostic envelope (`Kit.Diag`), the E-codes the WV-family
+constants (the persisted registry's allocation is a later integration
+step — the constants land in one place, ready for it). The checker's
+SEMANTICS are unchanged: same accept/refuse, the error CONTENT is the
+envelope.
 
 The five questions (notes/v3/01-core.md):
 
@@ -45,68 +55,19 @@ The five questions (notes/v3/01-core.md):
   positive/negative validator suites.
 
 Consumer trail: rides `Kit.CheckedProp` (pattern #1's carrier),
-`WasmCore.Types`, `WasmCore.Instr`, `WasmCore.Module`. Core-only.
+`Kit.Diag` (the ONE envelope's Kit face), `WasmCore.Types`,
+`WasmCore.Instr`, `WasmCore.OpTable` (the ONE op table's sig
+projections), `WasmCore.Module`. Core-only.
 -/
 
 import Kit.CheckedProp
+import Kit.Diag
 import WasmCore.Types
 import WasmCore.Instr
+import WasmCore.OpTable
 import WasmCore.Module
 
 namespace WasmCore
-
-/-! ## The ONE op table (07-extensibility R6: one row per op) -/
-
-/-- THE op table: ONE match over `Op`, one row per op — operand types
-    PAIRED with result types (pops × pushes; head = top: the FIRST pop
-    is popped FIRST). Comparisons yield i32; conversions widen/narrow.
-    Adding an op edits ONE row — `opPop`/`opPush` cannot drift apart
-    (they are this row's projections; 07-extensibility R6). -/
-def opSig : Op → List ValType × List ValType
-  | .i64add => ([.i64, .i64], [.i64])
-  | .i64sub => ([.i64, .i64], [.i64])
-  | .i64mul => ([.i64, .i64], [.i64])
-  | .i64ltu => ([.i64, .i64], [.i32])
-  | .i64leu => ([.i64, .i64], [.i32])
-  | .i64eq => ([.i64, .i64], [.i32])
-  | .i32add => ([.i32, .i32], [.i32])
-  | .i32sub => ([.i32, .i32], [.i32])
-  | .i32mul => ([.i32, .i32], [.i32])
-  | .i32and => ([.i32, .i32], [.i32])
-  | .i32xor => ([.i32, .i32], [.i32])
-  | .i32shru => ([.i32, .i32], [.i32])
-  | .i64shru => ([.i64, .i64], [.i64])
-  | .i32eqz => ([.i32], [.i32])
-  | .i32eq => ([.i32, .i32], [.i32])
-  | .i32ltu => ([.i32, .i32], [.i32])
-  | .i32gtu => ([.i32, .i32], [.i32])
-  | .i32wrapi64 => ([.i64], [.i32])
-  | .i64extendi32u => ([.i32], [.i64])
-
-/-- THE mem-op table: ONE match over `MemOp`, one row per mem op —
-    pops × pushes (the value sits on top of the address for stores;
-    loads only push). -/
-def memSig : MemOp → List ValType × List ValType
-  | .i32load8u => ([.i32], [.i32])
-  | .i32load => ([.i32], [.i32])
-  | .i64load => ([.i32], [.i64])
-  | .i32store => ([.i32, .i32], [])
-  | .i64store => ([.i64, .i32], [])
-  | .i32store8 => ([.i32, .i32], [])
-  | .i64store8 => ([.i64, .i32], [])
-
-/-- `opSig`'s pops — the projection the checker and the relation ride
-    (rfl-eliminable: `opPop .i32add = [.i32, .i32]` by `rfl`). -/
-def opPop (o : Op) : List ValType := (opSig o).1
-
-/-- `opSig`'s pushes (same discipline). -/
-def opPush (o : Op) : List ValType := (opSig o).2
-
-/-- `memSig`'s pops (same discipline). -/
-def memPop (m : MemOp) : List ValType := (memSig m).1
-
-/-- `memSig`'s pushes (same discipline). -/
-def memPush (m : MemOp) : List ValType := (memSig m).2
 
 /-! ## The pop/push discipline -/
 
@@ -126,7 +87,7 @@ theorem popPush_append : ∀ (pop push ts : List ValType),
   | nil => intro push ts; rfl
   | cons p ps ih =>
     intro push ts
-    simp only [popPush, List.cons_append, if_pos rfl]
+    simp only [popPush, List.cons_append]
     exact ih push ts
 
 theorem popPush_some : ∀ (pop push s s' : List ValType),
@@ -148,6 +109,132 @@ theorem popPush_some : ∀ (pop push s s' : List ValType),
           exact ⟨u, by simp only [List.cons_append, hu1, hin], hu2⟩
       · next => exact absurd h (by simp)
 
+/-! ## The error vocabulary (the envelope discipline, 05 §4) -/
+
+/-- The value-type rendering the diagnostics use (the Diag envelope's
+    string fields are ids-and-strings). -/
+def renderValType : ValType → String
+  | .i32 => "i32" | .i64 => "i64" | .f32 => "f32" | .f64 => "f64"
+  | .funcref => "funcref" | .externref => "externref"
+
+/-- The stack rendering: `[i32, i64]` (head = top). -/
+def renderValTypes : List ValType → String :=
+  fun ts => "[" ++ String.intercalate ", " (ts.map renderValType) ++ "]"
+
+/-- THE closed-world failure vocabulary: the checker's refusal KINDS
+    as ctors with their payload data — the expected vs got stacks, the
+    operand need, the offending index. The checker and the bridge
+    theorems ride these; the Diag rendering is `toDiag` (the ONE
+    envelope). Closed on purpose: a new failure kind is a new ctor,
+    and the compiler drives the extension (15-patterns #15). -/
+inductive ValidateError where
+  /-- The stack does not provide the pops (the ONE operand-shape
+      engine's refusal — `op`/`mem`/`call`/`brif`/the frame entries;
+      the valid space is the pops form `expected ++ ts`). -/
+  | operandMismatch (expected got : List ValType)
+  /-- The operand stack is empty but operands are still needed
+      (`need` = how many). -/
+  | underflow (need : Nat)
+  /-- `local.set`/`local.tee`'s top operand is not the local's type. -/
+  | localTypeMismatch (n : Nat) (expected got : ValType)
+  /-- A frame's exit stack is not its entry stack (`block`/`loop`/
+      `if_`). -/
+  | frameMismatch (expected got : List ValType)
+  /-- `select`'s stack is not one of its two live rows
+      (`i32 :: t :: t :: ts`, `t ∈ {i32, i64}`). -/
+  | selectOperands (got : List ValType)
+  /-- `ret`'s stack is not the enclosing function's results. -/
+  | unbalancedReturn (expected got : List ValType)
+  /-- The body's final stack is not the function's results. -/
+  | unbalancedEnd (expected got : List ValType)
+  /-- The local index is unbound. -/
+  | unboundLocal (n : Nat)
+  /-- The function index is unbound. -/
+  | unboundFunc (n : Nat)
+  /-- A function's type index is past the type section (`fn` = the
+      function's index). -/
+  | typeIndexRange (fn tyIdx : Nat)
+  /-- The per-function wrapper: the module driver pins WHICH function
+      refused (the Diag context's frame). -/
+  | atFunc (i : Nat) (e : ValidateError)
+  deriving Repr, BEq, DecidableEq, Inhabited
+
+/-! The validator's E-code CONSTANTS (the WV family): they land here,
+in one place, ready for the persisted registry (`Kit.CodeRegistry`'s
+stable allocation is a later integration step; the meaning of the
+string lives at the registry, never in the spelling alone). -/
+namespace ValidateError
+
+def ecOperandMismatch : Kit.ECode := ⟨"WV1001"⟩
+def ecUnderflow : Kit.ECode := ⟨"WV1002"⟩
+def ecLocalTypeMismatch : Kit.ECode := ⟨"WV1003"⟩
+def ecFrameMismatch : Kit.ECode := ⟨"WV1004"⟩
+def ecSelectOperands : Kit.ECode := ⟨"WV1005"⟩
+def ecUnbalancedReturn : Kit.ECode := ⟨"WV1006"⟩
+def ecUnbalancedEnd : Kit.ECode := ⟨"WV1007"⟩
+def ecUnboundLocal : Kit.ECode := ⟨"WV1008"⟩
+def ecUnboundFunc : Kit.ECode := ⟨"WV1009"⟩
+def ecTypeIndexRange : Kit.ECode := ⟨"WV1010"⟩
+
+end ValidateError
+
+/-- THE diagnostic envelope: every refusal renders into the ONE Diag —
+    the E-code from the WV family, the got/valid data from the error's
+    payload, the valid-space enumeration where the world is closed
+    (the expected operand types are the pops the ONE op table's
+    projections feed the payload). The unbound/positional failures
+    with no enumerable valid space build the literal (empty
+    `valid`/`suggest` is then honest, not a skipped discipline). -/
+def ValidateError.toDiag : ValidateError → Kit.Diag
+  | .operandMismatch exp got =>
+      Kit.Diag.closedWorld ecOperandMismatch
+        "operand type mismatch: the stack does not provide the instruction's pops"
+        .error (renderValTypes got)
+        [s!"a stack of the form {renderValTypes exp} ++ ts"]
+  | .underflow need =>
+      Kit.Diag.closedWorld ecUnderflow
+        s!"stack underflow: {need} operand(s) needed"
+        .error (renderValTypes [])
+        [s!"a stack of at least {need} operand(s)"]
+  | .localTypeMismatch n exp got =>
+      Kit.Diag.closedWorld ecLocalTypeMismatch
+        s!"local {n} expects {renderValType exp}"
+        .error (renderValType got) [renderValType exp]
+  | .frameMismatch exp got =>
+      Kit.Diag.closedWorld ecFrameMismatch
+        "frame stack mismatch: the frame's exit stack does not match its entry stack"
+        .error (renderValTypes got) [renderValTypes exp]
+  | .selectOperands got =>
+      Kit.Diag.closedWorld ecSelectOperands
+        "select needs i32 :: t :: t :: ts with t = i32 or t = i64"
+        .error (renderValTypes got)
+        ["i32, t, t, … with t = i32", "i32, t, t, … with t = i64"]
+  | .unbalancedReturn exp got =>
+      Kit.Diag.closedWorld ecUnbalancedReturn
+        "stack unbalanced at return"
+        .error (renderValTypes got) [renderValTypes exp]
+  | .unbalancedEnd exp got =>
+      Kit.Diag.closedWorld ecUnbalancedEnd
+        "stack unbalanced: the body's final stack does not match the results"
+        .error (renderValTypes got) [renderValTypes exp]
+  | .unboundLocal n =>
+      { code := ecUnboundLocal, message := s!"unbound local {n}"
+        , got := some s!"local index {n}" }
+  | .unboundFunc n =>
+      { code := ecUnboundFunc, message := s!"unbound function {n}"
+        , got := some s!"function index {n}" }
+  | .typeIndexRange fn tyIdx =>
+      { code := ecTypeIndexRange
+        , message := s!"function {fn}: type index {tyIdx} out of range"
+        , got := some s!"type index {tyIdx}" }
+  | .atFunc i e =>
+      let d := e.toDiag
+      { d with context := Kit.Label.at s!"function {i}" :: d.context }
+
+/-- The one-line rendering (the envelope's `.toString`). -/
+def ValidateError.render (e : ValidateError) : String :=
+  Kit.Diag.toString e.toDiag
+
 /-! ## The checker -/
 
 /-- The typing context: locals (params ++ declared, index-keyed), the
@@ -166,11 +253,11 @@ def FrameForm : Instr → Prop
 /-- The snd-projection's two reduction facts (rfl — stated once so no
     consumer re-derives `Except.map`'s equations). -/
 theorem map_snd_ok_eq (r : Bool × List ValType) :
-    ((fun r => r.2) <$> (Except.ok r : Except String (Bool × List ValType)))
+    ((fun r => r.2) <$> (Except.ok r : Except ValidateError (Bool × List ValType)))
       = .ok r.2 := rfl
 
-theorem map_snd_error (e : String) :
-    ((fun r => r.2) <$> (Except.error e : Except String (Bool × List ValType)))
+theorem map_snd_error (e : ValidateError) :
+    ((fun r => r.2) <$> (Except.error e : Except ValidateError (Bool × List ValType)))
       = .error e := rfl
 
 mutual
@@ -178,54 +265,54 @@ mutual
     control transferred (`br`/`unreach`/`ret`) — the tail is statically
     dead. Explicit arms, no wildcard (design doc R7). -/
 def stepFlag (c : Ctx) :
-    Instr → List ValType → Except String (Bool × List ValType)
+    Instr → List ValType → Except ValidateError (Bool × List ValType)
   | .i32const _, s => .ok (false, .i32 :: s)
   | .i64const _, s => .ok (false, .i64 :: s)
   | .localget n, s =>
       match c.lty n with
       | some t => .ok (false, t :: s)
-      | none => .error s!"unbound local {n}"
+      | none => .error (.unboundLocal n)
   | .localset n, s =>
       match c.lty n with
-      | none => .error s!"unbound local {n}"
+      | none => .error (.unboundLocal n)
       | some u =>
         match s with
-        | t :: ts => if t = u then .ok (false, ts) else .error "operand type mismatch"
-        | [] => .error "stack underflow"
+        | t :: ts => if t = u then .ok (false, ts) else .error (.localTypeMismatch n u t)
+        | [] => .error (.underflow 1)
   | .localtee n, s =>
       match c.lty n with
-      | none => .error s!"unbound local {n}"
+      | none => .error (.unboundLocal n)
       | some u =>
         match s with
-        | t :: ts => if t = u then .ok (false, t :: ts) else .error "operand type mismatch"
-        | [] => .error "stack underflow"
+        | t :: ts => if t = u then .ok (false, t :: ts) else .error (.localTypeMismatch n u t)
+        | [] => .error (.underflow 1)
   | .call fn, s =>
       match c.fenv fn with
-      | none => .error s!"unbound function {fn}"
+      | none => .error (.unboundFunc fn)
       | some ft =>
         match popPush ft.params.reverse ft.results.reverse s with
         | some s' => .ok (false, s')
-        | none => .error "operand type mismatch"
+        | none => .error (.operandMismatch ft.params.reverse s)
   | .mem op _ _, s =>
       match popPush (memPop op) (memPush op) s with
       | some s' => .ok (false, s')
-      | none => .error "operand type mismatch"
+      | none => .error (.operandMismatch (memPop op) s)
   | .op o, s =>
       match popPush (opPop o) (opPush o) s with
       | some s' => .ok (false, s')
-      | none => .error "operand type mismatch"
+      | none => .error (.operandMismatch (opPop o) s)
   | .brif _, s =>
       match s with
       | .i32 :: ts => .ok (false, ts)
-      | _ => .error "operand type mismatch"
+      | _ => .error (.operandMismatch [.i32] s)
   | .block b, s =>
       match b.foldl (checkStep c) (.ok (false, s)) with
       | .error e => .error e
-      | .ok (_, mid) => if mid = s then .ok (false, s) else .error "frame stack mismatch"
+      | .ok (_, mid) => if mid = s then .ok (false, s) else .error (.frameMismatch s mid)
   | .loop b, s =>
       match b.foldl (checkStep c) (.ok (false, s)) with
       | .error e => .error e
-      | .ok (_, mid) => if mid = s then .ok (false, s) else .error "frame stack mismatch"
+      | .ok (_, mid) => if mid = s then .ok (false, s) else .error (.frameMismatch s mid)
   | .if_ t e, s =>
       match s with
       | .i32 :: ts =>
@@ -236,26 +323,26 @@ def stepFlag (c : Ctx) :
             match e.foldl (checkStep c) (.ok (false, ts)) with
             | .error err => .error err
             | .ok (_, mid2) =>
-              if mid2 = ts then .ok (false, ts) else .error "frame stack mismatch"
-          else .error "frame stack mismatch"
-      | _ => .error "operand type mismatch"
+              if mid2 = ts then .ok (false, ts) else .error (.frameMismatch ts mid2)
+          else .error (.frameMismatch ts mid1)
+      | _ => .error (.operandMismatch [.i32] s)
   | .drop, s =>
       match s with
       | _ :: ts => .ok (false, ts)
-      | [] => .error "stack underflow"
+      | [] => .error (.underflow 1)
   | .select, s =>
       match s with
       | .i32 :: .i32 :: .i32 :: ts => .ok (false, .i32 :: ts)
       | .i32 :: .i64 :: .i64 :: ts => .ok (false, .i64 :: ts)
-      | _ => .error "operand type mismatch"
+      | _ => .error (.selectOperands s)
   | .br _, s => .ok (true, s)
   | .unreach, s => .ok (true, s)
-  | .ret, s => if s = c.resRev then .ok (true, s) else .error "stack unbalanced at return"
+  | .ret, s => if s = c.resRev then .ok (true, s) else .error (.unbalancedReturn c.resRev s)
 
 /-- One fold step: an error poisons; a stopped state copies through
     (the tail is statically dead); a live state steps. -/
 def checkStep (c : Ctx) :
-    Except String (Bool × List ValType) → Instr → Except String (Bool × List ValType)
+    Except ValidateError (Bool × List ValType) → Instr → Except ValidateError (Bool × List ValType)
   | .error e, _ => .error e
   | .ok (true, s), _ => .ok (true, s)
   | .ok (false, s), i => stepFlag c i s
@@ -265,12 +352,12 @@ end
     stack verdict (a PLAIN def outside the mutual block — reducible,
     so the bridge proofs reason definitionally). -/
 def checkFlow (c : Ctx) (s : List ValType) (body : List Instr) :
-    Except String (Bool × List ValType) :=
+    Except ValidateError (Bool × List ValType) :=
   body.foldl (checkStep c) (.ok (false, s))
 
 /-- The body's stack verdict (forgetting the stop flag). -/
 def checkBody (c : Ctx) (s : List ValType) (body : List Instr) :
-    Except String (List ValType) :=
+    Except ValidateError (List ValType) :=
   (fun r => r.2) <$> checkFlow c s body
 
 /-- The copy laws: a stopped or poisoned state survives the rest of
@@ -285,7 +372,7 @@ theorem foldl_stopped (c : Ctx) : ∀ (body : List Instr) (s : List ValType),
     simp only [List.foldl_cons, checkStep]
     exact ih s
 
-theorem foldl_poisoned (c : Ctx) (e : String) : ∀ (body : List Instr),
+theorem foldl_poisoned (c : Ctx) (e : ValidateError) : ∀ (body : List Instr),
     body.foldl (checkStep c) (.error e) = .error e := by
   intro body
   induction body with
@@ -297,7 +384,7 @@ theorem foldl_poisoned (c : Ctx) (e : String) : ∀ (body : List Instr),
 theorem fold_of_checkBody (c : Ctx) (s : List ValType) (body : List Instr)
     (s' : List ValType) (h : checkBody c s body = .ok s') :
     ∃ r, checkFlow c s body = .ok r ∧ r.2 = s' := by
-  simp only [checkBody, map_snd_ok_eq, map_snd_error] at h
+  simp only [checkBody] at h
   cases hf : checkFlow c s body with
   | error e => rw [hf, map_snd_error] at h; simp at h
   | ok r =>
@@ -491,7 +578,7 @@ theorem stepFlag_popPush_shape (c : Ctx) (i : Instr) (pop push s mid : List ValT
     (hstep : stepFlag c i s =
       match popPush pop push s with
       | some s' => Except.ok (false, s')
-      | none => Except.error "operand type mismatch")
+      | none => Except.error (ValidateError.operandMismatch pop s))
     (h : stepFlag c i s = .ok (false, mid)) :
     ∃ ts, s = pop ++ ts ∧ mid = push ++ ts := by
   rw [hstep] at h
@@ -621,7 +708,7 @@ theorem fold_popPush (c : Ctx) (s : List ValType) (i : Instr) (is : List Instr)
     (hstep : stepFlag c i s =
       match popPush pop push s with
       | some s' => Except.ok (false, s')
-      | none => Except.error "operand type mismatch")
+      | none => Except.error (ValidateError.operandMismatch pop s))
     (h : List.foldl (checkStep c) (Except.ok (false, s)) (i :: is) = .ok r) :
     ∃ ts, s = pop ++ ts ∧
       List.foldl (checkStep c) (Except.ok (false, push ++ ts)) is = .ok r := by
@@ -645,7 +732,8 @@ theorem stepFlag_complete (c : Ctx) (s mid : List ValType) (i : Instr)
 /-- The drift-guard (why the table is ONE): the closed universe is
     decided — every op consumes exactly its pops and leaves exactly its
     pushes through the ONE engine, so a malformed row fails at compile
-    time. Type content is pinned in WasmCoreTests' sig pins. -/
+    time (the row's own wf pins are `OpTable.opRow_wf`/`memRow_wf`).
+    Type content is pinned in WasmCoreTests' sig pins. -/
 theorem opSig_covers : ∀ o : Op,
     stepFlag (Ctx.mk (fun _ => none) (fun _ => none) []) (.op o) (opPop o ++ [])
       = .ok (false, opPush o ++ []) :=
@@ -678,8 +766,8 @@ theorem stepFlag_if_ (c : Ctx) (t e : List Instr) (ts : List ValType)
     stepFlag c (Instr.if_ t e) (.i32 :: ts) = .ok (false, ts) := by
   obtain ⟨r0, hf0, hs0⟩ := fold_of_checkBody c ts t ts h1
   obtain ⟨r1, hf1, hs1⟩ := fold_of_checkBody c ts e ts h2
-  simp only [stepFlag, ← checkFlow_eq c ts t, hf0, hs0, if_pos hs0,
-    ← checkFlow_eq c ts e, hf1, hs1, if_pos hs1, if_pos trivial]
+  simp only [stepFlag, ← checkFlow_eq c ts t, hf0, hs0, 
+    ← checkFlow_eq c ts e, hf1, hs1, if_pos trivial]
 
 /-- The completeness tail, packaged once (06 §7: the succ-branch's
     cons/frame arms share the same fold packaging). -/
@@ -711,7 +799,7 @@ theorem checkBody_complete (c : Ctx) :
       simp only [checkBody, checkFlow, List.foldl_nil, map_snd_ok_eq]
     | cons _ i is mid _ _ =>
       have hp := iSize_pos i
-      simp only [lSize_cons, iSize] at hk
+      simp only [lSize_cons] at hk
       omega
     | _ =>
       simp only [lSize_cons, iSize] at hk
@@ -990,11 +1078,11 @@ def fnCtx (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func) : Ctx :=
     against its signature — starts empty, ends at the results (reversed
     for the head-top convention). -/
 def checkFunc (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func) :
-    Except String Unit :=
+    Except ValidateError Unit :=
   match checkBody (fnCtx fenv ft f) [] f.body with
   | .ok s' =>
       if s' = ft.results.reverse then .ok ()
-      else .error "stack unbalanced: the body's final stack does not match the results"
+      else .error (.unbalancedEnd ft.results.reverse s')
   | .error e => .error e
 
 /-- The decidable shadow of `checkFunc` (the CheckedProp's check). -/
@@ -1043,19 +1131,52 @@ def funcChecked (fenv : Nat → Option FuncType) (ft : FuncType) : Kit.CheckedPr
 
 /-- Fold the per-function judgment over the module (explicit index for
     the curated error). -/
-def checkFuncs (m : Module) : Nat → List Func → Except String Unit
+def checkFuncs (m : Module) : Nat → List Func → Except ValidateError Unit
   | _, [] => .ok ()
   | i, f :: fs =>
       match m.typeAt f.tyIdx with
-      | none => .error s!"function {i}: type index {f.tyIdx} out of range"
+      | none => .error (.typeIndexRange i f.tyIdx)
       | some ft =>
         match checkFunc m.fenv ft f with
         | .ok () => checkFuncs m (i + 1) fs
-        | .error e => .error s!"function {i}: {e}"
+        | .error e => .error (.atFunc i e)
 
 /-- The module-level driver: every function's body validates against
     its (resolved) signature, indices included. -/
-def checkModule (m : Module) : Except String Unit :=
+def checkModule (m : Module) : Except ValidateError Unit :=
   checkFuncs m 0 m.funcs
+
+/-- The module check's PER-FUNCTION resolution: a module that checks
+    resolves every function's type index and validates its body
+    (the module-level type-safety theorem's premise face — the
+    driver's lookup chain is the check's own fold). -/
+theorem checkFuncs_some (m : Module) :
+    ∀ (fs : List Func) (i j : Nat) (f : Func),
+      checkFuncs m i fs = .ok () → fs[j]? = some f →
+      ∃ ft, m.typeAt f.tyIdx = some ft ∧ checkFunc m.fenv ft f = .ok () := by
+  intro fs
+  induction fs with
+  | nil => intro i j f _ h; simp at h
+  | cons g gs ih =>
+      intro i j f hchk hidx
+      cases j with
+      | zero =>
+          simp at hidx
+          subst hidx
+          rw [checkFuncs] at hchk
+          split at hchk
+          · simp at hchk
+          · next ft hft =>
+              split at hchk
+              · next hc => exact ⟨ft, hft, hc⟩
+              · next hc => simp at hchk
+      | succ j' =>
+          rw [checkFuncs] at hchk
+          split at hchk
+          · simp at hchk
+          · next ft hft =>
+              split at hchk
+              · next hc => exact ih (i + 1) j' f hchk hidx
+              · next hc => simp at hchk
 
 end WasmCore

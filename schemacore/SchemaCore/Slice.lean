@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Slice — the proof-of-life schema (the registered fixture)
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 
 The slice's ONE registered item: a plain Lean structure — the authoring
 surface is the declaration itself; `@[schema]` reflects it into a

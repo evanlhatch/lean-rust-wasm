@@ -129,3 +129,15 @@ Generated proofs ≠ proof search: grind/aesop-grown terms rot under
 drift; templates + decide are build-stable; cert-cited theorems stay
 inspectable and reduction-native. A hand theorem's justification names
 the relational content the ladder can't reach.
+
+## 11. Two more traps (the audit caught them missing)
+
+- **Equation lemmas bind ALL binders, implicits included, when the
+  match needs them structurally** (the legacy `Row.setN` lesson): a
+  wildcard `_` on an implicit the generated equation must mention
+  leaves the equation unusable — bind it (named, dotted) at the match.
+- **Deltas at the boundary, inversion in the log** (the event-sourcing
+  architecture invariant): the journal carries the inversion witnesses;
+  the boundary speaks net deltas. Never invert at the boundary, never
+  ship the raw event stream across it. (15-patterns #7 is the
+  meta-level analogue; this rule is the data-plane one.)

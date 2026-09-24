@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Value — the typed value universe over Ty + the evaluator
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/01-core.md §1 (Universe root: closed codes
 + TOTAL DENOTATION — the (a)→(b) bridge: a `Value t` can only hold
 data of type `t`, so test vectors + validators come free); notes/v3/
@@ -96,6 +96,7 @@ end
 
 /-! ## The evaluator — the total denotation -/
 
+
 mutual
 /-- THE EVALUATOR: the closed universe's total denotation — a value
     denotes its native Lean data (structural recursion, kernel-visible:
@@ -130,6 +131,7 @@ def VMap.evalMap : {k : KeyTy} → {v : Ty} → VMap k v →
     List (k.toTy.toType × v.toType)
   | _, _, .nil => []
   | _, _, .cons k v rest => (k.eval, v.eval) :: rest.evalMap
+
 end
 
 /-- The evaluator's coverage pin: every family member reduces. -/

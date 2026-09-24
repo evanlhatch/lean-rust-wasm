@@ -41,6 +41,7 @@ The five questions (notes/v3/01-core.md):
 
 Consumer trail: rides `Kit.Correspondence` (Codec), `Kit.Varint`
 (the shared varint atom), `WasmCore.Types`, `WasmCore.Instr`,
+`WasmCore.OpTable` (the ONE op table's wire facets),
 `WasmCore.Module`. Core-only (the cone rule).
 -/
 
@@ -48,6 +49,7 @@ import Kit.Correspondence
 import Kit.Varint
 import WasmCore.Types
 import WasmCore.Instr
+import WasmCore.OpTable
 import WasmCore.Module
 
 namespace WasmCore
@@ -91,25 +93,9 @@ def encodeFuncType (ft : FuncType) : List UInt8 :=
   0x60 :: (encVarNat ft.params.length ++ (ft.params.map encodeValType)
     ++ (encVarNat ft.results.length ++ ft.results.map encodeValType))
 
-/-- The memory op's opcode. -/
-def encodeMemOp : MemOp → UInt8
-  | .i32load8u => 0x2D | .i32load => 0x28 | .i64load => 0x29
-  | .i32store => 0x36 | .i64store => 0x37 | .i32store8 => 0x3A | .i64store8 => 0x3B
-
-/-- The natural alignment (log2) a memarg elides in the text format —
-    the binary format carries it explicitly. -/
-def memAlignDefault : MemOp → Nat
-  | .i32load8u => 0 | .i32load => 2 | .i64load => 3
-  | .i32store => 2 | .i64store => 3 | .i32store8 => 0 | .i64store8 => 0
-
-/-- The ops' opcodes (the legacy `opW` map's wire counterpart). -/
-def encodeOp : Op → List UInt8
-  | .i64add => [0x7C] | .i64sub => [0x7D] | .i64mul => [0x7E]
-  | .i64ltu => [0x54] | .i64leu => [0x58] | .i64eq => [0x51]
-  | .i32add => [0x6A] | .i32sub => [0x6B] | .i32mul => [0x6C]
-  | .i32and => [0x71] | .i32xor => [0x73] | .i32shru => [0x76] | .i64shru => [0x88]
-  | .i32eqz => [0x45] | .i32eq => [0x46] | .i32ltu => [0x49] | .i32gtu => [0x4B]
-  | .i32wrapi64 => [0xA7] | .i64extendi32u => [0xAD]
+/-! The mem/op facets ride the ONE op table (`WasmCore.OpTable`):
+    `memOpcode`/`memAlignDefault`/`opOpcode` are the row's projections
+    (07-extensibility R6 — no parallel wire maps). -/
 
 mutual
 /-- ONE instruction → its bytes. Total, structural, explicit arms. -/
@@ -121,8 +107,8 @@ def encodeInstr : Instr → List UInt8
   | .localtee n => 0x22 :: encVarNat n
   | .call fn => 0x10 :: encVarNat fn
   | .mem op offset align =>
-      [encodeMemOp op] ++ (encVarNat (align.getD (memAlignDefault op)) ++ encVarNat offset)
-  | .op o => encodeOp o
+      [memOpcode op] ++ (encVarNat (align.getD (memAlignDefault op)) ++ encVarNat offset)
+  | .op o => opOpcode o
   | .br d => 0x0C :: encVarNat d
   | .brif d => 0x0D :: encVarNat d
   | .block b => 0x02 :: (0x40 :: (encodeBody b ++ [0x0B]))

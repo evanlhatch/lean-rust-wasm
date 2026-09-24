@@ -37,6 +37,8 @@ The five questions (notes/v3/01-core.md):
   KitTests.Axioms pins the law theorems' cones (core triple only).
 -/
 
+import Kit.Relation
+
 namespace Kit
 
 /-! ## Iso — the true bijection -/
@@ -442,5 +444,88 @@ def transportLeft (i : Iso A' A) (p : Abstraction A B) :
   sound a' := p.sound (i.to a')
 
 end Abstraction
+
+/-! ## The carrier-as-graph bridge (16-surface §4.1)
+
+Every carrier value INDUCES its graph — the `Rel` its round trip names —
+and the carrier's `trans` and the engine's `Rel.comp` AGREE, proved once
+per grade: ONE composition tower, the grades riding on top. The engine
+runs over graphs; the grades refine. Direction honesty, judged per grade:
+
+- `Iso`: the graph is its `to` — total, functional, both round trips
+  under it.
+- `Retraction`: the graph is its `emb` — the ONE direction the grade's
+  law rides. Total on `A`; the uncovered `B`s have no incoming edge
+  (the honest gap is visible in the graph).
+- `Codec`: the graph is the DECODE direction, PARTIAL —
+  `decode a = some b`. A pair is in the graph exactly when the byte is
+  ACCEPTED (`decode_some_policy` makes the policy visible in the graph)
+  and names `b`. The encode direction is deliberately NOT the graph: it
+  is total on `B`, not on the wire's `A`s.
+
+The agreement shape is POINTWISE `Iff` — `Rel.comp_assoc`'s honest
+precedent (`Eq` of relations would buy the same content via funext +
+propext, nothing more).
+-/
+
+/-- The graph of an `Iso`: `R a b := b = i.to a`. -/
+abbrev Iso.toRel (i : Iso A B) : Rel A B := fun a b => b = i.to a
+
+/-- THE tower merge, `Iso` grade: the carrier's `trans` IS the engine's
+    `Rel.comp` on the graphs. No round-trip law is spent — the graph
+    composition is pure associativity. -/
+theorem Iso.toRel_trans (i : Iso A B) (j : Iso B C) (a : A) (c : C) :
+    (i.trans j).toRel a c ↔ Rel.comp i.toRel j.toRel a c :=
+  ⟨fun h => ⟨i.to a, rfl, h⟩,
+   fun h => by
+     obtain ⟨b, h1, h2⟩ := h
+     rw [h1] at h2
+     exact h2⟩
+
+/-- The unit row, `Iso` grade: the identity iso's graph IS the
+    diagonal — the engine's unit, cited, not re-proved. -/
+theorem Iso.toRel_refl (A : Type) (a b : A) :
+    (Iso.refl A).toRel a b ↔ Rel.refl A a b :=
+  ⟨fun h => h.symm, fun h => h.symm⟩
+
+/-- The graph of a `Retraction`: `R a b := b = r.emb a` — the `emb`
+    direction, the one the grade's law rides. -/
+abbrev Retraction.toRel (r : Retraction A B) : Rel A B :=
+  fun a b => b = r.emb a
+
+/-- THE tower merge, `Retraction` grade. -/
+theorem Retraction.toRel_trans (r : Retraction A B) (s : Retraction B C)
+    (a : A) (c : C) :
+    (r.trans s).toRel a c ↔ Rel.comp r.toRel s.toRel a c :=
+  ⟨fun h => ⟨r.emb a, rfl, h⟩,
+   fun h => by
+     obtain ⟨b, h1, h2⟩ := h
+     rw [h1] at h2
+     exact h2⟩
+
+/-- The unit row, `Retraction` grade. -/
+theorem Retraction.toRel_refl (A : Type) (a b : A) :
+    (Retraction.refl A).toRel a b ↔ Rel.refl A a b :=
+  ⟨fun h => h.symm, fun h => h.symm⟩
+
+/-- The graph of a `Codec`: the DECODE direction, PARTIAL —
+    `R a b := c.decode a = some b`. -/
+abbrev Codec.toRel (c : Codec A B) : Rel A B :=
+  fun a b => c.decode a = some b
+
+/-- THE tower merge, `Codec` grade: the composite's decode graph is the
+    engine's composite of the decode graphs — the `bind`'s existential
+    IS the witness chain (the collapse `Option.bind_eq_some_iff` reads). -/
+theorem Codec.toRel_trans (c : Codec A B) (d : Codec B C) (a : A) (b : C) :
+    (c.trans d).toRel a b ↔ Rel.comp c.toRel d.toRel a b :=
+  ⟨fun h => Option.bind_eq_some_iff.mp h,
+   fun h => Option.bind_eq_some_iff.mpr h⟩
+
+/-- The unit row, `Codec` grade: the identity codec's graph is the
+    diagonal — the partial graph of a total codec. -/
+theorem Codec.toRel_refl (A : Type) (a b : A) :
+    (Codec.refl A).toRel a b ↔ Rel.refl A a b := by
+  show (some a = some b) ↔ a = b
+  exact ⟨Option.some.inj, fun h => by rw [h]⟩
 
 end Kit

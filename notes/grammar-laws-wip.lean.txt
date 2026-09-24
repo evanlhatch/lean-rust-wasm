@@ -1,0 +1,2958 @@
+/-
+# TextKit.Grammar.Laws — the two generic round-trip laws (05 §1's point)
+
+The design of record: `notes/design-grammar-layer.md` §3.2–3.4. Under
+the certificate (`Predictive`, the PROVED `wfCheck_sound` route), ONE
+`Grammar` value's derived parser and printer round-trip BOTH ways:
+
+- `Grammar.parse_print` (law 1, append form, 15 #2): under
+  `valueOk`-discipline + fuel sufficiency + the tail-adequacy fold
+  `tailOk`, parsing the print returns the value and leaves the suffix.
+- `Grammar.print_parse` (law 2, exactness): a successful parse
+  consumed EXACTLY the print of its result, with the offsets and the
+  parsed-values-are-owned conjunct. The design's asymmetry claim
+  ("only the leaf/rel fields") survives MINUS one node: `alt`'s
+  branch coherence is NOT a leaf/rel field and NOT decidable, so law
+  2 carries the semantic `altCoherent` premise (a counterexample: two
+  rel-branches whose codecs decode different spellings INTO the same
+  value — first-disjoint, accepted, and exactness-false). The
+  migration targets' ctor-discriminated branches are coherent by
+  construction. `print_run` (accepted text IS canonical) needs it too.
+
+THE PROOF ARCHITECTURE (§3.4 made real):
+- the print-head-vs-FIRST lemma family the seq-case wall needed:
+  `printBundleE` (a nonempty print starts with an effective-first
+  head — the `printHead` conjunct — and a non-nullable grammar prints
+  nonempty) with the fix-level instance `printFixBundle` by `AccD`
+  recursion over the carried measure;
+- the parse-side duals: `parseMonoE` (parses never grow the input),
+  `parseConsumeE` (a non-nullable grammar's success consumes ≥ 1 —
+  the rep-progress content), `parseHeadE` (a consuming success starts
+  with an effective-first head), `parseExcludeE` (the first-exclusion
+  lemma: a non-nullable grammar whose effective heads all fail the
+  text fails on it);
+- the JUNCTION lemmas (`junctionE`/`junctionEG`/`junctionG`): the
+  seq-case wall's resolution — the certificate's WF-SEQ/WF-REP rows +
+  the continuation's value discipline + the tail fold at the suffix
+  YIELD the tail fold at `print b ++ sfx`, by induction on the left
+  grammar (the tail fold's value-dependence is what makes the alt
+  case provable — Grammar.lean's `tailOkE` docstring);
+- law 1's fix/self case: the behind-a-consumer flag (`guardE`,
+  implied by WF-FIX's `firstE ≠ none` via `firstE_some_guardE`) makes
+  the fuel accounting node-local: each selfE crossing spends exactly
+  the one unit of slack the guarded prefix's consumption bought —
+  the design's "guardedness + consumption force ≥ 1 consumption
+  before each re-entry", formalized.
+
+Core-only. Five questions:
+- root: none — the laws over the grammar value.
+- carrier grade: 15 #2's append-form round trips (the layer's reason
+  to exist).
+- spine reading: none.
+- ladder rung: the lemma family is the small-generic kind (01 §7);
+  the laws are the generic theorems the formats specialize (05 §3's
+  thin-wrapper rule).
+- gate row: none yet — TextKitTests pins the fixture instances +
+  axiom pins.
+-/
+
+import TextKit.Grammar.Parse
+import TextKit.Grammar.Check
+
+namespace TextKit
+
+/-! ## §0: the small list/string hand lemmas (01 §7's rung) -/
+
+/-- Prefixes of a common extension are comparable (the disj bridge's
+    lit/lit content). -/
+theorem prefix_total {l₁ l₂ cs : List Char} :
+    l₁ <+: cs → l₂ <+: cs → l₁ <+: l₂ ∨ l₂ <+: l₁ := by
+  intro h1 h2
+  induction l₁ generalizing l₂ cs with
+  | nil => exact Or.inl ⟨l₂, rfl⟩
+  | cons a as ih =>
+      cases l₂ with
+      | nil => exact Or.inr ⟨a :: as, rfl⟩
+      | cons b bs =>
+          obtain ⟨t₁, e₁⟩ := h1
+          obtain ⟨t₂, e₂⟩ := h2
+          have hab : a = b ∧ as ++ t₁ = bs ++ t₂ :=
+            List.cons.inj (e₁.trans e₂.symm)
+          obtain ⟨rfl, h2'⟩ := hab
+          rcases ih (cs := bs ++ t₂) ⟨t₁, h2'⟩ ⟨t₂, rfl⟩ with ⟨t, e⟩ | ⟨t, e⟩
+          · exact Or.inl ⟨t, by rw [List.cons_append, e]⟩
+          · exact Or.inr ⟨t, by rw [List.cons_append, e]⟩
+
+/-- A list is a prefix of its right-extensions. -/
+theorem isPrefixOf_append_right (l r : List Char) :
+    l.isPrefixOf (l ++ r) = true :=
+  List.isPrefixOf_iff_prefix.mpr ⟨r, rfl⟩
+
+/-- Head matching is extension-stable. -/
+theorem HeadSpec.matches_append (h : HeadSpec) (cs ds : List Char) :
+    h.matches cs = true → h.matches (cs ++ ds) = true := by
+  cases h with
+  | lit s =>
+      intro hm
+      show s.toList.isPrefixOf (cs ++ ds) = true
+      have : s.toList <+: cs := List.isPrefixOf_iff_prefix.mp hm
+      obtain ⟨t, e⟩ := this
+      rw [List.isPrefixOf_iff_prefix]
+      exact ⟨t ++ ds, by rw [← e, List.append_assoc]⟩
+  | cls p =>
+      intro hm
+      show (cs ++ ds).head?.any p = true
+      rw [List.head?_append]
+      cases hcs : cs.head? with
+      | none =>
+          have h2 : cs.head?.any p = true := hm
+          rw [hcs] at h2
+          simp at h2
+      | some c =>
+          have hc : p c = true := by
+            have h2 : cs.head?.any p = true := hm
+            rw [hcs] at h2
+            exact h2
+          exact hc
+
+/-- The decidable disjointness implies the semantic one (the
+    certificate's bridge, the small hand kind). -/
+theorem HeadSpec.disj_sound {h1 h2 : HeadSpec} :
+    h1.disj h2 = true → HeadSpec.SemDisj h1 h2 := by
+  intro hd cs hm
+  cases h1 with
+  | lit s1 =>
+      cases h2 with
+      | lit s2 =>
+          show s2.toList.isPrefixOf cs = false
+          have hd' : (s1.toList.isPrefixOf s2.toList ||
+              s2.toList.isPrefixOf s1.toList) = false := by
+            cases h : (s1.toList.isPrefixOf s2.toList ||
+                s2.toList.isPrefixOf s1.toList) with
+            | false => rfl
+            | true => simp [disj, h] at hd
+          have hd'' := Bool.or_eq_false_iff.mp hd'
+          cases hm2 : s2.toList.isPrefixOf cs with
+          | false => rfl
+          | true =>
+              have hp1 : s1.toList <+: cs := List.isPrefixOf_iff_prefix.mp hm
+              have hp2 : s2.toList <+: cs := List.isPrefixOf_iff_prefix.mp hm2
+              rcases prefix_total hp1 hp2 with ⟨t, e⟩ | ⟨t, e⟩
+              · have h11 : s1.toList.isPrefixOf s2.toList = true :=
+                  List.isPrefixOf_iff_prefix.mpr ⟨t, e⟩
+                simp [h11] at hd''
+              · have h22 : s2.toList.isPrefixOf s1.toList = true :=
+                  List.isPrefixOf_iff_prefix.mpr ⟨t, e⟩
+                simp [h22] at hd''
+      | cls p =>
+          show cs.head?.any p = false
+          cases hs : s1.toList with
+          | nil => simp [disj, hs] at hd
+          | cons c s' =>
+              simp [disj, hs] at hd
+              have h2 : s1.toList.isPrefixOf cs = true := hm
+              rw [hs] at h2
+              have hp : (c :: s') <+: cs := List.isPrefixOf_iff_prefix.mp h2
+              obtain ⟨t, e⟩ := hp
+              have hcs : cs.head? = Option.some c := by rw [← e]; rfl
+              rw [hcs]
+              exact hd
+  | cls p1 =>
+      cases h2 with
+      | lit s2 =>
+          show s2.toList.isPrefixOf cs = false
+          cases hs : s2.toList with
+          | nil => simp [disj, hs] at hd
+          | cons c s' =>
+              simp [disj, hs] at hd
+              cases hcs : cs.head? with
+              | none =>
+                  have h2 : cs.head?.any p1 = true := hm
+                  rw [hcs] at h2
+                  simp at h2
+              | some c' =>
+                  have hpc : p1 c' = true := by
+                    have h2 : cs.head?.any p1 = true := hm
+                    rw [hcs] at h2
+                    exact h2
+                  cases hpre : (c :: s').isPrefixOf cs with
+                  | false => rfl
+                  | true =>
+                      have hp : (c :: s') <+: cs := List.isPrefixOf_iff_prefix.mp hpre
+                      obtain ⟨t, e⟩ := hp
+                      have hc' : cs.head? = Option.some c := by rw [← e]; rfl
+                      rw [hc'] at hcs
+                      injection hcs with hcc
+                      rw [hcc] at hd
+                      simp [hd] at hpc
+      | cls p2 => simp [disj] at hd
+
+/-- The decidable munch-break is sound: a broken head never matches a
+    text whose head char passes the munch predicate. -/
+theorem HeadSpec.breaks_sound {h : HeadSpec} {p : Char → Bool} {cs : List Char} :
+    h.breaks p = true → h.matches cs = true →
+    cs.head?.all (fun c => !p c) = true := by
+  intro hb hm
+  cases h with
+  | lit s =>
+      cases hs : s.toList with
+      | nil => simp [breaks, hs] at hb
+      | cons c s' =>
+          simp [breaks, hs] at hb
+          have h2 : s.toList.isPrefixOf cs = true := hm
+          rw [hs] at h2
+          have hp : (c :: s') <+: cs := List.isPrefixOf_iff_prefix.mp h2
+          obtain ⟨t, e⟩ := hp
+          have hcs : cs.head? = Option.some c := by rw [← e]; rfl
+          rw [hcs]
+          show (!p c) = true
+          simp [hb]
+  | cls p' => simp [breaks] at hb
+
+/-- Nonempty left factor makes a nonempty append. -/
+theorem String.append_left_ne_empty {s t : String} (h : s ≠ "") : s ++ t ≠ "" := by
+  intro heq
+  have h2 := congrArg String.toList heq
+  rw [String.toList_append] at h2
+  simp [List.append_eq_nil_iff] at h2
+  exact h (String.toList_injective (by simp [h2.1]))
+
+/-- Nonempty right factor makes a nonempty append. -/
+theorem String.append_right_ne_empty {s t : String} (h : t ≠ "") : s ++ t ≠ "" := by
+  intro heq
+  have h2 := congrArg String.toList heq
+  rw [String.toList_append] at h2
+  simp [List.append_eq_nil_iff] at h2
+  exact h (String.toList_injective (by simp [h2.2]))
+
+/-- A nonempty string has positive length. -/
+theorem String.ne_empty_length {s : String} (h : s ≠ "") : 0 < s.length := by
+  cases hs : s.toList with
+  | nil => exact absurd (String.toList_injective (by simp [hs])) h
+  | cons c cs' =>
+      have : s.length = (c :: cs').length := by rw [← String.length_toList, hs]
+      simp [this]
+
+/-- A nonempty string's toList is nonempty. -/
+theorem String.ne_empty_toList {s : String} (h : s ≠ "") : s.toList ≠ [] := by
+  intro heq
+  exact h (String.toList_injective (by simp [heq]))
+
+/-! ## §1: the print-head-vs-FIRST family -/
+
+/-- effFirstE agrees with firstE when the latter succeeds (the
+    selfE-unfold parameter never surfaces under a concrete FIRST). -/
+theorem GrammarE.effFirstE_of_firstE {R : Type} :
+    {A : Type} → (g : GrammarE R A) → (fs hs : List HeadSpec) →
+    firstE g = Option.some hs → effFirstE fs g = hs := by
+  intro A g
+  induction g with
+  | atomE L => intro fs hs h; simp [firstE] at h; rw [← h]; rfl
+  | seqE a b iha ihb =>
+      intro fs hs h
+      simp only [firstE] at h
+      cases hfa : firstE a with
+      | none => rw [hfa] at h; simp at h
+      | some ha =>
+          rw [hfa] at h
+          cases hna : nullableE a with
+          | false =>
+              simp [hna] at h
+              subst h
+              show effFirstE fs a ++ (if nullableE a then effFirstE fs b else []) = ha
+              rw [hna]
+              simp
+              exact iha fs ha hfa
+          | true =>
+              simp [hna] at h
+              cases hfb : firstE b with
+              | none => rw [hfb] at h; simp at h
+              | some hb =>
+                  rw [hfb] at h
+                  simp at h
+                  subst h
+                  show effFirstE fs a ++ (if nullableE a then effFirstE fs b else []) = ha ++ hb
+                  rw [hna, iha fs ha hfa, ihb fs hb hfb]
+                  simp
+  | altE a b iha ihb =>
+      intro fs hs h
+      simp only [firstE] at h
+      cases hfa : firstE a with
+      | none => rw [hfa] at h; simp at h
+      | some ha =>
+          cases hfb : firstE b with
+          | none => rw [hfa, hfb] at h; simp at h
+          | some hb =>
+              rw [hfa, hfb] at h
+              simp at h
+              subst h
+              show effFirstE fs a ++ effFirstE fs b = ha ++ hb
+              rw [iha fs ha hfa, ihb fs hb hfb]
+  | repE a iha =>
+      intro fs hs h
+      simp only [firstE] at h
+      show effFirstE fs a = hs
+      exact iha fs hs h
+  | optE a iha =>
+      intro fs hs h
+      simp only [firstE] at h
+      show effFirstE fs a = hs
+      exact iha fs hs h
+  | labelE n a iha =>
+      intro fs hs h
+      simp only [firstE] at h
+      show effFirstE fs a = hs
+      exact iha fs hs h
+  | relE m owns don ex nm vld sub ih =>
+      intro fs hs h
+      simp only [firstE] at h
+      show effFirstE fs sub = hs
+      exact ih fs hs h
+  | selfE => intro fs hs h; simp [firstE] at h
+
+/-- WF-FIX's guardedness implies the guard fold (every selfE behind a
+    guaranteed consumer). -/
+theorem GrammarE.firstE_some_guardE {R : Type} :
+    {A : Type} → (g : GrammarE R A) → firstE g ≠ none → guardE g = true := by
+  intro A g
+  induction g with
+  | atomE L => intro _; rfl
+  | seqE a b iha ihb =>
+      intro hf
+      have hfa : firstE a ≠ none := fun h => hf (by simp [firstE, h])
+      have hga := iha hfa
+      cases hna : nullableE a with
+      | false =>
+          show (guardE a && (if nullableE a then guardE b else true)) = true
+          rw [hna]; simp [hga]
+      | true =>
+          have hfb : firstE b ≠ none := fun h => hf (by
+            cases hfa' : firstE a with
+            | none => exact absurd hfa' hfa
+            | some ha => simp [firstE, hfa', hna, h])
+          have hgb := ihb hfb
+          show (guardE a && (if nullableE a then guardE b else true)) = true
+          rw [hna]; simp [hga, hgb]
+  | altE a b iha ihb =>
+      intro hf
+      have hfa : firstE a ≠ none := fun h => hf (by simp [firstE, h])
+      have hfb : firstE b ≠ none := fun h => hf (by simp [firstE, h])
+      show (guardE a && guardE b) = true
+      simp [iha hfa, ihb hfb]
+  | repE a iha => intro hf; exact iha (by simpa [firstE] using hf)
+  | optE a iha => intro hf; exact iha (by simpa [firstE] using hf)
+  | labelE n a iha => intro hf; exact iha (by simpa [firstE] using hf)
+  | relE m owns don ex nm vld sub ih => intro hf; exact ih (by simpa [firstE] using hf)
+  | selfE => intro hf; simp [firstE] at hf
+
+/-- A nonempty print-list starts with the head of its first nonempty
+    element (the rep case's list induction, standalone). -/
+theorem GrammarE.printList_head {A : Type} {fs : List HeadSpec} :
+    ∀ (ys : List A) (f : (z : A) → z ∈ ys → String),
+    (∀ z hz, f z hz ≠ "" → ∀ cs, ∃ h ∈ fs, h.matches ((f z hz).toList ++ cs) = true) →
+    printList ys f ≠ "" →
+    ∀ cs, ∃ h ∈ fs, h.matches ((printList ys f).toList ++ cs) = true := by
+  intro ys
+  induction ys with
+  | nil => intro f _ hne; simp [printList_nil] at hne
+  | cons z zs ih =>
+      intro f hf hne cs
+      rw [printList_cons] at hne ⊢
+      by_cases hz0 : f z (List.Mem.head zs) = ""
+      · have hne' : printList zs (fun w hw => f w (List.Mem.tail z hw)) ≠ "" := by
+          intro h0
+          rw [hz0, h0] at hne
+          exact hne (by simp)
+        obtain ⟨h, hmem, hm⟩ := ih _ (fun w hw => hf w (List.Mem.tail z hw)) hne' cs
+        refine ⟨h, hmem, ?_⟩
+        have hsimpl : (f z (List.Mem.head zs) ++
+            printList zs (fun w hw => f w (List.Mem.tail z hw))).toList ++ cs =
+            (printList zs (fun w hw => f w (List.Mem.tail z hw))).toList ++ cs := by
+          rw [hz0]; simp
+        rw [hsimpl]; exact hm
+      · obtain ⟨h, hmem, hm⟩ := hf z (List.Mem.head zs) hz0
+          ((printList zs (fun w hw => f w (List.Mem.tail z hw))).toList ++ cs)
+        refine ⟨h, hmem, ?_⟩
+        have hsimpl : (f z (List.Mem.head zs) ++
+            printList zs (fun w hw => f w (List.Mem.tail z hw))).toList ++ cs =
+            (f z (List.Mem.head zs)).toList ++
+              ((printList zs (fun w hw => f w (List.Mem.tail z hw))).toList ++ cs) := by
+          rw [String.toList_append, List.append_assoc]
+        rw [hsimpl]; exact hm
+
+/-- The body's effective firsts ARE its firsts (the once-unfold value
+    computed) — under WF-FIX guardedness. -/
+theorem GrammarE.effFirstE_bodyFirsts {R : Type} (sb : GrammarE R R)
+    (hf : sb.firstE ≠ none) :
+    effFirstE sb.bodyFirsts sb = sb.bodyFirsts := by
+  cases hf' : sb.firstE with
+  | none => exact absurd hf' hf
+  | some hs =>
+      have h1 := effFirstE_of_firstE sb sb.bodyFirsts hs hf'
+      rw [h1]
+      simp [bodyFirsts, hf']
+
+/-- The closed fix node's effective firsts are the body's. -/
+theorem Grammar.effFirst_fix {R : Type} (m : R → Nat) (body : GrammarE R R)
+    (dec : ∀ x y, SelfPathE body x y → m y < m x) (hf : body.firstE ≠ none) :
+    effFirst (Grammar.fix m body dec) = body.bodyFirsts :=
+  GrammarE.effFirstE_bodyFirsts body hf
+
+/-- THE print-head-vs-FIRST kit (the seq-case wall's lemma family),
+    both conjuncts in one induction: (1) a non-nullable grammar prints
+    nonempty; (2) a nonempty print starts with an effective-first head.
+    The HSB bundle is the self-leaves' interface to the fix-level
+    instance (`Grammar.printFixBundle`). -/
+theorem GrammarE.printBundleE {R : Type} :
+    {A : Type} → (g : GrammarE R A) → (x : A) →
+    (Hb : (y : R) → SelfPathE g x y → Bool) →
+    (H : (y : R) → SelfPathE g x y → String) →
+    (fs : List HeadSpec) →
+    valueOkWalk g x Hb = true →
+    (∀ y (path : SelfPathE g x y), Hb y path = true →
+      (H y path ≠ "") ∧ ∀ cs, ∃ h ∈ fs, h.matches ((H y path).toList ++ cs) = true) →
+    (nullableE g = false → printWalk g x Hb H ≠ "") ∧
+    (printWalk g x Hb H ≠ "" →
+      ∀ cs, ∃ h ∈ effFirstE fs g, h.matches ((printWalk g x Hb H).toList ++ cs) = true) := by
+  intro A g
+  induction g with
+  | atomE L =>
+      intro x Hb H fs hok HSB
+      have hpre : L.pre x = true := hok
+      have hmunch : (L.munch.all fun p => ([] : List Char).head?.all (fun c => !p c)) = true := by
+        cases L.munch with
+        | none => rfl
+        | some p => simp
+      have hscan := L.print_scan 0 x [] hpre hmunch
+      have hcs : (L.print x).toList ++ [] = (L.print x).toList := List.append_nil _
+      refine ⟨?_, ?_⟩
+      · intro _
+        intro hne
+        have hne' : L.print x = "" := hne
+        have hc := L.consumes _ _ _ hscan
+        have hl : (L.print x).toList = [] := by rw [hne']; rfl
+        simp [hl] at hc
+      · intro hne cs
+        have hhead := L.scan_head _ _ _ hscan
+        refine ⟨L.head, by show L.head ∈ [L.head]; exact List.Mem.head [], ?_⟩
+        show L.head.matches ((L.print x).toList ++ cs) = true
+        apply HeadSpec.matches_append
+        have := hhead
+        rw [hcs] at this
+        exact this
+  | seqE a b iha ihb =>
+      intro x Hb H fs hok HSB
+      obtain ⟨p, q⟩ := x
+      have hok' : valueOkWalk a p (fun y path => Hb y (.seqL path)) = true ∧
+          valueOkWalk b q (fun y path => Hb y (.seqR path)) = true := by
+        have := hok
+        rw [valueOkWalk_seqE] at this
+        simpa [Bool.and_eq_true] using this
+      have HSBA : ∀ y (path : SelfPathE a p y),
+          (fun y path => Hb y (.seqL path)) y path = true →
+          ((fun y path => H y (.seqL path)) y path ≠ "") ∧
+          ∀ cs, ∃ h ∈ fs, h.matches (((fun y path => H y (.seqL path)) y path).toList ++ cs) = true :=
+        fun y path h => HSB y (.seqL path) h
+      have HSBB : ∀ y (path : SelfPathE b q y),
+          (fun y path => Hb y (.seqR path)) y path = true →
+          ((fun y path => H y (.seqR path)) y path ≠ "") ∧
+          ∀ cs, ∃ h ∈ fs, h.matches (((fun y path => H y (.seqR path)) y path).toList ++ cs) = true :=
+        fun y path h => HSB y (.seqR path) h
+      obtain ⟨neA, headA⟩ := iha p _ _ fs hok'.1 HSBA
+      obtain ⟨neB, headB⟩ := ihb q _ _ fs hok'.2 HSBB
+      have hneA : nullableE a = false →
+          printWalk a p (fun y path => Hb y (.seqL path))
+            (fun y path => H y (.seqL path)) ≠ "" := neA
+      refine ⟨?_, ?_⟩
+      · intro hnn
+        rw [printWalk_seqE]
+        cases hna : nullableE a with
+        | false => exact String.append_left_ne_empty (hneA hna)
+        | true =>
+            have hnb : nullableE b = false := by
+              have : nullableE (GrammarE.seqE a b) = false := hnn
+              simp only [nullableE, hna, Bool.true_and] at this
+              exact this
+            exact String.append_right_ne_empty (neB hnb)
+      · intro hne cs
+        rw [printWalk_seqE] at hne ⊢
+        by_cases hep : printWalk a p (fun y path => Hb y (.seqL path))
+            (fun y path => H y (.seqL path)) = ""
+        · have hna : nullableE a = true := by
+            cases h : nullableE a with
+            | false => exact absurd hep (hneA h)
+            | true => rfl
+          have hneB : printWalk b q (fun y path => Hb y (.seqR path))
+              (fun y path => H y (.seqR path)) ≠ "" := by
+            intro hb0
+            rw [hep, hb0] at hne
+            exact hne (by simp)
+          obtain ⟨h, hmem, hm⟩ := headB hneB cs
+          refine ⟨h, ?_, ?_⟩
+          · show h ∈ effFirstE fs a ++ (if nullableE a then effFirstE fs b else [])
+            rw [hna]
+            exact List.mem_append_right _ hmem
+          · have hsimpl : (printWalk a p (fun y path => Hb y (.seqL path))
+                  (fun y path => H y (.seqL path)) ++
+                printWalk b q (fun y path => Hb y (.seqR path))
+                  (fun y path => H y (.seqR path))).toList ++ cs =
+                (printWalk b q (fun y path => Hb y (.seqR path))
+                  (fun y path => H y (.seqR path))).toList ++ cs := by
+              rw [hep]
+              simp
+            rw [hsimpl]
+            exact hm
+        · obtain ⟨h, hmem, hm⟩ := headA hep ((printWalk b q
+              (fun y path => Hb y (.seqR path)) (fun y path => H y (.seqR path))).toList ++ cs)
+          refine ⟨h, ?_, ?_⟩
+          · show h ∈ effFirstE fs a ++ (if nullableE a then effFirstE fs b else [])
+            exact List.mem_append_left _ hmem
+          · have hsimpl : (printWalk a p (fun y path => Hb y (.seqL path))
+                  (fun y path => H y (.seqL path)) ++
+                printWalk b q (fun y path => Hb y (.seqR path))
+                  (fun y path => H y (.seqR path))).toList ++ cs =
+                (printWalk a p (fun y path => Hb y (.seqL path))
+                  (fun y path => H y (.seqL path))).toList ++
+                ((printWalk b q (fun y path => Hb y (.seqR path))
+                  (fun y path => H y (.seqR path))).toList ++ cs) := by
+              rw [String.toList_append, List.append_assoc]
+            rw [hsimpl]
+            exact hm
+  | altE a b iha ihb =>
+      intro x Hb H fs hok HSB
+      have HSBA : ∀ y (path : SelfPathE a x y),
+          (fun y path => Hb y (.altL path)) y path = true →
+          ((fun y path => H y (.altL path)) y path ≠ "") ∧
+          ∀ cs, ∃ h ∈ fs, h.matches (((fun y path => H y (.altL path)) y path).toList ++ cs)
+            = true :=
+        fun y path h => HSB y (.altL path) h
+      have HSBB : ∀ y (path : SelfPathE b x y),
+          (fun y path => Hb y (.altR path)) y path = true →
+          ((fun y path => H y (.altR path)) y path ≠ "") ∧
+          ∀ cs, ∃ h ∈ fs, h.matches (((fun y path => H y (.altR path)) y path).toList ++ cs)
+            = true :=
+        fun y path h => HSB y (.altR path) h
+      have hd : (valueOkWalk a x (fun y path => Hb y (.altL path)) ||
+          valueOkWalk b x (fun y path => Hb y (.altR path))) = true := by
+        have h3 := hok
+        rw [valueOkWalk_altE] at h3
+        exact h3
+      have hb2_of : valueOkWalk a x (fun y path => Hb y (.altL path)) = false →
+          valueOkWalk b x (fun y path => Hb y (.altR path)) = true := by
+        intro h1
+        cases h2 : valueOkWalk b x (fun y path => Hb y (.altR path)) with
+        | true => rfl
+        | false => simp [h1, h2] at hd
+      refine ⟨?_, ?_⟩
+      · intro hnn
+        rw [printWalk_altE]
+        have hnn' : nullableE a = false ∧ nullableE b = false := by
+          have : nullableE (GrammarE.altE a b) = false := hnn
+          simp only [nullableE, Bool.or_eq_false_iff] at this
+          exact this
+        cases hd1 : valueOkWalk a x (fun y path => Hb y (.altL path)) with
+        | true =>
+            rw [if_pos rfl]
+            exact (iha x _ _ fs hd1 HSBA).1 hnn'.1
+        | false =>
+            rw [if_neg (show ¬ ((false : Bool) = true) from by simp)]
+            exact (ihb x _ _ fs (hb2_of hd1) HSBB).1 hnn'.2
+      · intro hne cs
+        rw [printWalk_altE] at hne ⊢
+        cases hd1 : valueOkWalk a x (fun y path => Hb y (.altL path)) with
+        | true =>
+            rw [if_pos hd1] at hne
+            rw [if_pos (show (true : Bool) = true from rfl)]
+            obtain ⟨h, hmem, hm⟩ := (iha x _ _ fs hd1 HSBA).2 hne cs
+            exact ⟨h, List.mem_append_left _ hmem, hm⟩
+        | false =>
+            rw [if_neg (by simp [hd1])] at hne
+            rw [if_neg (show ¬((false : Bool) = true) from by simp)]
+            obtain ⟨h, hmem, hm⟩ := (ihb x _ _ fs (hb2_of hd1) HSBB).2 hne cs
+            exact ⟨h, List.mem_append_right _ hmem, hm⟩
+  | repE a iha =>
+      intro xs Hb H fs hok HSB
+      have hokAll : ∀ z (hz : z ∈ xs),
+          valueOkWalk a z (fun y path => Hb y (.repP hz path)) = true := by
+        have := hok
+        rw [valueOkWalk_repE] at this
+        exact allWalk_true xs _ this
+      have HSBel : ∀ z (hz : z ∈ xs) y (path : SelfPathE a z y),
+          (fun y path => Hb y (.repP hz path)) y path = true →
+          ((fun y path => H y (.repP hz path)) y path ≠ "") ∧
+          ∀ cs, ∃ h ∈ fs, h.matches (((fun y path => H y (.repP hz path)) y path).toList ++ cs)
+            = true :=
+        fun z hz y path h => HSB y (.repP hz path) h
+      refine ⟨?_, ?_⟩
+      · intro hnn
+        simp [nullableE] at hnn
+      · intro hne cs
+        rw [printWalk_repE] at hne ⊢
+        exact printList_head xs _
+          (fun z hz hz0 => (iha z _ _ fs (hokAll z hz) (HSBel z hz)).2 hz0) hne cs
+  | optE a iha =>
+      intro x Hb H fs hok HSB
+      refine ⟨?_, ?_⟩
+      · intro hnn
+        simp [nullableE] at hnn
+      · intro hne cs
+        cases x with
+        | none =>
+            rw [printWalk_optE_none] at hne
+            exact absurd rfl hne
+        | some z =>
+            rw [printWalk_optE_some] at hne ⊢
+            have hok' : valueOkWalk a z (fun y path => Hb y (.optP path)) = true := by
+              have := hok
+              rw [valueOkWalk_optE_some] at this
+              exact this
+            obtain ⟨h, hmem, hm⟩ := (iha z _ _ fs hok'
+              (fun y path h => HSB y (.optP path) h)).2 hne cs
+            exact ⟨h, hmem, hm⟩
+  | labelE n a iha =>
+      intro x Hb H fs hok HSB
+      have hok' : valueOkWalk a x (fun y path => Hb y (.labelP path)) = true := by
+        have := hok
+        rw [valueOkWalk_labelE] at this
+        exact this
+      obtain ⟨ne1, hd1⟩ := iha x _ _ fs hok' (fun y path h => HSB y (.labelP path) h)
+      refine ⟨?_, ?_⟩
+      · intro hnn
+        rw [printWalk_labelE]
+        exact ne1 hnn
+      · intro hne cs
+        rw [printWalk_labelE] at hne ⊢
+        exact hd1 hne cs
+  | relE mm owns don ex nm vld sub ih =>
+      intro x Hb H fs hok HSB
+      have hok2 : owns x = true ∧
+          valueOkWalk sub (mm.encode x) (fun y path => Hb y (.relP path)) = true := by
+        have h3 := hok
+        rw [valueOkWalk_relE] at h3
+        exact Eq.mp (Bool.and_eq_true _ _) h3
+      have hok' := hok2.2
+      obtain ⟨ne1, hd1⟩ := ih (mm.encode x) _ _ fs hok'
+        (fun y path h => HSB y (.relP path) h)
+      refine ⟨?_, ?_⟩
+      · intro hnn
+        rw [printWalk_relE]
+        exact ne1 hnn
+      · intro hne cs
+        rw [printWalk_relE] at hne ⊢
+        exact hd1 hne cs
+  | selfE =>
+      intro x Hb H fs hok HSB
+      have hok' : Hb x (.selfP x) = true := hok
+      obtain ⟨hne1, hhd1⟩ := HSB x (.selfP x) hok'
+      refine ⟨?_, ?_⟩
+      · intro _
+        rw [printWalk_selfE]
+        exact hne1
+      · intro _ cs
+        rw [printWalk_selfE]
+        obtain ⟨h, hmem, hm⟩ := hhd1 cs
+        exact ⟨h, hmem, hm⟩
+
+/-- The fix-level print bundle (the AccD instance of printBundleE —
+    the HSB is the measure-smaller self-values' own bundles). -/
+theorem Grammar.printFixBundle {R : Type} (m : R → Nat) (sb : GrammarE R R)
+    (dec : ∀ x y, SelfPathE sb x y → m y < m x)
+    (hn : sb.nullableE = false) (hf : sb.firstE ≠ none) :
+    ∀ x (acc : AccD m x), fixValueOk m sb dec x = true →
+      (printFix m sb dec x ≠ "") ∧
+      ∀ cs, ∃ h ∈ sb.bodyFirsts,
+        h.matches ((printFix m sb dec x).toList ++ cs) = true := by
+  intro x acc
+  induction acc with
+  | intro x h ih =>
+      intro hok
+      have hok' : GrammarE.valueOkWalk sb x (fun y _ => fixValueOk m sb dec y) = true := by
+        have h2 := hok
+        rw [fixValueOk_unfold] at h2
+        exact h2
+      have hb := GrammarE.printBundleE sb x
+        (fun y _ => fixValueOk m sb dec y) (fun y _ => printFix m sb dec y)
+        sb.bodyFirsts hok' (fun y path hok_y => ih y (dec x y path) hok_y)
+      have hfs : GrammarE.effFirstE sb.bodyFirsts sb = sb.bodyFirsts :=
+        GrammarE.effFirstE_bodyFirsts sb hf
+      rw [printFix_unfold]
+      constructor
+      · exact hb.1 hn
+      · intro cs
+        obtain ⟨h', hmem, hm⟩ := hb.2 (hb.1 hn) cs
+        rw [hfs] at hmem
+        exact ⟨h', hmem, hm⟩
+
+/-! ## §2: the parse-side duals -/
+
+/-- The ok-inversion pair (the parse-case splits' shared shape). -/
+private theorem GrammarE.ok_cur_inv {A : Type} {w : A × Cursor} {v : A} {c : Cursor}
+    (h : (Except.ok w : Except ParseError (A × Cursor)) = Except.ok (v, c)) : w.2 = c :=
+  (Prod.mk.inj (Except.ok.inj h)).2
+
+/-- Parses never grow the input (the fuel accounting's monotonicity
+    side). Strong induction on the fuel, structural inside; the repE
+    case is an inner induction on the repetition fuel. -/
+theorem GrammarE.parseMonoE {R : Type} (sb : GrammarE R R) :
+    ∀ (fuel : Nat) {A : Type} {g : GrammarE R A} {x : A} {cur cur' : Cursor},
+      parseE sb g fuel cur = .ok (x, cur') → cur'.cs.length ≤ cur.cs.length := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atomE L =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          exact Nat.le_of_lt (L.consumes _ _ _ h)
+      | seqE a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseE sb b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h]
+                  exact Nat.le_trans (ihb hb) (iha ha)
+      | altE a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseE sb b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h]
+                  exact ihb hb
+              | error e' => simp only [hb] at h; simp at h
+      | repE a iha =>
+          intro xs cur cur' h
+          simp only [parseE] at h
+          have manyMono : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyE sb a f c = .ok (ys, c') → c'.cs.length ≤ c.cs.length := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0
+                simp only [parseManyE] at h0
+                rw [← ok_cur_inv h0]
+                exact Nat.le_refl _
+            | succ f ih' =>
+                intro hf ys c c' h0
+                simp only [parseManyE] at h0
+                cases hb : parseE sb a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    rw [← ok_cur_inv h0]
+                    exact Nat.le_refl _
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    have hbody : c₁.cs.length ≤ c.cs.length := by
+                      by_cases hf1 : f + 1 = F
+                      · exact iha (hf1 ▸ hb)
+                      · exact IH (f+1) (by omega) hb
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyE sb a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          rw [← ok_cur_inv h0]
+                          exact Nat.le_trans (ih' (by omega) zs c₁ c₂ hr) hbody
+                    · rw [if_neg hprog] at h0
+                      rw [← ok_cur_inv h0]
+                      exact hbody
+          exact manyMono F (Nat.le_refl F) xs cur cur' h
+      | optE a iha =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e =>
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact Nat.le_refl _
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+      | labelE n a iha =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2]
+              exact iha ha
+      | relE mm owns don ex nm vld sub ih =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h]
+                  exact ih ha
+      | selfE =>
+          intro x cur cur' h
+          cases F with
+          | zero => simp [parseE] at h
+          | succ f =>
+              simp only [parseE] at h
+              exact IH f (Nat.lt_succ_self f) h
+
+/-- The repetition engine's monotonicity (the corollary face). -/
+theorem GrammarE.parseMonoManyE {R : Type} (sb : GrammarE R R)
+    {A : Type} (a : GrammarE R A) :
+    ∀ (fuel : Nat) {xs : List A} {cur cur' : Cursor},
+      parseManyE sb a fuel cur = .ok (xs, cur') → cur'.cs.length ≤ cur.cs.length := by
+  intro fuel
+  induction fuel with
+  | zero =>
+      intro xs cur cur' h
+      simp only [parseManyE] at h
+      rw [← ok_cur_inv h]
+      exact Nat.le_refl _
+  | succ f ih =>
+      intro xs cur cur' h
+      simp only [parseManyE] at h
+      cases hb : parseE sb a (f+1) cur with
+      | error e =>
+          simp only [hb] at h
+          rw [← ok_cur_inv h]
+          exact Nat.le_refl _
+      | ok r =>
+          obtain ⟨z, c₁⟩ := r
+          simp only [hb] at h
+          have hbody : c₁.cs.length ≤ cur.cs.length := parseMonoE sb (f+1) hb
+          by_cases hprog : c₁.cs.length < cur.cs.length
+          · rw [if_pos hprog] at h
+            cases hr : parseManyE sb a f c₁ with
+            | error e => simp [hr] at h
+            | ok r₂ =>
+                obtain ⟨zs, c₂⟩ := r₂
+                simp only [hr] at h
+                rw [← ok_cur_inv h]
+                exact Nat.le_trans (ih hr) hbody
+          · rw [if_neg hprog] at h
+            rw [← ok_cur_inv h]
+            exact hbody
+
+/-- The consumption lemma (the rep-progress content): a non-nullable
+    grammar's success shortens the input — the body's own
+    non-nullability (`hn`, the strengthened WF-FIX row) is what the
+    selfE crossing consumes. -/
+theorem GrammarE.parseConsumeE {R : Type} (sb : GrammarE R R)
+    (hn : sb.nullableE = false) :
+    ∀ (fuel : Nat) {A : Type} {g : GrammarE R A} {x : A} {cur cur' : Cursor},
+      parseE sb g fuel cur = .ok (x, cur') →
+      nullableE g = false → cur'.cs.length < cur.cs.length := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atomE L =>
+          intro x cur cur' h _
+          simp only [parseE] at h
+          exact L.consumes _ _ _ h
+      | seqE a b iha ihb =>
+          intro x cur cur' h hnn
+          simp only [parseE] at h
+          have hnn' : (nullableE a && nullableE b) = false := hnn
+          cases ha : parseE sb a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseE sb b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h]
+                  cases hna : nullableE a with
+                  | false =>
+                      have h1 : cur₁.cs.length < cur.cs.length := iha ha hna
+                      have h2 : cur₂.cs.length ≤ cur₁.cs.length := parseMonoE sb F hb
+                      exact Nat.lt_of_le_of_lt h2 h1
+                  | true =>
+                      have hnb : nullableE b = false := by
+                        cases h2 : nullableE b with
+                        | true => simp [hna, h2] at hnn'
+                        | false => rfl
+                      have h1 : cur₁.cs.length ≤ cur.cs.length := parseMonoE sb F ha
+                      have h2 : cur₂.cs.length < cur₁.cs.length := ihb hb hnb
+                      exact Nat.lt_of_lt_of_le h2 h1
+      | altE a b iha ihb =>
+          intro x cur cur' h hnn
+          simp only [parseE] at h
+          have hnn' : (nullableE a || nullableE b) = false := hnn
+          simp only [Bool.or_eq_false_iff] at hnn'
+          cases ha : parseE sb a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha hnn'.1
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseE sb b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h]
+                  exact ihb hb hnn'.2
+              | error e' => simp only [hb] at h; simp at h
+      | repE a iha =>
+          intro x cur cur' h hnn
+          simp [nullableE] at hnn
+      | optE a iha =>
+          intro x cur cur' h hnn
+          simp [nullableE] at hnn
+      | labelE n a iha =>
+          intro x cur cur' h hnn
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2]
+              exact iha ha hnn
+      | relE mm owns don ex nm vld sub ih =>
+          intro x cur cur' h hnn
+          simp only [parseE] at h
+          cases ha : parseE sb sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h]
+                  exact ih ha hnn
+      | selfE =>
+          intro x cur cur' h _
+          cases F with
+          | zero => simp [parseE] at h
+          | succ f =>
+              simp only [parseE] at h
+              exact IH f (Nat.lt_succ_self f) h hn
+
+/-! ## §3: law 2 (exactness), open level -/
+
+/-- The branch-coherence fold (law 2's alt content — the wave's
+    documented delta from the design's "unconditional" claim: the
+    printed branch is chosen by `valueOk`, the parsed branch by the
+    text; exactness needs them to agree, and a first-disjoint grammar
+    can still overlap VALUES through its rel codecs — the premise is
+    semantic, the migration targets discharge it by ctor
+    discrimination). Path-free handlers (the liftings agree by
+    `valueOkWalk_congr`). -/
+def GrammarE.altCoherentE {R : Type} (m : R → Nat) (sb : GrammarE R R)
+    (dec : ∀ x y, SelfPathE sb x y → m y < m x) :
+    {A : Type} → GrammarE R A → Prop :=
+  fun {_} g => match g with
+  | .atomE _ => True
+  | .seqE a b => altCoherentE m sb dec a ∧ altCoherentE m sb dec b
+  | .altE a b =>
+      (∀ x, valueOkWalk a x (fun y _ => Grammar.fixValueOk m sb dec y) = true →
+        valueOkWalk b x (fun y _ => Grammar.fixValueOk m sb dec y) = false) ∧
+      altCoherentE m sb dec a ∧ altCoherentE m sb dec b
+  | .repE a => altCoherentE m sb dec a
+  | .optE a => altCoherentE m sb dec a
+  | .labelE _ a => altCoherentE m sb dec a
+  | .relE _ _ _ _ _ _ sub => altCoherentE m sb dec sub
+  | .selfE => True
+
+/-- The closed branch-coherence fold. -/
+def Grammar.altCoherent : {A : Type} → Grammar A → Prop :=
+  fun {_} g => match g with
+  | .atom _ => True
+  | .seq a b => altCoherent a ∧ altCoherent b
+  | .alt a b =>
+      (∀ x, valueOk a x = true → valueOk b x = false) ∧
+      altCoherent a ∧ altCoherent b
+  | .rep a => altCoherent a
+  | .opt a => altCoherent a
+  | .label _ a => altCoherent a
+  | .rel _ _ _ _ _ _ sub => altCoherent sub
+  | .fix m body dec => GrammarE.altCoherentE m body dec body
+open Grammar in
+/-- THE exactness law, open level (design §3.3): a successful parse
+    consumed EXACTLY the print of its result — the two conjuncts plus
+    the parsed-values-are-owned third. NO certificate premise (the
+    leaf/rel fields carry it); the coherence premise is the alt
+    branch-agreement (see `altCoherentE`). The repE case is an inner
+    induction on the repetition fuel. -/
+theorem GrammarE.print_parse_E {R : Type} (sb : GrammarE R R) (m : R → Nat)
+    (dec : ∀ x y, SelfPathE sb x y → m y < m x)
+    (hcoh : GrammarE.altCoherentE m sb dec sb) :
+    ∀ (fuel : Nat) {A : Type} {g : GrammarE R A} {x : A} {cur cur' : Cursor},
+      altCoherentE m sb dec g →
+      parseE sb g fuel cur = .ok (x, cur') →
+      cur.cs = (printWalk g x (fun y _ => Grammar.fixValueOk m sb dec y)
+                  (fun y _ => printFix m sb dec y)).toList ++ cur'.cs ∧
+      cur'.off = cur.off + (printWalk g x (fun y _ => Grammar.fixValueOk m sb dec y)
+                  (fun y _ => printFix m sb dec y)).length ∧
+      valueOkWalk g x (fun y _ => Grammar.fixValueOk m sb dec y) = true := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atomE L =>
+          intro x cur cur' _ h
+          simp only [parseE] at h
+          rw [printWalk_atomE]
+          exact ⟨L.scan_exact _ _ _ h, L.scan_off _ _ _ h, L.scan_post _ _ _ h⟩
+      | seqE a b iha ihb =>
+          intro x cur cur' hco h
+          obtain ⟨hcohA, hcohB⟩ := hco
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseE sb b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  have hcc := Prod.mk.inj (Except.ok.inj h)
+                  obtain ⟨hx1, hx2, hx3⟩ := iha hcohA ha
+                  obtain ⟨hy1, hy2, hy3⟩ := ihb hcohB hb
+                  rw [← hcc.1, ← hcc.2]
+                  rw [printWalk_seqE]
+                  have hbrA : printWalk a x₁ (fun y _ => Grammar.fixValueOk m sb dec y)
+                      (fun y _ => printFix m sb dec y) =
+                      printWalk a x₁
+                        (fun y' path => Grammar.fixValueOk m sb dec y')
+                        (fun y' path => printFix m sb dec y') :=
+                    printWalk_congr a x₁ _ _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+                  have hbrB : printWalk b y (fun y _ => Grammar.fixValueOk m sb dec y)
+                      (fun y _ => printFix m sb dec y) =
+                      printWalk b y
+                        (fun y' path => Grammar.fixValueOk m sb dec y')
+                        (fun y' path => printFix m sb dec y') :=
+                    printWalk_congr b y _ _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+                  rw [← hbrA, ← hbrB]
+                  have hbrAB : valueOkWalk a x₁
+                      (fun y' path => Grammar.fixValueOk m sb dec y') =
+                      valueOkWalk a x₁ (fun y _ => Grammar.fixValueOk m sb dec y) :=
+                    valueOkWalk_congr a x₁ _ _ (fun _ _ => rfl)
+                  have hbrBB : valueOkWalk b y
+                      (fun y' path => Grammar.fixValueOk m sb dec y') =
+                      valueOkWalk b y (fun y _ => Grammar.fixValueOk m sb dec y) :=
+                    valueOkWalk_congr b y _ _ (fun _ _ => rfl)
+                  refine ⟨?_, ?_, ?_⟩
+                  · rw [hx1, hy1, String.toList_append, List.append_assoc]
+                  · rw [hy2, hx2, String.length_append]
+                    omega
+                  · rw [valueOkWalk_seqE, ← hbrAB, ← hbrBB]
+                    simp [hx3, hy3]
+      | altE a b iha ihb =>
+          intro x cur cur' hco h
+          obtain ⟨hcohab, hcohA, hcohB⟩ := hco
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              obtain ⟨hx1, hx2, hx3⟩ := iha hcohA ha
+              rw [← hcc.1, ← hcc.2]
+              rw [printWalk_altE]
+              have hd : valueOkWalk a x₁ (fun y path =>
+                  Grammar.fixValueOk m sb dec y) = true := by
+                have h2 := hx3
+                rw [valueOkWalk_congr a x₁ _ _ (fun y path => rfl :
+                  ∀ y path, (fun y' _ => Grammar.fixValueOk m sb dec y') y path =
+                    (fun y' path => Grammar.fixValueOk m sb dec y') y path)] at h2
+                exact h2
+              rw [if_pos hd]
+              have hbrA : printWalk a x₁ (fun y _ => Grammar.fixValueOk m sb dec y)
+                  (fun y _ => printFix m sb dec y) =
+                  printWalk a x₁
+                    (fun y' path => Grammar.fixValueOk m sb dec y')
+                    (fun y' path => printFix m sb dec y') :=
+                printWalk_congr a x₁ _ _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+              rw [← hbrA]
+              refine ⟨hx1, hx2, ?_⟩
+              rw [valueOkWalk_altE]
+              simp [hx3]
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseE sb b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  have hcc := Prod.mk.inj (Except.ok.inj h)
+                  obtain ⟨hx1, hx2, hx3⟩ := ihb hcohB hb
+                  rw [← hcc.1, ← hcc.2]
+                  rw [printWalk_altE]
+                  have hbB : valueOkWalk b x₂ (fun y _ =>
+                      Grammar.fixValueOk m sb dec y) = true := by
+                    have h2 := hx3
+                    rw [valueOkWalk_congr b x₂ _ _ (fun y path => rfl :
+                      ∀ y path, (fun y' _ => Grammar.fixValueOk m sb dec y') y path =
+                        (fun y' path => Grammar.fixValueOk m sb dec y') y path)] at h2
+                    exact h2
+                  have hdA : valueOkWalk a x₂ (fun y _ =>
+                      Grammar.fixValueOk m sb dec y) = false := by
+                    cases hda : valueOkWalk a x₂ (fun y _ => Grammar.fixValueOk m sb dec y) with
+                    | true =>
+                        have := hcohab x₂ hda
+                        simp [hbB] at this
+                    | false => rfl
+                  have hd : valueOkWalk a x₂ (fun y path =>
+                      Grammar.fixValueOk m sb dec y) = false := by
+                    have h2 := hdA
+                    rw [valueOkWalk_congr a x₂ _ _ (fun y path => rfl :
+                      ∀ y path, (fun y' _ => Grammar.fixValueOk m sb dec y') y path =
+                        (fun y' path => Grammar.fixValueOk m sb dec y') y path)]
+                    exact h2
+                  rw [if_neg (by simp [hd])]
+                  have hbrB : printWalk b x₂ (fun y _ => Grammar.fixValueOk m sb dec y)
+                      (fun y _ => printFix m sb dec y) =
+                      printWalk b x₂
+                        (fun y' path => Grammar.fixValueOk m sb dec y')
+                        (fun y' path => printFix m sb dec y') :=
+                    printWalk_congr b x₂ _ _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+                  rw [← hbrB]
+                  refine ⟨hx1, hx2, ?_⟩
+                  rw [valueOkWalk_altE]
+                  simp [hx3]
+              | error e' => simp only [hb] at h; simp at h
+      | repE a iha =>
+          intro xs cur cur' hco h
+          simp only [parseE] at h
+          have L : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyE sb a f c = .ok (ys, c') →
+              c.cs = (printList ys (fun z hz =>
+                  printWalk a z (fun y path => Grammar.fixValueOk m sb dec y)
+                    (fun y path => printFix m sb dec y))).toList ++ c'.cs ∧
+              c'.off = c.off + (printList ys (fun z hz =>
+                  printWalk a z (fun y path => Grammar.fixValueOk m sb dec y)
+                    (fun y path => printFix m sb dec y))).length ∧
+              allWalk ys (fun z hz =>
+                valueOkWalk a z (fun y path => Grammar.fixValueOk m sb dec y)) = true := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0
+                simp only [parseManyE] at h0
+                have hcc := Prod.mk.inj (Except.ok.inj h0)
+                rw [← hcc.1, ← hcc.2]
+                simp [printList_nil, allWalk_nil]
+            | succ f ih' =>
+                intro hf ys c c' h0
+                simp only [parseManyE] at h0
+                cases hb : parseE sb a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    have hcc := Prod.mk.inj (Except.ok.inj h0)
+                    rw [← hcc.1, ← hcc.2]
+                    simp [printList_nil, allWalk_nil]
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    have hbody := (show f + 1 = F ∨ f + 1 < F from by omega).elim
+                      (fun hf1 => iha hco (hf1 ▸ hb)) (fun hlt => IH (f+1) hlt hco hb)
+                    obtain ⟨hz1, hz2, hz3⟩ := hbody
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyE sb a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          have hcc := Prod.mk.inj (Except.ok.inj h0)
+                          obtain ⟨hzs1, hzs2, hzs3⟩ := ih' (by omega) zs c₁ c₂ hr
+                          rw [← hcc.1, ← hcc.2]
+                          rw [printList_cons, allWalk_cons]
+                          refine ⟨?_, ?_, ?_⟩
+                          · rw [hz1, hzs1, String.toList_append, List.append_assoc]
+                          · rw [hzs2, hz2, String.length_append]
+                            omega
+                          · simp [hz3, hzs3]
+                    · rw [if_neg hprog] at h0
+                      have hcc := Prod.mk.inj (Except.ok.inj h0)
+                      rw [← hcc.1, ← hcc.2]
+                      rw [printList_cons, printList_nil, allWalk_cons, allWalk_nil]
+                      refine ⟨?_, ?_, ?_⟩
+                      · rw [hz1]
+                        simp
+                      · rw [hz2]
+                        simp
+                      · simp [hz3]
+          obtain ⟨L1, L2, L3⟩ := L F (Nat.le_refl F) xs cur cur' h
+          rw [printWalk_repE]
+          refine ⟨L1, L2, ?_⟩
+          rw [valueOkWalk_repE]
+          exact L3
+      | optE a iha =>
+          intro x cur cur' hco h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e =>
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              rw [← hcc.1, ← hcc.2]
+              rw [printWalk_optE_none]
+              simp [valueOkWalk_optE_none]
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              obtain ⟨hz1, hz2, hz3⟩ := iha hco ha
+              rw [← hcc.1, ← hcc.2]
+              rw [printWalk_optE_some]
+              have hbr : printWalk a z (fun y _ => Grammar.fixValueOk m sb dec y)
+                  (fun y _ => printFix m sb dec y) =
+                  printWalk a z
+                    (fun y' path => Grammar.fixValueOk m sb dec y')
+                    (fun y' path => printFix m sb dec y') :=
+                printWalk_congr a z _ _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+              rw [← hbr] at hz1 hz2
+              refine ⟨hz1, hz2, ?_⟩
+              rw [valueOkWalk_optE_some]
+              have hbrB : valueOkWalk a z
+                  (fun y' path => Grammar.fixValueOk m sb dec y') =
+                  valueOkWalk a z (fun y _ => Grammar.fixValueOk m sb dec y) :=
+                valueOkWalk_congr a z _ _ (fun _ _ => rfl)
+              rw [← hbrB] at hz3
+              exact hz3
+      | labelE n a iha =>
+          intro x cur cur' hco h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              obtain ⟨hz1, hz2, hz3⟩ := iha hco ha
+              rw [← hcc.1, ← hcc.2]
+              rw [printWalk_labelE]
+              have hbr : printWalk a z (fun y _ => Grammar.fixValueOk m sb dec y)
+                  (fun y _ => printFix m sb dec y) =
+                  printWalk a z
+                    (fun y' path => Grammar.fixValueOk m sb dec y')
+                    (fun y' path => printFix m sb dec y') :=
+                printWalk_congr a z _ _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+              rw [← hbr] at hz1 hz2
+              refine ⟨hz1, hz2, ?_⟩
+              rw [valueOkWalk_labelE]
+              have hbrB : valueOkWalk a z
+                  (fun y' path => Grammar.fixValueOk m sb dec y') =
+                  valueOkWalk a z (fun y _ => Grammar.fixValueOk m sb dec y) :=
+                valueOkWalk_congr a z _ _ (fun _ _ => rfl)
+              rw [← hbrB] at hz3
+              exact hz3
+      | relE mm owns don ex nm vld sub ih =>
+          intro x cur cur' hco h
+          simp only [parseE] at h
+          cases ha : parseE sb sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  have hcc := Prod.mk.inj (Except.ok.inj h)
+                  obtain ⟨hz1, hz2, hz3⟩ := ih hco ha
+                  rw [← hcc.1, ← hcc.2]
+                  have hex : mm.encode r = raw := ex raw r hd
+                  have hown : owns r = true := don raw r hd
+                  rw [printWalk_relE]
+                  have hbr : printWalk sub (mm.encode r)
+                      (fun y _ => Grammar.fixValueOk m sb dec y)
+                      (fun y _ => printFix m sb dec y) =
+                      printWalk sub raw
+                        (fun y' path => Grammar.fixValueOk m sb dec y')
+                        (fun y' path => printFix m sb dec y') := by
+                    rw [hex]
+                  rw [hbr]
+                  refine ⟨hz1, hz2, ?_⟩
+                  rw [valueOkWalk_relE]
+                  have hbrB : valueOkWalk sub (mm.encode r)
+                      (fun y' path => Grammar.fixValueOk m sb dec y') =
+                      valueOkWalk sub raw (fun y _ => Grammar.fixValueOk m sb dec y) := by
+                    rw [hex]
+                  rw [hbrB]
+                  simp [hown, hz3]
+      | selfE =>
+          intro x cur cur' _ h
+          cases F with
+          | zero => simp [parseE] at h
+          | succ f =>
+              simp only [parseE] at h
+              obtain ⟨hx1, hx2, hx3⟩ := IH f (Nat.lt_succ_self f) hcoh h
+              rw [printWalk_selfE]
+              have hbr : printFix m sb dec x =
+                  printWalk sb x (fun y _ => Grammar.fixValueOk m sb dec y)
+                    (fun y _ => printFix m sb dec y) :=
+                printFix_unfold m sb dec x
+              rw [hbr]
+              refine ⟨hx1, hx2, ?_⟩
+              have h4 : Grammar.fixValueOk m sb dec x =
+                  valueOkWalk sb x (fun y _ => Grammar.fixValueOk m sb dec y) :=
+                Grammar.fixValueOk_unfold m sb dec x
+              rw [valueOkWalk_selfE]
+              show Grammar.fixValueOk m sb dec x = true
+              rw [h4]
+              exact hx3
+
+/-! ## §4: the parse-side head/exclusion family -/
+
+/-- A successful parse splits the input at the final cursor (the
+    unconditional split fact — the exactness law's cs conjunct without
+    the print). -/
+theorem GrammarE.parseSplitsE {R : Type} (sb : GrammarE R R) :
+    ∀ (fuel : Nat) {A : Type} {g : GrammarE R A} {x : A} {cur cur' : Cursor},
+      parseE sb g fuel cur = .ok (x, cur') → ∃ pre, cur.cs = pre ++ cur'.cs := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atomE L =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          exact ⟨(L.print x).toList, L.scan_exact _ _ _ h⟩
+      | seqE a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseE sb b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h]
+                  obtain ⟨pa, hpa⟩ := iha ha
+                  obtain ⟨pb, hpb⟩ := ihb hb
+                  exact ⟨pa ++ pb, by rw [hpa, hpb, List.append_assoc]⟩
+      | altE a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseE sb b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h]
+                  exact ihb hb
+              | error e' => simp only [hb] at h; simp at h
+      | repE a iha =>
+          intro xs cur cur' h
+          simp only [parseE] at h
+          have splits : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyE sb a f c = .ok (ys, c') → ∃ pre, c.cs = pre ++ c'.cs := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0
+                simp only [parseManyE] at h0
+                rw [← ok_cur_inv h0]
+                exact ⟨[], rfl⟩
+            | succ f ih' =>
+                intro hf ys c c' h0
+                simp only [parseManyE] at h0
+                cases hb : parseE sb a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    rw [← ok_cur_inv h0]
+                    exact ⟨[], rfl⟩
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    have hbody : ∃ pre, c.cs = pre ++ c₁.cs := by
+                      by_cases hf1 : f + 1 = F
+                      · exact iha (hf1 ▸ hb)
+                      · exact IH (f+1) (by omega) hb
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyE sb a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          rw [← ok_cur_inv h0]
+                          obtain ⟨p1, hp1⟩ := hbody
+                          obtain ⟨p2, hp2⟩ := ih' (by omega) zs c₁ c₂ hr
+                          exact ⟨p1 ++ p2, by rw [hp1, hp2, List.append_assoc]⟩
+                    · rw [if_neg hprog] at h0
+                      rw [← ok_cur_inv h0]
+                      exact hbody
+          exact splits F (Nat.le_refl F) xs cur cur' h
+      | optE a iha =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e =>
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact ⟨[], rfl⟩
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+      | labelE n a iha =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2]
+              exact iha ha
+      | relE mm owns don ex nm vld sub ih =>
+          intro x cur cur' h
+          simp only [parseE] at h
+          cases ha : parseE sb sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h]
+                  exact ih ha
+      | selfE =>
+          intro x cur cur' h
+          cases F with
+          | zero => simp [parseE] at h
+          | succ f =>
+              simp only [parseE] at h
+              exact IH f (Nat.lt_succ_self f) h
+
+/-- The parse-side head lemma (the print-head-vs-FIRST family's dual):
+    a CONSUMING success starts with an effective-first head. -/
+theorem GrammarE.parseHeadE {R : Type} (sb : GrammarE R R)
+    (hn : sb.nullableE = false) (hf : sb.firstE ≠ none) :
+    ∀ (fuel : Nat) {A : Type} {g : GrammarE R A} {x : A} {cur cur' : Cursor},
+      parseE sb g fuel cur = .ok (x, cur') → cur'.cs.length < cur.cs.length →
+      ∃ h ∈ effFirstE sb.bodyFirsts g, h.matches cur.cs = true := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atomE L =>
+          intro x cur cur' h _
+          simp only [parseE] at h
+          exact ⟨L.head, by show L.head ∈ [L.head]; exact List.Mem.head [],
+            L.scan_head _ _ _ h⟩
+      | seqE a b iha ihb =>
+          intro x cur cur' h hlt
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseE sb b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h] at hlt
+                  by_cases h1 : cur₁.cs.length < cur.cs.length
+                  · obtain ⟨hh, hmem, hm⟩ := iha ha h1
+                    exact ⟨hh, List.mem_append_left _ hmem, hm⟩
+                  · have hmono := parseMonoE sb F ha
+                    have heq0 : cur₁.cs.length = cur.cs.length :=
+                      Nat.le_antisymm hmono (Nat.le_of_not_lt h1)
+                    obtain ⟨pre, hpre⟩ := parseSplitsE sb F ha
+                    have hlen : pre.length = 0 := by
+                      have h3 := congrArg List.length hpre
+                      rw [List.length_append, heq0] at h3
+                      omega
+                    have hpre0 : pre = [] := List.length_eq_zero_iff.mp hlen
+                    have hcs : cur₁.cs = cur.cs := by
+                      rw [hpre0] at hpre
+                      simp at hpre
+                      exact hpre.symm
+                    have hlt' : cur₂.cs.length < cur.cs.length := hlt
+                    have hlt2 : cur₂.cs.length < cur₁.cs.length := by omega
+                    obtain ⟨hh, hmem, hm⟩ := ihb hb hlt2
+                    have hna : nullableE a = true := by
+                      cases h2 : nullableE a with
+                      | false =>
+                          have h2c : cur₁.cs.length < cur.cs.length :=
+                            parseConsumeE sb hn F ha h2
+                          omega
+                      | true => rfl
+                    refine ⟨hh, ?_, ?_⟩
+                    · show hh ∈ effFirstE sb.bodyFirsts a ++
+                          (if nullableE a then effFirstE sb.bodyFirsts b else [])
+                      rw [hna]
+                      exact List.mem_append_right _ hmem
+                    · rw [hcs] at hm; exact hm
+      | altE a b iha ihb =>
+          intro x cur cur' h hlt
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h] at hlt
+              obtain ⟨hh, hmem, hm⟩ := iha ha hlt
+              exact ⟨hh, List.mem_append_left _ hmem, hm⟩
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseE sb b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h] at hlt
+                  obtain ⟨hh, hmem, hm⟩ := ihb hb hlt
+                  exact ⟨hh, List.mem_append_right _ hmem, hm⟩
+              | error e' => simp only [hb] at h; simp at h
+      | repE a iha =>
+          intro xs cur cur' h hlt
+          simp only [parseE] at h
+          have heads : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyE sb a f c = .ok (ys, c') → c'.cs.length < c.cs.length →
+              ∃ h ∈ effFirstE sb.bodyFirsts a, h.matches c.cs = true := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0 hlt0
+                simp only [parseManyE] at h0
+                rw [← ok_cur_inv h0] at hlt0
+                simp at hlt0
+            | succ f ih' =>
+                intro hf ys c c' h0 hlt0
+                simp only [parseManyE] at h0
+                cases hb : parseE sb a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    rw [← ok_cur_inv h0] at hlt0
+                    simp at hlt0
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyE sb a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          rw [← ok_cur_inv h0] at hlt0
+                          by_cases hf1 : f + 1 = F
+                          · exact iha (hf1 ▸ hb) hprog
+                          · exact IH (f+1) (by omega) hb hprog
+                    · rw [if_neg hprog] at h0
+                      rw [← ok_cur_inv h0] at hlt0
+                      exact absurd hlt0 hprog
+          exact heads F (Nat.le_refl F) xs cur cur' h hlt
+      | optE a iha =>
+          intro x cur cur' h hlt
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e =>
+              simp only [ha] at h
+              rw [← ok_cur_inv h] at hlt
+              simp at hlt
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h] at hlt
+              exact iha ha hlt
+      | labelE n a iha =>
+          intro x cur cur' h hlt
+          simp only [parseE] at h
+          cases ha : parseE sb a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2] at hlt
+              exact iha ha hlt
+      | relE mm owns don ex nm vld sub ih =>
+          intro x cur cur' h hlt
+          simp only [parseE] at h
+          cases ha : parseE sb sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h] at hlt
+                  exact ih ha hlt
+      | selfE =>
+          intro x cur cur' h hlt
+          cases F with
+          | zero => simp [parseE] at h
+          | succ f =>
+              simp only [parseE] at h
+              obtain ⟨hh, hmem, hm⟩ := IH f (Nat.lt_succ_self f) h hlt
+              have hfs : effFirstE sb.bodyFirsts sb = sb.bodyFirsts :=
+                effFirstE_bodyFirsts sb hf
+              rw [hfs] at hmem
+              exact ⟨hh, hmem, hm⟩
+
+/-- The first-exclusion lemma (design §3.4's alt content): a
+    non-nullable grammar whose effective heads all fail the text fails
+    on it. -/
+theorem GrammarE.parseExcludeE {R : Type} (sb : GrammarE R R)
+    (hn : sb.nullableE = false) (hf : sb.firstE ≠ none) :
+    ∀ (fuel : Nat) {A : Type} {g : GrammarE R A} (k : Nat) (cs : List Char),
+      nullableE g = false →
+      (∀ h ∈ effFirstE sb.bodyFirsts g, h.matches cs = false) →
+      ∃ e, parseE sb g fuel ⟨k, cs⟩ = .error e := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atomE L =>
+          intro k cs hnn hfail
+          have h1 : L.head.matches cs = false :=
+            hfail L.head (by show L.head ∈ [L.head]; exact List.Mem.head [])
+          obtain ⟨e, he⟩ := L.head_fail ⟨k, cs⟩ h1
+          exact ⟨e, by simp only [parseE]; exact he⟩
+      | seqE a b iha ihb =>
+          intro k cs hnn hfail
+          have hnn' : (nullableE a && nullableE b) = false := hnn
+          cases ha : parseE sb a F ⟨k, cs⟩ with
+          | error e =>
+              exact ⟨e, by simp only [parseE]; rw [ha]⟩
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              by_cases hcons : cur₁.cs.length < cs.length
+              · obtain ⟨hh, hmem, hm⟩ := parseHeadE sb hn hf F ha hcons
+                have hbad : hh.matches cs = false :=
+                  hfail hh (List.mem_append_left _ hmem)
+                simp [hm] at hbad
+              · have hmono : cur₁.cs.length ≤ cs.length := parseMonoE sb F ha
+                have heq0 : cur₁.cs.length = cs.length :=
+                  Nat.le_antisymm hmono (Nat.le_of_not_lt hcons)
+                obtain ⟨pre, hpre⟩ := parseSplitsE sb F ha
+                have hpre' : cs = pre ++ cur₁.cs := hpre
+                have hlen : pre.length = 0 := by
+                  have h3 := congrArg List.length hpre'
+                  rw [List.length_append, heq0] at h3
+                  omega
+                have hpre0 : pre = [] := List.length_eq_zero_iff.mp hlen
+                have hcs : cur₁.cs = cs := by
+                  rw [hpre0] at hpre'
+                  simp at hpre'
+                  exact hpre'.symm
+                have hna : nullableE a = true := by
+                  cases h2 : nullableE a with
+                  | false =>
+                      have h2c : cur₁.cs.length < cs.length := parseConsumeE sb hn F ha h2
+                      omega
+                  | true => rfl
+                have hnb : nullableE b = false := by
+                  cases h2 : nullableE b with
+                  | true => simp [hna, h2] at hnn'
+                  | false => rfl
+                have hfailB : ∀ h ∈ effFirstE sb.bodyFirsts b, h.matches cur₁.cs = false := by
+                  intro hh hmem
+                  have hmem2 : hh ∈ effFirstE sb.bodyFirsts a ++
+                      (if nullableE a then effFirstE sb.bodyFirsts b else []) := by
+                    rw [hna]
+                    exact List.mem_append_right _ hmem
+                  rw [hcs]
+                  exact hfail hh hmem2
+                obtain ⟨e, he⟩ := ihb cur₁.off cur₁.cs hnb hfailB
+                have he' : parseE sb b F cur₁ = .error e := he
+                exact ⟨e, by simp only [parseE, ha, he']⟩
+      | altE a b iha ihb =>
+          intro k cs hnn hfail
+          have hnn' : (nullableE a || nullableE b) = false := hnn
+          simp only [Bool.or_eq_false_iff] at hnn'
+          have hfailA : ∀ h ∈ effFirstE sb.bodyFirsts a, h.matches cs = false :=
+            fun hh hmem => hfail hh (List.mem_append_left _ hmem)
+          have hfailB : ∀ h ∈ effFirstE sb.bodyFirsts b, h.matches cs = false :=
+            fun hh hmem => hfail hh (List.mem_append_right _ hmem)
+          obtain ⟨ea, hea⟩ := iha k cs hnn'.1 hfailA
+          obtain ⟨eb, heb⟩ := ihb k cs hnn'.2 hfailB
+          exact ⟨ParseError.farther ea eb, by simp only [parseE, hea, heb]⟩
+      | repE a iha =>
+          intro k cs hnn _
+          simp [nullableE] at hnn
+      | optE a iha =>
+          intro k cs hnn _
+          simp [nullableE] at hnn
+      | labelE n a iha =>
+          intro k cs hnn hfail
+          obtain ⟨e, he⟩ := iha k cs hnn hfail
+          have hthis : parseE sb (.labelE n a) F ⟨k, cs⟩ =
+              .error { e with valid := [n], message := s!"expected {n}", context := TextKit.Label.at n :: e.context } := by
+            simp only [parseE, he]
+          exact ⟨_, hthis⟩
+      | relE mm owns don ex nm vld sub ih =>
+          intro k cs hnn hfail
+          obtain ⟨e, he⟩ := ih k cs hnn hfail
+          exact ⟨e, by simp only [parseE, he]⟩
+      | selfE =>
+          intro k cs _ hfail
+          cases F with
+          | zero =>
+              exact ⟨ParseError.base k ["<recursion limit>"], by simp [parseE]⟩
+          | succ f =>
+              have hfs : effFirstE sb.bodyFirsts sb = sb.bodyFirsts :=
+                effFirstE_bodyFirsts sb hf
+              have hfail' : ∀ h ∈ effFirstE sb.bodyFirsts sb, h.matches cs = false := by
+                intro hh hmem
+                rw [hfs] at hmem
+                exact hfail hh hmem
+              obtain ⟨e, he⟩ := IH f (Nat.lt_succ_self f) k cs hn hfail'
+              refine ⟨e, ?_⟩
+              show parseE sb .selfE (f + 1) ⟨k, cs⟩ = .error e
+              simp only [parseE]
+              exact he
+
+/-! ## the closed-level print bundle -/
+
+/-- printG's per-node equations (iota). -/
+theorem Grammar.printG_atom (L : Lexeme R) (x : R) :
+    printG (.atom L) x = L.print x := rfl
+theorem Grammar.printG_seq (a : Grammar A) (b : Grammar B) (p : A) (q : B) :
+    printG (.seq a b) (p, q) = (printG a p ++ printG b q) := rfl
+theorem Grammar.printG_alt (a b : Grammar R) (x : R) :
+    printG (.alt a b) x = (if valueOk a x then printG a x else printG b x) := rfl
+theorem Grammar.printG_rep (a : Grammar A) (xs : List A) :
+    printG (.rep a) xs = xs.foldr (fun z acc => printG a z ++ acc) "" := rfl
+theorem Grammar.printG_opt_some (a : Grammar A) (z : A) :
+    printG (.opt a) (Option.some z) = printG a z := rfl
+theorem Grammar.printG_opt_none (a : Grammar A) :
+    printG (.opt a) Option.none = "" := rfl
+theorem Grammar.printG_label (n : String) (a : Grammar A) (x : A) :
+    printG (.label n a) x = printG a x := rfl
+theorem Grammar.printG_rel (m : Kit.Codec Raw R) (owns : R → Bool)
+    (don : ∀ raw r, m.decode raw = Option.some r → owns r = true)
+    (ex : ∀ raw r, m.decode raw = Option.some r → m.encode r = raw)
+    (nm : String) (vld : List String) (sub : Grammar Raw) (x : R) :
+    printG (.rel m owns don ex nm vld sub) x = printG sub (m.encode x) := rfl
+theorem Grammar.printG_fix (m : R → Nat) (body : GrammarE R R)
+    (dec : ∀ x y, SelfPathE body x y → m y < m x) (x : R) :
+    printG (.fix m body dec) x = printFix m body dec x := rfl
+
+/-- valueOk's per-node equations (iota). -/
+theorem Grammar.valueOk_seq (a : Grammar A) (b : Grammar B) (p : A) (q : B) :
+    valueOk (.seq a b) (p, q) = (valueOk a p && valueOk b q) := rfl
+theorem Grammar.valueOk_alt (a b : Grammar R) (x : R) :
+    valueOk (.alt a b) x = (valueOk a x || valueOk b x) := rfl
+theorem Grammar.valueOk_rep (a : Grammar A) (xs : List A) :
+    valueOk (.rep a) xs = xs.all (fun z => valueOk a z) := rfl
+theorem Grammar.valueOk_opt_some (a : Grammar A) (z : A) :
+    valueOk (.opt a) (Option.some z) = valueOk a z := rfl
+theorem Grammar.valueOk_opt_none (a : Grammar A) :
+    valueOk (.opt a) Option.none = true := rfl
+theorem Grammar.valueOk_label (n : String) (a : Grammar A) (x : A) :
+    valueOk (.label n a) x = valueOk a x := rfl
+theorem Grammar.valueOk_rel (m : Kit.Codec Raw R) (owns : R → Bool)
+    (don : ∀ raw r, m.decode raw = Option.some r → owns r = true)
+    (ex : ∀ raw r, m.decode raw = Option.some r → m.encode r = raw)
+    (nm : String) (vld : List String) (sub : Grammar Raw) (x : R) :
+    valueOk (.rel m owns don ex nm vld sub) x = (owns x && valueOk sub (m.encode x)) := rfl
+
+/-- A nonempty foldr-print starts with the head of its first nonempty
+    element (the closed rep case's list induction). -/
+theorem Grammar.foldr_append_head {A : Type} {fs : List HeadSpec} :
+    ∀ (ys : List A) (f : A → String),
+    (∀ z, z ∈ ys → f z ≠ "" → ∀ cs, ∃ h ∈ fs, h.matches ((f z).toList ++ cs) = true) →
+    ys.foldr (fun z acc => f z ++ acc) "" ≠ "" →
+    ∀ cs, ∃ h ∈ fs, h.matches (((ys.foldr (fun z acc => f z ++ acc) "")).toList ++ cs) = true := by
+  intro ys
+  induction ys with
+  | nil => intro f _ hne; simp at hne
+  | cons z zs ih =>
+      intro f hf hne cs
+      show ∃ h ∈ fs, h.matches (((f z ++ zs.foldr (fun w acc => f w ++ acc) "")).toList ++ cs)
+        = true
+      by_cases hz0 : f z = ""
+      · have hne' : zs.foldr (fun w acc => f w ++ acc) "" ≠ "" := by
+          intro h0
+          apply hne
+          show (f z ++ zs.foldr (fun w acc => f w ++ acc) "") = ""
+          rw [hz0, h0]
+          simp
+        obtain ⟨h, hmem, hm⟩ := ih _ (fun w hw => hf w (List.Mem.tail z hw)) hne' cs
+        refine ⟨h, hmem, ?_⟩
+        have hsimpl : ((f z ++ zs.foldr (fun w acc => f w ++ acc) "")).toList ++ cs =
+            (zs.foldr (fun w acc => f w ++ acc) "").toList ++ cs := by
+          rw [hz0]; simp
+        rw [hsimpl]; exact hm
+      · obtain ⟨h, hmem, hm⟩ := hf z (List.Mem.head zs) hz0
+          ((zs.foldr (fun w acc => f w ++ acc) "").toList ++ cs)
+        refine ⟨h, hmem, ?_⟩
+        have hsimpl : ((f z ++ zs.foldr (fun w acc => f w ++ acc) "")).toList ++ cs =
+            (f z).toList ++ ((zs.foldr (fun w acc => f w ++ acc) "").toList ++ cs) := by
+          rw [String.toList_append, List.append_assoc]
+        rw [hsimpl]; exact hm
+
+/-- The closed print bundle: the print-head-vs-FIRST kit at the closed
+    level (the seq-case wall's closed half). -/
+theorem Grammar.printBundleG :
+    {A : Type} → (g : Grammar A) → Predictive g → (x : A) →
+    valueOk g x = true →
+    (nullable g = false → printG g x ≠ "") ∧
+    (printG g x ≠ "" → ∀ cs, ∃ h ∈ effFirst g, h.matches ((printG g x).toList ++ cs) = true) := by
+  intro A g
+  induction g with
+  | atom L =>
+      intro _ x hok
+      have hpre : L.pre x = true := hok
+      have hmunch : (L.munch.all fun p => ([] : List Char).head?.all (fun c => !p c)) = true := by
+        cases L.munch with
+        | none => rfl
+        | some p => simp
+      have hscan := L.print_scan 0 x [] hpre hmunch
+      refine ⟨?_, ?_⟩
+      · intro _
+        intro hne
+        have hne' : L.print x = "" := hne
+        have hc := L.consumes _ _ _ hscan
+        have hl : (L.print x).toList = [] := by rw [hne']; rfl
+        simp [hl] at hc
+      · intro hne cs
+        have hhead := L.scan_head _ _ _ hscan
+        refine ⟨L.head, by show L.head ∈ [L.head]; exact List.Mem.head [], ?_⟩
+        show L.head.matches ((L.print x).toList ++ cs) = true
+        apply HeadSpec.matches_append
+        have h2 := hhead
+        simp only [] at h2
+        have h3 : L.head.matches ((L.print x).toList ++ []) = true := h2
+        rw [List.append_nil] at h3
+        exact h3
+  | seq a b iha ihb =>
+      intro hp x hok
+      obtain ⟨p, q⟩ := x
+      have hp' : Predictive a ∧ Predictive b ∧
+          (∀ s1 ∈ tailFirst a, ∀ s2 ∈ effFirst b, HeadSpec.disj s1 s2 = true) ∧
+          (∀ p' ∈ (tailMunch a).getD [], ∀ s2 ∈ effFirst b, s2.breaks p' = true) := hp
+      obtain ⟨hpa, hpb, h1, h2⟩ := hp'
+      {  -- the seq content
+          have hok' : valueOk a p = true ∧ valueOk b q = true := by
+            have h3 := hok
+            rw [valueOk_seq] at h3
+            simpa [Bool.and_eq_true] using h3
+          obtain ⟨neA, headA⟩ := iha hpa p hok'.1
+          obtain ⟨neB, headB⟩ := ihb hpb q hok'.2
+          refine ⟨?_, ?_⟩
+          · intro hnn
+            rw [printG_seq]
+            have hnn' : (nullable a && nullable b) = false := hnn
+            cases hna : nullable a with
+            | false => exact String.append_left_ne_empty (neA hna)
+            | true =>
+                have hnb : nullable b = false := by
+                  cases h : nullable b with
+                  | true => simp [hna, h] at hnn'
+                  | false => rfl
+                exact String.append_right_ne_empty (neB hnb)
+          · intro hne cs
+            rw [printG_seq] at hne ⊢
+            by_cases hep : printG a p = ""
+            · have hna : nullable a = true := by
+                cases h : nullable a with
+                | false => exact absurd hep (neA h)
+                | true => rfl
+              have hneB : printG b q ≠ "" := by
+                intro hb0
+                rw [hep, hb0] at hne
+                exact hne (by simp)
+              obtain ⟨h, hmem, hm⟩ := headB hneB cs
+              refine ⟨h, ?_, ?_⟩
+              · show h ∈ effFirst a ++ (if nullable a then effFirst b else [])
+                rw [hna]
+                exact List.mem_append_right _ hmem
+              · have hsimpl : (printG a p ++ printG b q).toList ++ cs =
+                    (printG b q).toList ++ cs := by
+                  rw [hep]; simp
+                rw [hsimpl]; exact hm
+            · obtain ⟨h, hmem, hm⟩ := headA hep ((printG b q).toList ++ cs)
+              refine ⟨h, ?_, ?_⟩
+              · show h ∈ effFirst a ++ (if nullable a then effFirst b else [])
+                exact List.mem_append_left _ hmem
+              · have hsimpl : (printG a p ++ printG b q).toList ++ cs =
+                    (printG a p).toList ++ ((printG b q).toList ++ cs) := by
+                  rw [String.toList_append, List.append_assoc]
+                rw [hsimpl]; exact hm
+      }
+  | alt a b iha ihb =>
+      intro hp x hok
+      have hp' : Predictive a ∧ Predictive b ∧
+          (∀ s1 ∈ effFirst a, ∀ s2 ∈ effFirst b, HeadSpec.disj s1 s2 = true) ∧
+          nullable a = false := hp
+      obtain ⟨hpa, hpb, h1, h2⟩ := hp'
+      {  -- the alt content
+          have hd : (valueOk a x || valueOk b x) = true := by
+            have h3 := hok
+            rw [valueOk_alt] at h3
+            exact h3
+          have hb2_of : valueOk a x = false → valueOk b x = true := by
+            intro h0
+            cases h4 : valueOk b x with
+            | true => rfl
+            | false => simp [h0, h4] at hd
+          refine ⟨?_, ?_⟩
+          · intro hnn
+            rw [printG_alt]
+            have hnn' : nullable a = false ∧ nullable b = false := by
+              have h3 : (nullable a || nullable b) = false := hnn
+              simp only [Bool.or_eq_false_iff] at h3
+              exact h3
+            cases hd1 : valueOk a x with
+            | true =>
+                rw [if_pos (show (true : Bool) = true from rfl)]
+                exact (iha hpa x hd1).1 hnn'.1
+            | false =>
+                rw [if_neg (show ¬((false : Bool) = true) from by simp)]
+                exact (ihb hpb x (hb2_of hd1)).1 hnn'.2
+          · intro hne cs
+            rw [printG_alt] at hne ⊢
+            cases hd1 : valueOk a x with
+            | true =>
+                rw [if_pos hd1] at hne
+                rw [if_pos (show (true : Bool) = true from rfl)]
+                obtain ⟨h, hmem, hm⟩ := (iha hpa x hd1).2 hne cs
+                exact ⟨h, List.mem_append_left _ hmem, hm⟩
+            | false =>
+                rw [if_neg (by simp [hd1])] at hne
+                rw [if_neg (show ¬((false : Bool) = true) from by simp)]
+                obtain ⟨h, hmem, hm⟩ := (ihb hpb x (hb2_of hd1)).2 hne cs
+                exact ⟨h, List.mem_append_right _ hmem, hm⟩
+      }
+  | rep a iha =>
+      intro hp xs hok
+      have hp' : Predictive a ∧ nullable a = false ∧
+          (∀ p' ∈ (tailMunch a).getD [], ∀ s2 ∈ effFirst a, s2.breaks p' = true) ∧
+          (∀ s1 ∈ tailFirst a, ∀ s2 ∈ effFirst a, HeadSpec.disj s1 s2 = true) := hp
+      obtain ⟨hpa, h1, h2, h3⟩ := hp'
+      {  -- the rep content
+          have hokAll : ∀ z, z ∈ xs → valueOk a z = true := by
+            have h4 := hok
+            rw [valueOk_rep] at h4
+            exact List.all_eq_true.mp h4
+          refine ⟨?_, ?_⟩
+          · intro hnn
+            simp [nullable] at hnn
+          · intro hne cs
+            rw [printG_rep] at hne ⊢
+            show ∃ h ∈ effFirst a, h.matches
+                ((xs.foldr (fun z acc => printG a z ++ acc) "").toList ++ cs) = true
+            exact foldr_append_head xs (fun z => printG a z)
+              (fun z hz hz0 => (iha hpa z (hokAll z hz)).2 hz0) hne cs
+      }
+  | opt a iha =>
+      intro hp x hok
+      have hp' : Predictive a ∧ nullable a = false := hp
+      obtain ⟨hpa, hnnp⟩ := hp'
+      {  -- the opt content
+          refine ⟨?_, ?_⟩
+          · intro hnn
+            simp [nullable] at hnn
+          · intro hne cs
+            cases x with
+            | none =>
+                rw [printG_opt_none] at hne
+                exact absurd rfl hne
+            | some z =>
+                rw [printG_opt_some] at hne ⊢
+                have hok' : valueOk a z = true := by
+                  have h3 := hok
+                  rw [valueOk_opt_some] at h3
+                  exact h3
+                obtain ⟨h, hmem, hm⟩ := (iha hpa z hok').2 hne cs
+                exact ⟨h, hmem, hm⟩
+      }
+  | label n a iha =>
+      intro hp x hok
+      have hpa : Predictive a := hp
+      {  -- the label content
+          have hok' : valueOk a x = true := by
+            have h3 := hok
+            rw [valueOk_label] at h3
+            exact h3
+          obtain ⟨ne1, hd1⟩ := iha hpa x hok'
+          refine ⟨?_, ?_⟩
+          · intro hnn
+            rw [printG_label]
+            exact ne1 hnn
+          · intro hne cs
+            rw [printG_label] at hne ⊢
+            exact hd1 hne cs
+      }
+  | rel mm owns don ex nm vld sub ih =>
+      intro hp x hok
+      have hps : Predictive sub := hp
+      {  -- the rel content
+          have hok2 : owns x = true ∧ valueOk sub (mm.encode x) = true := by
+            have h3 := hok
+            rw [valueOk_rel] at h3
+            exact Eq.mp (Bool.and_eq_true _ _) h3
+          obtain ⟨ne1, hd1⟩ := ih hps (mm.encode x) hok2.2
+          refine ⟨?_, ?_⟩
+          · intro hnn
+            rw [printG_rel]
+            exact ne1 hnn
+          · intro hne cs
+            rw [printG_rel] at hne ⊢
+            exact hd1 hne cs
+      }
+  | fix m body dec =>
+      intro hp x hok
+      have hp' : GrammarE.PredictiveE body body ∧
+          body.firstE ≠ none ∧ body.nullableE = false ∧ body.tailSelfFreeE = true := hp
+      obtain ⟨hps, hf, hn, ht⟩ := hp'
+      {  -- the fix content
+          have hok' : fixValueOk m body dec x = true := hok
+          obtain ⟨ne1, hd1⟩ := printFixBundle m body dec hn hf x
+            (AccD.ofFuel m x (m x + 1) (Nat.lt_succ_self _)) hok'
+          rw [printG_fix]
+          refine ⟨fun _ => ne1, ?_⟩
+          · intro hne cs
+            obtain ⟨h, hmem, hm⟩ := hd1 cs
+            have hfs : effFirst (Grammar.fix m body dec) = body.bodyFirsts :=
+              Grammar.effFirst_fix m body dec hf
+            rw [hfs]
+            exact ⟨h, hmem, hm⟩
+      }
+/-! ## §5: the closed-level family -/
+
+/-- The closed ok-inversion (same shape, Except-typed). -/
+private theorem Grammar.ok_cur_inv {A : Type} {w : A × Cursor} {v : A} {c : Cursor}
+    (h : (Except.ok w : Except ParseError (A × Cursor)) = Except.ok (v, c)) : w.2 = c :=
+  (Prod.mk.inj (Except.ok.inj h)).2
+
+/-- The closed monotonicity. -/
+theorem Grammar.parseMonoG :
+    ∀ (fuel : Nat) {A : Type} {g : Grammar A} {x : A} {cur cur' : Cursor},
+      parseG g fuel cur = .ok (x, cur') → cur'.cs.length ≤ cur.cs.length := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atom L =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          exact Nat.le_of_lt (L.consumes _ _ _ h)
+      | seq a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseG b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h]
+                  exact Nat.le_trans (ihb hb) (iha ha)
+      | alt a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseG b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h]
+                  exact ihb hb
+              | error e' => simp only [hb] at h; simp at h
+      | rep a iha =>
+          intro xs cur cur' h
+          simp only [parseG] at h
+          have manyMono : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyG a f c = .ok (ys, c') → c'.cs.length ≤ c.cs.length := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0
+                simp only [parseManyG] at h0
+                rw [← ok_cur_inv h0]
+                exact Nat.le_refl _
+            | succ f ih' =>
+                intro hf ys c c' h0
+                simp only [parseManyG] at h0
+                cases hb : parseG a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    rw [← ok_cur_inv h0]
+                    exact Nat.le_refl _
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    have hbody : c₁.cs.length ≤ c.cs.length := by
+                      by_cases hf1 : f + 1 = F
+                      · exact iha (hf1 ▸ hb)
+                      · exact IH (f+1) (by omega) hb
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyG a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          rw [← ok_cur_inv h0]
+                          exact Nat.le_trans (ih' (by omega) zs c₁ c₂ hr) hbody
+                    · rw [if_neg hprog] at h0
+                      rw [← ok_cur_inv h0]
+                      exact hbody
+          exact manyMono F (Nat.le_refl F) xs cur cur' h
+      | opt a iha =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e =>
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact Nat.le_refl _
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+      | label n a iha =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2]
+              exact iha ha
+      | rel mm owns don ex nm vld sub ih =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h]
+                  exact ih ha
+      | fix m body dec =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          exact GrammarE.parseMonoE body F h
+
+/-- The closed consumption lemma (the rep-progress content). -/
+theorem Grammar.parseConsumeG :
+    ∀ (fuel : Nat) {A : Type} {g : Grammar A}, Predictive g →
+      ∀ {x : A} {cur cur' : Cursor},
+      parseG g fuel cur = .ok (x, cur') →
+      nullable g = false → cur'.cs.length < cur.cs.length := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atom L =>
+          intro _ x cur cur' h _
+          simp only [parseG] at h
+          exact L.consumes _ _ _ h
+      | seq a b iha ihb =>
+          intro hp x cur cur' h hnn
+          have hp' : Predictive a ∧ Predictive b ∧
+              (∀ s1 ∈ tailFirst a, ∀ s2 ∈ effFirst b, HeadSpec.disj s1 s2 = true) ∧
+              (∀ p ∈ (tailMunch a).getD [], ∀ s2 ∈ effFirst b, s2.breaks p = true) := hp
+          obtain ⟨hpa, hpb, _, _⟩ := hp'
+          simp only [parseG] at h
+          have hnn' : (nullable a && nullable b) = false := hnn
+          cases ha : parseG a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseG b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h]
+                  cases hna : nullable a with
+                  | false =>
+                      have h1 : cur₁.cs.length < cur.cs.length := iha hpa ha hna
+                      have h2 : cur₂.cs.length ≤ cur₁.cs.length := parseMonoG F hb
+                      exact Nat.lt_of_le_of_lt h2 h1
+                  | true =>
+                      have hnb : nullable b = false := by
+                        cases h2 : nullable b with
+                        | true => simp [hna, h2] at hnn'
+                        | false => rfl
+                      have h1 : cur₁.cs.length ≤ cur.cs.length := parseMonoG F ha
+                      have h2 : cur₂.cs.length < cur₁.cs.length := ihb hpb hb hnb
+                      exact Nat.lt_of_lt_of_le h2 h1
+      | alt a b iha ihb =>
+          intro hp x cur cur' h hnn
+          have hp' : Predictive a ∧ Predictive b ∧ _ ∧ _ := hp
+          obtain ⟨hpa, hpb, _, _⟩ := hp'
+          simp only [parseG] at h
+          have hnn' : (nullable a || nullable b) = false := hnn
+          simp only [Bool.or_eq_false_iff] at hnn'
+          cases ha : parseG a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha hpa ha hnn'.1
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseG b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h]
+                  exact ihb hpb hb hnn'.2
+              | error e' => simp only [hb] at h; simp at h
+      | rep a iha =>
+          intro hp x cur cur' h hnn
+          simp [nullable] at hnn
+      | opt a iha =>
+          intro hp x cur cur' h hnn
+          simp [nullable] at hnn
+      | label n a iha =>
+          intro hp x cur cur' h hnn
+          have hpa : Predictive a := hp
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2]
+              exact iha hpa ha hnn
+      | rel mm owns don ex nm vld sub ih =>
+          intro hp x cur cur' h hnn
+          have hps : Predictive sub := hp
+          simp only [parseG] at h
+          cases ha : parseG sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h]
+                  exact ih hps ha hnn
+      | fix m body dec =>
+          intro hp x cur cur' h hnn
+          have hp' : GrammarE.PredictiveE body body ∧ body.firstE ≠ none ∧
+              body.nullableE = false ∧ body.tailSelfFreeE = true := hp
+          obtain ⟨hps, hf, hn, ht⟩ := hp'
+          simp only [parseG] at h
+          exact GrammarE.parseConsumeE body hn F h (by
+            show GrammarE.nullableE body = false
+            exact hn)
+
+/-- The closed split fact. -/
+theorem Grammar.parseSplitsG :
+    ∀ (fuel : Nat) {A : Type} {g : Grammar A} {x : A} {cur cur' : Cursor},
+      parseG g fuel cur = .ok (x, cur') → ∃ pre, cur.cs = pre ++ cur'.cs := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atom L =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          exact ⟨(L.print x).toList, L.scan_exact _ _ _ h⟩
+      | seq a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseG b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h]
+                  obtain ⟨pa, hpa⟩ := iha ha
+                  obtain ⟨pb, hpb⟩ := ihb hb
+                  exact ⟨pa ++ pb, by rw [hpa, hpb, List.append_assoc]⟩
+      | alt a b iha ihb =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseG b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h]
+                  exact ihb hb
+              | error e' => simp only [hb] at h; simp at h
+      | rep a iha =>
+          intro xs cur cur' h
+          simp only [parseG] at h
+          have splits : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyG a f c = .ok (ys, c') → ∃ pre, c.cs = pre ++ c'.cs := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0
+                simp only [parseManyG] at h0
+                rw [← ok_cur_inv h0]
+                exact ⟨[], rfl⟩
+            | succ f ih' =>
+                intro hf ys c c' h0
+                simp only [parseManyG] at h0
+                cases hb : parseG a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    rw [← ok_cur_inv h0]
+                    exact ⟨[], rfl⟩
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    have hbody : ∃ pre, c.cs = pre ++ c₁.cs := by
+                      by_cases hf1 : f + 1 = F
+                      · exact iha (hf1 ▸ hb)
+                      · exact IH (f+1) (by omega) hb
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyG a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          rw [← ok_cur_inv h0]
+                          obtain ⟨p1, hp1⟩ := hbody
+                          obtain ⟨p2, hp2⟩ := ih' (by omega) zs c₁ c₂ hr
+                          exact ⟨p1 ++ p2, by rw [hp1, hp2, List.append_assoc]⟩
+                    · rw [if_neg hprog] at h0
+                      rw [← ok_cur_inv h0]
+                      exact hbody
+          exact splits F (Nat.le_refl F) xs cur cur' h
+      | opt a iha =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e =>
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact ⟨[], rfl⟩
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h]
+              exact iha ha
+      | label n a iha =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2]
+              exact iha ha
+      | rel mm owns don ex nm vld sub ih =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h]
+                  exact ih ha
+      | fix m body dec =>
+          intro x cur cur' h
+          simp only [parseG] at h
+          exact GrammarE.parseSplitsE body F h
+/-! ## §5b: the closed head/exclusion/exactness family -/
+
+/-- The closed parse-head lemma. -/
+theorem Grammar.parseHeadG :
+    ∀ (fuel : Nat) {A : Type} {g : Grammar A}, Predictive g →
+      ∀ {x : A} {cur cur' : Cursor},
+      parseG g fuel cur = .ok (x, cur') → cur'.cs.length < cur.cs.length →
+      ∃ h ∈ effFirst g, h.matches cur.cs = true := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atom L =>
+          intro _ x cur cur' h _
+          simp only [parseG] at h
+          exact ⟨L.head, by show L.head ∈ [L.head]; exact List.Mem.head [],
+            L.scan_head _ _ _ h⟩
+      | seq a b iha ihb =>
+          intro hp x cur cur' h hlt
+          have hp' : Predictive a ∧ Predictive b ∧ _ ∧ _ := hp
+          obtain ⟨hpa, hpb, _, _⟩ := hp'
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseG b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  rw [← ok_cur_inv h] at hlt
+                  by_cases h1 : cur₁.cs.length < cur.cs.length
+                  · obtain ⟨hh, hmem, hm⟩ := iha hpa ha h1
+                    exact ⟨hh, List.mem_append_left _ hmem, hm⟩
+                  · have hmono := parseMonoG F ha
+                    have heq0 : cur₁.cs.length = cur.cs.length :=
+                      Nat.le_antisymm hmono (Nat.le_of_not_lt h1)
+                    obtain ⟨pre, hpre⟩ := parseSplitsG F ha
+                    have hlen : pre.length = 0 := by
+                      have h3 := congrArg List.length hpre
+                      rw [List.length_append, heq0] at h3
+                      omega
+                    have hpre0 : pre = [] := List.length_eq_zero_iff.mp hlen
+                    have hcs : cur₁.cs = cur.cs := by
+                      rw [hpre0] at hpre
+                      simp at hpre
+                      exact hpre.symm
+                    have hlt' : cur₂.cs.length < cur.cs.length := hlt
+                    have hlt2 : cur₂.cs.length < cur₁.cs.length := by omega
+                    obtain ⟨hh, hmem, hm⟩ := ihb hpb hb hlt2
+                    have hna : nullable a = true := by
+                      cases h2 : nullable a with
+                      | false =>
+                          have h2c : cur₁.cs.length < cur.cs.length :=
+                            parseConsumeG F hpa ha h2
+                          omega
+                      | true => rfl
+                    refine ⟨hh, ?_, ?_⟩
+                    · show hh ∈ effFirst a ++ (if nullable a then effFirst b else [])
+                      rw [hna]
+                      exact List.mem_append_right _ hmem
+                    · rw [hcs] at hm; exact hm
+      | alt a b iha ihb =>
+          intro hp x cur cur' h hlt
+          have hp' : Predictive a ∧ Predictive b ∧ _ ∧ _ := hp
+          obtain ⟨hpa, hpb, _, _⟩ := hp'
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h] at hlt
+              obtain ⟨hh, hmem, hm⟩ := iha hpa ha hlt
+              exact ⟨hh, List.mem_append_left _ hmem, hm⟩
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseG b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  rw [← ok_cur_inv h] at hlt
+                  obtain ⟨hh, hmem, hm⟩ := ihb hpb hb hlt
+                  exact ⟨hh, List.mem_append_right _ hmem, hm⟩
+              | error e' => simp only [hb] at h; simp at h
+      | rep a iha =>
+          intro hp xs cur cur' h hlt
+          have hp' : Predictive a ∧ nullable a = false ∧ _ ∧ _ := hp
+          obtain ⟨hpa, hnn, _, _⟩ := hp'
+          simp only [parseG] at h
+          have heads : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyG a f c = .ok (ys, c') → c'.cs.length < c.cs.length →
+              ∃ h ∈ effFirst a, h.matches c.cs = true := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0 hlt0
+                simp only [parseManyG] at h0
+                rw [← ok_cur_inv h0] at hlt0
+                simp at hlt0
+            | succ f ih' =>
+                intro hf ys c c' h0 hlt0
+                simp only [parseManyG] at h0
+                cases hb : parseG a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    rw [← ok_cur_inv h0] at hlt0
+                    simp at hlt0
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyG a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          rw [← ok_cur_inv h0] at hlt0
+                          by_cases hf1 : f + 1 = F
+                          · exact iha hpa (hf1 ▸ hb) hprog
+                          · exact IH (f+1) (by omega) hpa hb hprog
+                    · rw [if_neg hprog] at h0
+                      rw [← ok_cur_inv h0] at hlt0
+                      exact absurd hlt0 hprog
+          exact heads F (Nat.le_refl F) xs cur cur' h hlt
+      | opt a iha =>
+          intro hp x cur cur' h hlt
+          have hpa : Predictive a ∧ nullable a = false := hp
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e =>
+              simp only [ha] at h
+              rw [← ok_cur_inv h] at hlt
+              simp at hlt
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              rw [← ok_cur_inv h] at hlt
+              exact iha hpa.1 ha hlt
+      | label n a iha =>
+          intro hp x cur cur' h hlt
+          have hpa : Predictive a := hp
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              rw [← h.2] at hlt
+              exact iha hpa ha hlt
+      | rel mm owns don ex nm vld sub ih =>
+          intro hp x cur cur' h hlt
+          have hps : Predictive sub := hp
+          simp only [parseG] at h
+          cases ha : parseG sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  rw [← ok_cur_inv h] at hlt
+                  exact ih hps ha hlt
+      | fix m body dec =>
+          intro hp x cur cur' h hlt
+          have hp' : GrammarE.PredictiveE body body ∧ body.firstE ≠ none ∧
+              body.nullableE = false ∧ body.tailSelfFreeE = true := hp
+          obtain ⟨hps, hf, hn, ht⟩ := hp'
+          simp only [parseG] at h
+          obtain ⟨hh, hmem, hm⟩ := GrammarE.parseHeadE body hn hf F h hlt
+          have hfs : effFirst (Grammar.fix m body dec) = body.bodyFirsts :=
+            Grammar.effFirst_fix m body dec hf
+          rw [hfs]
+          exact ⟨hh, hmem, hm⟩
+
+/-- The closed first-exclusion lemma. -/
+theorem Grammar.parseExcludeG :
+    ∀ (fuel : Nat) {A : Type} {g : Grammar A}, Predictive g →
+      ∀ (k : Nat) (cs : List Char),
+      nullable g = false →
+      (∀ h ∈ effFirst g, h.matches cs = false) →
+      ∃ e, parseG g fuel ⟨k, cs⟩ = .error e := by
+  intro fuel
+  induction fuel using Nat.strongRecOn with
+  | _ F IH =>
+      intro A g
+      induction g with
+      | atom L =>
+          intro _ k cs hnn hfail
+          have h1 : L.head.matches cs = false :=
+            hfail L.head (by show L.head ∈ [L.head]; exact List.Mem.head [])
+          obtain ⟨e, he⟩ := L.head_fail ⟨k, cs⟩ h1
+          exact ⟨e, by simp only [parseG]; exact he⟩
+      | seq a b iha ihb =>
+          intro hp k cs hnn hfail
+          have hp' : Predictive a ∧ Predictive b ∧ _ ∧ _ := hp
+          obtain ⟨hpa, hpb, _, _⟩ := hp'
+          have hnn' : (nullable a && nullable b) = false := hnn
+          cases ha : parseG a F ⟨k, cs⟩ with
+          | error e =>
+              exact ⟨e, by simp only [parseG]; rw [ha]⟩
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              have hsplit := parseSplitsG F ha
+              by_cases hcons : cur₁.cs.length < cs.length
+              · obtain ⟨hh, hmem, hm⟩ := parseHeadG F hpa ha hcons
+                have hbad : hh.matches cs = false :=
+                  hfail hh (List.mem_append_left _ hmem)
+                simp [hm] at hbad
+              · have hmono : cur₁.cs.length ≤ cs.length := parseMonoG F ha
+                have heq0 : cur₁.cs.length = cs.length :=
+                  Nat.le_antisymm hmono (Nat.le_of_not_lt hcons)
+                obtain ⟨pre, hpre⟩ := hsplit
+                have hpre' : cs = pre ++ cur₁.cs := hpre
+                have hlen : pre.length = 0 := by
+                  have h3 := congrArg List.length hpre'
+                  rw [List.length_append, heq0] at h3
+                  omega
+                have hpre0 : pre = [] := List.length_eq_zero_iff.mp hlen
+                have hcs : cur₁.cs = cs := by
+                  rw [hpre0] at hpre'
+                  simp at hpre'
+                  exact hpre'.symm
+                have hna : nullable a = true := by
+                  cases h2 : nullable a with
+                  | false =>
+                      have h2c : cur₁.cs.length < cs.length := parseConsumeG F hpa ha h2
+                      omega
+                  | true => rfl
+                have hnb : nullable b = false := by
+                  cases h2 : nullable b with
+                  | true => simp [hna, h2] at hnn'
+                  | false => rfl
+                have hfailB : ∀ h ∈ effFirst b, h.matches cur₁.cs = false := by
+                  intro hh hmem
+                  have hmem2 : hh ∈ effFirst a ++
+                      (if nullable a then effFirst b else []) := by
+                    rw [hna]
+                    exact List.mem_append_right _ hmem
+                  rw [hcs]
+                  exact hfail hh hmem2
+                obtain ⟨e, he⟩ := ihb hpb cur₁.off cur₁.cs hnb hfailB
+                have he' : parseG b F cur₁ = .error e := he
+                exact ⟨e, by simp only [parseG, ha, he']⟩
+      | alt a b iha ihb =>
+          intro hp k cs hnn hfail
+          have hp' : Predictive a ∧ Predictive b ∧ _ ∧ _ := hp
+          obtain ⟨hpa, hpb, _, _⟩ := hp'
+          have hnn' : (nullable a || nullable b) = false := hnn
+          simp only [Bool.or_eq_false_iff] at hnn'
+          have hfailA : ∀ h ∈ effFirst a, h.matches cs = false :=
+            fun hh hmem => hfail hh (List.mem_append_left _ hmem)
+          have hfailB : ∀ h ∈ effFirst b, h.matches cs = false :=
+            fun hh hmem => hfail hh (List.mem_append_right _ hmem)
+          obtain ⟨ea, hea⟩ := iha hpa k cs hnn'.1 hfailA
+          obtain ⟨eb, heb⟩ := ihb hpb k cs hnn'.2 hfailB
+          exact ⟨ParseError.farther ea eb, by simp only [parseG, hea, heb]⟩
+      | rep a iha =>
+          intro hp k cs hnn _
+          simp [nullable] at hnn
+      | opt a iha =>
+          intro hp k cs hnn _
+          simp [nullable] at hnn
+      | label n a iha =>
+          intro hp k cs hnn hfail
+          have hpa : Predictive a := hp
+          obtain ⟨e, he⟩ := iha hpa k cs hnn hfail
+          have hthis : parseG (.label n a) F ⟨k, cs⟩ =
+              .error { e with valid := [n], message := s!"expected {n}", context := TextKit.Label.at n :: e.context } := by
+            simp only [parseG, he]
+          exact ⟨_, hthis⟩
+      | rel mm owns don ex nm vld sub ih =>
+          intro hp k cs hnn hfail
+          have hps : Predictive sub := hp
+          obtain ⟨e, he⟩ := ih hps k cs hnn hfail
+          exact ⟨e, by simp only [parseG, he]⟩
+      | fix m body dec =>
+          intro hp k cs hnn hfail
+          have hp' : GrammarE.PredictiveE body body ∧ body.firstE ≠ none ∧
+              body.nullableE = false ∧ body.tailSelfFreeE = true := hp
+          obtain ⟨hps, hf, hn, ht⟩ := hp'
+          have hnnE : GrammarE.nullableE body = false := hn
+          have hfailE : ∀ h ∈ GrammarE.effFirstE body.bodyFirsts body,
+              h.matches cs = false := by
+            intro hh hmem
+            apply hfail
+            rw [Grammar.effFirst_fix m body dec hf]
+            rw [GrammarE.effFirstE_bodyFirsts body hf] at hmem
+            exact hmem
+          obtain ⟨e, he⟩ := GrammarE.parseExcludeE body hnnE hf F k cs hnnE hfailE
+          exact ⟨e, by simp only [parseG]; exact he⟩
+/-! ## §5c: law 2 (exactness), closed level -/
+
+/-- THE exactness law, closed level (design §3.3): a successful parse
+    consumed EXACTLY the print of its result, with the offsets and the
+    parsed-values-are-owned conjunct. Premises: the branch-coherence
+    fold ONLY (the wave's documented delta from the design's
+    "unconditional" claim — see `altCoherent`'s docstring). -/
+theorem Grammar.print_parse {A : Type} :
+    ∀ (g : Grammar A) (fuel : Nat), altCoherent g →
+      ∀ {x : A} {cur cur' : Cursor},
+      parseG g fuel cur = .ok (x, cur') →
+      cur.cs = (printG g x).toList ++ cur'.cs ∧
+      cur'.off = cur.off + (printG g x).length ∧
+      valueOk g x = true := by
+  intro g fuel
+  induction fuel using Nat.strongRecOn generalizing g with
+  | _ F IH =>
+      induction g with
+      | atom L =>
+          intro hco x cur cur' h
+          simp only [parseG] at h
+          rw [printG_atom]
+          exact ⟨L.scan_exact _ _ _ h, L.scan_off _ _ _ h, L.scan_post _ _ _ h⟩
+      | seq a b iha ihb =>
+          intro hco x cur cur' h
+          obtain ⟨hcohA, hcohB⟩ := hco
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              cases hb : parseG b F cur₁ with
+              | error e => simp only [ha, hb] at h; simp at h
+              | ok r₂ =>
+                  obtain ⟨y, cur₂⟩ := r₂
+                  simp only [ha, hb] at h
+                  have hcc := Prod.mk.inj (Except.ok.inj h)
+                  obtain ⟨hx1, hx2, hx3⟩ := iha hcohA ha
+                  obtain ⟨hy1, hy2, hy3⟩ := ihb hcohB hb
+                  rw [← hcc.1, ← hcc.2]
+                  rw [printG_seq]
+                  refine ⟨?_, ?_, ?_⟩
+                  · rw [hx1, hy1, String.toList_append, List.append_assoc]
+                  · rw [hy2, hx2, String.length_append]
+                    omega
+                  · rw [valueOk_seq]
+                    simp [hx3, hy3]
+      | alt a b iha ihb =>
+          intro hco x cur cur' h
+          obtain ⟨hcohab, hcohA, hcohB⟩ := hco
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | ok r =>
+              obtain ⟨x₁, cur₁⟩ := r
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              obtain ⟨hx1, hx2, hx3⟩ := iha hcohA ha
+              rw [← hcc.1, ← hcc.2]
+              rw [printG_alt]
+              rw [if_pos hx3]
+              refine ⟨hx1, hx2, ?_⟩
+              rw [valueOk_alt]
+              simp [hx3]
+          | error e =>
+              simp only [ha] at h
+              cases hb : parseG b F cur with
+              | ok r =>
+                  obtain ⟨x₂, cur₂⟩ := r
+                  simp only [hb] at h
+                  have hcc := Prod.mk.inj (Except.ok.inj h)
+                  obtain ⟨hx1, hx2, hx3⟩ := ihb hcohB hb
+                  rw [← hcc.1, ← hcc.2]
+                  rw [printG_alt]
+                  have hdA : valueOk a x₂ = false := by
+                    cases hda : valueOk a x₂ with
+                    | true =>
+                        have := hcohab x₂ hda
+                        simp [hx3] at this
+                    | false => rfl
+                  rw [if_neg (by simp [hdA])]
+                  refine ⟨hx1, hx2, ?_⟩
+                  rw [valueOk_alt]
+                  simp [hx3]
+              | error e' => simp only [hb] at h; simp at h
+      | rep a iha =>
+          intro hco xs cur cur' h
+          simp only [parseG] at h
+          have L : ∀ f, f ≤ F → ∀ ys c c',
+              parseManyG a f c = .ok (ys, c') →
+              c.cs = (ys.foldr (fun z acc => printG a z ++ acc) "").toList ++ c'.cs ∧
+              c'.off = c.off + (ys.foldr (fun z acc => printG a z ++ acc) "").length ∧
+              ys.all (fun z => valueOk a z) = true := by
+            intro f
+            induction f with
+            | zero =>
+                intro hf ys c c' h0
+                simp only [parseManyG] at h0
+                have hcc := Prod.mk.inj (Except.ok.inj h0)
+                rw [← hcc.1, ← hcc.2]
+                simp
+            | succ f ih' =>
+                intro hf ys c c' h0
+                simp only [parseManyG] at h0
+                cases hb : parseG a (f+1) c with
+                | error e =>
+                    simp only [hb] at h0
+                    have hcc := Prod.mk.inj (Except.ok.inj h0)
+                    rw [← hcc.1, ← hcc.2]
+                    simp
+                | ok r =>
+                    obtain ⟨z, c₁⟩ := r
+                    simp only [hb] at h0
+                    have hbody := (show f + 1 = F ∨ f + 1 < F from by omega).elim
+                      (fun hf1 => iha hcoh (hf1 ▸ hb)) (fun hlt => IH (f+1) hlt hcoh hb)
+                    obtain ⟨hz1, hz2, hz3⟩ := hbody
+                    by_cases hprog : c₁.cs.length < c.cs.length
+                    · rw [if_pos hprog] at h0
+                      cases hr : parseManyG a f c₁ with
+                      | error e => simp [hr] at h0
+                      | ok r₂ =>
+                          obtain ⟨zs, c₂⟩ := r₂
+                          simp only [hr] at h0
+                          have hcc := Prod.mk.inj (Except.ok.inj h0)
+                          obtain ⟨hzs1, hzs2, hzs3⟩ := ih' (by omega) zs c₁ c₂ hr
+                          rw [← hcc.1, ← hcc.2]
+                          show (c.cs = ((printG a z ++ zs.foldr (fun w acc => printG a w ++ acc) "")).toList ++ c₂.cs ∧
+                                c₂.off = c.off + (printG a z ++ zs.foldr (fun w acc => printG a w ++ acc) "").length ∧
+                                ((z :: zs).all fun w => valueOk a w) = true)
+                          refine ⟨?_, ?_, ?_⟩
+                          · rw [hz1, hzs1, String.toList_append, List.append_assoc]
+                          · rw [hzs2, hz2, String.length_append]
+                            omega
+                          · simp [hz3, hzs3]
+                    · rw [if_neg hprog] at h0
+                      have hcc := Prod.mk.inj (Except.ok.inj h0)
+                      rw [← hcc.1, ← hcc.2]
+                      show (c.cs = ((printG a z ++ [].foldr (fun w acc => printG a w ++ acc) "")).toList ++ c₁.cs ∧
+                            c₁.off = c.off + (printG a z ++ [].foldr (fun w acc => printG a w ++ acc) "").length ∧
+                            ([z].all fun w => valueOk a w) = true)
+                      refine ⟨?_, ?_, ?_⟩
+                      · rw [hz1]
+                        simp
+                      · rw [hz2]
+                        simp
+                      · simp [hz3]
+          obtain ⟨L1, L2, L3⟩ := L F (Nat.le_refl F) xs cur cur' h
+          rw [printG_rep]
+          exact ⟨L1, L2, by rw [valueOk_rep]; exact L3⟩
+      | opt a iha =>
+          intro hco x cur cur' h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e =>
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              rw [← hcc.1, ← hcc.2]
+              rw [printG_opt_none, valueOk_opt_none]
+              simp
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              obtain ⟨hz1, hz2, hz3⟩ := iha hco ha
+              rw [← hcc.1, ← hcc.2]
+              rw [printG_opt_some, valueOk_opt_some]
+              exact ⟨hz1, hz2, hz3⟩
+      | label n a iha =>
+          intro x cur cur' hco h
+          simp only [parseG] at h
+          cases ha : parseG a F cur with
+          | error e => simp [ha] at h
+          | ok r =>
+              obtain ⟨z, c₁⟩ := r
+              simp only [ha] at h
+              have hcc := Prod.mk.inj (Except.ok.inj h)
+              obtain ⟨hz1, hz2, hz3⟩ := iha hco ha
+              rw [← hcc.1, ← hcc.2]
+              rw [printG_label, valueOk_label]
+              exact ⟨hz1, hz2, hz3⟩
+      | rel mm owns don ex nm vld sub ih =>
+          intro x cur cur' hco h
+          simp only [parseG] at h
+          cases ha : parseG sub F cur with
+          | error e => simp only [ha] at h; simp at h
+          | ok r =>
+              obtain ⟨raw, c₁⟩ := r
+              simp only [ha] at h
+              cases hd : mm.decode raw with
+              | none => simp [hd] at h
+              | some r =>
+                  simp only [hd] at h
+                  have hcc := Prod.mk.inj (Except.ok.inj h)
+                  obtain ⟨hz1, hz2, hz3⟩ := ih hco ha
+                  rw [← hcc.1, ← hcc.2]
+                  have hex : mm.encode r = raw := ex raw r hd
+                  have hown : owns r = true := don raw r hd
+                  rw [printG_rel, valueOk_rel]
+                  rw [hex]
+                  exact ⟨hz1, hz2, by simp [hown, hz3]⟩
+      | fix m body dec =>
+          intro x cur cur' hco h
+          simp only [parseG] at h
+          obtain ⟨hx1, hx2, hx3⟩ := GrammarE.print_parse_E body m dec hco F h
+          rw [printG_fix]
+          have hbr : printFix m body dec x =
+              GrammarE.printWalk body x (fun y _ => fixValueOk m body dec y)
+                (fun y _ => printFix m body dec y) :=
+            printFix_unfold m body dec x
+          rw [hbr]
+          refine ⟨hx1, hx2, ?_⟩
+          have h4 : fixValueOk m body dec x =
+              GrammarE.valueOkWalk body x (fun y _ => fixValueOk m body dec y) :=
+            fixValueOk_unfold m body dec x
+          show Grammar.fixValueOk m body dec x = true
+          rw [h4]
+          exact hx3
+
+end TextKit
+---
+PARKED WORK-IN-PROGRESS (the grammar-laws knot, parked after two agents hit the token wall): does not compile as-is; the senior's partial proof content for the future design round. NOT part of the build.

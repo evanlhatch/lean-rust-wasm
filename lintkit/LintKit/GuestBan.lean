@@ -1,0 +1,139 @@
+/-
+LintKit.GuestBan — the guest-runtime ban as a DECL-CHECK (mined from
+legacy/lean/LintKit/LintKit/GuestBan.lean, which moved the pure predicate
+verbatim from CodegenCore.GuestGate).
+
+The ban: anything whose runtime the WASM guest does not have —
+
+- `Nat.*` — bignum (GMP); the guest's integers are fixed-width
+- `String.*` — UTF-8 objects land with guestlang-std
+- `IO.*` / `Task.*` / `Thunk.*` — host capabilities, not guest code
+
+The scan is SYNTACTIC (constants in the elaborated term, pre-LCNF) and
+over-approximates: `if n == 0` on Nat bans even when the value is always
+small — correct stance for a boundary check.
+
+The lint (`linter.guestlang.guestBan`) is default-OFF tree-wide (the
+recursiveSimpEqns precedent): it answers "would this def pass
+`@[guest_std]`" for EVERY def of a package — a census question, not a
+gate. Enforcement stays with the attributes (`LintKit.GuestGate`).
+Census run:
+  lake exe lintkit --enable=linter.guestlang.guestBan <roots>
+
+The five questions (notes/v3/01-core.md):
+- root: none — the guest boundary's check (pattern #13's predicate).
+- carrier grade: none — host machinery (the ban is a meta-level scan).
+- spine reading: interpretation (env → findings) over the guest ban.
+- ladder rung: n/a.
+- gate row: the guest gate (the attributes) + the census mount.
+-/
+module
+
+public import LintKit.DeclCheck
+
+public meta section
+
+open Lean Meta Linter EnvLinter
+
+namespace LintKit.GuestBan
+
+/-- The BAN LEVEL: strict (the app-authoring surface) vs std (the
+    guestlang-std authoring surface — match-only Nat is fine: the LCNF
+    for a match on Nat = ctor dispatch on the zero/succ object, no GMP
+    arithmetic; Nat ARITHMETIC consts stay banned). String opens up in
+    std mode too (the std runtime implements it). -/
+inductive Ban where
+  | strict | std
+
+/-- Banned root namespaces → the reason (shown in the error). -/
+def bannedAt? (level : Ban) (n : Name) : Option String :=
+  let root := n.getRoot
+  if root == `IO then some "IO is a host capability — guest functions must be pure over guestlang-std's WASI layer"
+  else if root == `Task then some "Task is the host scheduler — not guest code"
+  else if root == `Thunk then some "Thunk (laziness) needs heap + scheduler — not guest code"
+  else if root == `Nat then
+    match level with
+    | .strict => some "Nat is bignum (GMP) — the guest has fixed-width integers only (use UInt64/Int64)"
+    | .std =>
+      -- match-only Nat is std-legal; ARITHMETIC is GMP — banned
+      let s := n.toString
+      let arith := ["Nat.add", "Nat.sub", "Nat.mul", "Nat.div", "Nat.mod",
+        "Nat.pred", "Nat.pow", "Nat.gcd", "Nat.log2"].any (fun op => s == op || s.startsWith (op ++ "."))
+      if arith then some "Nat arithmetic is GMP — std code may only MATCH on Nat (zero/succ patterns)"
+      else none
+  else if root == `String then
+    match level with
+    | .strict => some "String runtime lands with guestlang-std — not yet compilable"
+    | .std => none
+  else none
+
+/-- PURE predicate: every banned constant root in the Expr, in scan
+order, deduped. The testable core of the `@[guest]`/`@[guest_std]`
+gates. Scan = core's memoized `Expr.getUsedConstants` REVERSED: the
+original hand-fold visited argument-before-function / body-before-type
+(reverse pre-order — e.g. `f Nat.x` lists `"Nat"` before `"IO"` for
+`IO.println (Nat.add ..)`). -/
+def checkExprAt (level : Ban) (e : Expr) (acc : List String := []) : List String :=
+  e.getUsedConstants.toList.reverse.foldl (init := acc) fun a n =>
+    match (bannedAt? level n).map fun _ => n.getRoot.toString with
+    | some h => if a.contains h then a else a ++ [h]
+    | none => a
+
+/-- The strict predicate (the `@[guest]` surface). -/
+def checkExpr (e : Expr) (acc : List String := []) : List String :=
+  checkExprAt .strict e acc
+
+/-- One rendered violation line (the `- \`X\` — reason` row), at the
+    check's OWN ban level — the `@[guest_std]` error must not render
+    STRICT reasons. Violations are ROOTS: at `.std` a `Nat` root can
+    only have come from ARITHMETIC (match-only Nat is legal), so the
+    reason is the arithmetic one, not the strict bignum one. -/
+def reasonLine (level : Ban) (v : String) : String :=
+  let why? := match level, v with
+    | .std, "Nat" =>
+      some "Nat arithmetic is GMP — std code may only MATCH on Nat (zero/succ patterns)"
+    | _, _ => bannedAt? level v.toName
+  match why? with
+  | some why => s!"- `{v}` — {why}"
+  | none => s!"- `{v}`"
+
+/-- Rendered reason for each violation (for the elab error), at the
+    check's OWN ban level. -/
+def reasons (level : Ban) (violations : List String) : String :=
+  String.intercalate "\n" (violations.map (reasonLine level))
+
+/-- The guest ban as the SHARED decl-check: scan the def's type +
+    value at `level`; one diag carrying the historical error text
+    (`attrName` is the mount's display name — the gate throws the message
+    verbatim, the lint reports it). Non-defs are NOT findings: the lint
+    mount sweeps every decl kind, and "wrong kind" is not a violation —
+    the attribute's "applies to defs only" error is gate-side misuse
+    validation (in `LintKit.GuestGate.checkGuestAt`), like the
+    guest-mark write. -/
+def guestBanCheck (attrName : String) (level : Ban) : LintKit.DeclCheck :=
+  fun decl env =>
+    match env.find? decl with
+    | some (.defnInfo di) =>
+        let violations := checkExprAt level di.type (checkExprAt level di.value [])
+        if violations.isEmpty then []
+        else [{ code := String.intercalate "," violations
+              , message := s!"`@{attrName}` function `{decl}` is not guest-compilable:\n{reasons level violations}" }]
+    | _ => []
+
+/-- The LINT mount: the std-level ban as a report (default off — see the
+    option's comment). -/
+meta def guestBanLinter : EnvLinter :=
+  LintKit.mountAsLinter (guestBanCheck "guest_std" .std)
+    "no declaration uses runtimes the WASM guest cannot compile"
+    "declarations using banned guest runtimes (the `@[guest_std]` ban)"
+
+end LintKit.GuestBan
+
+-- Census linter, default OFF (see the comment above): the
+-- `register_guestlang_linter` one-liner (LintKit.Basic) keeps the exact
+-- name + default the gates call by.
+register_guestlang_linter linter.guestlang.guestBan
+  LintKit.GuestBan.guestBanLinter default_false
+  "report declarations that would FAIL `@[guest_std]` (banned \
+    guest runtimes: IO/Task/Thunk, Nat arithmetic) — default off: a census \
+    lint, not a gate; the `@[guest]`/`@[guest_std]` attributes enforce"

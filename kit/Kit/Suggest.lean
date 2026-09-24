@@ -1,22 +1,25 @@
 /-
-# Kit.Suggest — the ONE did-you-mean engine
+# Kit.Suggest — the did-you-mean routes (the shim over the ONE engine)
 
-The closed-world error discipline (15-patterns #16): every failure over a
-closed world ENUMERATES the valid space + appends the did-you-mean —
-one engine, one suffix. `suggestFor` is that suffix AS DATA: `none` =
-nothing close, `some s` = the rendered suffix the consumer appends (or
-stamps into `Diag.suggest` — Kit.Diag's `closedWorld` constructor is the
-first consumer).
+The closed-world error discipline (15-patterns #16): every failure over
+a closed world ENUMERATES the valid space + appends the did-you-mean —
+one engine, one suffix. THE CONVERGENCE ORDER: the engine's ONE home is
+`TextKit.Suggest` (the cone/build call — the module-system C0 substrate
+at the lowest point both diagnostic sides import; a `module` file
+cannot import a pre-`module` file, so textkit→kit is build-impossible
+and the engine lives down, where Kit already imports TextKit). These
+`Kit`-namespaced definitions DELEGATE to it — kept so every Kit-side
+consumer (`Kit.Diag.closedWorld`'s shim, FreshName, the KitTests pins)
+is interface-preserved.
 
 Provenance: mined from
 `legacy/lean/codegen-core/CodegenCore/DidYouMean.lean` (the ranked
-engine — landed here as `Kit.didYouMean`, Kit.Registry) +
+engine — landed at TextKit.Suggest as `TextKit.didYouMean`) +
 `GenKit.lean` (`didYouMeanSuffix` — the one tree-wide suffix format,
-ported verbatim as `suggestSuffix`). The bounded edit distance
-(`editDistance?`) names the exact-semantics wrapper over core
-`Lean.EditDistance.levenshtein` (the compiler's own cutoff-bounded DP).
+`TextKit.suggestSuffix`).
 
-Core-only (no mathlib/Batteries); `Lean.EditDistance` is core.
+Core-only (no mathlib/Batteries); the engine's `Lean.EditDistance` is
+core.
 
 The five questions (notes/v3/01-core.md):
 - root: DATA — a pure suggestion value over String/List, no behavior.
@@ -29,42 +32,35 @@ The five questions (notes/v3/01-core.md):
   (KitTests: known-answer + ordering pins + the negative control).
 -/
 
-import Lean
-import Kit.Registry
+import TextKit.Suggest
 
 namespace Kit
 
 /-! ## the bounded edit distance -/
 
 /-- The edit distance between `a` and `b`, when it is at most
-    `maxDist`. `none` = the true distance exceeds the bound (core
-    `levenshtein`'s `some` is NOT guaranteed to be under the cutoff —
-    the explicit filter keeps the semantics exact). -/
+    `maxDist`. `none` = the true distance exceeds the bound.
+    DELEGATION: `TextKit.editDistance?` is the ONE engine. -/
 def editDistance? (a b : String) (maxDist : Nat := 3) : Option Nat :=
-  match Lean.EditDistance.levenshtein a b (maxDist + 1) with
-  | some dist => if dist ≤ maxDist then some dist else none
-  | none => none
+  TextKit.editDistance? a b maxDist
 
 /-! ## the suffix (the one tree-wide did-you-mean format) -/
 
 /-- The did-you-mean suffix every closed-world error path appends —
     the legacy `GenKit.didYouMeanSuffix` format, verbatim: the ranked
-    candidates (`Kit.didYouMean`, nearest first, ties lexicographic),
-    joined `", "`; empty ranking = empty suffix (no close match, no
-    guess). -/
+    candidates (`TextKit.didYouMean`, nearest first, ties
+    lexicographic), joined `", "`; empty ranking = empty suffix (no
+    close match, no guess). DELEGATION: `TextKit.suggestSuffix`. -/
 def suggestSuffix (got : String) (valid : List String) (maxDist : Nat := 3) : String :=
-  let c := Kit.didYouMean got valid maxDist
-  if c.isEmpty then "" else s!" — did you mean: {String.intercalate ", " c}?"
+  TextKit.suggestSuffix got valid maxDist
 
 /-- The suffix as data: `none` = nothing close (the error still
     enumerates `valid` — the enumeration is the message, the suffix is
     the shortcut), `some s` = the rendered did-you-mean. THE consumer
     route for every closed-world failure (Kit.Diag's `closedWorld`
-    fills its `suggest` field here). -/
+    fills its `suggest` field here). DELEGATION: `TextKit.suggestFor`. -/
 def suggestFor (got : String) (valid : List String) (maxDist : Nat := 3) :
     Option String :=
-  match suggestSuffix got valid maxDist with
-  | "" => none
-  | s => some s
+  TextKit.suggestFor got valid maxDist
 
 end Kit

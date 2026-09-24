@@ -2,7 +2,7 @@
 # SchemaCore.Pred — the check lane's predicate fragment (the seed of the
 relational predicate core)
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/02-data-plane.md §1-2 (the schema describes
 valid worlds; a row predicate is a constraint over one row; a failed
 check carries the VIOLATING ROWS); notes/v3/15-patterns.md #1 (the

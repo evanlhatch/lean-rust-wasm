@@ -28,10 +28,19 @@ private structure Cli where
   cfg : DriverConfig
   mods : Array Name
 
-def Cli.gatedRoots : Array Name := #[`Kit, `TextKit, `TestKit, `LintKit, `Gates, `SchemaCore]
+def Cli.gatedRoots : Array Name := #[`Kit, `TextKit, `TestingKit, `LintKit, `Gates, `Wit, `SchemaCore, `ZSet, `Machines, `Query, `Guest]
+
+/-- The tree's srcDir layout (lakefile.toml): the gated roots' source
+mounts, so the text lints resolve sources from the repo-root cwd. A
+`--src-root=` flag adds mappings on top. -/
+def Cli.defaultSrcRoots : Array (Name × String) :=
+  #[(`Kit, "kit"), (`TextKit, "textkit"), (`TestingKit, "testingkit"),
+    (`LintKit, "lintkit"), (`Gates, "gates"), (`Wit, "wit"),
+    (`SchemaCore, "schemacore"), (`ZSet, "zset"), (`Machines, "machines"),
+    (`Query, "query"), (`Guest, "guest")]
 
 def Cli.parse (args : List String) : Cli := Id.run do
-  let mut cfg : DriverConfig := {}
+  let mut cfg : DriverConfig := { srcRoots := Cli.defaultSrcRoots }
   let mut mods : Array Name := #[]
   for a in args do
     if let some n := a.dropPrefix? "--disable=" then
@@ -42,6 +51,12 @@ def Cli.parse (args : List String) : Cli := Id.run do
       cfg := { cfg with extraPrefixes :=
         if cfg.extraPrefixes.isEmpty then p.toString
         else cfg.extraPrefixes ++ "," ++ p.toString }
+    else if let some rs := a.dropPrefix? "--src-root=" then
+      -- repeatable `--src-root=<module-root>=<dir>`: extra source mounts
+      -- for the text lints (non-gated roots linted by hand)
+      match rs.toString.splitOn "=" with
+      | [r, dir] => cfg := { cfg with srcRoots := cfg.srcRoots.push (r.toName, dir) }
+      | _ => pure ()  -- malformed flag: ignored (the usage line documents the shape)
     else
       mods := mods.push a.toName
   let roots := if mods.isEmpty then Cli.gatedRoots else mods
@@ -57,12 +72,20 @@ unsafe def main (args : List String) : IO UInt32 := do
     (trustLevel := 1024) (loadExts := true)
   let (findings, _) ← (LintKit.lintModules mods cfg).toIO
     { fileName := "<lintkit>", fileMap := default } { env }
+  let roots := mods.map (·.getRoot)
+  let (textFindings, missing) ← runTextLintsOnModules env roots cfg
+  for m in missing do
+    IO.eprintln s!"warning: no source file found for module `{m}` — text \
+      lints skipped for it"
   let mut failed := false
   for f in findings do
     IO.println f.message
     failed := true
+  for f in textFindings do
+    IO.println s!"{f.file}:{f.line}: [{f.linter}] {f.message}"
+    failed := true
   if failed then
-    IO.println s!"lintkit: {findings.size} finding(s) in \
+    IO.println s!"lintkit: {findings.size + textFindings.size} finding(s) in \
       {String.intercalate " " (mods.map toString).toList}"
     return 1
   IO.println s!"lintkit: clean ({String.intercalate " " (mods.map toString).toList})"

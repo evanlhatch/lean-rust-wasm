@@ -2,35 +2,46 @@
 # Kit.Obligation — the obligation substrate (the discharge tier system)
 
 Every checkable fact as data (15-patterns #4): label + computed tier +
-payload + provenance + closed evidence; the discharge backends live
-once HERE; a row whose evidence's tier mismatches the obligation's
-fails construction (`Discharged` — armed-but-unfired becomes
-unrepresentable); an undischarged obligation is a loud gap.
+payload + provenance + closed evidence — and THE CLAIM ITSELF, as the
+TYPE INDEX: `Obligation α P` is indexed by the proposition `P` the row
+claims (notes/v3/04-verification.md §2 + the review's correction: a
+discharge must prove the ACTUAL claim, never a claim-shaped name). The
+backends discharge the obligation's OWN index — a discharge whose
+content does not prove `P` FAILS TO ELABORATE (the mis-wire rule's
+deepest promotion: today it is not merely detected, it is
+unrepresentable). An undischarged obligation is a loud gap.
 
 Provenance: mined from `legacy/lean/codegen-core/CodegenCore/Kit.lean`
 (the `Obligation` section, verbatim theorem content for the
 `decideEvidence`/`decideDischarge` family + their soundness/
-completeness theorems). Deliberately OUT (no consumer in this
-landing): the certificate-citation resolution gate (legacy C7 —
-`Dbsp.Certs.#check_cert`'s home is downstream, not core).
+completeness theorems), then indexed by the claim. Deliberately OUT
+(no consumer in this landing): the certificate-citation resolution
+gate (legacy C7 — `Dbsp.Certs.#check_cert`'s home is downstream, not
+core).
 
 Core-only: `Name`/`String` are prelude types — nothing schema-shaped
 crosses this line.
 
 The five questions (notes/v3/01-core.md):
 - root: none — the discipline layer's substrate over checkable facts
-  (01 §4: an obligation = a correspondence instance + tier + evidence).
-- carrier grade: none of its own — a row PACKAGES tier + evidence;
-  the mis-wire rule (tier mismatch fails construction) is the
-  unrepresentable grade.
+  (01 §4: an obligation = a correspondence instance + tier + evidence,
+  with the claimed proposition as the index).
+- carrier grade: none of its own — a row PACKAGES tier + evidence; the
+  mis-wire rules are the unrepresentable grade (tier mismatch fails
+  `Discharged`'s construction; claim mismatch fails to ELABORATE — the
+  claim is the index, the backends take none).
 - spine reading: none — the lanes' obligations ride it; nothing is
-  accumulated or read here.
+  accumulated or read here. (A collection face over heterogeneous
+  claims would be a `Σ`-wrapper — no consumer yet, so it does not
+  exist: the leftover rule.)
 - ladder rung: this file DEFINES the tier set (the rung vocabulary:
   provedAtElab > decidableNow > generatedCheck > oracleSwept >
   guestVerified); the backends' soundness/completeness are hand
-  theorems, ported verbatim.
+  theorems, ported verbatim, restated at the indexed strength (a
+  discharge PROVES the indexed claim — the type says it).
 - gate row: none yet — Kit is outside Gates.Packages' gated set;
   KitTests.Axioms pins the backends' axiom cones.
+
 -/
 
 import Lean
@@ -89,31 +100,43 @@ def Evidence.tier : Evidence → Tier
   | .oracleRow _ => .oracleSwept
   | .guestWitness _ _ => .guestVerified
 
-/-! ## The obligation as data -/
+/-! ## The obligation as data — indexed by its claim -/
 
-/-- A checkable fact as data: the label, the computed discharge tier,
-    the lane's own payload, and the declaring declaration. Registration
-    COMPUTES the tier; backends READ it. -/
-structure Obligation (α : Type) where
+/-- A checkable fact as data, INDEXED BY ITS CLAIM: the label, the
+    computed discharge tier, the lane's own payload, and the declaring
+    declaration — with the claimed proposition `P` as the TYPE INDEX.
+    Registration COMPUTES the tier; backends READ it and discharge `P`
+    itself (no claim parameter exists to mis-wire). The claim's content
+    stays opaque (a Prop — the display faces read the label + tier +
+    payload, never the claim's content). -/
+structure Obligation (α : Type) (P : Prop) where
   label : String
   tier : Tier
   payload : α
   provenance : Lean.Name
 deriving Inhabited
 
-/-- A discharge: the obligation plus its evidence, with the MIS-WIRE
-    RULE IN THE TYPE — `Evidence.tier ev` must equal `o.tier`, so a
-    tier-mismatched discharge fails to construct. (`tierOK` defaults to
+/-- The row's claim, as a projection: the type index, named for the
+    soundness statements' reading — `decideDischarge_sound` concludes
+    `o.claim`. Definitionally `P` (an `abbrev`: the instance search in
+    the soundness bodies must see through it). -/
+abbrev Obligation.claim {α : Type} {P : Prop} (_o : Obligation α P) : Prop := P
+
+/-- A discharge: the obligation plus its evidence, with BOTH mis-wire
+    rules in the type — `Evidence.tier ev` must equal `o.tier` (the
+    tier mismatch fails to construct), and the obligation's claim is
+    the index `P` (a discharge filed under a different claim is a
+    different TYPE — it fails to elaborate). (`tierOK` defaults to
     `by decide` — for concrete obligations + evidence the mismatch is a
     `decide`-refutable literal.) -/
-structure Discharged (α : Type) where
-  obligation : Obligation α
+structure Discharged (α : Type) (P : Prop) where
+  obligation : Obligation α P
   evidence : Evidence
   tierOK : evidence.tier = obligation.tier := by decide
 
 /-- The data-level mis-wire check (for surfaces that inspect, not
     construct): the tiers disagree — the loud, greppable gap. -/
-def tierMismatch (o : Obligation α) (e : Evidence) : Bool :=
+def tierMismatch (o : Obligation α P) (e : Evidence) : Bool :=
   e.tier != o.tier
 
 /-! ## The decidableNow backend — ONE implementation, many lanes -/
@@ -148,22 +171,24 @@ theorem Obligation.decideEvidence_of_claim {claim : Prop} [Decidable claim]
 
 /-- The tier-GATED application: only the `decidableNow` rung is served
     by this backend (`none` = the loud gap: a hand-set tier the lane
-    cannot serve, or a FALSE decide verdict). `claim` is the lane's
-    claim over the OBLIGATION; the `Decidable` instance is the lane's
-    decision procedure. -/
-def Obligation.decideDischarge {α : Type} (claim : Obligation α → Prop)
-    [∀ o : Obligation α, Decidable (claim o)] (o : Obligation α) :
-    Option Evidence :=
+    cannot serve, or a FALSE decide verdict). THE CLAIM IS THE
+    OBLIGATION'S OWN INDEX — there is no claim parameter to mis-wire;
+    `P`'s `Decidable` instance is the lane's decision procedure. -/
+def Obligation.decideDischarge {α : Type} {P : Prop} (o : Obligation α P)
+    [Decidable P] : Option Evidence :=
   match o.tier with
-  | .decidableNow => decideEvidence (claim o)
+  | .decidableNow => decideEvidence P
   | .provedAtElab | .generatedCheck | .oracleSwept | .guestVerified => none
 
-/-- SOUNDNESS of the tier-gated application (the per-lane `*_sound`
-    bodies route through here). -/
-theorem Obligation.decideDischarge_sound {α : Type} (claim : Obligation α → Prop)
-    [∀ o : Obligation α, Decidable (claim o)] (o : Obligation α)
+/-- SOUNDNESS of the tier-gated application, AT THE INDEXED STRENGTH:
+    a discharge proves the obligation's OWN claim — the conclusion is
+    the index `P` (`o.claim`, definitionally), so a discharge whose
+    content proves a different proposition cannot state this theorem
+    (the per-lane `*_sound` bodies route through here). -/
+theorem Obligation.decideDischarge_sound {α : Type} {P : Prop}
+    (o : Obligation α P) [Decidable P]
     (ht : o.tier = .decidableNow)
-    (h : o.decideDischarge claim = some (.decided true)) : claim o := by
+    (h : o.decideDischarge = some (.decided true)) : o.claim := by
   unfold decideDischarge at h
   rw [ht] at h
   exact decideEvidence_sound h
@@ -171,10 +196,10 @@ theorem Obligation.decideDischarge_sound {α : Type} (claim : Obligation α → 
 /-- COMPLETENESS of the tier-gated application: a true claim discharges
     to the `.decided true` evidence — the backend FIRES on the claims
     it can decide. -/
-theorem Obligation.decideDischarge_of_claim {α : Type} (claim : Obligation α → Prop)
-    [∀ o : Obligation α, Decidable (claim o)] (o : Obligation α)
-    (ht : o.tier = .decidableNow) (hc : claim o) :
-    o.decideDischarge claim = some (.decided true) := by
+theorem Obligation.decideDischarge_of_claim {α : Type} {P : Prop}
+    (o : Obligation α P) [Decidable P]
+    (ht : o.tier = .decidableNow) (hc : P) :
+    o.decideDischarge = some (.decided true) := by
   unfold decideDischarge
   rw [ht]
   exact decideEvidence_of_claim hc

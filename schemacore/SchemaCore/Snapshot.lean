@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Snapshot — the registry-state serialization (the universe snapshot)
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/03-bidirectional.md §7 (the snapshot is the
 substrate the committed delta checks against — the breaking gate reads
 THIS file's format); notes/v3/09-gates-ops.md §3-4 (the committed
@@ -26,6 +26,30 @@ is the lossy one, never this baseline).
   write-side gate, the emitter's law);
 - LF line endings, every line newline-terminated, the empty file IS
   the empty universe.
+
+## Riding TextKit (the 10-sequencing rule: no second parser plumbing)
+
+The parser's plumbing is TextKit's, not hand-rolled:
+- the token scans (ty keywords, item/field names) are
+  `TextKit.Parser.takeWhile` — ONE maximal-prefix scan returning token
+  + rest, with `TextKit.takeWhile_stop`/`TextKit.takeDrop_head` as the
+  inversion lemmas (TextKit.Lemmas owns them); the file carries NO
+  local takeWhile/dropWhile pair or its lemmas;
+- the literal prefixes (`item `, `field `) are `TextKit.expect` (the
+  kit's `expect_self` is the round-trip face — no local copy);
+- the bounded cap's digits are `TextKit.scanNat`.
+
+HONEST RESIDUE (the local machinery that stays):
+- the carrier is `Except String` (the loud refusal messages ARE the
+  format's contract), so the delimiter discipline (the paren/comma/
+  space structure inside `parseTy`, the newline arm of `parseFields`)
+  is structural matching, not TextKit combinators — moving it onto
+  GParser would re-key the errors and change the laws' statements;
+- the line/item loop fuel stays: it is the genuine recursion measure
+  (one unit per field/item), not an artifact of hand-rolled plumbing;
+  TextKit's `many` covers a different carrier;
+- `natText` (the cap's renderer) is format content — its OWN encoding,
+  proved round-trip below — not parsing plumbing.
 
 ## The laws (honest, at this size)
 
@@ -71,12 +95,58 @@ The five questions (notes/v3/01-core.md):
   gen-check's, one tie per artifact).
 -/
 
+import Kit.Diag
 import SchemaCore.Item
 import SchemaCore.Register
+import TextKit.Lemmas
 
 namespace SchemaCore
 
 open Kit
+
+/-! ## the refusal envelope (05 §4: the failure KINDS as registry codes) -/
+
+/-- The SN family — the snapshot lane's E-codes, allocated from the
+    PERSISTED registry (`notes/code-registry.txt`, the spec of record;
+    05 §4's stable-allocation rule). The constants are the family's
+    declaration, the code-registry gate's coverage scan ties the
+    spellings to the live rows. -/
+def eSN0001 : Kit.ECode := ⟨"SN0001"⟩
+def eSN0002 : Kit.ECode := ⟨"SN0002"⟩
+def eSN0003 : Kit.ECode := ⟨"SN0003"⟩
+def eSN0004 : Kit.ECode := ⟨"SN0004"⟩
+def eSN0005 : Kit.ECode := ⟨"SN0005"⟩
+def eSN0006 : Kit.ECode := ⟨"SN0006"⟩
+def eSN0007 : Kit.ECode := ⟨"SN0007"⟩
+def eSN0008 : Kit.ECode := ⟨"SN0008"⟩
+def eSN0009 : Kit.ECode := ⟨"SN0009"⟩
+def eSN0010 : Kit.ECode := ⟨"SN0010"⟩
+def eSN0011 : Kit.ECode := ⟨"SN0011"⟩
+def eSN0012 : Kit.ECode := ⟨"SN0012"⟩
+def eSN0013 : Kit.ECode := ⟨"SN0013"⟩
+def eSN0014 : Kit.ECode := ⟨"SN0014"⟩
+def eSN0015 : Kit.ECode := ⟨"SN0015"⟩
+def eSN0016 : Kit.ECode := ⟨"SN0016"⟩
+def eSN0017 : Kit.ECode := ⟨"SN0017"⟩
+def eSN0018 : Kit.ECode := ⟨"SN0018"⟩
+def eSN0019 : Kit.ECode := ⟨"SN0019"⟩
+def eSN0020 : Kit.ECode := ⟨"SN0020"⟩
+def eSN0021 : Kit.ECode := ⟨"SN0021"⟩
+def eSN0022 : Kit.ECode := ⟨"SN0022"⟩
+def eSN0023 : Kit.ECode := ⟨"SN0023"⟩
+def eSN0024 : Kit.ECode := ⟨"SN0024"⟩
+def eSN0025 : Kit.ECode := ⟨"SN0025"⟩
+def eSN0026 : Kit.ECode := ⟨"SN0026"⟩
+def eSN0027 : Kit.ECode := ⟨"SN0027"⟩
+
+/-- The snapshot's refusal, in the ONE envelope's rendering: the failure
+    kind rides the registry's SN row, the text keeps the `snapshot:`
+    channel prefix. The parser's refusals are positional/structural (no
+    single `got` to enumerate a valid space over), so the literal Diag
+    is the honest shape; the closed-world refusal (the unknown type
+    token) constructs through `Kit.Diag.closedWorld` directly. -/
+def snapshotDiag (code : Kit.ECode) (message : String) : String :=
+  Kit.Diag.toString { code := code, message := s!"snapshot: {message}" }
 
 /-! ## the encoding -/
 
@@ -99,21 +169,49 @@ decreasing_by
   simp_wf
   omega
 
-/-- The snapshot spelling of a `Ty`: paren encoding, no spaces (the
-    legacy `Ty.toSnapshot`'s discipline, over the slice's universe).
-    The literal apps are split (`"option" ++ "("`) so the char-level
-    proofs see every separator — the VALUE is byte-identical. -/
-def tyText : Ty → String
-  | .bool => "bool"
-  | .u64 => "u64"
-  | .i64 => "i64"
-  | .string => "string"
-  | .option t => "option" ++ "(" ++ tyText t ++ ")"
-  | .list t => "list" ++ "(" ++ tyText t ++ ")"
-  | .result a b => "result" ++ "(" ++ tyText a ++ "," ++ tyText b ++ ")"
-  | .map k v => "map" ++ "(" ++ renderKeyTy k ++ "," ++ tyText v ++ ")"
-  | .set k => "set" ++ "(" ++ renderKeyTy k ++ ")"
-  | .bounded n => "bounded" ++ "(" ++ natText n ++ ")"
+/-- The snapshot spelling's ALGEBRA (the foldTy row set — the ONE
+    walk's snapshot face). The literal apps are split (`"option" ++ "("`)
+    so the char-level proofs see every separator — the VALUE is
+    byte-identical to the fused spelling (the legacy `Ty.toSnapshot`'s
+    discipline, over the slice's universe). The map/set rows consume
+    the KEY directly (`renderKeyTy` — no `Ty` re-entry, Ty.lean's
+    scalar-sub-universe discipline). -/
+def snapshotAlg : TyAlg String where
+  bool := "bool"
+  u64 := "u64"
+  i64 := "i64"
+  string := "string"
+  option a := "option" ++ "(" ++ a ++ ")"
+  list a := "list" ++ "(" ++ a ++ ")"
+  result a b := "result" ++ "(" ++ a ++ "," ++ b ++ ")"
+  map k v := "map" ++ "(" ++ renderKeyTy k ++ "," ++ v ++ ")"
+  set k := "set" ++ "(" ++ renderKeyTy k ++ ")"
+  bounded n := "bounded" ++ "(" ++ natText n ++ ")"
+
+/-- The snapshot spelling of a `Ty` = the fold over `snapshotAlg` (the
+    migration: ONE walk, the emitter's rows as data — a new `Ty` ctor
+    refuses to compile until this algebra grows its row). -/
+def tyText : Ty → String := foldTy snapshotAlg
+
+/-- The fold's equations in the char-proof-facing form (each `rfl`:
+    the fold's structural reduction + the algebra row — `parseTy_tyText`
+    and its dependents consume THESE). -/
+theorem tyText_bool : tyText .bool = "bool" := rfl
+theorem tyText_u64 : tyText .u64 = "u64" := rfl
+theorem tyText_i64 : tyText .i64 = "i64" := rfl
+theorem tyText_string : tyText .string = "string" := rfl
+theorem tyText_option (t : Ty) :
+    tyText (.option t) = "option" ++ "(" ++ tyText t ++ ")" := rfl
+theorem tyText_list (t : Ty) :
+    tyText (.list t) = "list" ++ "(" ++ tyText t ++ ")" := rfl
+theorem tyText_result (a b : Ty) :
+    tyText (.result a b) = "result" ++ "(" ++ tyText a ++ "," ++ tyText b ++ ")" := rfl
+theorem tyText_map (k : KeyTy) (v : Ty) :
+    tyText (.map k v) = "map" ++ "(" ++ renderKeyTy k ++ "," ++ tyText v ++ ")" := rfl
+theorem tyText_set (k : KeyTy) :
+    tyText (.set k) = "set" ++ "(" ++ renderKeyTy k ++ ")" := rfl
+theorem tyText_bounded (n : Nat) :
+    tyText (.bounded n) = "bounded" ++ "(" ++ natText n ++ ")" := rfl
 
 /-- The field run of one line: ` field <fname> <tytext>` per field
     (structural — the round-trip proof mirrors it fold for fold).
@@ -195,76 +293,89 @@ def keyOfTy : Ty → Option KeyTy
     recursive call consumes at least one character, so fuel = the input
     length is strictly sufficient (the caller passes exactly that). -/
 def parseTy : Nat → List Char → Except String (Ty × List Char)
-  | 0, _ => .error "snapshot: parse fuel exhausted (malformed ty nesting)"
+  | 0, _ => .error (snapshotDiag eSN0001 "parse fuel exhausted (malformed ty nesting)")
   | fuel + 1, cs =>
-      let kw := cs.takeWhile Char.isAlphanum
-      let rest := cs.dropWhile Char.isAlphanum
-      let one (k : Ty → Ty) : Except String (Ty × List Char) :=
-        match rest with
-        | '(' :: r =>
-            match parseTy fuel r with
-            | .ok (t, ')' :: r2) => .ok (k t, r2)
-            | .ok (_, _) => .error "snapshot: expected ')' after the ty argument"
-            | .error e => .error e
-        | _ => .error "snapshot: expected '(' after the ty head"
-      let two (k : Ty → Ty → Ty) : Except String (Ty × List Char) :=
-        match rest with
-        | '(' :: r =>
-            match parseTy fuel r with
-            | .ok (a, ',' :: r2) =>
-                match parseTy fuel r2 with
-                | .ok (b, ')' :: r3) => .ok (k a b, r3)
-                | .ok (_, _) => .error "snapshot: expected ')' after the second ty argument"
-                | .error e => .error e
-            | .ok (_, _) => .error "snapshot: expected ',' between the ty arguments"
-            | .error e => .error e
-        | _ => .error "snapshot: expected '(' after the ty head"
-      let key (k : KeyTy → Ty → Ty) : Except String (Ty × List Char) :=
-        match rest with
-        | '(' :: r =>
-            match parseTy fuel r with
-            | .ok (kt, ',' :: r2) =>
-                match keyOfTy kt with
-                | none => .error "snapshot: the map key is not a scalar key type"
-                | some kk =>
-                    match parseTy fuel r2 with
-                    | .ok (v, ')' :: r3) => .ok (k kk v, r3)
-                    | .ok (_, _) => .error "snapshot: expected ')' after the map's value type"
-                    | .error e => .error e
-            | .ok (_, _) => .error "snapshot: expected ',' between the map's key and value"
-            | .error e => .error e
-        | _ => .error "snapshot: expected '(' after the ty head"
-      match String.ofList kw with
-      | "bool" => .ok (.bool, rest)
-      | "u64" => .ok (.u64, rest)
-      | "i64" => .ok (.i64, rest)
-      | "string" => .ok (.string, rest)
-      | "option" => one .option
-      | "list" => one .list
-      | "result" => two (fun a b => .result a b)
-      | "map" => key (fun kk v => .map kk v)
-      | "set" =>
-          -- the scalar-key gate at the boundary (the legacy `set` arm):
-          -- parse the element as a ty, re-gate into `KeyTy`
+      -- the token scan rides TextKit: ONE maximal-prefix scan returning
+      -- the token + the rest (`TextKit.takeWhile_stop` is its round-trip
+      -- inversion). The scan is total, so the none arm is the monad
+      -- carrier's shape, never a live path.
+      match TextKit.Parser.takeWhile Char.isAlphanum cs with
+      | none => .error (snapshotDiag eSN0002 "the token scan failed")
+      | some (kw, rest) =>
+        let one (k : Ty → Ty) : Except String (Ty × List Char) :=
           match rest with
           | '(' :: r =>
               match parseTy fuel r with
-              | .ok (kt, ')' :: r2) =>
-                  match keyOfTy kt with
-                  | none => .error "snapshot: the set element is not a scalar key type"
-                  | some kk => .ok (.set kk, r2)
-              | .ok (_, _) => .error "snapshot: expected ')' after the set element"
+              | .ok (t, ')' :: r2) => .ok (k t, r2)
+              | .ok (_, _) => .error (snapshotDiag eSN0003 "expected ')' after the ty argument")
               | .error e => .error e
-          | _ => .error "snapshot: expected '(' after `set`"
-      | "bounded" =>
+          | _ => .error (snapshotDiag eSN0004 "expected '(' after the ty head")
+        let two (k : Ty → Ty → Ty) : Except String (Ty × List Char) :=
           match rest with
           | '(' :: r =>
-              match TextKit.scanNat r with
-              | some (n, ')' :: r2) => .ok (.bounded n, r2)
-              | some (_, _) => .error "snapshot: expected ')' after the bounded cap"
-              | none => .error "snapshot: expected the bounded cap's digits"
-          | _ => .error "snapshot: expected '(' after `bounded`"
-      | other => .error s!"snapshot: unknown type token `{other}`"
+              match parseTy fuel r with
+              | .ok (a, ',' :: r2) =>
+                  match parseTy fuel r2 with
+                  | .ok (b, ')' :: r3) => .ok (k a b, r3)
+                  | .ok (_, _) => .error (snapshotDiag eSN0005 "expected ')' after the second ty argument")
+                  | .error e => .error e
+              | .ok (_, _) => .error (snapshotDiag eSN0006 "expected ',' between the ty arguments")
+              | .error e => .error e
+          | _ => .error (snapshotDiag eSN0004 "expected '(' after the ty head")
+        let key (k : KeyTy → Ty → Ty) : Except String (Ty × List Char) :=
+          match rest with
+          | '(' :: r =>
+              match parseTy fuel r with
+              | .ok (kt, ',' :: r2) =>
+                  match keyOfTy kt with
+                  | none => .error (snapshotDiag eSN0007 "the map key is not a scalar key type")
+                  | some kk =>
+                      match parseTy fuel r2 with
+                      | .ok (v, ')' :: r3) => .ok (k kk v, r3)
+                      | .ok (_, _) => .error (snapshotDiag eSN0008 "expected ')' after the map's value type")
+                      | .error e => .error e
+              | .ok (_, _) => .error (snapshotDiag eSN0009 "expected ',' between the map's key and value")
+              | .error e => .error e
+          | _ => .error (snapshotDiag eSN0004 "expected '(' after the ty head")
+        match kw with
+        | "bool" => .ok (.bool, rest)
+        | "u64" => .ok (.u64, rest)
+        | "i64" => .ok (.i64, rest)
+        | "string" => .ok (.string, rest)
+        | "option" => one .option
+        | "list" => one .list
+        | "result" => two (fun a b => .result a b)
+        | "map" => key (fun kk v => .map kk v)
+        | "set" =>
+            -- the scalar-key gate at the boundary (the legacy `set` arm):
+            -- parse the element as a ty, re-gate into `KeyTy`
+            match rest with
+            | '(' :: r =>
+                match parseTy fuel r with
+                | .ok (kt, ')' :: r2) =>
+                    match keyOfTy kt with
+                    | none => .error (snapshotDiag eSN0010 "the set element is not a scalar key type")
+                    | some kk => .ok (.set kk, r2)
+                | .ok (_, _) => .error (snapshotDiag eSN0011 "expected ')' after the set element")
+                | .error e => .error e
+            | _ => .error (snapshotDiag eSN0012 "expected '(' after `set`")
+        | "bounded" =>
+            match rest with
+            | '(' :: r =>
+                match TextKit.scanNat r with
+                | some (n, ')' :: r2) => .ok (.bounded n, r2)
+                | some (_, _) => .error (snapshotDiag eSN0013 "expected ')' after the bounded cap")
+                | none => .error (snapshotDiag eSN0014 "expected the bounded cap's digits")
+            | _ => .error (snapshotDiag eSN0015 "expected '(' after `bounded`")
+        | other =>
+            -- the closed-world discipline: the legal space enumerated +
+            -- the did-you-mean — the ONE engine (`Kit.suggestFor`) fills
+            -- the envelope's `suggest` via `closedWorld`; the rendering
+            -- carries the valid list + the suggestion suffix
+            .error (Kit.Diag.toString (Kit.Diag.closedWorld eSN0016
+              s!"snapshot: unknown type token `{other}`" .error other
+              ["bool", "u64", "i64", "string", "option", "list", "result",
+                "map", "set", "bounded"]))
 
 /-- The field run: zero or more ` field <fname> <tytext>` segments,
     terminated by the item line's newline (consumed — the item loop owns
@@ -274,39 +385,46 @@ def parseTy : Nat → List Char → Except String (Ty × List Char)
 def parseFields : Nat → Nat → List Char → Except String (List Field × List Char)
   | _, _, [] => .ok ([], [])
   | _, _, '\n' :: r => .ok ([], r)
-  | _, 0, _ => .error "snapshot: parse fuel exhausted (the field run)"
+  | _, 0, _ => .error (snapshotDiag eSN0017 "parse fuel exhausted (the field run)")
   | tyFuel, loop + 1, ' ' :: r =>
       match TextKit.expect "field " r with
-      | none => .error "snapshot: expected `field `"
+      | none => .error (snapshotDiag eSN0018 "expected `field `")
       | some r1 =>
-        let fn := r1.takeWhile sepOk
-        let r2 := r1.dropWhile sepOk
-        if fn = [] then .error "snapshot: empty field name"
-        else match r2 with
-          | ' ' :: r3 =>
-              match parseTy tyFuel r3 with
-              | .error e => .error e
-              | .ok (t, r4) =>
-                  match parseFields tyFuel loop r4 with
-                  | .error e => .error e
-                  | .ok (more, r5) => .ok ({ name := String.ofList fn, ty := t } :: more, r5)
-          | _ => .error "snapshot: expected ' ' between the field name and its type"
-  | _, _, _ => .error "snapshot: expected ` field`, newline, or EOF"
+        -- the name scan rides TextKit (ONE maximal sep-free run: the
+        -- name + the rest; the scan is total, so the none arm is the
+        -- monad carrier's shape, never a live path)
+        match TextKit.Parser.takeWhile sepOk r1 with
+        | none => .error (snapshotDiag eSN0019 "the name scan failed")
+        | some (fn, r2) =>
+          if fn = "" then .error (snapshotDiag eSN0020 "empty field name")
+          else match r2 with
+            | ' ' :: r3 =>
+                match parseTy tyFuel r3 with
+                | .error e => .error e
+                | .ok (t, r4) =>
+                    match parseFields tyFuel loop r4 with
+                    | .error e => .error e
+                    | .ok (more, r5) => .ok ({ name := fn, ty := t } :: more, r5)
+            | _ => .error (snapshotDiag eSN0021 "expected ' ' between the field name and its type")
+  | _, _, _ => .error (snapshotDiag eSN0022 "expected ` field`, newline, or EOF")
 
 /-- One item's block: `item <name>` + its field run. The field run's
     loop fuel reuses the ty budget (both are bounded by the input
     length; the conditions stay CONSTANT per item). -/
 def parseItem (tyFuel : Nat) (cs : List Char) : Except String (Item × List Char) :=
   match TextKit.expect "item " cs with
-  | none => .error "snapshot: expected `item `"
+  | none => .error (snapshotDiag eSN0023 "expected `item `")
   | some r =>
-      let nm := r.takeWhile sepOk
-      let r1 := r.dropWhile sepOk
-      if nm = [] then .error "snapshot: empty item name"
-      else
-        match parseFields tyFuel tyFuel r1 with
-        | .error e => .error e
-        | .ok (fs, r2) => .ok ({ name := String.ofList nm, fields := fs }, r2)
+      -- the name scan rides TextKit (the maximal sep-free run; total,
+      -- so the none arm is the monad carrier's shape, never a live path)
+      match TextKit.Parser.takeWhile sepOk r with
+      | none => .error (snapshotDiag eSN0019 "the name scan failed")
+      | some (nm, r1) =>
+        if nm = "" then .error (snapshotDiag eSN0024 "empty item name")
+        else
+          match parseFields tyFuel tyFuel r1 with
+          | .error e => .error e
+          | .ok (fs, r2) => .ok ({ name := nm, fields := fs }, r2)
 
 /-- The item loop: one item per line; `parseItem` CONSUMES the line's
     newline (parseFields owns it), so the next iteration starts directly
@@ -333,7 +451,7 @@ theorem parseItems_cons (tyFuel : Nat) (loop : Nat) (cs : List Char)
             match parseItems tyFuel loop r with
             | .error e => .error e
             | .ok (its, r3) => .ok (it :: its, r3) := by
-  simp only [parseItems, hne]
+  simp only [parseItems]
 
 theorem append_cons_ne_nil (l : List Char) (a : Char) (y : List Char) :
     (l ++ a :: y) ≠ [] := by simp
@@ -344,12 +462,14 @@ theorem append_cons_ne_nil (l : List Char) (a : Char) (y : List Char) :
 def parse (s : String) : Except String (List Item) :=
   match parseItems s.length s.length s.toList with
   | .ok (its, []) => .ok its
-  | .ok (_, _) => .error "snapshot: trailing garbage after the last item line"
+  | .ok (_, _) => .error (snapshotDiag eSN0025 "trailing garbage after the last item line")
   | .error e => .error e
 
 /-! ## the round-trip proofs -/
 
 theorem tyDepth_pos (t : Ty) : 1 ≤ tyDepth t := by
+  -- kept a simp walk: the option/list cases leave the CHILD variable
+  -- in the goal (not closed), so rung-3 decide cannot take them whole
   cases t <;> simp [tyDepth]
 
 /-- A well-formed ty text always ends against a break char (one of the
@@ -370,51 +490,16 @@ theorem lcomma : ",".toList = [','] := rfl
 theorem lspace : " ".toList = [' '] := rfl
 theorem rnewline : "\n".toList = ['\n'] := rfl
 
-/-- A list whose head fails `p` has an empty `takeWhile` and a full
-    `dropWhile`. -/
-theorem takeDrop_head {p : Char → Bool} {r : List Char}
-    (hr : r.head?.all (fun c => !p c)) :
-    r.takeWhile p = [] ∧ r.dropWhile p = r := by
-  cases r with
-  | nil => simp
-  | cons c cs =>
-      have h1 : ¬ p c := by simpa using hr
-      simp [h1]
-
-/-- The scan of `w ++ r` stops exactly at `w` (all of `w` passes `p`,
-    `r`'s head fails it) — the name/keyword round trip's core. -/
-theorem takeDrop_stop {p : Char → Bool} {w r : List Char}
-    (hw : w.all p) (hr : r.head?.all (fun c => !p c)) :
-    (w ++ r).takeWhile p = w ∧ (w ++ r).dropWhile p = r := by
-  rw [List.takeWhile_append_of_pos (List.all_eq_true.mp hw),
-      List.dropWhile_append_of_pos (List.all_eq_true.mp hw)]
-  have hd := takeDrop_head hr
-  rw [hd.1, List.append_nil, hd.2]
-  exact ⟨rfl, rfl⟩
-
-theorem takeWhile_stop {p : Char → Bool} {w r : List Char}
-    (hw : w.all p) (hr : r.head?.all (fun c => !p c)) :
-    (w ++ r).takeWhile p = w := (takeDrop_stop hw hr).1
-
-theorem dropWhile_stop {p : Char → Bool} {w r : List Char}
-    (hw : w.all p) (hr : r.head?.all (fun c => !p c)) :
-    (w ++ r).dropWhile p = r := (takeDrop_stop hw hr).2
+/-! The takeWhile/dropWhile scan family (takeDrop_head/takeDrop_stop/
+takeWhile_stop/dropWhile_stop) is TextKit.Lemmas' — the kit owns the
+maximal-scan inversion; the parser above cites TextKit.takeWhile_stop
+and TextKit.takeDrop_head. -/
 
 theorem ofList_ne_nil {L : List Char} (h : L ≠ []) : String.ofList L ≠ "" := by
   intro hcon
   have h2 := congrArg String.toList hcon
   simp [String.toList_ofList] at h2
   exact h h2
-
-/-- `TextKit.expect` consumes its own prefix. -/
-theorem expect_self (p : String) (r : List Char) :
-    TextKit.expect p (p.toList ++ r) = some r := by
-  have hpre : p.toList.isPrefixOf (p.toList ++ r) = true := by
-    induction p.toList with
-    | nil => rfl
-    | cons a as ih => simp [List.isPrefixOf_cons_cons, ih]
-  simp only [TextKit.expect, TextKit.startsWith, hpre]
-  simp [List.drop_append, List.drop_length, String.length_toList]
 
 /-- The digit char's two faces agree with its value. -/
 theorem natDigit_spec : ∀ m : Nat, m < 10 →
@@ -480,10 +565,10 @@ theorem scanNat_natText (n : Nat) (r : List Char)
   have htw : ((natText n).toList ++ r).takeWhile Char.isDigit
       = (natText n).toList := by
     rw [List.takeWhile_append_of_pos (List.all_eq_true.mp hall)]
-    simp [(takeDrop_head hr).1]
+    simp [(TextKit.takeDrop_head hr).1]
   have hdr : ((natText n).toList ++ r).dropWhile Char.isDigit = r := by
     rw [List.dropWhile_append_of_pos (List.all_eq_true.mp hall)]
-    exact (takeDrop_head hr).2
+    exact (TextKit.takeDrop_head hr).2
   simp only [TextKit.scanNat, htw, hdr]
   rw [if_neg (ofList_ne_nil (natText_ne n)), String.ofList_toList,
     foldl_natText]
@@ -492,10 +577,10 @@ theorem headOk_break (sfx : List Char) (h : tyBreakOk sfx) :
     sfx.head?.all (fun c => !c.isAlphanum)
     ∧ sfx.head?.all (fun c => !c.isDigit) := by
   cases sfx with
-  | nil => simp [tyBreakOk]
+  | nil => simp []
   | cons c X =>
       have hc := h
-      simp only [tyBreakOk, List.head?_cons, Option.some.injEq] at hc
+      simp only [tyBreakOk, List.head?_cons] at hc
       simp only [List.head?_cons, Option.all_some]
       rcases hc with hc | hc | hc | hc
       · simp [hc]
@@ -511,11 +596,6 @@ theorem nameOk_ne_str (s : String) (h : nameOk s) : s ≠ "" := by
   intro hcon
   rw [hcon] at h
   simp [nameOk] at h
-
-theorem nameOk_ne (s : String) (h : nameOk s) : s.toList ≠ [] := by
-  intro hcon
-  rw [String.toList_eq_nil_iff] at hcon
-  exact nameOk_ne_str s h hcon
 
 /-- The head conditions for the ty/field scans' `r` sides (term lemmas —
     the `r` is inferred, so a tactic block there would meet a
@@ -539,7 +619,7 @@ theorem headOk_renderFields (fs : List Field) (suffix : List Char)
     ((renderFields fs).toList ++ suffix).head?.all (fun c => !sepOk c) := by
   cases fs with
   | nil =>
-      simp only [renderFields, String.toList_append, String.toList_empty,
+      simp only [renderFields, String.toList_empty,
         List.nil_append]
       rcases h with h | h
       · rw [h]; simp
@@ -557,16 +637,16 @@ theorem tyBreakOk_renderFields (fs : List Field) (suffix : List Char)
   | nil =>
       rcases h with h | h
       · rw [h]
-        simp [tyBreakOk, renderFields, String.toList_append,
-          String.toList_empty, List.nil_append, List.append_nil]
-      · simp only [renderFields, String.toList_append, String.toList_empty,
+        simp [tyBreakOk, renderFields, 
+          String.toList_empty, List.append_nil]
+      · simp only [renderFields, String.toList_empty,
           List.nil_append, tyBreakOk]
         rw [h]
         simp
   | cons f fs =>
       simp only [renderFields, String.toList_append, List.cons_append, lspace,
-        List.head?_cons]
-      simp [tyBreakOk, sepOk]
+        ]
+      simp [tyBreakOk]
 
 /-- The key scalar's snapshot text scans back to the injected ty (the
     key positions parse as tys, then re-gate). -/
@@ -579,36 +659,28 @@ theorem parseTy_keyText (k : KeyTy) (fuel : Nat) (sfx : List Char)
   | succ fuel =>
       cases k with
       | bool =>
-          simp only [renderKeyTy, String.toList_append,
-            List.cons_append, parseTy, String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "bool".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "bool".toList)
-            (by decide) h2']
+          simp only [renderKeyTy, 
+            parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "bool".toList) (by decide) h2']
           simp [KeyTy.toTy]
       | u64 =>
-          simp only [renderKeyTy, String.toList_append,
-            List.cons_append, parseTy, String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "u64".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "u64".toList)
-            (by decide) h2']
+          simp only [renderKeyTy, 
+            parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "u64".toList) (by decide) h2']
           simp [KeyTy.toTy]
       | i64 =>
-          simp only [renderKeyTy, String.toList_append,
-            List.cons_append, parseTy, String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "i64".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "i64".toList)
-            (by decide) h2']
+          simp only [renderKeyTy, 
+            parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "i64".toList) (by decide) h2']
           simp [KeyTy.toTy]
       | string =>
-          simp only [renderKeyTy, String.toList_append,
-            List.cons_append, parseTy, String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "string".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "string".toList)
-            (by decide) h2']
+          simp only [renderKeyTy, 
+            parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "string".toList) (by decide) h2']
           simp [KeyTy.toTy]
 
 theorem keyOfTy_toTy (k : KeyTy) : keyOfTy k.toTy = some k := by
@@ -628,12 +700,9 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       | zero => omega
       | succ fuel =>
           have h2' := (headOk_break sfx h2).1
-          simp only [tyText, String.toList_append, List.cons_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "bool".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "bool".toList)
-            (by decide) h2']
+          simp only [tyText_bool, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "bool".toList) (by decide) h2']
           simp
   | u64 =>
       intro fuel sfx h1 h2
@@ -642,12 +711,9 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       | zero => omega
       | succ fuel =>
           have h2' := (headOk_break sfx h2).1
-          simp only [tyText, String.toList_append, List.cons_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "u64".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "u64".toList)
-            (by decide) h2']
+          simp only [tyText_u64, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "u64".toList) (by decide) h2']
           simp
   | i64 =>
       intro fuel sfx h1 h2
@@ -656,12 +722,9 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       | zero => omega
       | succ fuel =>
           have h2' := (headOk_break sfx h2).1
-          simp only [tyText, String.toList_append, List.cons_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "i64".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "i64".toList)
-            (by decide) h2']
+          simp only [tyText_i64, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "i64".toList) (by decide) h2']
           simp
   | string =>
       intro fuel sfx h1 h2
@@ -670,12 +733,9 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       | zero => omega
       | succ fuel =>
           have h2' := (headOk_break sfx h2).1
-          simp only [tyText, String.toList_append, List.cons_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "string".toList)
-            (by decide) h2',
-            dropWhile_stop (p := Char.isAlphanum) (w := "string".toList)
-            (by decide) h2']
+          simp only [tyText_string, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "string".toList) (by decide) h2']
           simp
   | option t ih =>
       intro fuel sfx h1 h2
@@ -683,13 +743,10 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "option".toList)
-            (by decide) (headOk_lparen _),
-            dropWhile_stop (p := Char.isAlphanum) (w := "option".toList)
-            (by decide) (headOk_lparen _)]
+          simp only [tyText_option, String.toList_append, List.cons_append, lparen,
+            rparen, List.append_assoc, List.nil_append, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "option".toList) (by decide) (headOk_lparen _)]
           simp
           rw [ih fuel (')' :: sfx) (by omega) (by simp [tyBreakOk])]
           simp
@@ -699,13 +756,10 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "list".toList)
-            (by decide) (headOk_lparen _),
-            dropWhile_stop (p := Char.isAlphanum) (w := "list".toList)
-            (by decide) (headOk_lparen _)]
+          simp only [tyText_list, String.toList_append, List.cons_append, lparen,
+            rparen, List.append_assoc, List.nil_append, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "list".toList) (by decide) (headOk_lparen _)]
           simp
           rw [ih fuel (')' :: sfx) (by omega) (by simp [tyBreakOk])]
           simp
@@ -715,13 +769,10 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText, String.toList_append, List.cons_append, lparen,
-            rparen, lcomma, List.append_assoc, List.nil_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "result".toList)
-            (by decide) (headOk_lparen _),
-            dropWhile_stop (p := Char.isAlphanum) (w := "result".toList)
-            (by decide) (headOk_lparen _)]
+          simp only [tyText_result, String.toList_append, List.cons_append, lparen,
+            rparen, lcomma, List.append_assoc, List.nil_append, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "result".toList) (by decide) (headOk_lparen _)]
           simp
           rw [iha fuel (',' :: ((tyText b).toList ++ (')' :: sfx)))
             (by omega) (by simp [tyBreakOk])]
@@ -734,13 +785,10 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText, String.toList_append, List.cons_append, lparen,
-            rparen, lcomma, List.append_assoc, List.nil_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "map".toList)
-            (by decide) (headOk_lparen _),
-            dropWhile_stop (p := Char.isAlphanum) (w := "map".toList)
-            (by decide) (headOk_lparen _)]
+          simp only [tyText_map, String.toList_append, List.cons_append, lparen,
+            rparen, lcomma, List.append_assoc, List.nil_append, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "map".toList) (by decide) (headOk_lparen _)]
           simp
           rw [parseTy_keyText k fuel
             (',' :: ((tyText v).toList ++ (')' :: sfx)))
@@ -756,13 +804,10 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "set".toList)
-            (by decide) (headOk_lparen _),
-            dropWhile_stop (p := Char.isAlphanum) (w := "set".toList)
-            (by decide) (headOk_lparen _)]
+          simp only [tyText_set, String.toList_append, List.cons_append, lparen,
+            rparen, List.append_assoc, List.nil_append, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "set".toList) (by decide) (headOk_lparen _)]
           simp
           rw [parseTy_keyText k fuel (')' :: sfx) (by omega)
             (by simp [tyBreakOk])]
@@ -774,13 +819,10 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy,
-            String.ofList_toList]
-          rw [takeWhile_stop (p := Char.isAlphanum) (w := "bounded".toList)
-            (by decide) (headOk_lparen _),
-            dropWhile_stop (p := Char.isAlphanum) (w := "bounded".toList)
-            (by decide) (headOk_lparen _)]
+          simp only [tyText_bounded, String.toList_append, List.cons_append, lparen,
+            rparen, List.append_assoc, List.nil_append, parseTy]
+          rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
+            (w := "bounded".toList) (by decide) (headOk_lparen _)]
           simp
           rw [scanNat_natText n (')' :: sfx) (headOk_rparen_d sfx)]
           simp
@@ -799,16 +841,16 @@ theorem parseFields_render (fs : List Field) : ∀ (tyFuel loop : Nat) (suffix :
       intro tyFuel loop suffix h0 _ _ _
       rcases h0 with h0 | h0
       · rw [h0]
-        simp [parseFields, renderFields, String.toList_append,
-          String.toList_empty, List.nil_append, List.append_nil]
+        simp [parseFields, renderFields, 
+          String.toList_empty, List.append_nil]
       · cases hs : suffix with
         | nil => rw [hs] at h0; simp at h0
         | cons c cs =>
             rw [hs] at h0
             simp at h0
             subst h0
-            simp [parseFields, renderFields, String.toList_append,
-              String.toList_empty, List.nil_append, hs]
+            simp [parseFields, renderFields, 
+              String.toList_empty, List.nil_append]
   | cons f fs ih =>
       intro tyFuel loop suffix h0 h1 h2 h3
       simp only [List.length_cons] at h3
@@ -816,14 +858,13 @@ theorem parseFields_render (fs : List Field) : ∀ (tyFuel loop : Nat) (suffix :
       | zero => omega
       | succ loop =>
           have hfn := nameOk_all f.name (h1 f (List.mem_cons_self))
-          have hne := nameOk_ne f.name (h1 f (List.mem_cons_self))
+          have hne := nameOk_ne_str f.name (h1 f (List.mem_cons_self))
           simp only [renderFields, String.toList_append, List.cons_append,
             List.nil_append, List.append_assoc, lspace, parseFields,
-            expect_self,
-            takeWhile_stop (p := sepOk) (w := f.name.toList) hfn
+            TextKit.expect_self,
+            TextKit.takeWhile_stop (p := sepOk) (w := f.name.toList) hfn
               (headOk_space_sep _),
-            dropWhile_stop (p := sepOk) (w := f.name.toList) hfn
-              (headOk_space_sep _),
+            String.ofList_toList,
             if_neg hne]
           rw [parseTy_tyText f.ty tyFuel ((renderFields fs).toList ++ suffix)
             (h2 f (List.mem_cons_self)) (tyBreakOk_renderFields fs suffix h0)]
@@ -832,7 +873,7 @@ theorem parseFields_render (fs : List Field) : ∀ (tyFuel loop : Nat) (suffix :
             (fun g hg => h1 g (List.mem_cons_of_mem _ hg))
             (fun g hg => h2 g (List.mem_cons_of_mem _ hg))
             (by omega)]
-          simp [String.ofList_toList]
+          simp
 
 /-- THE ITEM LAW: one item's block (through its newline) scans back to
     the item. The suffix (EOF or the rest after the newline) passes
@@ -843,15 +884,14 @@ theorem parseItem_render (it : Item) (tyFuel : Nat) (suffix : List Char)
     (h3 : ∀ f ∈ it.fields, tyDepth f.ty ≤ tyFuel)
     (h4 : it.fields.length ≤ tyFuel) :
     parseItem tyFuel ((renderLine it).toList ++ suffix) = .ok (it, suffix.drop 1) := by
-  simp only [renderLine, String.toList_append, List.cons_append,
-    List.nil_append, List.append_assoc, parseItem, expect_self,
-    takeWhile_stop (p := sepOk) (w := it.name.toList) (nameOk_all it.name h1)
-      (headOk_renderFields it.fields suffix h0),
-    dropWhile_stop (p := sepOk) (w := it.name.toList) (nameOk_all it.name h1)
-      (headOk_renderFields it.fields suffix h0),
-    nameOk_ne it.name h1]
+  simp only [renderLine, String.toList_append, 
+    List.append_assoc, parseItem, TextKit.expect_self,
+    TextKit.takeWhile_stop (p := sepOk) (w := it.name.toList)
+      (nameOk_all it.name h1) (headOk_renderFields it.fields suffix h0),
+    String.ofList_toList,
+    nameOk_ne_str it.name h1]
   rw [parseFields_render it.fields tyFuel tyFuel suffix h0 h2 h3 h4]
-  simp [String.ofList_toList]
+  simp
 
 /-- THE ITEMS LAW: the canonical line run scans back to the items. -/
 theorem parseItems_printItems (its : List Item) : ∀ (tyFuel loop : Nat),
@@ -903,25 +943,25 @@ theorem renderKeyTy_pos (k : KeyTy) : 1 ≤ (renderKeyTy k).length := by
 
 theorem tyDepth_le_tyText (t : Ty) : tyDepth t ≤ (tyText t).length := by
   induction t with
-  | bool => simp [tyDepth, tyText, lenB]
-  | u64 => simp [tyDepth, tyText, lenU]
-  | i64 => simp [tyDepth, tyText, lenI]
-  | string => simp [tyDepth, tyText, lenS]
+  | bool => simp [tyDepth, tyText_bool, lenB]
+  | u64 => simp [tyDepth, tyText_u64, lenU]
+  | i64 => simp [tyDepth, tyText_i64, lenI]
+  | string => simp [tyDepth, tyText_string, lenS]
   | option t ih =>
-      simp [tyDepth, tyText, String.length_append, lenO, lenPl, lenPr]; omega
+      simp [tyDepth, tyText_option, String.length_append, lenPr]; omega
   | list t ih =>
-      simp [tyDepth, tyText, String.length_append, lenL, lenPl, lenPr]; omega
+      simp [tyDepth, tyText_list, String.length_append, lenPr]; omega
   | result a b iha ihb =>
-      simp [tyDepth, tyText, String.length_append, lenR, lenPl, lenPr, lenCm]
+      simp [tyDepth, tyText_result, String.length_append, lenPr, lenCm]
       omega
   | map k v ihv =>
       have hk := renderKeyTy_pos k
-      simp only [tyDepth, tyText, String.length_append, lenM, lenPl, lenPr,
+      simp only [tyDepth, tyText_map, String.length_append, lenM, lenPl, lenPr,
         lenCm]
       omega
   | set k =>
       have hk := renderKeyTy_pos k
-      simp only [tyDepth, tyText, String.length_append, lenT, lenPl, lenPr]
+      simp only [tyDepth, tyText_set, String.length_append, lenT, lenPl, lenPr]
       omega
   | bounded n =>
       have h1 : 1 ≤ (natText n).toList.length := by
@@ -930,7 +970,7 @@ theorem tyDepth_le_tyText (t : Ty) : tyDepth t ≤ (tyText t).length := by
         | cons c cs => simp
       have h2 : (natText n).length = (natText n).toList.length :=
         (String.length_toList (s := natText n)).symm
-      simp only [tyDepth, tyText, String.length_append, lenBd, lenPl, lenPr]
+      simp only [tyDepth, tyText_bounded, String.length_append, lenBd, lenPl, lenPr]
       rw [h2]
       omega
 
@@ -993,7 +1033,7 @@ theorem insertItem_mem (y : Item) (l : List Item) (x : Item) :
   | cons z zs ih =>
       simp only [insertItem]
       split
-      · simp [ih]
+      · simp []
       · constructor
         · intro h
           rcases List.mem_cons.mp h with hx | h
@@ -1109,11 +1149,11 @@ def snapshotOfEnv (env : Lean.Environment) : Except String String := do
   let reg ← registryOfItems (schemaExt.getState env)
   if h : namesOk reg.items = true then
     match snapshotFiles reg h with
-    | [] => .error "snapshot: the emitter produced nothing"
+    | [] => .error (snapshotDiag eSN0026 "the emitter produced nothing")
     | f :: _ => .ok f.contents
   else
-    .error "snapshot: a registered name is not encodable \
-      (space/newline in an item or field name) — the write-side gate refuses"
+    .error (snapshotDiag eSN0027 "a registered name is not encodable \
+      (space/newline in an item or field name) — the write-side gate refuses")
 
 end SchemaCore
 
@@ -1121,7 +1161,10 @@ end SchemaCore
 
 PROVED: `parseTy_tyText` (every ty token), `parseFields_render`,
 `parseItem_render`, `parseItems_printItems`, `parse_print` — the
-decode-after-encode direction, for `nameOk` registries, exactly.
+decode-after-encode direction, for `nameOk` registries, exactly —
+over the TextKit base (the scans ride `TextKit.Parser.takeWhile`,
+`TextKit.expect`, `TextKit.scanNat`; the inversions cite
+TextKit.Lemmas, no local scan-lemma copies).
 NOTED, NOT PROVED: the canonicalization direction (`print (parse s) = s`
 for canonical `s`) — the sort's permutation theory on top; the gate
 re-derives the bytes instead. NO `sorry`, NO `axiom` anywhere above.

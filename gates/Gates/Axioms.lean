@@ -147,6 +147,9 @@ def printReport (r : PkgReport) : IO Bool := do
 unsafe def run (write acceptDrift : Bool) : IO UInt32 := do
   -- initSearchPath reads LEAN_PATH (`lake exe` supplies the dep closure)
   -- + the sysroot; loadPkgEnv prepends the root build dir per import.
+  -- Not `Gates.withPkgEnv`: this gate folds ALL gated packages and a load
+  -- failure is a per-package loadError report row, not a first-failure
+  -- gate exit (the combinator's shape).
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
   let mut reports : Array PkgReport := #[]

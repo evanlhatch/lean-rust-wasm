@@ -24,6 +24,17 @@ builder's own curation, wrapped with the `@[attr] decl:` prefix).
   `Kit.DataRegistry` (the registry = the integral of the event log);
   a duplicate name is the loud `.error` (decided, never assumed).
 - `<base>NameOf` — the naming function (the registry's lookup key).
+- `<base>ObligationView` — THE OBLIGATION-VIEW hook: the obligation
+  labels the lane attests (one per registered item, in registration
+  order) — the entourage's attests face, auto-filled at registration.
+- `<base>LedgerDemand` — THE LEDGER-ROWS hook: the lane's DEMAND SET
+  (Kit.Ledger.DemandSet) — the lane's registration records the
+  collections it reads (its OWN extension, whose growth invalidates
+  every replay), the rows it folds (the registered items as names),
+  and its emitter revision. The honest minimal of the demand-set
+correction (Kit.Ledger): a lane's replays depend on the collection
+  AS-A-SET, so the registration declares the dependency at the mount,
+  never by memory.
 - `<base>AttrReg` — the attribute's `initialize` binding.
 
 The clause keywords (`naming`, `attr`, `builder`) become parser
@@ -68,6 +79,7 @@ Five questions (notes/v3/01-core.md):
 
 import Lean
 import Kit.Diag
+import Kit.Ledger
 import Kit.Registry
 
 namespace Kit.Lane
@@ -111,16 +123,31 @@ def materialize {α : Type} (nameOf : α → String) (items : List α) :
 
 /-! ## The curated failures (Kit.Diag) -/
 
+/-- The KL family — the lane substrate's E-codes, allocated from the
+    PERSISTED registry (`notes/code-registry.txt`, the spec of record;
+    05 §4's stable-allocation rule). The constants are the family's
+    DECLARATION — the sites below use them, never a bare string, and
+    the code-registry gate's coverage scan ties every spelling to its
+    allocated live row (a hand-strung code is a gate refusal). -/
+def eKL0001 : Kit.ECode := ⟨"KL0001"⟩
+def eKL0002 : Kit.ECode := ⟨"KL0002"⟩
+def eKL0003 : Kit.ECode := ⟨"KL0003"⟩
+def eKL0004 : Kit.ECode := ⟨"KL0004"⟩
+def eKL0005 : Kit.ECode := ⟨"KL0005"⟩
+def eKL0006 : Kit.ECode := ⟨"KL0006"⟩
+
 /-- The literal Diag for a positional misuse (no got/valid slot — the
-    message names the context, the construct, the valid usage). -/
-def usageDiag (code : String) (message : String) : Kit.Diag :=
-  { code := ⟨code⟩, message := message, severity := .error }
+    message names the context, the construct, the valid usage). The
+    code slot is an `ECode` of the registry's allocated family — a
+    bare string cannot reach the envelope. -/
+def usageDiag (code : Kit.ECode) (message : String) : Kit.Diag :=
+  { code := code, message := message, severity := .error }
 
 /-- The duplicate-registration Diag: the closed-world constructor —
     got + the taken names + the ONE engine's suggestion, unforgable. -/
 def dupDiag (attrStr declName : String) (got : String) (taken : List String) :
     Kit.Diag :=
-  Kit.Diag.closedWorld ⟨"KL0001"⟩
+  Kit.Diag.closedWorld eKL0001
     s!"@[{attrStr}] {declName}: `{got}` is already a registered item — \
       names must be fresh"
     .error got taken
@@ -136,12 +163,12 @@ unsafe def evalLaneItem {Item : Type} [Inhabited Item] (itemTy : Lean.Name)
     Lean.Meta.MetaM (Except String Item) := do
   match env.find? declName with
   | none =>
-    return .error (usageDiag "KL0002"
+    return .error (usageDiag eKL0002
       s!"@[{attrStr}] {declName}: no such declaration — the entry must be \
         a `def` in this module whose type is `{itemTy}`").toString
   | some (.defnInfo dv) =>
     unless dv.type.isConstOf itemTy do
-      return .error (usageDiag "KL0003"
+      return .error (usageDiag eKL0003
         s!"@[{attrStr}] {declName}: the entry's type is not the lane's item \
           type `{itemTy}` — valid usage: \
           `@[{attrStr}] def {declName} : {itemTy} := <value>`").toString
@@ -149,11 +176,11 @@ unsafe def evalLaneItem {Item : Type} [Inhabited Item] (itemTy : Lean.Name)
       return .ok (← Lean.Meta.evalExpr' Item itemTy dv.value)
     catch e =>
       let _ := e
-      return .error (usageDiag "KL0004"
+      return .error (usageDiag eKL0004
         s!"@[{attrStr}] {declName}: the entry's value could not be evaluated \
           — the item must be a closed literal value").toString
   | some _ =>
-    return .error (usageDiag "KL0005"
+    return .error (usageDiag eKL0005
       s!"@[{attrStr}] {declName}: not a `def` — the lane entry must be a \
         `def` whose type is `{itemTy}`").toString
 
@@ -248,7 +275,7 @@ def elabRegisterLane : Lean.Elab.Command.CommandElab
       | `(laneClause| builder := $t:term) => builder? := some t
       | _ => Lean.throwError "invalid lane clause"
     let some namingT := naming? |
-      let d := usageDiag "KL0006"
+      let d := usageDiag eKL0006
         "register_lane: the `where naming := <fn>` clause is required — \
           naming is the item's naming function (the registry's lookup key); \
           valid usage: `register_lane <Item> where naming := <fn>` with the \
@@ -267,6 +294,8 @@ def elabRegisterLane : Lean.Elab.Command.CommandElab
     let accId := Lean.mkIdent (Lean.Name.mkSimple s!"get{baseStr.capitalize}s")
     let nameOfId := Lean.mkIdent (Lean.Name.mkSimple s!"{baseStr}NameOf")
     let regId := Lean.mkIdent (Lean.Name.mkSimple s!"{baseStr}Registry")
+    let oblId := Lean.mkIdent (Lean.Name.mkSimple s!"{baseStr}ObligationView")
+    let demId := Lean.mkIdent (Lean.Name.mkSimple s!"{baseStr}LedgerDemand")
     let attrRegId := Lean.mkIdent (Lean.Name.mkSimple s!"{baseStr}AttrReg")
     let extFullNameStr := (ns ++ Lean.Name.mkSimple extStr).toString
     let attrRefStr := (ns ++ Lean.Name.mkSimple s!"{baseStr}Attr").toString
@@ -279,6 +308,8 @@ def elabRegisterLane : Lean.Elab.Command.CommandElab
     let kitNameOfStr : Lean.Term := Lean.mkIdent `Kit.Lane.nameOfStr
     let kitMat : Lean.Term := Lean.mkIdent `Kit.Lane.materialize
     let kitReg : Lean.Term := Lean.mkIdent `Kit.DataRegistry
+    let kitDemandSet : Lean.Term := Lean.mkIdent `Kit.Ledger.DemandSet
+    let kitNamesOf : Lean.Term := Lean.mkIdent `Kit.Ledger.namesOf
     let kitInstall : Lean.Term := Lean.mkIdent `Kit.Lane.installLaneAttr
     let kitEval : Lean.Term := Lean.mkIdent `Kit.Lane.evalLaneItem
     let kitWrap : Lean.Term := Lean.mkIdent `Kit.Lane.wrapBuilder
@@ -300,6 +331,20 @@ def elabRegisterLane : Lean.Elab.Command.CommandElab
       def $regId (env : Lean.Environment) :
           Except String ($kitReg $itemT) :=
         ($kitMat $nameOfId ($accId env))))
+    -- THE ENTOURAGE HOOKS (16-surface §3's discipline, at the lane
+    -- face): the obligation view (the attests labels, one per item) +
+    -- the ledger demand (the lane records the collections it READS —
+    -- its own extension, whose growth invalidates every replay — plus
+    -- the rows it folds and its emitter revision). Auto-filled at the
+    -- mount; there is no lane-side tier to hand-set.
+    Lean.Elab.Command.elabCommand (← `(command|
+      def $oblId (env : Lean.Environment) : List String :=
+        ($accId env).map $nameOfId))
+    Lean.Elab.Command.elabCommand (← `(command|
+      def $demId (env : Lean.Environment) : $kitDemandSet :=
+        { rows := ($accId env).map (fun it => $kitNamesOf ($nameOfId it))
+          collections := [$kitNamesOf $(Lean.quote extFullNameStr)]
+          emitterRev := "register_lane" }))
     Lean.Elab.Command.elabCommand (← `(command|
       unsafe initialize $attrRegId : Unit ←
         (($kitInstall (Item := $itemT))

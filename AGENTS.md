@@ -1,4 +1,4 @@
-# macht — agent instructions
+# mandate — agent instructions
 
 ## The doctrine (the contract)
 
@@ -27,17 +27,30 @@ name its doctrine slot; a change that names none is a design failure.
   failure.
 - Compile after every declaration; tests live in `<Package>/Tests/`;
   negative controls are mandatory for property sweeps.
+- **Never re-baseline** `notes/axiom-report.md` (or any gate baseline)
+  mid-order — report the drift; the INTEGRATOR re-baselines with
+  `--write --accept-drift` at the wave's commit.
+- **Placement is a lookup, not a derivation**: C0 machinery = kit,
+  textkit, testingkit, lintkit, gates; C1 domain cores = schemacore,
+  wasmcore, wit, zset, datalog; bridges = machines; host tooling =
+  inspector, scaffold. A new concept gets a NEW library only when no
+  existing one's domain answers it (and then: the lakefile row + the
+  cone-table row + the gates row + the test list — all four).
+- **The text-proof discipline**: parsers reason over TOKENS, not
+  chars; the char level is TextKit's alone. Literal `"…".toList`
+  reductions are a local rfl family, established ONCE per format —
+  never a per-lemma battle (the repeated agent trap).
 
 ## Build
 
 ```
 just build   # lake build (the root package)
-just test    # the package's tests
-just gates   # the gate spine (byte-tie, axiom gate, lints)
+just test    # every <Lib>Tests exe (the test_libs list; a gates row
+             # checks drift)
+just gates   # the gate spine: axioms, docs-check, gen-check,
+             # code-registry, snapshot, audit, artifact-headers,
+             # native-policy, coverage, kernel-check, ownership
 ```
-
-The scaffold is honest emptiness: `just gates` prints "the scaffold:
-nothing to gate yet" until the first gate rows land.
 
 ## Version control (jj)
 

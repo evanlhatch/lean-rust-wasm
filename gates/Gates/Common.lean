@@ -1,9 +1,16 @@
 /-
-Gates.Common — the shared registry-replay preamble + the report-gate
-combinator (mined from legacy/lean/gates/Gates/Common.lean's
+Gates.Common — the shared registry-replay preamble + the gate-tail
+combinators (mined from legacy/lean/gates/Gates/Common.lean's
 `Gates.Driver` tails).
 
-The combinator's contract: the write-or-diff baseline tail shared by the
+`Gates.withPkgEnv`: the single-package env-load prelude (sysroot init +
+loadPkgEnv + the LOAD FAILED exit) shared by the gates that load ONE
+package environment and hand it to their body. Gates whose load failure
+is a report row rather than a gate exit (Axioms' per-package loadError,
+DocsCheck's collected loadErrors) keep their own prelude — the combinator
+absorbs only the first-failure-exit shape.
+
+`Gates.Driver.reportGate`: the write-or-diff baseline tail shared by the
 baseline-report gates. `--write` writes `fresh ++ "\n"` and prints
 `wrote <path>` — EXCEPT a non-empty diff (a drifted baseline) is REFUSED
 unless `acceptDrift` (a re-baseline must not pre-authorize future taint;
@@ -28,8 +35,26 @@ vs fresh render).
 baseline discipline is its first consumer).
 -/
 import Lean
+import Gates.Packages
 
 namespace Gates
+
+/-- The single-package env-load prelude: init the search path from the
+    sysroot, `loadPkgEnv`, and on failure print the gate-named LOAD
+    FAILED line to stderr and exit 1; on success hand the environment to
+    `k`. (Unsafe: `loadPkgEnv` runs initializers.) Deliberately NOT for
+    the gates that fold several packages with per-package load-error
+    rows — Axioms/DocsCheck keep their own prelude (the honest-partiality
+    rule: absorb only the sites that fit). -/
+unsafe def withPkgEnv (gate : String) (pkg : PkgSpec)
+    (k : Lean.Environment → IO UInt32) : IO UInt32 := do
+  Lean.initSearchPath (← Lean.findSysroot)
+  let base ← Lean.searchPathRef.get
+  match ← loadPkgEnv base pkg with
+  | .error e => do
+    IO.eprintln s!"{gate}: LOAD FAILED — {e}"
+    return 1
+  | .ok env => k env
 
 namespace Driver
 
@@ -77,6 +102,34 @@ def reportGate (gate what why : String) (baseline : System.FilePath)
   IO.println cleanMsg
   return 0
 
-end Driver
+/-- The write-or-diff core of the byte-tie gates whose committed file IS
+    the artifact (SnapshotCheck, CodeRegistryCheck): an exact-bytes
+    compare — unlike `reportGate`, no `fresh ++ "\\n"` newline convention
+    and no accept-drift gate, because the `--write` here re-renders the
+    SAME data (there is no rendered-report baseline being re-baselined).
+    In sync: optionally announce the in-sync write (`inSyncWrite`; an
+    in-sync write is free) then the clean line, exit 0. Drifted: with
+    `--write` the deliberate, commit-visible re-render (`driftWriteMsg`,
+    then the clean line too when `cleanAfterWrite` — CodeRegistryCheck
+    canonicalizes and still reports clean, SnapshotCheck's re-baseline
+    ends at the write line), exit 0; without, `driftMsg`, exit 1. The
+    callers keep their pre-tie teeth (SnapshotCheck's parse refusal, the
+    absent-file bootstraps) — they do not fit the core. -/
+def byteTieGate (committed fresh : String) (write : Bool)
+    (writeFile : String → IO Unit) (inSyncWrite : Option String)
+    (driftWriteMsg : String) (cleanAfterWrite : Bool)
+    (cleanMsg : String) (driftMsg : String) : IO UInt32 := do
+  if committed == fresh then
+    if write then
+      if let some m := inSyncWrite then IO.println m
+    IO.println cleanMsg
+    return 0
+  if write then
+    writeFile fresh
+    IO.println driftWriteMsg
+    if cleanAfterWrite then IO.println cleanMsg
+    return 0
+  IO.println driftMsg
+  return 1
 
-end Gates
+end Driver

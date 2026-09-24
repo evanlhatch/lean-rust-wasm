@@ -1,4 +1,4 @@
-# The macht scaffold (first commit, per notes/v3/14-build-map.md §4).
+# The mandate scaffold (first commit, per notes/v3/14-build-map.md §4).
 # No library targets yet — they arrive with their first content (the
 # doctrine's leftover rule: nothing lands without a consumer). Libraries
 # will live as members of this package, cone-ordered: C0 machinery →
@@ -6,22 +6,28 @@
 # notes/v3/14-build-map.md §2). A cone-low module importing cone-high is
 # a gate failure (notes/v3/06-lean-rules.md).
 
-name = "Macht"
+name = "Mandate"
 version = "0.1.0"
 
-# ── TestKit (the shared test harness; notes/v3/15-patterns.md #5 + #14) ──
+# The default build covers every library (the lakefile-fixer wave's
+# catch: a bare lake build with no defaultTargets builds NOTHING — the
+# green-by-vacuity trap). The test EXES stay out of the default build
+# (just test runs them).
+defaultTargets = ["Kit", "TextKit", "TestingKit", "LintKit", "Gates", "SchemaCore", "WasmCore", "Wit", "Machines", "ZSet", "Inspector", "Datalog", "Analysis", "Cost", "Scaffold", "Query", "Vortex", "Guest", "Effects", "ScaffoldDemo", "ScaffoldLedger"]
+
+# ── TestingKit (the shared test harness; notes/v3/15-patterns.md #5 + #14) ──
 # Core-only: no LSpec, no Plausible, no mathlib.
 
 [[lean_lib]]
-name = "TestKit"
-srcDir = "testkit"
-roots = ["TestKit"]
-globs = ["TestKit", "TestKit.+"]
+name = "TestingKit"
+srcDir = "testingkit"
+roots = ["TestingKit"]
+globs = ["TestingKit", "TestingKit.+"]
 
 [[lean_exe]]
-name = "TestKitTests"
-srcDir = "testkit"
-root = "TestKitTests.Main"
+name = "TestingKitTests"
+srcDir = "testingkit"
+root = "TestingKitTests.Main"
 
 # ── TextKit (the core-only text/parser foundation; notes/v3/05-codegen.md §1,
 #    notes/v3/15-patterns.md #12) ──
@@ -48,6 +54,32 @@ root = "TextKitTests.Main"
 name = "Cli"
 git = "https://github.com/leanprover/lean4-cli"
 rev = "6130a47896ce867c6a4a55373441e59e565bad0f"
+
+# ── lean4lean (the kernel-check gate's independent double-check) ───────
+# batteries at the TREE-compatible rev (v4.33.0 = 4488d40, what the legacy
+# tree's mathlib closure already vendored). This ROOT require deliberately
+# overrides lean4lean's own batteries pin (v4.33.0-rc2): lean4lean builds
+# green under the v4.33.0 RELEASE toolchain with batteries v4.33.0
+# (probe-verified in the legacy tree; Gates/KernelCheck.lean's header).
+# The tree's own libraries import NOTHING from batteries (the cone rule);
+# the require exists only so `lake build lean4lean:exe` resolves.
+
+[[require]]
+name = "batteries"
+git = "https://github.com/leanprover-community/batteries"
+rev = "4488d40d070b9700d4d5a6aa342f0d40c31b2a2d"
+
+# lean4lean — the pure-Lean kernel, the independent double-check behind
+# `gates kernel-check`. Master @ 8223d22 targets leanprover/lean4:v4.33.0-rc2;
+# pinned here (the legacy tree's verified rev) — it builds under the
+# v4.33.0 release toolchain with the batteries override above. Only its
+# `lean4lean` exe target is built (on demand by kernel-check) — the tree's
+# own code imports nothing from it, so iteration cost is unaffected.
+
+[[require]]
+name = "lean4lean"
+git = "https://github.com/digama0/lean4lean"
+rev = "8223d223ed98661882e95d9d6a7126df7097cd76"
 
 # ── LintKit (the minimal env-linter engine; notes/v3/06-lean-rules.md,
 #    notes/v3/09-gates-ops.md §3) ──
@@ -79,8 +111,12 @@ supportInterpreter = true
 [[lean_lib]]
 name = "LintKitTestsLib"
 srcDir = "lintkit"
-roots = ["LintKitTests.Main", "LintKitTests.Violator"]
-globs = ["LintKitTests", "LintKitTests.+"]
+roots = ["LintKitTests.Main", "LintKitTests.Violator", "LintKitFixtures.Violations", "LintKitFixtures.Clean", "LintKitFixturesUntabled.Violator"]
+# No bare "LintKitTests" glob: a Glob.one emits the module unconditionally
+# (Lake's Glob.forEachModuleIn checks no file), and lintkit/LintKitTests.lean
+# does not exist — the phantom module's unreadable source fails the imports
+# job at collection time ("some modules have bad imports").
+globs = ["LintKitTests.+", "LintKitFixtures.+", "LintKitFixturesUntabled.+"]
 
 [[lean_exe]]
 name = "LintKitTests"
@@ -114,6 +150,7 @@ supportInterpreter = true
 name = "Kit"
 srcDir = "kit"
 roots = ["Kit"]
+globs = ["Kit", "Kit.+"]
 
 [[lean_lib]]
 name = "KitTestsLib"
@@ -141,7 +178,7 @@ globs = ["SchemaCore", "SchemaCore.+", "SchemaTests.+"]
 [[lean_lib]]
 name = "SchemaTestsLib"
 srcDir = "schemacore"
-roots = ["SchemaTests.Main", "SchemaTests.Axioms"]
+roots = ["SchemaTests.Main", "SchemaTests.Axioms", "SchemaTests.EntityMachine"]
 
 [[lean_exe]]
 name = "SchemaTests"
@@ -179,6 +216,14 @@ name = "WasmCoreTests"
 srcDir = "wasmcore"
 root = "WasmCoreTests.Main"
 
+# The wasm slice regen driver (the BINARY byte-tie's writer side: the
+# WAT text lane + the wasm bytes + the .hdr sidecar through the emit
+# spine). Safe main — no env replay (WasmCore is core-only).
+[[lean_exe]]
+name = "wasmgen"
+srcDir = "wasmcore"
+root = "WasmGenMain"
+
 # ── Kit.Lane — the lane substrate's demo lane (the end-to-end fixture) ──
 # The registration module (the register_lane mount) + the consumption
 # module (the entries + the build-time pins + the #guard_msgs curated
@@ -186,7 +231,376 @@ root = "WasmCoreTests.Main"
 # registration and the consumption are different modules. Consumed by
 # KitTests.Main (import; the value-level pins ride the exe).
 
+
+# ── Wit (the typed WIT target AST + the ONE renderer) ────────────────
+# The target-side carrier (notes/v3/07 R1 step 2: misrendering
+# unconstructible — the nodup facts ride the type). Core-only: no
+# imports at all (the cone root of the WIT lane). The renderer is
+# total, AST → text; the byte-tie (gates gen-check over
+# gen/schema-slice.wit) is its artifact-side proof. Tests: the exe
+# carries the golden pins + the #guard_msgs unconstructibility pins.
+
 [[lean_lib]]
-name = "KitLaneDemo"
-srcDir = "kit"
-roots = ["KitTests.LaneReg", "KitTests.LaneDemo"]
+name = "Wit"
+srcDir = "wit"
+roots = ["Wit"]
+globs = ["Wit", "Wit.+"]
+
+[[lean_exe]]
+name = "WitTests"
+srcDir = "wit"
+root = "WitTests.Main"
+
+# ── Machines (the TraceModel root's foundation) ──────────────────────
+# The machine carrier (pattern #1: relation + executable checker + the
+# proved bridge), the witness-carrying execution + the observer
+# composition (rides Kit.Observer), and the bounded exploration with
+# the HONEST trichotomy (proved / refuted-with-witness /
+# unknown-with-reason — budget exhaustion is UNKNOWN, never a verdict;
+# 01-core §3). Core-only (imports Kit.Observer — the cone rule).
+# Named exclusions in the headers: fairness, POR, vector clocks (08
+# §10's guard), nondeterministic-relation-primary machines.
+
+[[lean_lib]]
+name = "Machines"
+srcDir = "machines"
+roots = ["Machines"]
+globs = ["Machines", "Machines.+", "MachinesTests.+"]
+
+[[lean_lib]]
+name = "MachinesTestsLib"
+srcDir = "machines"
+roots = ["MachinesTests.Main", "MachinesTests.Axioms"]
+
+[[lean_exe]]
+name = "MachinesTests"
+srcDir = "machines"
+root = "MachinesTests.Main"
+
+# ── ZSet (the Change root's additive foundation — the delta substrate) ──
+# The canonical Z-set (sorted zero-free association list, invariant in
+# proof fields — the canonical-rep structure, NOT a quotient, 06 §7c)
+# + the Kit.Change.Additive instance (the ladder's top rung, 01 §2) +
+# the trichotomy types (03 §7: command/delta/event never collapsed).
+# Core-only (imports Kit — the cone rule; the legacy dbsp's mathlib
+# weight ported as fresh theorems, mined for intent only).
+# Tests: the exe carries the positive pins + the mandatory negative
+# controls; Axioms.lean is part of the tests lib (the axiom self-check).
+
+[[lean_lib]]
+name = "ZSet"
+srcDir = "zset"
+roots = ["ZSet"]
+globs = ["ZSet", "ZSet.+"]
+
+[[lean_lib]]
+name = "ZSetTestsLib"
+srcDir = "zset"
+roots = ["ZSetTests.Main", "ZSetTests.Axioms"]
+
+[[lean_exe]]
+name = "ZSetTests"
+srcDir = "zset"
+root = "ZSetTests.Main"
+
+# ── Inspector (the evidence-chain inspector — 03 §5 + 04 §2/§6/§8) ──
+# Reads the lanes' env extensions replayed at runtime (the gates'
+# loadPkgEnv discipline, MIRRORED in Inspector.Replay — not imported:
+# the inspector stays a leaf so the gates can consume its sweep next
+# without a cycle). Imports Kit.Obligation + SchemaCore.Check (read-only
+# usage of the lanes' public surfaces); the replay/exe surfaces are the
+# host side. Tests: the exe carries the live-replay pins + the pure
+# teeth pins (the fabricated undischarged row flags); Axioms.lean is
+# part of the tests lib (the axiom self-check over the pure faces).
+
+[[lean_lib]]
+name = "Inspector"
+srcDir = "inspector"
+roots = ["Inspector"]
+globs = ["Inspector", "Inspector.+", "InspectorTests.+"]
+
+[[lean_lib]]
+name = "InspectorTestsLib"
+srcDir = "inspector"
+roots = ["InspectorTests.Main", "InspectorTests.Axioms"]
+
+[[lean_exe]]
+name = "InspectorTests"
+srcDir = "inspector"
+root = "InspectorTests.Main"
+# The test exe replays env extensions at runtime — the interpreter must
+# be on (the gates' pattern).
+supportInterpreter = true
+
+[[lean_exe]]
+name = "inspector"
+srcDir = "inspector"
+root = "InspectorMain"
+# enableInitializersExecution (the import-preamble) is unsafe — the
+# interpreter must be on.
+supportInterpreter = true
+
+# ── Datalog (the data plane's executable fragment — 02-data-plane §9) ──
+# Typed predicates over an arbitrary DecidableEq+Inhabited value type,
+# ground-atom facts, range-restricted rules with the safety checker +
+# the loud refusal, the monotone consequence operator, LFP semantics,
+# the fuel = height-bound evaluator with its correctness theorem.
+# Core-only (imports Kit — the cone rule). Named exclusions in the
+# headers: stratified negation (a negated literal fails the safety
+# check), aggregation, arithmetic generation, recursive bag weights,
+# external effects — each lands with its named law (02 §9's trap
+# discipline). Tests: the exe carries the positive pins + the mandatory
+# negative controls; Axioms.lean is part of the tests lib (the axiom
+# self-check).
+
+[[lean_lib]]
+name = "Datalog"
+srcDir = "datalog"
+roots = ["Datalog"]
+# No bare "DatalogTests" glob: no datalog/DatalogTests.lean file exists
+# (same phantom-module rule as LintKitTestsLib above).
+globs = ["Datalog", "Datalog.+", "DatalogTests.+"]
+
+[[lean_lib]]
+name = "DatalogTestsLib"
+srcDir = "datalog"
+roots = ["DatalogTests.Main", "DatalogTests.Axioms"]
+
+[[lean_exe]]
+name = "DatalogTests"
+srcDir = "datalog"
+root = "DatalogTests.Main"
+
+# ── Scaffold (the application-scaffolding generator — 07's recipes as rows) ──
+# The AppSpec (a declarative Lean VALUE) → the generated consumer skeleton
+# (the generative engine's Lean-syntax target reading, 01 §5). Imports
+# Kit (read-only — the lane substrate + the emitter spine + the ONE Diag
+# envelope) + TestingKit (the golden discipline). Core-only (the cone rule).
+# Tests: the exe carries the golden byte-tie + the in-process elaboration
+# of the generated registration module + the curated-failure teeth + the
+# mandatory negative controls.
+
+[[lean_lib]]
+name = "Scaffold"
+srcDir = "scaffold"
+roots = ["Scaffold"]
+globs = ["Scaffold", "Scaffold.+"]
+
+[[lean_lib]]
+name = "ScaffoldTestsLib"
+srcDir = "scaffold"
+roots = ["ScaffoldTests.Main", "ScaffoldTests.Axioms"]
+
+[[lean_exe]]
+name = "ScaffoldTests"
+srcDir = "scaffold"
+root = "ScaffoldTests.Main"
+# The test exe byte-ties the generated DemoApp skeleton + runs the teeth.
+supportInterpreter = true
+
+# The scaffolder's WRITER side (the byte-tie's write face — the
+# schema/wasmgen precedent): the adopted skeletons' regen driver over
+# Scaffold.Specs.adoptedSpecs. Writes the GENERATED files every run;
+# seeds each hand-owned `<Name>/Flow.lean` ONCE (never overwrites).
+# Safe main — the generator is pure string machinery.
+[[lean_exe]]
+name = "scaffoldgen"
+srcDir = "scaffold"
+root = "ScaffoldGenMain"
+
+# ── Cost (the quantitative-semantics foundation) ─────────────────────
+# The cost model (CostModel: zero + composition + the monotonicity
+# discipline; natCost the canonical instance) + the grading discipline
+# (Graded: the writer shape — value ALONGSIDE cost, bind composes both
+# carriers) + the interpretation pair (plain eval vs cost-graded eval,
+# the agreement via Kit.Relation's engine — 01 §6) + the budget/monus
+# tie (01 §1: resources are not a root — a Change instance, monus;
+# exhaustion is observable data, never a verdict — 01 §3). Core-only
+# (imports Kit.Relation + Kit.Change — the cone rule). Tests: the exe
+# carries the composition-law pins + the agreement exercise + the
+# budget-exhaustion teeth + the mandatory negative controls.
+
+[[lean_lib]]
+name = "Cost"
+srcDir = "cost"
+roots = ["Cost"]
+globs = ["Cost", "Cost.+"]
+
+[[lean_lib]]
+name = "CostTestsLib"
+srcDir = "cost"
+roots = ["CostTests.Main", "CostTests.Axioms"]
+
+[[lean_exe]]
+name = "CostTests"
+srcDir = "cost"
+root = "CostTests.Main"
+
+# ── ScaffoldDemo — the generated skeleton, adopted (the byte-tie's committed side) ──
+# The generator's OWN output, committed verbatim (one writer: Scaffold.Generate
+# over the demo AppSpec in ScaffoldTests.Main — regen is the deliberate
+# re-emit; a hand edit fails the byte-tie in ScaffoldTests). The adoption is
+# the compiled-ness proof: lake elaborates the generated registration lane,
+# the consumption module and the control-carrying suite on EVERY build.
+
+[[lean_lib]]
+name = "ScaffoldDemo"
+srcDir = "."
+roots = ["DemoApp.Reg", "DemoApp.App", "DemoApp.Flow", "DemoApp.Tests"]
+globs = ["DemoApp.+"]
+
+# ── ScaffoldLedger — the dogfood skeleton, adopted (LedgerApp) ───────
+# The DOGFOOD consumer (notes/v3/07's leftover rule: the template's
+# output must have a real consumer — the fitness proof). Same
+# discipline as ScaffoldDemo: the generated Reg/App/Tests are the
+# generator's own output, committed verbatim (byte-tied in
+# ScaffoldTests); LedgerApp/Flow.lean is the HAND-OWNED extension
+# module (the fill obligations' home — no GENERATED header, no
+# byte-tie; the driver seeds it once, never overwrites).
+
+[[lean_lib]]
+name = "ScaffoldLedger"
+srcDir = "."
+roots = ["LedgerApp.Reg", "LedgerApp.App", "LedgerApp.Flow", "LedgerApp.Tests"]
+globs = ["LedgerApp.+"]
+
+# ── Analysis (the abstract-interpretation foundation) ─────────────────
+# The framework (the γ-carrier + the soundness-field transfers) + the
+# worked domain (bounded intervals over ℤ) + the checker shape (the
+# concrete/abstract expression pair riding Kit.Relation's ONE generic
+# theorem). Core-only (imports Kit — the cone rule). Tests: the exe
+# carries the known-answer pins + the type-level refusal teeth + the
+# mandatory negative controls; Axioms.lean is part of the tests lib
+# (the axiom self-check).
+
+[[lean_lib]]
+name = "Analysis"
+srcDir = "analysis"
+roots = ["Analysis"]
+globs = ["Analysis", "Analysis.+"]
+
+[[lean_lib]]
+name = "AnalysisTestsLib"
+srcDir = "analysis"
+roots = ["AnalysisTests.Main", "AnalysisTests.Axioms"]
+
+[[lean_exe]]
+name = "AnalysisTests"
+srcDir = "analysis"
+root = "AnalysisTests.Main"
+
+# ── Query (the relational fragment — 02-data-plane §2/§3/§4) ─────────
+# The typed query expressions over the schema's rows (selection /
+# projection / equijoin / union), the FD-driven result typing (the
+# key-join's at-most-one is the TYPE), the weighted evaluation (the
+# executable semantics), the spec reading + the bridge (pattern #1),
+# and the weight-polymorphism (THE ONE THEOREM's instance,
+# `evalQ_wmap`). Core-only (imports SchemaCore + ZSet — the cone
+# rule). Named exclusions: negation, aggregation, universal
+# conditions, ordering (02 §2's honest boundary — each needs its own
+# named semantics). Tests: the exe carries the pinned evaluations +
+# the key-join determinacy + the weight-poly pins + the mandatory
+# negative controls; Axioms.lean is part of the tests lib (the axiom
+# self-check).
+
+[[lean_lib]]
+name = "Query"
+srcDir = "query"
+roots = ["Query"]
+globs = ["Query", "Query.+"]
+
+[[lean_lib]]
+name = "QueryTestsLib"
+srcDir = "query"
+roots = ["QueryTests.Main", "QueryTests.Axioms"]
+
+[[lean_exe]]
+name = "QueryTests"
+srcDir = "query"
+root = "QueryTests.Main"
+
+# ── Vortex (the vortex lane's encoding seed) ─────────────────────────
+# The encoding selection as a PURE STATIC function (design doc:
+# never a runtime search) + the layout emitter row (07 R1's recipe over
+# the closed Ty). Core-only (imports Kit + SchemaCore — the cone rule;
+# the SchemaCore import is READ-ONLY: Ty/Item/Fold, the closed universe
+# + the ONE renderTy fold). Tests: the exe carries the known-answer
+# pins + the closed-universe coverage + the mandatory negative controls.
+
+[[lean_lib]]
+name = "Vortex"
+srcDir = "vortex"
+roots = ["Vortex"]
+globs = ["Vortex", "Vortex.+"]
+
+[[lean_lib]]
+name = "VortexTestsLib"
+srcDir = "vortex"
+roots = ["VortexTests.Main", "VortexTests.Axioms"]
+
+[[lean_exe]]
+name = "VortexTests"
+srcDir = "vortex"
+root = "VortexTests.Main"
+
+# ── Effects (the closed effect lattice + the resources split) ────────
+# The effects lane's foundation (notes/v3/08-capabilities.md §8): the
+# closed 8-atom lattice + the rows as finite sets with the lattice laws
+# + the effect-annotated computation (the row as INDEX; the join
+# computed at the type level; the check boundary's sub-effect proof —
+# an over-permissive composition fails to elaborate) + the resources
+# split SEPARATE (D7: effects are upper bounds, resources are usage
+# accounting with context splitting; the double-spend's
+# unrepresentability is the point) + the footprint laws over the
+# minimal state model (reads depend only on the footprint; writes
+# preserve outside it; the frame rule composes). C1-adjacent machinery
+# (imports Kit only — the cone rule). Tests: the exe carries the
+# lattice pins + the elaboration-refusal teeth + the double-spend pin
+# + the mandatory negative controls; Axioms.lean is part of the tests
+# lib (the axiom self-check).
+
+[[lean_lib]]
+name = "Effects"
+srcDir = "effects"
+roots = ["Effects"]
+globs = ["Effects", "Effects.+", "EffectsTests.+"]
+
+[[lean_lib]]
+name = "EffectsTestsLib"
+srcDir = "effects"
+roots = ["EffectsTests.Main", "EffectsTests.Axioms"]
+
+[[lean_exe]]
+name = "EffectsTests"
+srcDir = "effects"
+root = "EffectsTests.Main"
+
+# ── Guest (the LCNF→wasm guest-compiler lane's first slice) ──────────
+# The C2/host lane (notes/design-one-instr-ast.md's order): the LCNF
+# reading (host-side — `import Lean` is the lane's disclosed
+# discipline) + the lowering's seed over WasmCore's ONE AST (read-only
+# consumption: Encode/Validate/Module/Instr/OpTable). Tests: the exe
+# carries the end-to-end pin + the refusal teeth + the mandatory
+# negative controls; Axioms.lean is part of the tests lib (the axiom
+# self-check over the pure faces). The fixture module is part of the
+# tests lib (the driver imports it at runtime — the LCNF re-run needs
+# its olean, never a static import).
+
+[[lean_lib]]
+name = "Guest"
+srcDir = "guest"
+roots = ["Guest"]
+globs = ["Guest", "Guest.+"]
+
+[[lean_lib]]
+name = "GuestTestsLib"
+srcDir = "guest"
+roots = ["GuestTests.Main", "GuestTests.Fixture", "GuestTests.Axioms"]
+
+[[lean_exe]]
+name = "GuestTests"
+srcDir = "guest"
+root = "GuestTests.Main"
+# The driver's importModules + the LCNF re-run replay initializers —
+# the interpreter must be on (the InspectorTests pattern).
+supportInterpreter = true

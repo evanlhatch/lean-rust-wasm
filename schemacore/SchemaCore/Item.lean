@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Item — the item model: a record of named `Ty` fields
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/01-core.md §1 (Universe root), §5 (the
 spine: the registry is the accumulated event log, the emitter reads
 it); notes/v3/15-patterns.md #4 (the obligation as data — the slice's
@@ -52,18 +52,32 @@ structure Item where
 
 /-- `kebabName`: the wire spelling of a Lean name's last component —
     camelCase split at every uppercase (`"OrderItem"` → `"order-item"`).
-    The WIT record names come from here (never hand-set). -/
+    The WIT record names come from here (never hand-set).
+    THE ONE MANGLER: the body delegates to `Kit.kebab` (Kit.Mangle) (the WIT
+    lane's convention lives THERE, with the post-mangle uniqueness
+    discipline — a parallel kebab here would be a second escaping
+    decision). Byte-identical to the pre-delegation hand fold on the
+    lane's input class (Lean name components — pure camelCase, no
+    separators): `gates gen-check`'s byte-tie over `gen/schema-slice.wit`
+    is the proof. -/
 def kebabName (s : String) : String :=
-  let folded := s.toList.foldl (fun acc c =>
-    if c.isUpper then acc ++ ['-', c.toLower] else acc ++ [c]) []
-  match folded with
-  | '-' :: rest => String.ofList rest
-  | _ => String.ofList folded
+  Kit.kebab s
+
+/-- The last `.`-component of a name, as a structural char fold —
+    the KERNEL-REDUCIBLE face of `(s.splitOn ".").getLast!` (core's
+    splitOn rides the String iterator — wf recursion, 06 §2's
+    kernel-opacity trap — so anything that must reduce in the kernel
+    — the golden theorems' `decide`/`rfl` — routes through HERE;
+    the two spellings agree on every input: both return the run of
+    characters after the last `.`). -/
+def lastName (s : String) : String :=
+  String.ofList
+    (s.toList.foldl (fun cur c => if c == '.' then [] else cur ++ [c]) [])
 
 /-- The item's wire name: the last component of its Lean name,
     kebab-cased (`"SchemaCore.Slice.Example"` → `"example"`). -/
 def Item.wireName (item : Item) : String :=
-  kebabName ((item.name.splitOn ".").getLast!)
+  kebabName (lastName item.name)
 
 /-! ## The universe as a DataRegistry -/
 
@@ -82,28 +96,25 @@ def registryOfItems (items : List Item) :
 
 /-! ## The obligation view — the slice's one checkable fact -/
 
-/-- The obligation: an item's field names are distinct. The tier is
+/-- The obligation: an item's field names are distinct — THE CLAIM IS
+    THE TYPE INDEX (the row is `Obligation (List String)
+    ((item.fields.map (·.name))).Nodup`), so the tier/evidence/
+    discharge can never drift from the claim. The tier is
     `decidableNow` — over concrete field lists the fact is a `decide`.
     Registration COMPUTES the tier; backends READ it (Kit.Obligation). -/
-def fieldNodupObligation (item : Item) : Obligation (List String) :=
+def fieldNodupObligation (item : Item) :
+    Obligation (List String) ((item.fields.map (·.name))).Nodup :=
   { label := s!"schema/{item.name}/fields-nodup"
     tier := .decidableNow
     payload := item.fields.map (·.name)
     provenance := `SchemaCore }
 
-/-- The claim the obligation carries. -/
-def fieldNodupClaim (o : Obligation (List String)) : Prop := o.payload.Nodup
-
-/-- The claim's decision procedure (the runtime `decide` instance). -/
-instance fieldNodupClaimDec :
-    ∀ o : Obligation (List String), Decidable (fieldNodupClaim o) :=
-  fun o => List.nodupDecidable o.payload
-
-/-- The discharge via the kit's decidableNow backend — `none` is the
-    LOUD refusal (a false claim or a mis-wired tier; the backend never
-    fabricates evidence). Soundness/completeness are Kit's theorems,
-    cited, never re-proved. -/
+/-- The discharge via the kit's decidableNow backend — the claim
+    discharged is the obligation's OWN index (there is no claim
+    parameter to mis-wire); `none` is the LOUD refusal (a false claim
+    or a mis-wired tier; the backend never fabricates evidence).
+    Soundness/completeness are Kit's theorems, cited, never re-proved. -/
 def dischargeFieldNodup (item : Item) : Option Evidence :=
-  (fieldNodupObligation item).decideDischarge fieldNodupClaim
+  (fieldNodupObligation item).decideDischarge
 
 end SchemaCore

@@ -49,6 +49,12 @@ carried per-instance.
 15. `15-patterns.md` — the pattern catalog: the proven shapes with their
     canonical instances + WHY they're right + when NOT to use them (the
     affirmative shield against re-bloat).
+16. `16-surface.md` — the surface doctrine: the two-idiom frontend
+    (snapshot + stream, conjugate by the PROVED D/I bridges; inherited
+    idioms only, the machinery implicit), the six-word vocabulary, the
+    evidence-entourage discipline (weakest-sufficient evidence), the
+    strengthening program (the model's honest holes, ranked), the cheap
+    wins list, and the game-engine activation readings.
 
 ## The execution protocol (every change)
 

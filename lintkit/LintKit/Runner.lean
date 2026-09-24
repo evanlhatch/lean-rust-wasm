@@ -15,10 +15,13 @@ The linters are ALSO registered via `@[builtin_env_linter]` (the
 `register_guestlang_linter` macro's third part), so packages that DO
 import LintKit get stock `lake lint --builtin-lint` integration for free.
 
-Deliberate exclusions vs the legacy Runner: the text lints (no text-lint
-rule exists yet in this tree — the framework's TextFinding + the source
-walk arrive with the first text rule) and the artifact-header gate
-(arrives with the first emitter — nothing-without-a-consumer).
+The text lints (LintKit.TextLints/CodecLints) run over each linted
+module's SOURCE file — the source walk (`runTextLintsOnModules`) resolves
+files via the driver's `srcRoots` mappings (module root → directory),
+never via the search path, so dependency modules with colliding names
+are never scanned. Deliberate exclusions vs the legacy Runner: the
+artifact-header gate (arrives with the first emitter —
+nothing-without-a-consumer).
 
 The five questions (notes/v3/01-core.md):
 - root: none — the driver engine (why a custom runner: the header note
@@ -33,9 +36,19 @@ allowlist run (the same runner code path).
 module
 
 public import LintKit.AxiomAllowlist
+public import LintKit.BareChecker
+public import LintKit.Citations
+public import LintKit.CodecLints
 public import LintKit.Cone
+public import LintKit.DecideFirst
 public import LintKit.DupDefBodies
+public import LintKit.Graduation
+public import LintKit.GuestBan
 public import LintKit.PackageNamespace
+public import LintKit.RecursiveSimpEqns
+public import LintKit.TextLints
+public import LintKit.VerdictCtors
+public import LintKit.ZeroCitation
 
 public meta section
 
@@ -57,6 +70,10 @@ structure DriverConfig where
   overrides     : NameMap Bool := {}
   /-- Comma-separated extra prefixes for `packageNamespace`. -/
   extraPrefixes : String := ""
+  /-- `<module-root>=<dir>` mappings (repeatable): where a linted module
+  root's sources live RELATIVE TO THE DRIVER'S CWD. Text lints must
+  resolve sources or they are silently skipped (reported as warnings). -/
+  srcRoots      : Array (Name × String) := {}
   deriving Inhabited
 
 /-- The tree's env-linters, with their options. This list is the driver's
@@ -74,7 +91,35 @@ meta def lintkitLinters : Array (NamedEnvLinter × Lean.Option Bool) := #[
   ({ toEnvLinter := packageNamespaceLinter
      optName := `linter.guestlang.packageNamespace
      declName := ``LintKit.packageNamespaceLinter },
-   linter.guestlang.packageNamespace)
+   linter.guestlang.packageNamespace),
+  ({ toEnvLinter := bareCheckerLinter
+     optName := `linter.guestlang.bareChecker
+     declName := ``LintKit.bareCheckerLinter },
+   linter.guestlang.bareChecker),
+  ({ toEnvLinter := verdictCtorsLinter
+     optName := `linter.guestlang.verdictCtors
+     declName := ``LintKit.verdictCtorsLinter },
+   linter.guestlang.verdictCtors),
+  ({ toEnvLinter := recursiveSimpEqnsLinter
+     optName := `linter.guestlang.recursiveSimpEqns
+     declName := ``LintKit.recursiveSimpEqnsLinter },
+   linter.guestlang.recursiveSimpEqns),
+  ({ toEnvLinter := GuestBan.guestBanLinter
+     optName := `linter.guestlang.guestBan
+     declName := ``LintKit.GuestBan.guestBanLinter },
+   linter.guestlang.guestBan),
+  ({ toEnvLinter := decideFirstLinter
+     optName := `linter.guestlang.decideFirst
+     declName := ``LintKit.decideFirstLinter },
+   linter.guestlang.decideFirst),
+  ({ toEnvLinter := graduationLinter
+     optName := `linter.guestlang.graduation
+     declName := ``LintKit.graduationLinter },
+   linter.guestlang.graduation),
+  ({ toEnvLinter := zeroCitationLinter
+     optName := `linter.guestlang.zeroCitation
+     declName := ``LintKit.zeroCitationLinter },
+   linter.guestlang.zeroCitation)
 ]
 
 /-- Per-declaration enablement (the runner's replacement for core's
@@ -149,6 +194,48 @@ def runModuleLinters (env : Environment) (roots : Array Name)
           findings := findings.push
             { linter := opt.name, decl := m, message := ← msg.toString }
   return findings
+
+/-! ## the text lints (source walk) -/
+
+/-- The text lints (LintKit.TextLints/CodecLints), with their options:
+pure `file → content → findings` functions. -/
+def lintkitTextLints :
+    Array (Lean.Option Bool × (String → String → Array TextFinding)) :=
+  #[(linter.guestlang.noNewPartial, checkNoNewPartial),
+    (linter.guestlang.nolintReason, checkNolintReason),
+    (linter.guestlang.unregisteredRoundtrip, checkUnregisteredRoundtrip),
+    (linter.guestlang.didyoumeanDiscipline, checkDidyoumeanDiscipline)]
+
+/-- The `--src-root` mapping lookup: the FIRST mapping whose root prefixes
+the module wins; `none` = the cwd fallback. Pure so the self-tests can
+pin the resolution order. -/
+def srcRootFor (srcRoots : Array (Name × String)) (m : Name) : Option String :=
+  (srcRoots.find? fun (r, _) => r.isPrefixOf m).map (·.2)
+
+/-- Source-text lints over the `.lean` files of all linted modules. Sources
+resolve through the `--src-root` mappings first, then cwd-relative; never
+via the search path, so dependency modules with colliding names are never
+scanned. Missing sources are reported as warnings by the caller, never
+silently skipped. -/
+def runTextLintsOnModules (env : Environment) (roots : Array Name)
+    (cfg : DriverConfig := {}) : IO (Array TextFinding × Array Name) := do
+  let cwd ← IO.currentDir
+  let mut findings := #[]
+  let mut missing := #[]
+  for m in env.header.moduleNames do
+    unless roots.any (·.isPrefixOf m) do continue
+    let file := match srcRootFor cfg.srcRoots m with
+      | some dir => modToFilePath dir m "lean"
+      | none => modToFilePath cwd m "lean"
+    unless ← file.pathExists do
+      missing := missing.push m
+      continue
+    let content ← IO.FS.readFile file
+    for (opt, check) in lintkitTextLints do
+      if cfg.overrides.find? opt.name == some false then continue
+      for f in check file.toString content do
+        findings := findings.push f
+  return (findings, missing)
 
 /-- Lint the import closure of `mods` (the package's roots), restricted
 to decls defined in modules rooted at those roots. The DECLARATION

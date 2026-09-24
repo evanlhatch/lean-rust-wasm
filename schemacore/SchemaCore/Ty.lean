@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Ty — the boundary universe (the C1 slice's closed `Ty`)
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/01-core.md §1 (Universe root: finite data,
 closed codes + total denotation) + notes/v3/15-patterns.md #15 (the
 closed-universe exhaustiveness discipline).
@@ -90,8 +90,13 @@ deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- The key sub-universe INJECTS into `Ty`: every key is a scalar
     type. Emitters/codecs route key rendering through this — below the
-    first fold a key position is a plain `Ty` again. -/
-def KeyTy.toTy : KeyTy → Ty
+    first fold a key position is a plain `Ty` again. REDUCIBLE (abbrev):
+    the GADT case-splitting on `Value k.toTy` indices must see through
+    it (the matcher's index unification runs at instances transparency
+    — a semireducible spelling defeats the pruning and generates
+    impossible cross-ctor cases); the variable-key transport
+    (`KeyTy.toType_toTy`) is unaffected. -/
+abbrev KeyTy.toTy : KeyTy → Ty
   | .bool => .bool
   | .u64 => .u64
   | .i64 => .i64
@@ -130,109 +135,22 @@ theorem KeyTy.toType_toTy (k : KeyTy) : k.toTy.toType = k.toType := by
 
 /-- The key position's rendering. Key positions route through the
     scalar sub-universe (never a full `Ty` fold below it) — a plain
-    leaf fold, so `renderTy`'s own recursion stays STRUCTURAL (a
-    `k.toTy`-routed recursive call defeats the size check; wf-recursion
-    would make `renderTy` kernel-opaque). Coherent with the injection:
-    `renderKeyTy k = renderTy k.toTy` (proved below). -/
+    leaf fold, so the snapshot's char-level round-trip proofs stay
+    STRUCTURAL (a `k.toTy`-routed recursive call defeats the size
+    check; wf-recursion would make `tyText`'s parser proofs
+    kernel-opaque). Coherent with the injection AND with the fold:
+    `renderKeyTy k = renderTy k.toTy` and `renderKeyTy k =
+    foldKeyTy keyWitAlg k` (both proved in SchemaCore.Fold, the
+    initiality law's exercise). -/
 def renderKeyTy : KeyTy → String
   | .bool => "bool"
   | .u64 => "u64"
   | .i64 => "i64"
   | .string => "string"
 
-/-- The WIT lowering (the emitter's spelling; 07 R1's lowering over the
-    closed `Ty` — ONE fold, TOTAL, so exhaustiveness IS the
-    change-management system: a new constructor refuses to compile until
-    this match grows an arm). The correspondence grade per row:
-
-    LOSSLESS — the rendering determines the type:
-    `bool`/`u64`/`i64`/`string` are WIT's own scalars;
-    `option`/`list`/`result` recurse over their payloads.
-
-    RETRACTION-WITH-NOTE — the lossy rows (13-interfaces' rule: the WIT
-    view is the lossy one, never the baseline; the loss is DECLARED
-    here, not silent):
-    - `map k v` → `list<tuple<K, V>>`: WIT has no map. The
-      association-list form is the nearest shape; key uniqueness and
-      canonical key order are payload invariants the WIT type cannot
-      carry (a duplicate-key list is WIT-valid, schema-invalid).
-    - `set k` → `list<K>`: WIT has no set. BYTE-COLLIDES with
-      `.list k.toTy` (pinned: `renderTy_set_list_collision`); element
-      uniqueness is a payload invariant.
-    - `bounded cap` → `u64`: WIT has no bounded integers — the cap is
-      schema metadata the WIT boundary cannot carry. BYTE-COLLIDES with
-      `.u64` (pinned: `renderTy_bounded_u64_collision`); `bounded c1`
-      and `bounded c2` conflate, and a wire value over the cap becomes
-      representable.
-
-    Key positions route through `renderKeyTy` (the sub-universe fold). -/
-def renderTy : Ty → String
-  | .bool => "bool"
-  | .u64 => "u64"
-  | .i64 => "i64"
-  | .string => "string"
-  | .option t => s!"option<{renderTy t}>"
-  | .list t => s!"list<{renderTy t}>"
-  | .result ok err => s!"result<{renderTy ok}, {renderTy err}>"
-  | .map k v => s!"list<tuple<{renderKeyTy k}, {renderTy v}>>"
-  | .set k => s!"list<{renderKeyTy k}>"
-  | .bounded _ => "u64"
-
-/-! ## The lossless fragment (the correspondence row, 07 R1 step 3) -/
-
-/-- The lossless FRAGMENT: `t.witLossless = true` iff `renderTy t`
-    determines `t`. The map/set/bounded rows are OUT (the lossy
-    lowerings above — each names its loss); the scalars and the three
-    wrappers recurse over their payloads. -/
-def Ty.witLossless : Ty → Bool
-  | .bool => true
-  | .u64 => true
-  | .i64 => true
-  | .string => true
-  | .option a => a.witLossless
-  | .list a => a.witLossless
-  | .result ok err => ok.witLossless && err.witLossless
-  | .map _ _ => false
-  | .set _ => false
-  | .bounded _ => false
-
-/-- THE NAMED COLLISION (the lossy `set` row): a set's lowering is
-    byte-identical to the plain list over the same key type — the
-    collision is the declared loss, pinned here as data. -/
-theorem renderTy_set_list_collision (k : KeyTy) :
-    renderTy (.set k) = renderTy (.list k.toTy) := by cases k <;> rfl
-
-/-- THE NAMED COLLISION (the lossy `bounded` row): every cap lowers to
-    `u64` — caps conflate with each other and with plain `u64`. -/
-theorem renderTy_bounded_u64_collision (cap : Nat) :
-    renderTy (.bounded cap) = renderTy .u64 := rfl
-
-/-- Pairwise surface distinctness over a CONCRETE type list (decidable;
-    the lossless injectivity PIN at the slice's granularity — the
-    fragment's lowerings are pairwise distinct on the ctor sample,
-    `decide`-checked, not asserted). A `false` verdict names a surface
-    collision; the named ones are the lossy rows' pins. -/
-def witSurfaceDistinct : List Ty → Bool
-  | [] => true
-  | t :: rest =>
-      rest.all (fun t' => renderTy t != renderTy t') && witSurfaceDistinct rest
-
-/-- THE PIN: the lossless ctor sample's lowerings are pairwise distinct
-    (kernel `decide` over the one fold). -/
-example : witSurfaceDistinct
-    [.bool, .u64, .i64, .string, .option .u64, .list .string,
-     .result .u64 .string] = true := by decide
-
-/-- The lossy rows' fragment verdicts (the flagged exclusions). -/
-example : (Ty.map .string .u64).witLossless = false := rfl
-example : (Ty.set .u64).witLossless = false := rfl
-example : (Ty.bounded 42).witLossless = false := rfl
-example : (Ty.result .u64 .string).witLossless = true := rfl
-
-theorem renderKeyTy_toTy (k : KeyTy) : renderKeyTy k = renderTy k.toTy := by
-  cases k <;> rfl
-
-example : witSurfaceDistinct [.list .string, .set .string] = false := by decide
-example : witSurfaceDistinct [.u64, .bounded 42] = false := by decide
+-- The WIT lowering, the lossless-fragment flag, the collision pins and
+-- the distinctness pin live in `SchemaCore.Fold` now — the ONE walk,
+-- consumers are algebras (notes/v3/01-core.md §1 + 07 R1). This module
+-- ends at the key leaf: the universe, the injection, the key rendering.
 
 end SchemaCore

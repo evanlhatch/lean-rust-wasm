@@ -142,7 +142,7 @@ report-gate combinator in Gates/Common): config + analyse + render +
 the baseline discipline (write-or-diff with the loud re-baseline — a
 content-changing re-baseline is a deliberate act). The gate's output is
 a Verdict (ctors, never strings) + the exit code. Mounts available:
-gate (CI), lint (guestlang-lint), test (TestKit), obligation row,
+gate (CI), lint (guestlang-lint), test (TestingKit), obligation row,
 duel (the oracle), monitor (runtime) — one Statement, many mounts.
 
 ## 8. A new Rust host capability

@@ -1,4 +1,4 @@
-# macht
+# mandate
 
 The formally-modeled application toolkit: model an application in Lean —
 data, changes, behavior, protocols, obligations — and generate its

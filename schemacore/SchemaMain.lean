@@ -58,8 +58,46 @@ unsafe def main : IO UInt32 := do
     -- failed one); the driver owns the IO via the kit's shared loop —
     -- each artifact under ITS emitter's style/specSource, the same
     -- hand-rolled `header ++ contents` shape runEmitters encapsulates.
-    Kit.Emit.runEmitters "schema"
+    -- (The returned ledger rows have NO file consumer yet — the
+    -- leftover rule: the ledger lane lands when its reader does.)
+    let _rows ← Kit.Emit.runEmitters "schema"
       [(SchemaCore.witEmitter, r.reg), (SchemaCore.Emit.Rust.rustEmitter, r.reg)]
       (fun _ f =>
         pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    -- The DUEL vector-set's write (Kit.Duel's convention — the duel
+    -- emitter's job): the manifest rides the text lane, the vectors
+    -- the binary loop (+ their .hdr sidecars, Emit.lean's binary
+    -- discipline). Same GenMeta shapes — the text hash over the body,
+    -- the binary hash over the bytes (`bytesHash`).
+    let _duelRows ← Kit.Emit.runEmitters "schema"
+      [(SchemaCore.Emit.Rust.duelEmitter, r.reg)]
+      (fun _ f =>
+        pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    let _duelBinRows ← Kit.Emit.runBinaryEmitters "schema"
+      [(SchemaCore.Emit.Rust.duelEmitter, r.reg)]
+      (fun _ f =>
+        pure { items := r.reg.items.length
+             , contentHash := Kit.Emit.bytesHash f.contents })
+    -- The COMMIT DUEL's write (the bidirectional slice's differential —
+    -- SchemaCore.Commit's vector set; the same text+binary loop shape).
+    let _commitDuelRows ← Kit.Emit.runEmitters "schema"
+      [(commitDuelEmitter, r.reg)]
+      (fun _ f =>
+        pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    let _commitDuelBinRows ← Kit.Emit.runBinaryEmitters "schema"
+      [(commitDuelEmitter, r.reg)]
+      (fun _ f =>
+        pure { items := r.reg.items.length
+             , contentHash := Kit.Emit.bytesHash f.contents })
+    -- The GOLDEN MODULE (the byte-tie's theorem face, 09 §2): the same
+    -- regen run writes the committed goldens' Lean-side twin — the
+    -- embedded bodies + the kernel-discharged tie theorems + the teeth
+    -- (the pinned registry IS the live registration). One writer, one
+    -- regen: the artifact bytes and the golden module move together.
+    let goldens := SchemaCore.goldensBody r.reg
+    Kit.Emit.writeFileCreatingDirs "schemacore/SchemaCore/Goldens.lean"
+      (Kit.Emit.header .lean "schema" "SchemaCore.Slice"
+        { items := r.reg.items.length, contentHash := goldens.hash }
+        ++ goldens)
+    IO.println "wrote schemacore/SchemaCore/Goldens.lean"
     return 0

@@ -12,9 +12,11 @@ Shape:
 * `Cone` — the order `c0machinery ≤ c1domain ≤ c2theory ≤ c3app`
   (notes/v3/01-core.md's ladder shape, one rung per cone).
 * `coneOfRoot?` — project root → cone. A NEW PROJECT ROOT LANDS HERE
-  DELIBERATELY with the cone its content earns; an unknown root is
-  table-extension debt and passes the cone rule (the linter never
-  guesses a cone it was not given).
+  DELIBERATELY with the cone its content earns; an untabled root is a
+  LOUD GAP, not a pass — `coneVerdict` reports it as `.untabled` (the
+  2025 discipline fix: the first cut returned `#[]` for untabled
+  importers, so a landed library that forgot its row passed the cone
+  rule silently — exactly the lapse the table exists to prevent).
 * `Cone.bannedRoots` — the per-importer-cone external ban: C0/C1 ban
   `Mathlib` and `Batteries` (06 §8; host-side packages may import
   Batteries per the same rule, and a host-side C0 row that wants the
@@ -26,10 +28,12 @@ Shape:
   A reader root keeps its cone and the Mathlib/Batteries ban, but is
   exempt from the cone-high rule against TABLED roots. Guest-compiled
   roots never land here.
-* `coneOffences` — the pure verdict core: which of the imported roots
-  offend the importer's cone. Two rules: a cone-high PROJECT root is an
-  offence for any cone-low importer (reader roots excepted, above); the
-  banned external roots are offences for C0/C1 importers.
+* `coneVerdict` — the pure verdict core for one importer:
+  `.untabled` (the loud gap, above) or `.offences` — which of the
+  imported roots offend the importer's cone. Two rules: a cone-high
+  PROJECT root is an offence for any cone-low importer (reader roots
+  excepted, above); the banned external roots are offences for C0/C1
+  importers. `coneOffences` is the tabled-importer case, factored out.
 
 The linter is MODULE-level, not per-declaration: the input is the import
 graph (a module's direct imports, read from `env.header`), and the
@@ -100,15 +104,54 @@ deliberately with the cone its content earns; an unknown root is
 table-extension debt (the linter never guesses). -/
 def coneOfRoot? : Name → Option Cone
   -- C0 machinery: the core-only substrate any package may import.
-  | `Kit | `TextKit | `TestKit | `LintKit => some .c0machinery
+  | `Kit | `TextKit | `TestingKit | `LintKit => some .c0machinery
   -- Gates: host-side, core-only (the gate spine consumes C0 findings).
   | `Gates | `LintKitTests => some .c0machinery
-  -- C1 domain cores + their tests.
-  | `SchemaCore | `SchemaTests => some .c1domain
+  -- LintKit's fixture roots: the planted teeth modules (C0 machinery —
+  -- they import LintKit and nothing else) + the LOUD-GAP tooth, whose
+  -- project root is deliberately LEFT OUT of the table (see
+  -- LintKitFixturesUntabled in LintKitTests.Main).
+  | `LintKitFixtures => some .c0machinery
+  -- C0 tests + exe drivers (verified imports: their C0 lib + TestingKit
+  -- + Lean — nothing cone-high).
+  | `KitTests | `TestingKitTests | `TextKitTests => some .c0machinery
+  | `LintMain | `GatesMain => some .c0machinery
+  -- C1 domain cores + their tests + the schema package's own regen
+  -- driver (verified imports: Kit/TextKit + each other; SchemaCore.Emit
+  -- ← Wit/Wit.Render, same cone; SchemaMain ← SchemaCore + Lean).
+  | `SchemaCore | `SchemaTests | `SchemaMain => some .c1domain
   | `WasmCore | `WasmCoreTests => some .c1domain
-  -- Future roots land here, e.g.:
-  -- | `SomeTheory => some .c2theory
-  -- | `SomeApp    => some .c3app
+  | `Wit | `WitTests => some .c1domain
+  | `Machines | `MachinesTests => some .c1domain
+  | `ZSet | `ZSetTests => some .c1domain
+  | `Datalog | `DatalogTests => some .c1domain
+  | `Cost | `CostTests => some .c1domain
+  -- Effects: the C1-ADJACENT machinery (the closed effect lattice + the
+  -- resources split + the footprint laws — notes/v3/08-capabilities.md
+  -- §8): annotation/accounting substrate for the domain lanes'
+  -- composition joins, imports Kit only (the cone rule) — the
+  -- ZSet/Cost precedent.
+  | `Effects | `EffectsTests => some .c1domain
+  | `Analysis | `AnalysisTests => some .c1domain
+  | `Query | `QueryTests => some .c1domain
+  | `Vortex | `VortexTests => some .c1domain
+  -- C2: the host-side tooling lanes — read the domain cores' public
+  -- surfaces without being domain cores: Inspector ← SchemaCore.Check
+  -- (+ Kit.Obligation, Lean); Scaffold ← Kit + TestingKit (the AppSpec →
+  -- generated-skeleton engine). InspectorTests rides Inspector's cone;
+  -- InspectorMain is its driver.
+  | `Inspector | `InspectorTests | `InspectorMain => some .c2theory
+  | `Scaffold => some .c2theory
+  -- Guest: the LCNF→wasm compilation lane's host side (Guest.Lcnf ←
+  -- Lean + Lean.Compiler.LCNF; Guest.Lower ← WasmCore's ONE AST +
+  -- Kit.Diag — the domain core read-only; the EMITTED code is the
+  -- guest). Its tests ride the lane's cone.
+  | `Guest | `GuestTests => some .c2theory
+  -- C3: the app rows — the adopted generated app (DemoApp.Reg/App/
+  -- Tests: the generator's own output, imports Kit/TestingKit/Lean but its
+  -- content IS the app rung) + Scaffold's test root, which consumes
+  -- DemoApp.Tests (C3) for the byte-tie and so sits at C3 honestly.
+  | `DemoApp | `ScaffoldTests => some .c3app
   | _ => none
 
 /-- The per-importer-cone EXTERNAL ban (06 §8): the kernel cones C0/C1
@@ -146,7 +189,29 @@ def coneOffences (importerRoot : Name) (importRoots : Array Name) :
       match coneOfRoot? r with
       | some c' => !reader && !(c' ≤ importer)
       | none => (importer.bannedRoots.any (·.isPrefixOf r))
+  -- The TABLED case only — `coneVerdict` routes an untabled importer to
+  -- `.untabled` BEFORE this function runs; this arm is unreachable on
+  -- the module test's path (kept for the pure function's totality).
   | none => #[]
+
+/-- The verdict for one importer root (the module test's input):
+* `.untabled root` — the LOUD GAP: the root has no cone-table row. A
+  landed library that forgot its row is exactly the discipline failure
+  the table exists to catch, so this is a FINDING, never a silent pass.
+* `.offences roots` — the tabled case: the offending imports (empty =
+clean). -/
+public inductive ConeVerdict where
+  | untabled (root : Name)
+  | offences (roots : Array Name)
+  deriving Repr, DecidableEq, Inhabited
+
+/-- The full verdict: route the untabled importer to the loud gap, the
+tabled importer to `coneOffences`. -/
+def coneVerdict (importerRoot : Name) (importRoots : Array Name) :
+    ConeVerdict :=
+  match coneOfRoot? importerRoot with
+  | some _ => .offences (coneOffences importerRoot importRoots)
+  | none => .untabled importerRoot
 
 /-- The module-level cone test: the module's DIRECT imports (read from
 `env.header`) against its root's cone. Findings are per-MODULE (an
@@ -154,18 +219,25 @@ empty module can violate — a per-decl test cannot express this).
 Direct imports only — see the header's transitivity note. -/
 meta def coneModuleTest (mod : Name) : CoreM (Array MessageData) := do
   let env ← getEnv
-  let some importer := coneOfRoot? mod.getRoot | return #[]
   let some idx := env.getModuleIdx? mod | return #[]
   let some data := env.header.moduleData[idx]? | return #[]
   let importRoots := data.imports.map (·.module.getRoot)
-  let offences := coneOffences mod.getRoot importRoots
-  if offences.isEmpty then return #[]
-  return #[m!"cone violation: root `{mod.getRoot}` is \
-    {importer.render} but the module imports cone-high root(s) \
-    {String.intercalate ", " (offences.map toString).toList} — a cone-low \
-    module importing cone-high is a gate failure \
-    (notes/v3/06-lean-rules.md §8); the cone table is \
-    LintKit.Cone.coneOfRoot?"]
+  match coneVerdict mod.getRoot importRoots with
+  | .untabled root =>
+    return #[m!"cone gap: root `{root}` is not in the cone table — land \
+      its row deliberately with the cone its content earns \
+      (LintKit.Cone.coneOfRoot?): a landed project root without a row \
+      passes the cone rule silently, and a silent pass is the lapse the \
+      table exists to prevent (notes/v3/06-lean-rules.md §8)"]
+  | .offences offences =>
+    if offences.isEmpty then return #[]
+    let some importer := coneOfRoot? mod.getRoot | return #[]
+    return #[m!"cone violation: root `{mod.getRoot}` is \
+      {importer.render} but the module imports cone-high root(s) \
+      {String.intercalate ", " (offences.map toString).toList} — a cone-low \
+      module importing cone-high is a gate failure \
+      (notes/v3/06-lean-rules.md §8); the cone table is \
+      LintKit.Cone.coneOfRoot?"]
 
 end LintKit
 

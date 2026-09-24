@@ -82,8 +82,8 @@ def pchar (c : Char) : GParser Char := fun cur =>
   match cur.cs with
   | c' :: _ =>
       if c' = c then .ok (c, cur.adv)
-      else .error { pos := cur.off, expected := [s!"'{c}'"], context := [], suggest := none }
-  | [] => .error { pos := cur.off, expected := [s!"'{c}'"], context := [], suggest := none }
+      else .error (ParseError.base cur.off [s!"'{c}'"])
+  | [] => .error (ParseError.base cur.off [s!"'{c}'"])
 
 /-- Consume one character matching `p`; `name` is the expected-set entry
     (the head-predicate exclusion's positive face). -/
@@ -91,19 +91,19 @@ def satisfy (name : String) (p : Char → Bool) : GParser Char := fun cur =>
   match cur.cs with
   | c :: _ =>
       if p c then .ok (c, cur.adv)
-      else .error { pos := cur.off, expected := [name], context := [], suggest := none }
-  | [] => .error { pos := cur.off, expected := [name], context := [], suggest := none }
+      else .error (ParseError.base cur.off [name])
+  | [] => .error (ParseError.base cur.off [name])
 
 /-- Consume the literal `s` (the prefix kit's positive face). -/
 def tok (s : String) : GParser String := fun cur =>
   if s.toList.isPrefixOf cur.cs then .ok (s, cur.advBy s.length)
-  else .error { pos := cur.off, expected := [s!"'{s}'"], context := [], suggest := none }
+  else .error (ParseError.base cur.off [s!"'{s}'"])
 
 /-- Succeed only at end of input. -/
 def eof : GParser Unit := fun cur =>
   match cur.cs with
   | [] => .ok ((), cur)
-  | _ => .error { pos := cur.off, expected := ["<end of input>"], context := [], suggest := none }
+  | _ => .error (ParseError.base cur.off ["<end of input>"])
 
 /-- Look at (but do not consume) the next character — `lookAhead`-as-peek
     on the atomic shape; NEVER fails. -/
@@ -144,7 +144,7 @@ def orElse (p q : GParser α) : GParser α := fun cur =>
     `failure` reports an EMPTY expected-set at the current position
     (the honest unknown — a real grammar always labels through `label`). -/
 def failureG : GParser α := fun cur =>
-  .error { pos := cur.off, expected := [], context := [], suggest := none }
+  .error (ParseError.base cur.off [])
 
 instance : Alternative GParser where
   pure := GParser.result
@@ -162,12 +162,16 @@ instance : Alternative GParser where
   failure := failureG
   orElse := fun p q => orElse p (q ())
 
-/-- Label a parser: on failure the label joins the context stack
-    (prepended — outermost first) and the expected-set becomes exactly
-    the label (the label IS what the grammar wanted here). -/
+/-- Label a parser: on failure the label joins the envelope's context
+    stack (prepended — outermost first, as a name-only `TextKit.Label`) and
+    the valid-set becomes exactly the label (the label IS what the
+    grammar wanted here); the message names it too (the envelope's
+    curated-message rule). -/
 def label (s : String) (p : GParser α) : GParser α := fun cur =>
   match p cur with
-  | .error e => .error { e with expected := [s], context := s :: e.context }
+  | .error e =>
+      .error { e with valid := [s], message := s!"expected {s}",
+                      context := TextKit.Label.at s :: e.context }
   | .ok r => .ok r
 
 /-- Fill the did-you-mean hook on failure (the field's consumer-side

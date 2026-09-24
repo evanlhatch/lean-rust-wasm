@@ -274,17 +274,6 @@ theorem intAddCompose_nopRight (d : Int) : intAddCompose d 0 = d := by
 theorem intAddApply_nop (s : Int) : intAddApply s 0 = some s := by
   simp only [intAddApply, Option.some.injEq]; omega
 
-theorem intAddApply_roundTrip (s d s' : Int) (h : intAddApply s d = some s') :
-    intAddApply s' (intAddNeg d) = some s := by
-  simp only [intAddApply, intAddNeg, Option.some.injEq] at h ⊢
-  omega
-
-theorem intAddApply_commute (s a b : Int) :
-    (intAddApply s a).bind (fun x => intAddApply x b)
-      = (intAddApply s b).bind (fun x => intAddApply x a) := by
-  simp only [intAddApply, Option.bind_some, Option.some.injEq]
-  omega
-
 theorem intAddCompose_comm (a b : Int) : intAddCompose a b = intAddCompose b a := by
   simp only [intAddCompose]; omega
 
@@ -308,9 +297,21 @@ def intAdd : Additive Int Int where
   composeNopRight := intAddCompose_nopRight
   applyNop := intAddApply_nop
   inv := intAddNeg
-  roundTrip := intAddApply_roundTrip
+  -- roundTrip/commute are NOT hand omega scripts here: both are
+  -- DERIVED from the sibling fields by exactly the derivation the
+  -- generic laws catalog (`Additive.invRoundTrip` / `Additive.bindComm`
+  -- — one proof path; the instance cannot cite them, being their
+  -- subject, so the derivation is inlined at the fields and the
+  -- STANDALONE statements live only in the Additive namespace).
+  roundTrip := by
+    intro s d s' h
+    have h1 := intAddApply_compose s d (intAddNeg d)
+    rw [intAdd_invRight, intAddApply_nop, h] at h1
+    rw [Option.bind_some] at h1
+    exact h1.symm
   Disjoint _ _ := True
-  commute s a b _ := intAddApply_commute s a b
+  commute s a b _ := by
+    rw [← intAddApply_compose, intAddCompose_comm, intAddApply_compose]
   composeComm := intAddCompose_comm
   invLeft := intAdd_invLeft
   invRight := intAdd_invRight

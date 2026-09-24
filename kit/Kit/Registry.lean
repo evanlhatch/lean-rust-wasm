@@ -14,7 +14,10 @@ Provenance: mined from
 DidYouMean.lean's engine — theorem content ported, files FRESH
 (the env-extension layer of legacy Registry.lean deliberately does NOT
 port here: this is the value-level registry; the compile-time event
-log is a separate consumer's mount).
+log is a separate consumer's mount). The `insert` restoration + its
+laws + `nodupNamesIso` mine `DataRegistry.lean` and
+`CodegenCore.Kit.lean` (`nodupNamesIso`); `DisjointCommute` mines
+`CodegenCore.Kit.lean`.
 
 Core-only (no mathlib/Batteries). `Lean.EditDistance` is the compiler's
 own DP — core.
@@ -35,6 +38,7 @@ The five questions (notes/v3/01-core.md):
 
 import Lean
 import Kit.Correspondence
+import TextKit.Suggest
 
 namespace Kit
 
@@ -42,17 +46,14 @@ namespace Kit
 
 /-- The closest dictionary entries to `got`, nearest first. The closed
     world means the dictionary is always complete — the candidates ARE
-    the valid space, not a heuristic. The cutoff (`maxDist + 1`) prunes
-    the DP; the explicit `≤ maxDist` filter keeps the semantics exact
-    (a `some` from `levenshtein` is not guaranteed under the cutoff). -/
+    the valid space, not a heuristic. DELEGATION: the ONE engine lives
+    at `TextKit.Suggest` (the cone/build call — the module-system C0
+    substrate both diagnostic sides import); this is the `Kit`-namespaced
+    route over it, kept so every Kit-side consumer and pin is
+    interface-preserved. -/
 def didYouMean (got : String) (dict : List String) (maxDist : Nat := 3) :
     List String :=
-  let scored := dict.filterMap fun d =>
-    match Lean.EditDistance.levenshtein got d (maxDist + 1) with
-    | some dist => if dist ≤ maxDist then some (dist, d) else none
-    | none => none
-  let sorted := scored.toArray.qsort (fun a b => a.1 < b.1 || (a.1 == b.1 && a.2 < b.2))
-  sorted.toList.map (·.2)
+  TextKit.didYouMean got dict maxDist
 
 /-! ## Code allocation — position-derived, never hand-set -/
 
@@ -145,6 +146,15 @@ theorem lookup?_ok_mem (reg : DataRegistry α) {name : String} {a : α}
   · next hnone =>
     cases h
 
+/-- Determinism under nodup: the looked-up item is THE unique item with
+    that name — no other item can claim it. -/
+theorem lookup?_ok_unique (reg : DataRegistry α) {name : String} {a : α}
+    (h : reg.lookup? name = .ok a) :
+    ∀ b ∈ reg.items, reg.nameOf b = name → b = a := by
+  intro b hb hbn
+  obtain ⟨ha, hna⟩ := reg.lookup?_ok_mem h
+  exact reg.nameOf_injective hb ha (hbn.trans hna.symm)
+
 /-- A failed lookup is exactly the no-such-name case, and the miss
     carries the requested name plus suggestions over the registered
     names. -/
@@ -159,6 +169,30 @@ theorem lookup?_miss (reg : DataRegistry α) {name : String}
       exact h x hx
   unfold lookup?
   rw [hnone]
+
+/-- Insert a fresh-named item (at the head), preserving uniqueness. The
+    freshness obligation is an ARGUMENT: a duplicate name makes `insert`
+    uncallable — there is no rejection path because there is no illegal
+    state to reject (the mined shape; the runtime-rejection lane lives
+    in `Kit.Lane.materialize`, a different carrier). -/
+def insert (reg : DataRegistry α) (item : α)
+    (hfresh : reg.nameOf item ∉ reg.items.map reg.nameOf) : DataRegistry α where
+  items := item :: reg.items
+  nameOf := reg.nameOf
+  nodup := by
+    simp only [List.map_cons, List.nodup_cons]
+    exact ⟨hfresh, reg.nodup⟩
+
+/-- The inserted item is findable by its own name. -/
+theorem lookup?_insert_self (reg : DataRegistry α) (item : α)
+    (hfresh : reg.nameOf item ∉ reg.items.map reg.nameOf) :
+    (reg.insert item hfresh).lookup? (reg.nameOf item) = .ok item := by
+  simp [lookup?, insert]
+
+/-- Insertion grows the registry by exactly one. -/
+theorem all_insert (reg : DataRegistry α) (item : α)
+    (hfresh : reg.nameOf item ∉ reg.items.map reg.nameOf) :
+    (reg.insert item hfresh).all = item :: reg.all := rfl
 
 end DataRegistry
 
@@ -248,5 +282,45 @@ def finIso [BEq α] [LawfulBEq α] (reg : CodedRegistry α)
   inv_to i := Fin.ext (idxOf_getElem_inj reg i)
 
 end CodedRegistry
+
+/-! ## nodupNamesIso — the indexed-name space (the RowVals-projection
+correspondence) -/
+
+/-- A nodup name list IS an indexed space: position `i` ↦ the name at
+    `i`, name ↦ its unique position. (`Fin n`/name-subtype reading of
+    the field-name lists the RowVals lane projects by — the data-plane
+    wave's name-keyed walk DOES this.) -/
+def nodupNamesIso {names : List String} (hnd : names.Nodup) :
+    Iso (Fin names.length) {n : String // n ∈ names} where
+  to i := ⟨names[i.1]'i.2, List.getElem_mem i.2⟩
+  inv n := ⟨names.idxOf n.1, List.idxOf_lt_length_of_mem n.2⟩
+  to_inv n := Subtype.ext (List.getElem_idxOf (List.idxOf_lt_length_of_mem n.2))
+  inv_to i := Fin.ext (by
+    have hj := List.getElem_idxOf (List.idxOf_lt_length_of_mem (List.getElem_mem i.2))
+    exact (List.getElem_inj hnd).mp hj)
+
+/-! ## DisjointCommute — the shared write-disjointness law (one shape,
+many granularities) -/
+
+/-- THE shared law: `apply (apply s m₁) m₂ = apply (apply s m₂) m₁`
+    whenever the mutations' locations are disjoint. A mutation acts on
+    state through `apply`, has ONE location, locations carry a
+    disjointness relation, and write-disjoint mutations commute. Each
+    granularity instantiates the class by CITING its existing theorem
+    (the proofs live where the semantics live; this class adds no
+    proof). Mined from legacy `CodegenCore.Kit.lean`'s class of the same
+    name (the dbsp delta system + the lens path were its two
+    consumers). -/
+class DisjointCommute (S L Mut : Type) where
+  /-- The mutation application. -/
+  apply : S → Mut → S
+  /-- The (single) location a mutation writes. -/
+  loc : Mut → L
+  /-- Location disjointness (the side condition). -/
+  Disjoint : L → L → Prop
+  /-- THE contract: write-disjoint mutations commute. -/
+  disjoint_commutes :
+    ∀ (m₁ m₂ : Mut), Disjoint (loc m₁) (loc m₂) →
+      ∀ (s : S), apply (apply s m₁) m₂ = apply (apply s m₂) m₁
 
 end Kit

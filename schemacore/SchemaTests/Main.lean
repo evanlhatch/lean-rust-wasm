@@ -1,5 +1,5 @@
 /-
-# SchemaTests — the slice's test exe (TestKit the whole way)
+# SchemaTests — the slice's test exe (TestingKit the whole way)
 
 Per the slice: positive pins + the MANDATORY negative controls
 (15-patterns #5 — each Spec's sabotages must FAIL or the verdict is
@@ -7,7 +7,7 @@ Per the slice: positive pins + the MANDATORY negative controls
 
 1. `Ty` — the closed universe's rendering (every ctor's live witness).
 2. The emitter — the artifact body is a GOLDEN PIN (a literal), plus
-   the byte-tie's teeth at the value level (TestKit.Golden).
+   the byte-tie's teeth at the value level (TestingKit.Golden).
 3. The registry — duplicate item names are DECIDED and refused.
 4. The obligation — fields-nodup discharges at `decidableNow`; the
    mis-wire (`Discharged` with a tier-mismatched evidence) is
@@ -21,14 +21,22 @@ test exe cannot replay extensions; the gate is that suite's runner.
 Evidence, not architecture — the five-question block lives in the modules under test.
 -/
 
-import TestKit.Harness
-import TestKit.Golden
+import TestingKit.Harness
+import TestingKit.Golden
 import SchemaCore
+import SchemaCore.DeriveMeta
 import SchemaCore.Slice
 import SchemaCore.CheckSlice
+import SchemaCore.Keys
+import SchemaCore.KeysSlice
 import SchemaTests.Axioms
+import SchemaTests.Events
+import SchemaTests.Migrate
+import SchemaTests.Commit
+import SchemaTests.EntityMachine
+import SchemaTests.Inc
 
-open Kit SchemaCore TestKit
+open Kit SchemaCore TestingKit
 
 /-! ## Fixtures -/
 
@@ -66,7 +74,7 @@ def dupFieldItem : Item :=
     retraction-with-note), the bounded as `u64` (the declared cap
     loss). -/
 def expectedBody : String :=
-  "package macht:slice;\n\ninterface items {\n" ++
+  "package mandate:slice;\n\ninterface items {\n" ++
   "  record example {\n" ++
   "    ready: bool,\n" ++
   "    count: u64,\n" ++
@@ -90,13 +98,19 @@ def reg1 (item : Item) : DataRegistry Item :=
     nameOf := fun it => it.name
     nodup := by simp }
 
-/-! ## The record↔row bridge (the `@[row_bridge]` shape, hand on the fixture —
-    GenKit generates this per record when it lands; the SHAPE is the mined
-    `Meta/RowIso.lean` discipline: toRow/ofRow + BOTH round-trip laws + the
-    ONE `Kit.Iso`) -/
+/-! ## The record↔row bridge — DERIVED (`deriving WireCodec, row_bridge`,
+    the DeriveMeta handlers; the hand-built demonstration this file once
+    carried — the toRow/ofRow pair, the VList box helpers, and both
+    round-trip proofs, ~160 lines — is DELETED: the handlers generate
+    it per record, the laws cited from the GENERIC theorems) -/
 
 /-- The native record mirror of the Example fixture (the bridge's
-    native side). -/
+    native side). The deriving clause mounts BOTH capabilities: the
+    wire codec (`descr` + `tupleIso` + `codec` — the generic
+    `deriveCodec_correct`/`deriveDec_eq` thin wrappers) and the row
+    bridge (`fields` + `fieldNames` + `fields_nodup` + `nameIso` +
+    `toRow`/`ofRow` + `rowIso` — the generic `ofRowF_toRowF`/
+    `toRowF_ofRowF` thin wrappers). -/
 structure ExampleRec where
   ready : Bool
   count : UInt64
@@ -104,157 +118,51 @@ structure ExampleRec where
   label : String
   note : Option String
   tags : List String
-deriving Repr, BEq, Inhabited
+deriving Repr, BEq, Inhabited, WireCodec, row_bridge
 
-/-- `List String → VList .string` (the fixture's box half; the generic
-    `List (Value t)` pair is the generated harness's work). -/
-def exToVList : List String → VList .string
-  | [] => .nil
-  | x :: xs => .cons (.string x) (exToVList xs)
+/-- The generated field rows ARE the registry's snapshot — the GADT
+    index is the SAME list literal (the abbrev rule, 06 §3): the
+    derived bridge's rows typecheck against every fixture row. -/
+example : ExampleRec.fields = exampleCheckFields := rfl
 
-/-- The unbox half of `exToVList`. -/
-def exOfVList : VList .string → List String
-  | .nil => []
-  | .cons (.string x) xs => x :: exOfVList xs
+/-- The generated description: the fixture's fields, the declaration's
+    own name (the kernel reduces it — the reflection's pin). -/
+example : ExampleRec.descr = .product "ExampleRec"
+    [ ("ready", .prim .bool), ("count", .prim .u64)
+    , ("delta", .prim .i64), ("label", .prim .string)
+    , ("note", .option (.prim .string))
+    , ("tags", .list (.prim .string)) ] := rfl
 
-/-- The cons equation of `exOfVList` (the GADT matcher is
-    kernel-opaque to `rfl` — the 06 §2 wf-opacity sibling — but the
-    EQUATIONS fire under simp on ctor values; §5). -/
-theorem exOfVList_cons (x : String) (xs : VList .string) :
-    exOfVList (.cons (.string x) xs) = x :: exOfVList xs := by
-  simp [exOfVList]
+/-- The generated tupleIso composes into the rowIso (the ONE
+    `Kit.Iso`, both laws from the generic theorems via
+    `Kit.Iso.trans` — the law fields were checked at the defs; this
+    pin is the citation face). -/
+example : ExampleRec.rowIso.to = ExampleRec.toRow := rfl
+example : ExampleRec.rowIso.inv = ExampleRec.ofRow := rfl
 
-/-- Native → row (one `.cons` per field, boxed per its schema type). -/
-def exampleToRow : ExampleRec → RowVals exampleCheckFields
-  | ⟨r, c, d, l, n, t⟩ =>
-      .cons (.bool r) (.cons (.u64 c) (.cons (.i64 d) (.cons (.string l)
-        (.cons (match n with
-                | some s => .some (.string s)
-                | none => .none)
-          (.cons (.list (exToVList t)) .nil)))))
+/-- The determinacy fact, DECIDED at the mount (the obligation's
+discharge rides it — the name↔index iso's domain). -/
+example : ExampleRec.fieldNames.Nodup := ExampleRec.fields_nodup
 
-/-- Row → native (one `.cons` level per field, unboxed; the note field
-    splits on the `Value` ctor — the option's payload is a `Value`). -/
-def exampleOfRow : RowVals exampleCheckFields → ExampleRec
-  | .cons (.bool r) (.cons (.u64 c) (.cons (.i64 d) (.cons (.string l)
-      (.cons (.some (.string s)) (.cons (.list vs) .nil))))) =>
-      ⟨r, c, d, l, some s, exOfVList vs⟩
-  | .cons (.bool r) (.cons (.u64 c) (.cons (.i64 d) (.cons (.string l)
-      (.cons .none (.cons (.list vs) .nil))))) =>
-      ⟨r, c, d, l, none, exOfVList vs⟩
+/- BUILD-TIME TEETH (the deriving handlers are elaboration-time; the
+   refusals are the curated Diag, rendered verbatim — got + the valid
+   space + the did-you-mean). Drift FAILS THE BUILD. The refusal
+   fixtures are declared ONLY under their guards (a failing deriving
+   clause does not declare the structure, so each guard's command is
+   the fixture's only declaration). -/
 
-/-- The list payload's round trip (the row-side law's helper — the
-    cons case recurses; structural). -/
-theorem exToOfVList : ∀ (vs : VList .string), exToVList (exOfVList vs) = vs := by
-  intro vs
-  match vs with
-  | .nil => simp [exOfVList, exToVList]
-  | .cons h xs =>
-      cases h with
-      | string s =>
-          rw [exOfVList_cons]
-          show VList.cons (.string s) (exToVList (exOfVList xs))
-            = VList.cons (.string s) xs
-          rw [exToOfVList xs]
+/-- error: deriving WireCodec refused `DeriveBadNat`: [SD0002] error: `DeriveBadNat.n`: the field type is outside the supported fragment — `describe` reflects the boundary universe's leaves, wrapped in option/list/sum (got: Nat) — valid: Bool, UInt64, Int64, String, Option _, List _, Sum _ _ -/
+#guard_msgs in
+structure DeriveBadNat where
+  n : Nat
+deriving WireCodec
 
-/-- The record-side law's helper: the native list round trip (the
-    easy direction — structural over the native list). -/
-theorem exOfToVList : ∀ (xs : List String), exOfVList (exToVList xs) = xs
-  | [] => by simp [exToVList, exOfVList]
-  | x :: xs => by simp [exToVList, exOfVList_cons, exOfToVList xs]
+/-- error: deriving row_bridge refused `DeriveBadNatRow`: [SD0002] error: `DeriveBadNatRow.n`: the field type is outside the supported fragment — `describe` reflects the boundary universe's leaves, wrapped in option/list/sum (got: Nat) — valid: Bool, UInt64, Int64, String, Option _, List _, Sum _ _ -/
+#guard_msgs in
+structure DeriveBadNatRow where
+  n : Nat
+deriving row_bridge
 
-/-- LAW: `exampleToRow (exampleOfRow row) = row` — the row side (the
-    nested match; each `Value` ctor's projection is total; the tags
-    payload rides the list round trip). -/
-theorem exampleToRow_ofRow (row : RowVals exampleCheckFields) :
-    exampleToRow (exampleOfRow row) = row := by
-  cases row with
-  | cons a as =>
-      cases a with
-      | bool r =>
-          cases as with
-          | cons b bs =>
-              cases b with
-              | u64 c =>
-                  cases bs with
-                  | cons d ds =>
-                      cases d with
-                      | i64 e =>
-                          cases ds with
-                          | cons g gs =>
-                              cases g with
-                              | string l =>
-                                  cases gs with
-                                  | cons h hs =>
-                                      cases hs with
-                                      | cons f fs =>
-                                          cases fs with
-                                          | nil =>
-                                              cases f with
-                                              | list vs =>
-                                                  cases h with
-                                                  | none =>
-                                                      show (RowVals.cons (.bool r)
-                                                        (.cons (.u64 c)
-                                                        (.cons (.i64 e)
-                                                        (.cons (.string l)
-                                                        (.cons .none
-                                                        (.cons (.list (exToVList (exOfVList vs))) .nil))))) : RowVals exampleCheckFields)
-                                                        = RowVals.cons (.bool r)
-                                                        (.cons (.u64 c)
-                                                        (.cons (.i64 e)
-                                                        (.cons (.string l)
-                                                        (.cons .none
-                                                        (.cons (.list vs) .nil)))))
-                                                      rw [exToOfVList]
-                                                  | some v =>
-                                                      cases v with
-                                                      | string s =>
-                                                          show (RowVals.cons (.bool r)
-                                                            (.cons (.u64 c)
-                                                            (.cons (.i64 e)
-                                                            (.cons (.string l)
-                                                            (.cons (.some (.string s))
-                                                            (.cons (.list (exToVList (exOfVList vs))) .nil))))): RowVals exampleCheckFields)
-                                                            = RowVals.cons (.bool r)
-                                                            (.cons (.u64 c)
-                                                            (.cons (.i64 e)
-                                                            (.cons (.string l)
-                                                            (.cons (.some (.string s))
-                                                            (.cons (.list vs) .nil)))))
-                                                          rw [exToOfVList]
-
-/-- LAW: `exampleOfRow (exampleToRow r) = r` — the record side (each
-    field is a projection; the `show` exposes the reduced form, the
-    list round trip rewrites). -/
-theorem exampleOfRow_toRow (r : ExampleRec) :
-    exampleOfRow (exampleToRow r) = r := by
-  cases r with
-  | mk ready count delta label note tags =>
-      cases note with
-      | none =>
-          show ExampleRec.mk ready count delta label none
-              (exOfVList (exToVList tags))
-            = ExampleRec.mk ready count delta label none tags
-          rw [exOfToVList tags]
-      | some s =>
-          show ExampleRec.mk ready count delta label (some s)
-              (exOfVList (exToVList tags))
-            = ExampleRec.mk ready count delta label (some s) tags
-          rw [exOfToVList tags]
-
-/-- THE ROW ISO — `Kit.Iso ExampleRec (RowVals exampleCheckFields)`: every lane's
-    row bridge projects its fields (the correspondence preference: a
-    TRUE Iso — the row side is total because `RowVals` admits only
-    well-formed rows). -/
-def exampleRowIso : Kit.Iso ExampleRec (RowVals exampleCheckFields) :=
-  ⟨exampleToRow, exampleOfRow, exampleToRow_ofRow, exampleOfRow_toRow⟩
-
-/-- The Example fixture's field-name list (the name↔index iso's
-    domain; nodup decided — the determinacy content, 02 §3). -/
-def exFieldNames : List String := exampleCheckFields.map (·.name)
-
-theorem exFieldNames_nodup : exFieldNames.Nodup := by decide
 
 /-! ## The suites -/
 
@@ -357,6 +265,137 @@ def losslessSpec : Spec :=
           "control: the bounded row is OUT — the cap is not WIT-carried") ]
     4 42
 
+/-! ## The recursion schemes (SchemaCore.Fold) — the migration's pins -/
+
+/-- The PRE-FOLD hand walk, kept here as the migration's oracle: the
+    OLD `renderTy` body (Ty.lean's match, verbatim). The core's own
+    `renderTy` is the fold now; this copy exists so the suite can watch
+    the two walks agree — the uniqueness law's runtime face. -/
+def renderTyDirect : Ty → String
+  | .bool => "bool"
+  | .u64 => "u64"
+  | .i64 => "i64"
+  | .string => "string"
+  | .option t => s!"option<{renderTyDirect t}>"
+  | .list t => s!"list<{renderTyDirect t}>"
+  | .result ok err => s!"result<{renderTyDirect ok}, {renderTyDirect err}>"
+  | .map k v => s!"list<tuple<{renderKeyTy k}, {renderTyDirect v}>>"
+  | .set k => s!"list<{renderKeyTy k}>"
+  | .bounded _ => "u64"
+
+/-- THE MIGRATION LAW: the hand walk IS the fold — the initiality
+    theorem (`foldTy_unique`) applied to the oracle; every row commutes
+    by `rfl` (the interpolation IS the concatenation). This theorem is
+    the migration's evidence at the TYPE level; the byte-tie is its
+    artifact-level face. -/
+theorem renderTyDirect_eq (t : Ty) : renderTyDirect t = renderTy t :=
+  foldTy_unique (f := renderTyDirect) rfl rfl rfl rfl
+    (fun _ => rfl) (fun _ => rfl) (fun _ _ => rfl) (fun _ _ => rfl)
+    (fun _ => rfl) (fun _ => rfl) t
+
+/-- A function that does NOT commute on one constructor is NOT the
+    fold: the saboteur drops the option child — the uniqueness law's
+    hypotheses fail on exactly one row, and the agreement dies. (The
+    negative control's data.) -/
+def fBad : Ty → String
+  | .bool => "bool"
+  | .u64 => "u64"
+  | .i64 => "i64"
+  | .string => "string"
+  | .option _ => "opt!"
+  | .list t => s!"list<{renderTyDirect t}>"
+  | .result ok err => s!"result<{renderTyDirect ok}, {renderTyDirect err}>"
+  | .map k v => s!"list<tuple<{renderKeyTy k}, {renderTyDirect v}>>"
+  | .set k => s!"list<{renderKeyTy k}>"
+  | .bounded _ => "u64"
+
+/-- The sabotage ALGEBRA: the fold with one row replaced (the option
+    row loses its child). A wrong row is a wrong rendering — the fold
+    does not paper over it. -/
+def witAlgBad : TyAlg String := { witAlg with option := fun _ => "u64" }
+
+/-- The FUSION LAW's exercise: `String.length` DISTRIBUTES over the WIT
+    rows (a concatenation's length is the sum of the parts), so the
+    rendered length is itself a fold over the length algebra — the
+    fused walk computes the length WITHOUT building the text.
+    (A cosmetic wrapper like `fun s => "W" ++ s ++ "W"` does NOT
+    distribute — it double-wraps nested children — and fusion
+    correctly refuses it.) -/
+def lengthWitAlg : TyAlg Nat where
+  bool := "bool".length
+  u64 := "u64".length
+  i64 := "i64".length
+  string := "string".length
+  option a := "option<".length + a + ">".length
+  list a := "list<".length + a + ">".length
+  result ok err := "result<".length + ok + ", ".length + err + ">".length
+  map k a := "list<tuple<".length + (renderKeyTy k).length
+    + ", ".length + a + ">>".length
+  set k := "list<".length + (renderKeyTy k).length + ">".length
+  bounded _ := "u64".length
+
+theorem fold_fusion_exercise (t : Ty) :
+    (renderTy t).length = foldTy lengthWitAlg t := by
+  show (foldTy witAlg t).length = foldTy lengthWitAlg t
+  exact foldTy_fusion (h := String.length) (alg := witAlg)
+    (alg' := lengthWitAlg) rfl rfl rfl rfl
+    (fun a => by simp [witAlg, lengthWitAlg, String.length_append])
+    (fun a => by simp [witAlg, lengthWitAlg, String.length_append])
+    (fun ok err => by simp [witAlg, lengthWitAlg, String.length_append])
+    (fun k a => by simp [witAlg, lengthWitAlg, String.length_append])
+    (fun k => by simp [witAlg, lengthWitAlg, String.length_append])
+    (fun n => by simp [witAlg, lengthWitAlg])
+    t
+
+/-- The fold suite: the schemes' pins + the migration's evidence. -/
+def foldSpec : Spec :=
+  Spec.ofList "the recursion schemes: one fold, algebras, the laws"
+    (fun _ => assert (
+      -- the migration: the fold at the concrete types (renderTy IS
+      -- foldTy witAlg definitionally — renderTyDirect_eq pins the walk
+      -- agreement; here the rows' concrete outputs)
+      (foldTy witAlg (.option (.list (.map .string .u64)))
+              == renderTy (.option (.list (.map .string .u64))))
+      -- the oracle agrees on the nested sample (renderTyDirect_eq's
+      -- runtime face over a non-trivial type)
+        && (renderTyDirect (.option (.list (.map .string .u64)))
+              == renderTy (.option (.list (.map .string .u64))))
+        && (renderTyDirect (.result (.option .i64) (.bounded 9))
+              == renderTy (.result (.option .i64) (.bounded 9)))
+      -- the lossless flag rides the fold (the migrated verdicts)
+        && ((Ty.map .string .u64).witLossless == false)
+        && ((Ty.result .u64 .string).witLossless == true)
+      -- the RUST rendering rides the fold (the migrated rows)
+        && (tyRustPrim .string == "String")
+        && (tyRustPrim (.result .u64 .string) == "Result<u64, String>")
+        && (tyRustPrim (.map .string .u64) == "Vec<(String, u64)>")
+        && (tyRustPrim (.set .i64) == "Vec<i64>")
+        && (tyRustPrim (.bounded 42) == "u64")
+      -- the FUSION law's runtime face: the length fold agrees with
+      -- measuring the rendered text
+        && ((renderTy (.option .u64)).length
+              == foldTy lengthWitAlg (.option .u64))
+        && ((renderTy (.map .string (.list .u64))).length
+              == foldTy lengthWitAlg (.map .string (.list .u64))))
+      "the recursion schemes drifted")
+    [ ("the saboteur agrees with the fold",
+        fun _ =>
+          assert (fBad (.option .u64) == renderTy (.option .u64))
+          "control fired: a function that drops the option child is NOT \
+            the fold — uniqueness law's hypotheses fail and the \
+            agreement dies")
+    , ("the sabotaged algebra row still renders",
+        fun _ =>
+          assert (foldTy witAlgBad (.option .u64) == renderTy (.option .u64))
+          "control fired: a wrong algebra row renders wrong — the fold \
+            does not paper over it")
+    , ("the key position reads the Ty table",
+        fun _ =>
+          assert (renderKeyTy .string == "String")
+          "control fired: the KEY fold reads keyWitAlg's rows — the \
+            scalar sub-universe's table, never the Ty algebra's") ]
+    4 42
+
 /-- The emitter's artifact body is the golden pin; the byte-tie's teeth
     at the value level (a tampered body fails Golden.cmp). -/
 def artifactSpec : Spec :=
@@ -404,7 +443,7 @@ def registrySpec : Spec :=
 def obligationSpec : Spec :=
   Spec.ofList "fields-nodup discharges at decidableNow"
     (fun _ =>
-      let d : Discharged (List String) :=
+      let d : Discharged (List String) ((exItem.fields.map (·.name))).Nodup :=
         { obligation := fieldNodupObligation exItem, evidence := .decided true }
       assert ((dischargeFieldNodup exItem == some (.decided true))
         && (d.obligation.tier == .decidableNow))
@@ -501,15 +540,15 @@ def rowSpec : Spec :=
   Spec.ofList "the row bridge round-trips + the projection + the index iso"
     (fun _ =>
       let r : ExampleRec := ⟨true, 3, -2, "a", some "n", ["t1", "t2"]⟩
-      let row := exampleToRow r
-      let iso := fieldIndexIso exFieldNames_nodup
+      let row := ExampleRec.toRow r
+      let iso := ExampleRec.nameIso
       assert (
       -- the Iso laws, live: the record side on concrete data (the ROW
-      -- side is the PROVED law — `RowVals` carries no BEq; the theorem
-      -- `exampleToRow_ofRow` is the pin)
-        (exampleOfRow row == r)
-        && (exampleOfRow
-              (exampleToRow ⟨false, 0, 1, "b", none, []⟩)
+      -- side is the PROVED law — `RowVals` carries no BEq; the Iso's
+      -- law fields are the GENERIC theorems' citations)
+        (ExampleRec.ofRow row == r)
+        && (ExampleRec.ofRow
+              (ExampleRec.toRow ⟨false, 0, 1, "b", none, []⟩)
               == ⟨false, 0, 1, "b", none, []⟩)
       -- the name-keyed projection: first match, typed hit, loud miss
         && (match RowVals.project? exampleCheckFields row "label" with
@@ -518,26 +557,153 @@ def rowSpec : Spec :=
         && (RowVals.project? exampleCheckFields row "nope").isNone
       -- the name↔index iso: both round trips over the fixture's names
         && ((iso.to ⟨1, by decide⟩).1 == "count")
-        && ((iso.inv ⟨"count", by simp [exFieldNames]⟩).1 == 1)
-        && ((iso.to (iso.inv ⟨"count", by simp [exFieldNames]⟩)).1
+        && ((iso.inv ⟨"count", by decide⟩).1 == 1)
+        && ((iso.to (iso.inv ⟨"count", by decide⟩)).1
               == "count"))
       "the row layer drifted")
     [ ("projection fabricates a miss",
         fun _ =>
           let r : ExampleRec := ⟨true, 3, -2, "a", some "n", ["t1", "t2"]⟩
-          assert ((RowVals.project? exampleCheckFields (exampleToRow r) "nope").isSome)
+          assert ((RowVals.project? exampleCheckFields (ExampleRec.toRow r) "nope").isSome)
             "control: a missing field name must project to none")
     , ("round trip forgets the note",
         fun _ =>
           let r : ExampleRec := ⟨true, 3, -2, "a", some "n", ["t1", "t2"]⟩
-          assert (exampleOfRow (exampleToRow r)
+          assert (ExampleRec.ofRow (ExampleRec.toRow r)
             == { r with note := none })
           "control: the bridge must carry the option payload faithfully")
     , ("index iso maps to the wrong name",
         fun _ =>
-          let iso := fieldIndexIso exFieldNames_nodup
+          let iso := ExampleRec.nameIso
           assert ((iso.to ⟨1, by decide⟩).1 == "ready")
           "control: position 1's name is count, not ready") ]
+    4 42
+
+/-! ## The derived capability suite (SchemaCore.DeriveMeta — the mounts) -/
+
+/-- The deriving handlers' end-to-end runtime face: the generated
+    `fields`/`descr` literals, the wire grade's decode∘encode, the row
+    bridge's both round trips, the name↔index iso, the decided
+    determinacy fact. The LAWS themselves are the Iso/Codec law fields
+    (checked at the defs); this suite pins the VALUES. -/
+def deriveSpec : Spec :=
+  Spec.ofList "the derived codec + row bridge round-trip"
+    (fun _ =>
+      let r : ExampleRec := ⟨true, 3, -2, "a", some "n", ["t1", "t2"]⟩
+      assert ((
+      -- the generated fields literal IS the registry's snapshot
+        (ExampleRec.fields == exampleCheckFields)
+      -- the generated descr: the fixture's fields, the decl's name
+        && (ExampleRec.descr == .product "ExampleRec"
+              [ ("ready", .prim .bool), ("count", .prim .u64)
+              , ("delta", .prim .i64), ("label", .prim .string)
+              , ("note", .option (.prim .string))
+              , ("tags", .list (.prim .string)) ])
+      -- the WIRE: the codec's decode∘encode (the law field routes
+      -- through the GENERIC deriveCodec_correct — the runtime face)
+        && (match ExampleRec.codec.decode (ExampleRec.codec.encode r) with
+            | some w => w == r
+            | none => false)
+        && (match ExampleRec.codec.decode
+              (ExampleRec.codec.encode ⟨false, 0, 1, "b", none, []⟩) with
+            | some w => w == ⟨false, 0, 1, "b", none, []⟩
+            | none => false)
+      -- the ROW bridge: both round trips (the Iso laws live)
+        && (ExampleRec.ofRow (ExampleRec.toRow r) == r)
+        && (ExampleRec.ofRow (ExampleRec.toRow ⟨false, 0, 1, "b", none, []⟩)
+              == ⟨false, 0, 1, "b", none, []⟩)
+      -- the name↔index iso (the determinacy fact, decided)
+        && ((ExampleRec.nameIso.to ⟨1, by decide⟩).1 == "count")
+        && ((ExampleRec.nameIso.inv ⟨"count", by decide⟩).1 == 1)
+      -- the fields-nodup obligation: DISCHARGED at the mount (the
+      -- decided Prop — the type-level pin below)
+        ))
+      "the derived capability surface drifted")
+    [ ("the codec forgets the tags payload",
+        fun _ =>
+          let r : ExampleRec := ⟨true, 3, -2, "a", some "n", ["t1", "t2"]⟩
+          assert (match ExampleRec.codec.decode (ExampleRec.codec.encode r) with
+                  | some w => w == { r with tags := [] }
+                  | none => false)
+          "control: the codec must carry the list payload faithfully")
+    , ("the descr borrows the registry's name",
+        fun _ =>
+          assert (ExampleRec.descr == .product "Example"
+            [ ("ready", .prim .bool), ("count", .prim .u64)
+            , ("delta", .prim .i64), ("label", .prim .string)
+            , ("note", .option (.prim .string))
+            , ("tags", .list (.prim .string)) ])
+          "control: the descr's product name is the DECLARATION's \
+            (provenance-faithful — ExampleRec, not the registry's Example)")
+    , ("the nameIso reads the wrong position",
+        fun _ =>
+          assert ((ExampleRec.nameIso.to ⟨1, by decide⟩).1 == "ready")
+          "control: position 1's name is count, not ready")
+    , ("the fields literal reorders",
+        fun _ =>
+          assert (ExampleRec.fields.reverse == exampleCheckFields)
+          "control: the generated rows are in registration order") ]
+    4 42
+
+/-! ## The evidence entourage (Kit.Derive.Evidence + the mounts' emissions,
+    16-surface §3) -/
+
+/-- The sabotaged drawer (the sweep-teeth's producer): draws NOTHING —
+    the sweep must report `failAt` (the drawer's loud gap), never a
+    silent pass. -/
+def sabDrawNone : TestingKit.Tape → Option (ExampleRec × TestingKit.Tape) :=
+  fun _ => none
+
+/-- The entourage suite: the derived capability arrives with its FULL
+    evidence cone — the kind row (computed from the capability + the
+    carrier shape), the obligation row (tier COMPUTED from the kind — a
+    sweep reports `oracleSwept`, never `provedAtElab`), the
+    tier-matched discharge, the LCG sweep, the mechanical controls, and
+    the simp-set registration. THE CENSUS: the round trips are
+    type-carried (`Kit.Iso`'s law fields) — the entourage generates
+    NOTHING for them (`emissionsOf .rowBridge` is `[]`). The negatives:
+    the mount's OWN mechanical controls (each must fail) + the
+    tier-honesty control + the sweep-teeth control. -/
+def entourageSpec : Spec :=
+  Spec.ofList "the derived capability's evidence entourage (16-surface §3)"
+    (fun _ => do
+      -- the kind is COMPUTED from the capability + the carrier shape
+      assert (ExampleRec.codecEvidenceKind == .lgcSweep) "entourage.kindComputed"
+      -- the tier is COMPUTED from the kind: a sweep reports oracleSwept
+      assert (ExampleRec.codecObligation.tier == .oracleSwept) "entourage.tierComputed"
+      -- the discharge is tier-matched (the oracle-row evidence constructs)
+      let _ := ExampleRec.codecDischarged
+      -- the determinacy fact's kind: closed-finite → the kernel decides
+      assert (ExampleRec.fieldsEvidenceKind == .kernelDecide) "entourage.fieldsKind"
+      assert (ExampleRec.fieldsObligation.tier == .decidableNow) "entourage.fieldsTier"
+      -- THE CENSUS: the type-carried facts generate NOTHING
+      assert (Kit.Derive.Evidence.emissionsOf .rowBridge == []) "entourage.census.carried"
+      assert (Kit.Derive.Evidence.emissionsOf .wireCodec
+        == [Kit.Derive.Evidence.Emission.obligationRow,
+            Kit.Derive.Evidence.Emission.sweepControls,
+            Kit.Derive.Evidence.Emission.simpSet]) "entourage.emissions"
+      -- the controls are the MECHANICAL shapes (the entourage's data —
+      -- never hand-invented)
+      assert ((ExampleRec.codecSabotages.map (·.1)).take 2
+        == Kit.Derive.Evidence.mechanicalControls .unbounded)
+        "entourage.mechanicalControls"
+      -- the SWEEP: 16 drawn instances, round trip + discrimination
+      assert (ExampleRec.codecSweep == .pass 16) "entourage.sweep"
+      -- the simp-set registration: the citation face (the lemma IS the
+      -- codec's own law field — zero new proof content)
+      let _ := @ExampleRec.codec_roundtrip
+      pure ())
+    (ExampleRec.codecSabotages ++
+      [ ("sabotage: the sweep mislabels itself provedAtElab",
+          fun _ =>
+            assert (ExampleRec.codecObligation.tier == .provedAtElab)
+              "control fired: the tier-honesty theorem was violated")
+      , ("sabotage: the sweep tolerates the silent drawer",
+          fun _ =>
+            assert (SchemaCore.runCodecSweep ExampleRec.codec
+                (fun a => ExampleRec.codec.encode a) sabDrawNone 16 42
+              == .pass 16)
+              "control fired: the sweep passed over a drawer that drew nothing") ])
     4 42
 
 /-! ## The description layer (SchemaCore.Describe — D19's meta-universe) -/
@@ -1055,14 +1221,17 @@ def checkSpec : Spec :=
       -- the PASSING fixture: the discharge FIRES (the table bridge —
       -- the claim, not the checker's private Bool, is what decided)
         (exampleCountPositive.dischargeOn goodRows == some (.decided true))
-      -- the item's shape: label, computed tier, payload
-        && (exampleCountPositive.obligation.label
+      -- the item's shape: label, computed tier, payload (the data
+      -- fields — claim-independent, read via the goodRows row)
+        && ((exampleCountPositive.obligation goodRows).label
               == "schema/Example/example-count-positive")
-        && (exampleCountPositive.obligation.tier == .decidableNow)
-        && (exampleCountPositive.obligation.payload
+        && ((exampleCountPositive.obligation goodRows).tier == .decidableNow)
+        && ((exampleCountPositive.obligation goodRows).payload
               == exampleCheckFields.map (·.name))
-      -- the mixed table: the check refuses; the violating rows ride
-        && (exampleCountPositive.checkOn mixedRows == false)
+      -- the mixed table: the verdict is the REAL failed check
+        -- (`.checked false` — not the refusal; the schema is the
+        -- item's own) + the violating rows ride
+        && (exampleCountPositive.checkOn mixedRows == .checked false)
         && (exampleCountPositive.checkRows goodRows == true)
       -- the VIOLATED fixture: the loud gap (none — the backend
       -- refuses, it does not fabricate evidence)
@@ -1075,15 +1244,17 @@ def checkSpec : Spec :=
         fun _ =>
           let foreignFields : List SchemaCore.Field := [{ name := "x", ty := .u64 }]
           let foreignRow : RowVals foreignFields := .cons (.u64 5) .nil
-          assert (exampleCountPositive.checkOn [foreignRow] == true)
+          assert (exampleCountPositive.checkOn [foreignRow] == .checked true)
           "control fired: a table for ANOTHER schema must refuse, never misread")
+          -- the control asserts the MISREAD face (`.checked true`); the
+          -- honest executor answers `.foreignSchema`, so the control fails
     , ("discharge fabricates evidence",
         fun _ =>
           assert (exampleCountZero.dischargeOn mixedRows == some (.decided true))
           "control fired: a violated claim must be the LOUD none")
     , ("tier mis-wire passes silently",
         fun _ =>
-          assert (¬(Kit.tierMismatch exampleCountPositive.obligation
+          assert (¬(Kit.tierMismatch (exampleCountPositive.obligation [])
             (Kit.Evidence.oracleRow "oracle-1")))
           "control fired: an oracle-row evidence against decidableNow is a \
             mis-wire")
@@ -1108,20 +1279,738 @@ def checkSpec : Spec :=
           "control fired: an unregistered target must be a finding") ]
     4 42
 
+/-! ## The keys lane (SchemaCore.Keys — declared keys + foreign keys,
+    the determinacy theorems, 02 §3) -/
+
+/-- The hand-built two-table universe (the FK positive case needs a
+target with a declared key — the slice's registered items can't host
+one: ExampleEx has no scalar field — so the cascade's foreign rungs
+exercise over hand-built data, the legacy test shape). -/
+abbrev customerFields : List SchemaCore.Field :=
+  [ { name := "id", ty := .u64 }
+  , { name := "name", ty := .string } ]
+
+abbrev orderFields : List SchemaCore.Field :=
+  [ { name := "oid", ty := .u64 }
+  , { name := "cust", ty := .u64 }
+  , { name := "qty", ty := .u64 } ]
+
+abbrev customerDecl : KeyDecl :=
+  { record := "Customer", fields := customerFields, key := "id" }
+
+abbrev orderDecl : KeyDecl :=
+  { record := "Order", fields := orderFields, key := "oid"
+    foreign := [{ field := "cust", target := "Customer" }] }
+
+def keyItems : List Item :=
+  [ ⟨"Customer", customerFields⟩, ⟨"Order", orderFields⟩ ]
+
+/-- The good tables (distinct keys; every FK image resolves). -/
+def custRows : List (RowVals customerFields) :=
+  [ .cons (.u64 1) (.cons (.string "ann") .nil)
+  , .cons (.u64 2) (.cons (.string "bob") .nil) ]
+
+def orderRows : List (RowVals orderFields) :=
+  [ .cons (.u64 100) (.cons (.u64 1) (.cons (.u64 3) .nil))
+  , .cons (.u64 101) (.cons (.u64 2) (.cons (.u64 1) .nil)) ]
+
+/-- The sabotaged table: two DISTINCT rows sharing the key image 100
+(the conservative-inference control's data — determinacy fails without
+the checked `uniqueOn`). -/
+def dupOrderRows : List (RowVals orderFields) :=
+  [ .cons (.u64 100) (.cons (.u64 1) (.cons (.u64 3) .nil))
+  , .cons (.u64 100) (.cons (.u64 2) (.cons (.u64 4) .nil)) ]
+
+/-- The key image of order 100 (the lookup's probe). -/
+def orderKey100 : FieldVal := ⟨.u64, .u64 100⟩
+
+/-- THE DETERMINACY THEOREM, exercised at the fixture: the rows
+matching the key image are pairwise equal (the theorem itself — not a
+Bool shadow — cited from the lane). -/
+example (huniq : orderDecl.uniqueOn orderRows = true) :
+    ∀ (r1 r2 : RowVals orderFields),
+    r1 ∈ orderRows → r2 ∈ orderRows →
+    orderDecl.matchesKey r1 orderKey100 = true →
+    orderDecl.matchesKey r2 orderKey100 = true → r1 = r2 :=
+  fun r1 r2 hmem1 hmem2 hm1 hm2 =>
+    orderDecl.uniqueOn_determines orderKey100 orderRows r1 r2 huniq
+      hmem1 hmem2 hm1 hm2
+
+/-- The Option-shape corollary, exercised: the key-backed lookup's
+results are subsingleton (the theorem `lookup?_atMostOne`). -/
+example (r1 r2 : RowVals orderFields)
+    (h1 : orderDecl.lookup? orderRows orderKey100 = some r1)
+    (h2 : orderDecl.lookup? orderRows orderKey100 = some r2) :
+    r1 = r2 :=
+  orderDecl.lookup?_atMostOne orderRows (by rfl) orderKey100 h1 h2
+
+/-- The keys lane's suite: the WF cascade's teeth (a broken FK refuses
+with the NAMED RUNG's diagnostic), the determinacy payoff live, the
+obligations discharged through the kit's backend, and the mandatory
+negative controls. -/
+def keysSpec : Spec :=
+  Spec.ofList "the keys lane: WF cascade + determinacy + obligations"
+    (fun _ => assert ((
+    -- the WELL-FORMED fixture: the cascade is clean, the gate reading
+    -- agrees, the CheckedProp is complete
+      (keyDeclsCheck keyItems [customerDecl, orderDecl] == [])
+      && (keyDeclsWellFormed keyItems [customerDecl, orderDecl])
+      && keysChecked.isComplete
+    -- the canonical meanings over the good tables
+      && (orderDecl.uniqueOn orderRows == true)
+      && (customerDecl.uniqueOn custRows == true)
+      && (orderDecl.referencesOn { field := "cust", target := "Customer" }
+            customerDecl orderRows custRows == true)
+    -- the DETERMINACY PAYOFF live: the Option-shaped lookup hits the
+    -- unique row; the List-shaped conservative surface sees both rows
+      && (match orderDecl.lookup? orderRows orderKey100 with
+          | some row => toString (Pred.renderRow orderFields row)
+              == "oid=100; cust=1; qty=3"
+          | none => false)
+      && ((orderDecl.lookupAll dupOrderRows orderKey100).length == 2)
+    -- the obligation view: BOTH rows discharge through the kit's
+    -- decidableNow backend over the all-default singleton tables
+      && (customerDecl.dischargeUniqueOn
+            (customerDecl.defaultTable?.getD []) == some (.decided true))
+      && (orderDecl.dischargeUniqueOn
+            (orderDecl.defaultTable?.getD []) == some (.decided true))
+      && (orderDecl.dischargeReferencesOn
+            { field := "cust", target := "Customer" } customerDecl
+            (orderDecl.defaultTable?.getD [])
+            (customerDecl.defaultTable?.getD []) == some (.decided true))
+      && ((KeyDecl.defaultObligations [exampleKey] exampleKey).length == 1)))
+      "the keys lane drifted")
+    [ ("the type-mismatch rung passes",
+        fun _ =>
+          -- cust carries STRING against the target's u64 key: the
+          -- SABOTAGED belief is that the cascade is clean — the honest
+          -- checker refuses at the foreignTy rung, the control fails
+          let badFields : List SchemaCore.Field :=
+            [ { name := "oid", ty := .u64 }
+            , { name := "cust", ty := .string }
+            , { name := "qty", ty := .u64 } ]
+          let bad : KeyDecl :=
+            { record := "Order", fields := badFields, key := "oid"
+              foreign := [{ field := "cust", target := "Customer" }] }
+          assert ((keyDeclsCheck keyItems [bad]).isEmpty)
+          "control fired: the TYPE-AGREEMENT rung must refuse")
+    , ("the forward-reference rung passes",
+        fun _ =>
+          -- the target's key NOT declared: the foreignDecl rung fires
+          let noCust : KeyDecl :=
+            { record := "Order", fields := orderFields, key := "oid"
+              foreign := [{ field := "cust", target := "Customer" }] }
+          assert ((keyDeclsCheck keyItems [noCust]).isEmpty)
+          "control fired: the TARGET-DECLARATION rung must refuse")
+    , ("the missing-FK-field rung passes",
+        fun _ =>
+          let bad : KeyDecl :=
+            { record := "Order", fields := orderFields, key := "oid"
+              foreign := [{ field := "nope", target := "Customer" }] }
+          assert ((keyDeclsCheck keyItems [bad]).isEmpty)
+          "control fired: the FK-FIELD rung must refuse")
+    , ("the missing-target rung passes",
+        fun _ =>
+          let bad : KeyDecl :=
+            { record := "Order", fields := orderFields, key := "oid"
+              foreign := [{ field := "cust", target := "Nope" }] }
+          assert ((keyDeclsCheck keyItems [bad]).isEmpty)
+          "control fired: the TARGET-RESOLUTION rung must refuse")
+    , ("the non-scalar-key rung passes",
+        fun _ =>
+          -- note is an option — outside the scalar key universe
+          let bad : KeyDecl :=
+            { record := "Example", fields := exampleCheckFields,
+              key := "note" }
+          let items : List Item :=
+            [ { name := "Example", fields := exampleCheckFields } ]
+          assert ((keyDeclsCheck items [bad]).isEmpty)
+          "control fired: the KEY-FIELD scalar gate must refuse")
+    , ("the stale-snapshot rung passes",
+        fun _ =>
+          let bad : KeyDecl :=
+            { record := "Order", fields := orderFields.drop 1, key := "oid" }
+          assert ((keyDeclsCheck keyItems [bad]).isEmpty)
+          "control fired: the RESOLVED-RECORD rung must refuse")
+    , ("the duplicate-declaration scan passes",
+        fun _ =>
+          assert ((keyDeclsCheck keyItems [customerDecl, customerDecl]).isEmpty)
+          "control fired: the dup scan must refuse")
+    , ("the unconstrained universe passes",
+        fun _ =>
+          -- the record is not IN the universe: the resolver rung fires
+          let ghost : KeyDecl :=
+            { record := "Ghost", fields := orderFields, key := "oid" }
+          assert ((keyDeclsCheck keyItems [ghost]).isEmpty)
+          "control fired: the RECORD-RESOLUTION rung must refuse")
+    , ("determinacy without the checked key",
+        fun _ =>
+          -- the conservative-inference control: the SABOTAGED belief is
+          -- that uniqueness holds WITHOUT the checked uniqueOn — the
+          -- honest check says false (two distinct rows share the image)
+          let r1 : RowVals orderFields :=
+            .cons (.u64 100) (.cons (.u64 1) (.cons (.u64 3) .nil))
+          let r2 : RowVals orderFields :=
+            .cons (.u64 100) (.cons (.u64 2) (.cons (.u64 4) .nil))
+          assert (orderDecl.uniqueOn dupOrderRows == true)
+          "control fired: the duplicate-key rows must be visible as data — \
+            the hypothesis is load-bearing")
+    , ("the broken FK discharges",
+        fun _ =>
+          -- a type-mismatched FK image never resolves in the target's
+          -- key images (beq is type-guarded): the SABOTAGED belief is
+          -- that the obligation discharges — the honest backend shows
+          -- the LOUD gap, never fabricated evidence
+          let badFields : List SchemaCore.Field :=
+            [ { name := "oid", ty := .u64 }
+            , { name := "cust", ty := .string }
+            , { name := "qty", ty := .u64 } ]
+          let bad : KeyDecl :=
+            { record := "Order", fields := badFields, key := "oid"
+              foreign := [{ field := "cust", target := "Customer" }] }
+          assert (bad.dischargeReferencesOn
+            { field := "cust", target := "Customer" } customerDecl
+            (bad.defaultTable?.getD [])
+            (customerDecl.defaultTable?.getD []) == some (.decided true))
+          "control fired: a broken FK's obligation must be the loud none")
+    , ("the default-less record discharges",
+        fun _ =>
+          -- bounded 0 is default-less: the SABOTAGED belief is that a
+          -- default table exists — the honest gap is the loud none
+          let capless : KeyDecl :=
+            { record := "Cap", fields := [{ name := "n", ty := .bounded 0 }],
+              key := "n" }
+          assert (capless.defaultTable?.isSome)
+          "control fired: a default-less record must show the loud gap") ]
+    4 42
+
+/-! ## The update lane (SchemaCore.Update — the data plane's operational
+    half: SET/INSERT/DELETE over declared keys) -/
+
+abbrev updFields : List SchemaCore.Field :=
+  [ { name := "id", ty := .u64 }
+  , { name := "name", ty := .string }
+  , { name := "qty", ty := .u64 } ]
+
+/-- The write paths (hand-built — the GADT's index IS the evidence). -/
+def updPathName : ColPath "name" .string updFields := .there .here
+def updPathQty : ColPath "qty" .u64 updFields := .there (.there .here)
+
+def updRow (i : UInt64) (n : String) (q : UInt64) : RowVals updFields :=
+  .cons (.u64 i) (.cons (.string n) (.cons (.u64 q) .nil))
+
+def updRows : List (RowVals updFields) :=
+  [ updRow 1 "ann" 3, updRow 2 "bob" 1, updRow 3 "cy" 7 ]
+
+/-- uRename: `name := "x"`, total guard. -/
+def uRename : UpdateItem updFields where
+  record := "Order"; name := "rename"
+  guard := .lit true
+  sets := [{ field := { name := "name", ty := .string }
+             path := updPathName, value := .string "x" }]
+
+/-- uRestock: `qty := 9` where qty > 0. -/
+def uRestock : UpdateItem updFields where
+  record := "Order"; name := "restock"
+  guard := .u64GtLit "qty" 0
+  sets := [{ field := { name := "qty", ty := .u64 }
+             path := updPathQty, value := .u64 9 }]
+
+/-- THE PREMISE PACK, discharged by decide over the concrete fixtures:
+    the derived reads (never hand-listed), the disjoint writes, the
+    refusals, the separations. -/
+def renameRestockCompat : UpdateCompat uRename uRestock updRows where
+  ni₁₂ := by decide
+  ni₂₁ := by decide
+  setDisj := by decide
+  refuse₁₂ := by decide
+  refuse₂₁ := by decide
+  insertSep₁₂ := by decide
+  insertSep₂₁ := by decide
+
+/-- THE ORDER-FREEDOM PIN: the two disjoint updates compute the SAME
+    table in either order (Law 5b, the compat pack riding it). -/
+example :
+    uRename.apply (uRestock.apply updRows)
+      = uRestock.apply (uRename.apply updRows) :=
+  apply2_comm renameRestockCompat rfl rfl
+
+/-- the same table's VALUE pin (the concrete net effect). -/
+example :
+    uRename.apply (uRestock.apply updRows)
+      = [updRow 1 "x" 9, updRow 2 "x" 9, updRow 3 "x" 9] := rfl
+
+/-- uSet2: `qty := 2` — writes the column uPurge READS. -/
+def uSet2 : UpdateItem updFields where
+  record := "Order"; name := "set-two"
+  guard := .lit true
+  sets := [{ field := { name := "qty", ty := .u64 }
+             path := updPathQty, value := .u64 2 }]
+
+/-- uPurge: DELETE where qty > 2. -/
+def uPurge : UpdateItem updFields where
+  record := "Order"; name := "purge"
+  guard := .u64GtLit "qty" 2
+  sets := []
+  delete := true
+
+/-- THE SAME-KEY LATER-WINS WITNESS (the premise's teeth): OUTSIDE the
+    disjointness premise the order IS observable — set-then-purge keeps
+    every row (the write moved qty under the purge's guard), purge-then-
+    set deletes two. PINNED as the counterexample. -/
+example :
+    uSet2.apply (uPurge.apply updRows) = [updRow 2 "bob" 2] := rfl
+
+example :
+    uPurge.apply (uSet2.apply updRows)
+      = [updRow 1 "ann" 2, updRow 2 "bob" 2, updRow 3 "cy" 2] := rfl
+
+/-- The keyed WF fixtures. -/
+def updKeyDecl : KeyDecl :=
+  { record := "Order", fields := updFields, key := "id" }
+
+/-- uInsFresh: an INSERT with a declared key. -/
+def uInsFresh : UpdateItem updFields where
+  record := "Order"; name := "ins-fresh"
+  guard := .lit true
+  sets := []
+  insert? := some (updRow 9 "d" 1)
+  key? := some "id"
+
+/-- uDel: a DELETE keyed on id. -/
+def uDel : UpdateItem updFields where
+  record := "Order"; name := "del"
+  guard := .u64EqLit "id" 2
+  sets := []
+  delete := true
+  key? := some "id"
+
+/-- uDup: TWO clauses on one column (the dup-set rung's fixture). -/
+def uDup : UpdateItem updFields where
+  record := "Order"; name := "dup"
+  guard := .lit true
+  sets := [{ field := { name := "name", ty := .string }
+             path := updPathName, value := .string "a" }
+          ,{ field := { name := "name", ty := .string }
+             path := updPathName, value := .string "b" }]
+
+/-- uGhostKey: delete keyed on an UNDECLARED key. -/
+def uGhostKey : UpdateItem updFields where
+  record := "Order"; name := "ghost"
+  guard := .lit true
+  sets := []
+  delete := true
+  key? := some "nope"
+/-- uInsDup: an insert COLLIDING with the default row's key (the
+    obligation's loud gap fixture). -/
+def uInsDup : UpdateItem updFields where
+  record := "Order"; name := "ins-dup"
+  guard := .lit true
+  sets := []
+  insert? := some (updRow 0 "d" 1)
+  key? := some "id"
+
+/-- The keyed delta's fixtures (the keyed put at the canonical keyed
+    meaning). -/
+def kxRow (i : UInt64) (n : String) (q : UInt64) : RowVals updFields :=
+  updRow i n q
+
+/-- The keyed state AS A FUNCTION (the canonical keyed meaning — the
+    state IS a `KeyState`: key image → row). -/
+def kxState (rows : List (RowVals updFields)) : KeyState updFields := fun k =>
+  match rows with
+  | [] => none
+  | r :: rest =>
+      match RowVals.project? updFields r "id" with
+      | some v => if FieldVal.beq v k then some r else kxState rest k
+      | none => kxState rest k
+
+/-- The keyed state's RENDERING (states are functions — the comparison
+    surface is the rendered row at each probed key). -/
+def kxAt (X : Option (KeyState updFields)) (i : UInt64) : String :=
+  match X with
+  | none => "none"
+  | some st =>
+      match st ⟨.u64, .u64 i⟩ with
+      | none => "none"
+      | some r => Pred.renderRow updFields r
+
+def kxPut (i : UInt64) (oldN : String) (newN : String) : KeyPut updFields where
+  key := ⟨.u64, .u64 i⟩
+  old? := some (kxRow i oldN 3)
+  new? := some (kxRow i newN 3)
+
+/-- The keyed updates' compat at the fixture (the same-shape pack over
+    the ann-row). -/
+def updateWfPin : UpdateWf uDel [updKeyDecl] :=
+  ⟨by decide, by intro _; exact ⟨"id", updKeyDecl, rfl, rfl⟩⟩
+
+/-- The update suite. -/
+def updateSpec : Spec :=
+  Spec.ofList "the update lane: laws, lowering, WF, obligations"
+    (fun _ => assert ((
+    -- the WF cascade: the good keyed updates are clean, the bridge rides
+      ((updateDiags uInsFresh [updKeyDecl]).isEmpty)
+      && ((updateDiags uDel [updKeyDecl]).isEmpty)
+    -- the obligations: the keyed update's preservation discharges
+      && ((uRename.dischargeUnique "id") == some (.decided true))
+    -- the keyed delta: the checked put's round trip at the fixture
+      && ((match (kxPut 1 "ann" "anna").apply (kxState updRows) with
+          | some _ => true | none => false))
+      ))
+      "the update lane drifted")
+    [ ("the SAME-key conflict is order-INDEPENDENT",
+        fun _ =>
+          -- the premise's teeth: OUTSIDE the disjointness premise the
+          -- order IS observable (set-then-purge keeps all three rows,
+          -- purge-then-set keeps one) — the control claims independence
+          -- and must FAIL
+          assert ((uSet2.apply (uPurge.apply updRows)).map
+              (Pred.renderRow updFields)
+            == (uPurge.apply (uSet2.apply updRows)).map
+              (Pred.renderRow updFields))
+          "control fired: the order-dependence outside the disjointness \
+            premise is OBSERVABLE — later-wins is by design")
+    , ("the dup-set update passes the WF",
+        fun _ =>
+          assert ((updateDiags uDup [updKeyDecl]).isEmpty)
+          "control fired: two SET clauses on one column must trip the \
+            dup-set rung (SU0001) — the order-freedom premise is the data")
+    , ("the keyless insert passes the WF",
+        fun _ =>
+          let u : UpdateItem updFields :=
+            { record := "Order", name := "ins", guard := .lit true
+              sets := []
+              insert? := some (updRow 9 "d" 1) }
+          assert ((updateDiags u [updKeyDecl]).isEmpty)
+          "control fired: an insert without a declared key must trip the \
+            keyed rung (SU0002)")
+    , ("the ghost key passes the WF",
+        fun _ =>
+          assert ((updateDiags uGhostKey [updKeyDecl]).isEmpty)
+          "control fired: a delete keyed on an undeclared key must trip \
+            the key-resolution rung (SU0003)")
+    , ("the colliding insert discharges",
+        fun _ =>
+          -- the inserted row's key collides with the default row's:
+          -- the post-table has TWO id-0 rows — the preservation claim
+          -- is FALSE — the discharge must be the loud none
+          assert (uInsDup.dischargeUnique "id" == some (.decided true))
+          "control fired: a key-colliding insert must be the LOUD none — \
+            the backend refuses, it never fabricates evidence")
+    , ("the keyed delta's same-key puts commute",
+        fun _ =>
+          -- the Disjoint predicate's teeth: two puts at the SAME key
+          -- are order-dependent — p then q chains (anna → bob); in the
+          -- other order q's old image is absent and the fold REFUSES —
+          -- the equality of the two orders must FAIL
+          let X : Option (KeyState updFields) := some (kxState updRows)
+          let p := kxPut 1 "ann" "anna"
+          let q := kxPut 1 "anna" "bob"
+          assert (kxAt ((X.bind (KeyPut.apply p)).bind (KeyPut.apply q)) 1
+            == kxAt ((X.bind (KeyPut.apply q)).bind (KeyPut.apply p)) 1)
+          "control fired: same-key puts are order-dependent (bob vs the \
+            poisoned none) — Disjoint is load-bearing")
+    , ("the delta-lowering folds to nothing",
+        fun _ =>
+          -- the lowering's refusal face: a delete whose key projection
+          -- fails lowers to [] — the refusal reading, pinned
+          let u : UpdateItem updFields :=
+            { record := "Order", name := "del"
+              guard := .lit true, sets := [], delete := true
+              key? := some "id" }
+          assert ((u.lowerRow (updRow 0 "x" 1)).isEmpty)
+          "control fired: a delete of a non-projecting row must lower \
+            to [] (the refusal reading), never misread") ]
+    4 42
+
+/-! ## The semantic-profiles lane (SchemaCore.Profile — 16-surface §4.5) -/
+
+/-- The Money-cents fixture (scale 100): the profile AND the scale in
+    the TYPE; the constructor's proof fields are the bounded lane's
+    pattern — out-of-contract values unconstructible (the mod is the
+    LCG discipline's clamp, a no-op below the capacity). -/
+def mkMoney100 (u : Nat) : Money 100 :=
+  ⟨u % 2 ^ 64, Nat.mod_lt u (by decide), by decide⟩
+
+/-- The units draw: 8 bytes — below the capacity by construction. -/
+def genMoney (tape : Tape) : Money 100 × Tape :=
+  let (bs, t) := genNatBytes tape 8
+  (mkMoney100 (bs.foldl (fun acc b => acc * 256 + b.toNat) 0), t)
+
+/-- The laws at one generated instance: the add exactness/refusal
+disjunction, the mul floor law, the total order, the codec legality
+(the wire sees the bare u64, the suffix rides through). -/
+def profileLawOk (a b : Money 100) : Bool :=
+  let u := a.raw.units
+  let v := b.raw.units
+  let addOk :=
+    match a.raw.add? b.raw with
+    | some c => c.units == u + v
+    | none => !(u + v < 2 ^ 64)
+  let mulOk :=
+    match a.raw.mul? b.raw with
+    | some c => c.units == u * v / 100
+      && (c.units * 100 ≤ u * v && u * v < (c.units + 1) * 100)
+    | none => !(u * v / 100 < 2 ^ 64)
+  let ordOk := a.raw ≤ b.raw || b.raw ≤ a.raw
+  let wireOk :=
+    match decVal .u64 (encVal .u64 a.raw.toValue ++ [0xFF]) with
+    | some p => p.1 == a.raw.toValue && p.2 == [0xFF]
+    | none => false
+  addOk && mulOk && ordOk && wireOk
+
+/-- The known-answer + erasure pins (the discipline's concrete face). -/
+def profilePinSpec : Spec :=
+  Spec.ofList "the profile lane: erasure pins + the deterministic known answers"
+    (fun _ =>
+      assert ((
+        -- the ERASURE pins: the phantom index costs nothing at runtime
+        ((⟨(7 : UInt64)⟩ : Profiled .plain UInt64).raw == 7)
+          && ((Profiled.iso .plain UInt64).to ((Profiled.iso .plain UInt64).inv 7) == 7)
+          && ((⟨(7 : UInt64)⟩ : Labeled UInt64)
+                == (⟨(7 : UInt64)⟩ : Profiled .plain UInt64))
+        -- the Money-cents known answers: exact add
+          && (((mkMoney100 150).raw.add? (mkMoney100 275).raw).map (fun c => c.units)
+                == some 425)
+        -- the NAMED floor: 33¢ × 33¢ = 10.89 units² → 10 (NOT 11)
+          && (((mkMoney100 33).raw.mul? (mkMoney100 33).raw).map (fun c => c.units)
+                == some 10)
+        -- the exact square: 50¢ × 50¢ = 25¢, no rounding needed
+          && (((mkMoney100 50).raw.mul? (mkMoney100 50).raw).map (fun c => c.units)
+                == some 25)
+        -- the overflow REFUSAL: max units + 1 refuses, never wraps
+          && ((mkMoney100 (2 ^ 64 - 1)).raw.add? (mkMoney100 1).raw) == none
+        -- the scale is type-level data, not runtime
+          && (Fixed.scaleOf (mkMoney100 25).raw) == 100
+        -- the lift evals to the units (the value lane's erasure face)
+          && ((mkMoney100 425).raw.toValue.eval == 425)))
+        "the profile pins drifted")
+    [ ("overflow wraps", fun _ =>
+        assert (((mkMoney100 (2 ^ 64 - 1)).raw.add? (mkMoney100 1).raw).map (fun c => c.units)
+          == some 0)
+          "control fired: the checked add must refuse at the capacity, never wrap")
+    , ("mul is exact", fun _ =>
+        assert (((mkMoney100 33).raw.mul? (mkMoney100 33).raw).map (fun c => c.units)
+          == some 1089)
+          "control fired: mul rounds — the named floor, not an exact product")
+    , ("the phantom leaks into the wire", fun _ =>
+        assert (encVal .u64 (mkMoney100 425).raw.toValue
+          != Kit.Varint.encVarNat 425)
+          "control fired: codec legality is byte-identity with the bare u64 — \
+            the profile text is nowhere in the bytes") ]
+    4 42
+
+/-- The law sweep (LCG discipline #14): two 8-byte draws per instance —
+    the add/mul/order/codec laws at every instance, the overflow branch
+    exercised (two uniform 64-bit draws sum past the capacity about
+    half the time). -/
+def profileSpec : Spec :=
+  Spec.ofList "the deterministic laws hold at every generated instance"
+    (fun tape0 =>
+      let (a, t1) := genMoney tape0
+      let (b, _) := genMoney t1
+      assert (profileLawOk a b)
+        "a generated instance broke the erasure, the fixed-point laws, or codec legality")
+    [ ("unchecked wrap", fun _ =>
+        assert (((mkMoney100 (2 ^ 64 - 1)).raw.add? (mkMoney100 1).raw).isSome)
+          "control fired: the checked add must refuse at the capacity")
+    , ("floor rounds up", fun _ =>
+        assert (((mkMoney100 33).raw.mul? (mkMoney100 33).raw).map (fun c => c.units)
+          == some 11)
+          "control fired: the named floor rounds DOWN — 10.89 units² is 10") ]
+    64 42
+
+/-! ## The breaking lane (SchemaCore.Diff — the diff + verdict + remedy seed) -/
+
+-- The fixtures: a pair of universes whose net change is KNOWN. `b` is
+-- the bounded-cap field, so the widening remedy has a live target.
+def widgetsOld : Item :=
+  { name := "Widgets"
+    fields := [ { name := "a", ty := .u64 }
+              , { name := "b", ty := .bounded 42 } ] }
+
+def widgetsWide : Item :=
+  { name := "Widgets"
+    fields := [ { name := "a", ty := .u64 }
+              , { name := "b", ty := .bounded 100 } ] }
+
+def extrasItem : Item :=
+  { name := "Extras", fields := [ { name := "c", ty := .bool } ] }
+
+def ghostItem : Item :=
+  { name := "Ghost", fields := [ { name := "g", ty := .u64 } ] }
+
+/-- The rename twin: SAME field contents, different name — the D13
+    delete+add pair (candidates, never merged). -/
+def ghostTwin : Item := { ghostItem with name := "Ghost2" }
+
+-- The worked remedy: the bounded-cap widening 42 ≤ 100, soundness
+-- discharged at the declaration site (`widenBounded_sound`).
+def widenSmall : FieldMigration := widenBounded "b" 42 100 (by decide)
+
+def widgetsWidening : Migration :=
+  { item := "Widgets", fields := [widenSmall] }
+
+/-- The diff's known answers: the net change over the name key, exact. -/
+def diffSpec : Spec :=
+  Spec.ofList "the diff's known answers"
+    (fun _ => assert ((
+      -- identical universes: the NET change is empty
+      (diff [widgetsOld] [widgetsOld] = [])
+      -- pure removal / pure addition
+      && (diff [extrasItem] [] = [.removed "Extras"])
+      && (diff [] [extrasItem] = [.added "Extras"])
+      -- the retyped field carries the old AND new type as evidence
+      && (diff [widgetsOld] [widgetsWide]
+            = [.changed "Widgets"
+                [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]])
+      -- the field-level evidence set: a field add rides the changed item
+      && (diff [ghostItem]
+                [{ ghostItem with fields := ghostItem.fields ++ [ { name := "h", ty := .bool } ] }]
+            = [.changed "Ghost" [.fieldAdded "h"]])
+      -- the rename twin is NOT merged: removed + added, both named
+      && (diff [ghostItem] [ghostTwin]
+            = [.removed "Ghost", .added "Ghost2"])
+      -- the rename CANDIDACY is named (the report's honesty face)
+      && (renameCandidates [ghostItem] [ghostTwin] = [("Ghost", "Ghost2")])
+      -- no candidacy without agreeing field contents
+      && (renameCandidates [widgetsOld] [ghostTwin] = [])))
+      "the diff's known answers drifted")
+    [ ("an unchanged universe still diffs",
+        fun _ => assert (diff [widgetsOld] [widgetsOld] != [])
+          "control fired: the net change of an identical pair must be EMPTY \
+(the Z-set discipline: net-zero = nothing changed)")
+    , ("a rename is silently merged",
+        fun _ => assert (diff [ghostItem] [ghostTwin] = [])
+          "control fired: a delete+add pair must stay removed+added (D13: \
+names are presentation; the diff never merges on field contents)")
+    , ("a type change is invisible",
+        fun _ => assert (diff [widgetsOld] [widgetsWide] = [])
+          "control fired: a retyped field is a BREAKING finding with \
+evidence, never silent") ]
+    4 42
+
+/-- The verdict's both faces + the exit-code discipline. -/
+def verdictSpec : Spec :=
+  Spec.ofList "the verdict's both faces + the bridge"
+    (fun _ => assert ((
+      -- clean: additions only
+      (verdictOf (diff [] [extrasItem]) [] = .clean)
+      -- unremedied: a removal, no remedy registered
+      && (verdictOf (diff [extrasItem] []) [] = .unremedied)
+      -- unremedied: the widening, NO remedy registered
+      && (verdictOf (diff [widgetsOld] [widgetsWide]) [] = .unremedied)
+      -- remedied: the widening WITH its registered migration
+      && (verdictOf (diff [widgetsOld] [widgetsWide]) [widgetsWidening]
+            = .remedied)
+      -- the exit-code discipline (the ONLY mapping)
+      && (CompatVerdict.exitCode .clean = 0)
+      && (CompatVerdict.exitCode .remedied = 0)
+      && (CompatVerdict.exitCode .unremedied = 2)
+      -- the relation's both faces over concrete items
+      && (backwardCompatible [widgetsOld] [widgetsOld, extrasItem])
+      && !(backwardCompatible [extrasItem] [])))
+      "the verdict's faces drifted")
+    [ ("an unremedied retype exits clean",
+        fun _ => assert (CompatVerdict.exitCode
+          (verdictOf (diff [widgetsOld] [widgetsWide]) []) = 0)
+          "control fired: a breaking change with no remedy exits 2 — the \
+loud warning (`just gates` fails on 2), never a quiet success")
+    , ("a removal is backward compatible",
+        fun _ => assert (backwardCompatible [extrasItem] [])
+          "control fired: a removal strands old readers — the relation \
+must refuse it")
+    , ("the bridge's clean face lies",
+        fun _ => assert (!(backwardCompatible [widgetsOld] [widgetsOld, extrasItem]))
+          "control fired: additions are replay-safe (no old data references \
+them) — the clean verdict and the relation agree (pattern #1)") ]
+    4 42
+
+-- The near-miss migration: oldTy bounded 41 ≠ the found bounded 42
+-- (the negative control's fixture).
+def nearMissMigration : Migration :=
+  { item := "Widgets"
+    fields := [ { field := "b"
+                , oldTy := .bounded 41
+                , newTy := .bounded 100
+                , apply := fun v =>
+                    match v with
+                    | .bounded f => .bounded (Fin.castLE (by decide) f) } ] }
+
+/-- The remedy's soundness exercised + the honest unremedied rule. -/
+def remedySpec : Spec :=
+  Spec.ofList "the remedy's soundness is exercised + the honest unremedied rule"
+    (fun _ => assert ((
+      -- the diagram commutes: the widened value denotes the SAME number
+      ((Value.eval (.bounded 100) (widenSmall.apply (Value.bounded ⟨40, by decide⟩))).val = 40)
+      -- the migration remedies exactly the widening change (right item,
+      -- right field, exactly the found old/new types)
+      && (widgetsWidening.remedies
+            (Change.changed "Widgets"
+              [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]))
+      -- field ADDITIONS ride along (no old data to map)
+      && (widgetsWidening.remedies
+            (Change.changed "Widgets" [.fieldAdded "h"]))
+      -- REMOVALS ARE HONESTLY UNREMEDIED (no value-map target)
+      && !(widgetsWidening.remedies (Change.removed "Widgets"))
+      && !(widgetsWidening.remedies (Change.removed "Extras"))
+      -- the item name gates the remedy
+      && !(widgetsWidening.remedies
+            (Change.changed "Other"
+              [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]))))
+      "the remedy's behavior drifted")
+    [ ("a widened value changes the number",
+        fun _ => assert ((Value.eval (.bounded 100)
+          (widenSmall.apply (Value.bounded ⟨40, by decide⟩))).val = 41)
+          "control fired: widening is not reinterpretation — the SAME \
+number, or the soundness obligation is false")
+    , ("a remedy with the wrong old type still remediess",
+        fun _ => assert (nearMissMigration.remedies
+          (Change.changed "Widgets"
+            [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]))
+          "control fired: the remedy must match the found old AND new \
+types exactly — a near-miss migration is no evidence")
+    , ("a removed item has a value-map target",
+        fun _ => assert (widgetsWidening.remedies (Change.removed "Widgets"))
+          "control fired: removals are honestly UNREMEDIED — there is no \
+value-map target for gone data (the honest verdict, not an oversight)") ]
+    4 42
+
+-- The bridge, at theorem level: clean ⟺ the relation (both directions
+-- pinned over concrete universes — the gate runs the checker, the
+-- theorem says the checker is the relation's decision).
+example : verdictOf (diff [widgetsOld] [widgetsOld]) [] = .clean := rfl
+example : backwardCompatible [widgetsOld] [widgetsOld] = true := rfl
+example : backwardCompatible [extrasItem] [] = false := rfl
+
 /-! ## The driver -/
 
 def main : IO UInt32 :=
-  TestKit.mainOfSuites
+  TestingKit.mainOfSuites
     [ ("SchemaCore.Ty", [tyRenderSpec, losslessSpec])
+    , ("SchemaCore.Fold", [foldSpec])
     , ("SchemaCore.Value", [valueSpec])
     , ("SchemaCore.Codec", [codecGoldenSpec, codecRoundTripSpec, codecRefusalSpec])
     , ("SchemaCore.Emit", [artifactSpec, lawSpec])
     , ("SchemaCore.Item", [registrySpec, obligationSpec])
     , ("SchemaCore.RowVals", [rowSpec])
+    , ("SchemaCore.Derive", [deriveSpec])
+    , ("SchemaCore.DeriveMeta entourage", [entourageSpec])
     , ("SchemaCore.Snapshot", [snapshotSpec])
     , ("SchemaCore.Describe", [describeSpec])
     , ("SchemaCore.Pred", [predSpec])
-    , ("SchemaCore.Check", [checkSpec]) ]
+    , ("SchemaCore.Check", [checkSpec])
+    , ("SchemaCore.Keys", [keysSpec])
+    , ("SchemaCore.Update", [updateSpec])
+    , ("SchemaCore.EventSourced", [eventSourcedSpec, esCodecSpec, esMigrationSpec])
+    , ("SchemaCore.Migrate", [migrateSpec, migrateRefusalSpec])
+    , ("SchemaCore.Profile", [profilePinSpec, profileSpec])
+    , ("SchemaCore.EntityMachine", [entityMachineSpec])
+    , ("SchemaCore.Diff", [diffSpec, verdictSpec, remedySpec])
+    , ("SchemaCore.Violate+Commit", [commitFaceSpec, refuseFaceSpec,
+        staleFaceSpec, duelSpec])
+    , ("SchemaCore.IncViolate", [incSpec, incFallbackSpec]) ]
 
 /-! ## The Rust lane (SchemaCore.Emit.Rust) — the differential's Lean side
 
@@ -1163,3 +2052,13 @@ example : (SchemaCore.Emit.Rust.tamperVectors.map (·.1))
 example : Kit.Emit.outputsDisjoint
     [SchemaCore.witEmitter, SchemaCore.Emit.Rust.rustEmitter] = true := by
   decide
+
+/-- THE DUEL VECTOR SET (the duel migration's pins): ten vectors —
+    six atoms + the example row + three refusals — all `encVal`'s
+    bytes, the ONE source. -/
+example : SchemaCore.Emit.Rust.duelVectors.vectors.length = 10 := rfl
+
+/-- The manifest's expectations cover exactly the emitted vectors
+    (Kit.Duel's shape check — a manifest row over an absent vector is
+    a generator bug, and the pin makes it a test verdict). -/
+example : Kit.Duel.expectsCovered SchemaCore.Emit.Rust.duelVectors = true := rfl

@@ -109,7 +109,7 @@ wasm emitter. When not: host-only code needs no mark (don't mark for
 the ceremony).
 
 **14. The LCG discipline.** Generated data is seeded + deterministic
-(`TestKit.lcg`); a failing case replays byte-identically from its seed;
+(`TestingKit.lcg`); a failing case replays byte-identically from its seed;
 shrinking walks toward the minimal case. Why right: "works on my seed"
 is never a bug report. When not: never for a generated fixture.
 

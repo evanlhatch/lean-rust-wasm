@@ -18,7 +18,7 @@ is a `[[lean_lib]]`/`[[lean_exe]]` target with `srcDir`/`roots`. The
 per-package split died in the single-lake migration (the cone
 duplication: N packages × the full dep cone). The cone rule survives as
 DATA: the import-ban table (LintKit) — core-only libraries
-(codegen-core, TextKit, TestKit, LintKit) never import the mathlib
+(codegen-core, TextKit, TestingKit, LintKit) never import the mathlib
 cone; guest-compiled modules stay core-only.
 
 The gates run via the gates exe (`lean/gates/`): `just gates` = the
@@ -30,7 +30,7 @@ composition in the justfile (09 §3). Everything below passes it.
 |---|---|---|
 | **codegen-core** | the kit: Iso/PartialIso (the graded carrier's current form), CheckedProp, Obligation (tiers/evidence/discharge backends), DataRegistry/CodedRegistry, the Emit spine (Emitter+law+runCertified, runEmitters, the JSON builder, the manglers), GenKit (freshNameCheck/didYouMeanSuffix/declare_* glue), AttrKit, the guest gate (GuestBan) | C0 |
 | **TextKit** | the total parser core (Parser monad over `List Char`, scanners, the inversion-lemma kit) — re-homed out of substrait | C0 |
-| **TestKit** | PropSpec (mandatory negative controls), the LCG (deterministic seeded generation), GateKit, the harness/verdict machinery | C0 |
+| **TestingKit** | PropSpec (mandatory negative controls), the LCG (deterministic seeded generation), GateKit, the harness/verdict machinery | C0 |
 | **LintKit** | the env/text linter engine + the linter table (axiom allowlist, dupDefBodies incl. the upstream-dup extension, packageNamespace, noNewPartial, bareChecker, unregisteredRoundtrip, didyoumeanDiscipline, coreHasNoClaim, …) | C0 |
 | **gates** | the gate driver (gen-check/axioms/native-policy/kernel-check/manifest-check/coverage/docs-check + the report-gate combinator + the audit channel) | C0, host-side |
 | **Machines** | Machine (step?/run/traces), Sessions (dual-checked protocols), Convergent (decreasing variants), Rewind (ChangeInversion), the machine! macro + the states:/payload: entourage, the Fusion bridges (machines↔dbsp: journal = D∘run, dI iso, bisimulation as stream equality) | C2 (mathlib) |

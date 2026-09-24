@@ -1,7 +1,7 @@
 /-
 # SchemaCore.Check — the check lane (invariants as registered items)
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/12-construction.md §2 (the lane recipe:
 item + mount + legality + obligation view + tests); notes/v3/
 15-patterns.md #4 (the obligation as data — a registered invariant
@@ -19,9 +19,10 @@ ported fresh at slice size):
   (the legacy `SchemaInvariant` existential-wrapper shape: a row for
   another schema cannot be applied — the GADT index rides the stored
   fields; the executor casts only after a data-equality guard).
-- `checkRows` / `checkOn` — the executable check over a table; the
-  guard `checkOn_of_ne` refuses a foreign-schema table (`false`),
-  never misreads.
+- `checkRows` / `checkOn` — the executable check over a table;
+  `checkOn`'s verdict is a CONSTRUCTOR, never a smuggled Bool (04 §6):
+  `.checked ok` is a real result, `.foreignSchema` is the refusal —
+  `checkOn_of_ne` pins the refusal's exact face, never misreads.
 - The legality Statement — `scopedDiags` (the diagnostic authority) +
   `CheckLegal` (the reasoning authority) + `scopedDiags_eq_nil_iff`
   (the proved bridge): the target resolves in the universe, the stored
@@ -71,29 +72,13 @@ namespace SchemaCore
 
 /-! ## The field-equality decision (the guard's instance) -/
 
-/-- `Field` equality, decided from its parts (String + Ty both carry
-    DecidableEq; Item.lean's deriving set is closed, so the instance
-    lives HERE — with the consumer that needs it). -/
-instance : DecidableEq Field := by
-  intro a b
-  cases a with
-  | mk an aty =>
-      cases b with
-      | mk bn bt =>
-          cases hn : decEq an bn with
-          | isTrue h1 =>
-              cases ht : decEq aty bt with
-              | isTrue h2 =>
-                  refine isTrue ?_
-                  rw [h1, h2]
-              | isFalse h2 =>
-                  refine isFalse (fun h => h2 ?_)
-                  have hty := congrArg Field.ty h
-                  exact hty
-          | isFalse h1 =>
-              refine isFalse (fun h => h1 ?_)
-              have hnm := congrArg Field.name h
-              exact hnm
+/- `Field` equality — GENERATED, not hand-walked (06 §7: generation >
+   hand-writing; the closed-case script this replaces — cases over
+   both fields, two nested decEq splits, two congrArg injections —
+   is exactly the shape the deriving handler produces; String + Ty
+   both carry DecidableEq, and the instance lives HERE with the
+   consumer that needs it). -/
+deriving instance DecidableEq for Field
 
 /-! ## The invariant item -/
 
@@ -112,31 +97,51 @@ instance : Inhabited CheckItem :=
 
 /-! ## The executable check -/
 
+/-- The verdict of the guarded executor: a REAL check result at the
+    item's own field list (the Bool the predicate decided), or a
+    REFUSAL — the table belongs to another schema, so no check ran.
+    The refusal is its own constructor, never smuggled into a `false`
+    that would conflate it with a genuine failed check (04 §6: the
+    verdict vocabulary is ctors, never strings-or-Bool-overloads). -/
+inductive CheckVerdict where
+  /-- A real check ran: this is the predicate's decision. -/
+  | checked (ok : Bool)
+  /-- No check ran: the table is for another schema (the guard's
+      refusal — the legacy `guardCastApply` discipline, honest face). -/
+  | foreignSchema
+  deriving BEq, Repr
+
 /-- The check over a table typed by the item's OWN field list. -/
 def CheckItem.checkRows (ci : CheckItem) (rows : List (RowVals ci.fields)) : Bool :=
   rows.all (fun r => ci.pred.check r)
 
-/-- The safe executor: a table for ANOTHER schema refuses (`false`) —
-    the field-list guard is the DecidableEq instance, never a silent
-    misread (the legacy `checkOn`/`guardCastApply` discipline). -/
+/-- The safe executor: a table for ANOTHER schema refuses
+    (`.foreignSchema` — no check ran, so no Bool is reported); at the
+    item's OWN field list the verdict is the real check, wrapped
+    (the field-list guard is the DecidableEq instance, never a silent
+    misread — the legacy `checkOn`/`guardCastApply` discipline). -/
 def CheckItem.checkOn (ci : CheckItem) {fs : List Field}
-    (rows : List (RowVals fs)) : Bool :=
-  if h : fs = ci.fields then CheckItem.checkRows ci (cast (by rw [h]) rows)
-  else false
+    (rows : List (RowVals fs)) : CheckVerdict :=
+  if h : fs = ci.fields then
+    CheckVerdict.checked (CheckItem.checkRows ci (cast (by rw [h]) rows))
+  else .foreignSchema
 
-/-- At the item's OWN field list the guard collapses to the all-check. -/
+/-- At the item's OWN field list the guard collapses to the all-check
+    (wrapped in `.checked`). -/
 theorem CheckItem.checkOn_self (ci : CheckItem)
     (rows : List (RowVals ci.fields)) :
-    ci.checkOn rows = ci.checkRows rows := by
+    ci.checkOn rows = CheckVerdict.checked (ci.checkRows rows) := by
   simp only [checkOn]
   split
   · next h => simp
   · next h => simp at h
 
-/-- A table for another schema refuses. -/
+/-- A table for another schema refuses — the STRONGER pin: the
+    verdict's exact face is `.foreignSchema`, not a `checked` of any
+    Bool (no check ran, so no decision is reported). -/
 theorem CheckItem.checkOn_of_ne (ci : CheckItem) {fs : List Field}
     (hne : fs ≠ ci.fields) (rows : List (RowVals fs)) :
-    ci.checkOn rows = false := by
+    ci.checkOn rows = CheckVerdict.foreignSchema := by
   simp only [checkOn]
   split
   · next h => exact absurd h hne
@@ -278,37 +283,46 @@ theorem CheckItem.scopedDiags_eq_nil_iff (items : List Item) (ci : CheckItem) :
 
 /-! ## The obligation view (what a registered invariant MEANS, as data) -/
 
-/-- The registered invariant's obligation row (15-patterns #4): the
-    label, the COMPUTED tier — `decidableNow`, because over a provided
-    materialized table the claim is a closed decide — the payload
-    (the scope's field names), the provenance. -/
-def CheckItem.obligation (ci : CheckItem) : Obligation (List String) :=
+/-- The registered invariant's obligation row over a PROVIDED table
+    (15-patterns #4): the label, the COMPUTED tier — `decidableNow`,
+    because over a provided materialized table the claim is a closed
+    decide — the payload (the scope's field names), the provenance —
+    and THE CLAIM AS THE TYPE INDEX: the row is `Obligation _
+    (ci.holds rows)`, the per-row predicate itself. The data-level
+    fields (label/tier/payload/provenance) do not depend on `rows`;
+    only the claim index does — so a discharge of this row can never
+    prove a different proposition than the table it was built for
+    (the mis-wire rule's deepest promotion). -/
+def CheckItem.obligation (ci : CheckItem) (rows : List (RowVals ci.fields)) :
+    Obligation (List String) (ci.holds rows) :=
   { label := s!"schema/{ci.schemaRef}/{ci.name}"
     tier := .decidableNow
     payload := ci.fields.map (·.name)
     provenance := `SchemaCore }
 
 /-- THE DISCHARGE — via the kit's decidableNow backend, NEVER a
-    hand-rolled trio: `none` is the loud gap (a false claim or a
-    mis-set tier; the backend refuses, it does not fabricate
-    evidence). -/
+    hand-rolled trio: the claim discharged is the obligation's OWN
+    index (`ci.holds rows`; the `Decidable` instance is the table
+    bridge's `checkHoldsDec`), there is no claim parameter to mis-wire.
+    `none` is the loud gap (a false claim or a mis-set tier; the
+    backend refuses, it does not fabricate evidence). -/
 def CheckItem.dischargeOn (ci : CheckItem) (rows : List (RowVals ci.fields)) :
     Option Evidence :=
-  ci.obligation.decideDischarge (fun _ => ci.holds rows)
+  (ci.obligation rows).decideDischarge
 
 /-- The discharge's SOUNDNESS — a citation of the kit backend's
-    theorem (never a re-proof). -/
+    theorem (never a re-proof), at the indexed strength: the type says
+    the discharge proves THIS table's claim. -/
 theorem CheckItem.dischargeOn_sound (ci : CheckItem)
     (rows : List (RowVals ci.fields))
     (h : ci.dischargeOn rows = some (.decided true)) : ci.holds rows :=
-  Obligation.decideDischarge_sound (fun _ => ci.holds rows) ci.obligation rfl h
+  Obligation.decideDischarge_sound (ci.obligation rows) rfl h
 
 /-- The discharge's COMPLETENESS — a true claim fires the backend. -/
 theorem CheckItem.dischargeOn_complete (ci : CheckItem)
     (rows : List (RowVals ci.fields)) (hc : ci.holds rows) :
     ci.dischargeOn rows = some (.decided true) :=
-  Obligation.decideDischarge_of_claim (fun _ => ci.holds rows) ci.obligation
-    rfl hc
+  Obligation.decideDischarge_of_claim (ci.obligation rows) rfl hc
 
 /-! ## The mount — `@[check]`, by `Kit.Lane.register_lane` -/
 

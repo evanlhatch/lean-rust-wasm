@@ -1,0 +1,26 @@
+[package]
+name = "mandate-host"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# The engine — version twin of legacy/crates/guestlang-host (wasmtime 47).
+# Features mirror legacy's minus everything the first seed doesn't use:
+# core modules only (no component-model, no wasi, no async, no pooling).
+wasmtime = { version = "47", default-features = false, features = [
+  "cranelift",
+  "runtime",
+  "std",
+] }
+# The typed-error derive (12 §8's no-bare-panics discipline). The
+# fast-observe fault registry integration (the E-codes, the causal
+# trees) is a LATER order — this enum is the honest first-seed surface,
+# structured so each variant maps onto one future `@[host_fault]` row.
+thiserror = "2"
+
+[dev-dependencies]
+# The tamper/golden teeth tests build variant modules from the text
+# format; `wat` is the parser wasmtime itself vendors (its optional
+# `wat` dep), used here to produce wasm BYTES for `run_answer`.
+wat = "1"

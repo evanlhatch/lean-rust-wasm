@@ -64,7 +64,7 @@ watch list is WATCH.
     the shrink path; validity-preserving shrinkers for refined types
     (shrinking `Packet.length` without `bytes` is malformed, not
     smaller); valid values → property tests, raw malformed → boundary
-    tests. Home: TestKit.
+    tests. Home: TestingKit.
 
 ## The data plane (02's inventory)
 

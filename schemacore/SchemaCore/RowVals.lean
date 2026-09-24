@@ -1,7 +1,7 @@
 /-
 # SchemaCore.RowVals — the row layer: positional values + the name↔index iso
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/02-data-plane.md §1-3 (records are row
 TYPES; the row is the runtime half of a record, indexed BY its schema —
 a row for `["id","name"]` cannot hold the values of `["name","id"]`).

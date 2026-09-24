@@ -15,6 +15,7 @@ Evidence, not architecture — the five-question block lives in the modules unde
 import SchemaCore
 import SchemaCore.Pred
 import SchemaCore.Check
+import SchemaCore.Keys
 
 open SchemaCore
 
@@ -153,3 +154,150 @@ open SchemaCore
 /-- info: 'SchemaCore.CheckItem.checkOn_self' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms SchemaCore.CheckItem.checkOn_self
+
+/-! ## The derivation layer (SchemaCore.Derive + DeriveMeta — the order's
+     axiom pins: the GENERIC theorems must be axiom-free or core-triple
+     only — a new axiom in the derivation layer fails the build here) -/
+
+/-- info: 'SchemaCore.deriveCodec_correct' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.deriveCodec_correct
+
+/-- info: 'SchemaCore.deriveDec_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.deriveDec_eq
+
+/-- info: 'SchemaCore.deriveCodec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.deriveCodec
+
+/-- info: 'SchemaCore.rowBridgeIso' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.rowBridgeIso
+
+/-- info: 'SchemaCore.eval_mkValue' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.eval_mkValue
+
+/-- info: 'SchemaCore.mkValue_eval' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.mkValue_eval
+
+/-- info: 'SchemaCore.ofRowF_toRowF' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.ofRowF_toRowF
+
+/-- info: 'SchemaCore.toRowF_ofRowF' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.toRowF_ofRowF
+
+/-- info: 'SchemaCore.decNat?_encNat_append' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.decNat?_encNat_append
+
+/-- info: 'SchemaCore.WireCodec' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.WireCodec
+
+/-- info: 'SchemaCore.row_bridge' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.row_bridge
+
+/-! ## The keys lane (SchemaCore.Keys — the determinacy theorems' cone:
+     core-triple at most; the structural beq's lawfulness is the
+     unconditional replacement for the legacy CodecClosed conditioning) -/
+
+/-- info: 'SchemaCore.FieldVal.beq' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.FieldVal.beq
+
+/-- info: 'SchemaCore.Value.beq_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.Value.beq_eq
+
+/-- info: 'SchemaCore.FieldVal.beq_eq_true_iff_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.FieldVal.beq_eq_true_iff_eq
+
+/-- info: 'SchemaCore.KeyDecl.uniqueOn_determines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.uniqueOn_determines
+
+/-- info: 'SchemaCore.KeyDecl.lookup?_atMostOne' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.lookup?_atMostOne
+
+/-- info: 'SchemaCore.KeyDecl.check' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.check
+
+/-- info: 'SchemaCore.keyDeclsCheck_eq_nil_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.keyDeclsCheck_eq_nil_iff
+
+/-- info: 'SchemaCore.keysChecked' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.keysChecked
+
+/-- info: 'SchemaCore.KeyDecl.dischargeUniqueOn' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.dischargeUniqueOn
+
+/-- info: 'SchemaCore.KeyDecl.defaultObligations' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.defaultObligations
+
+/-! ## The event-sourcing lane (SchemaCore.Delta + Event — the rungs,
+     the fusion, the codec, the gate: core-triple at most) -/
+
+/-- info: 'SchemaCore.witnessedReversible' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.witnessedReversible
+
+/-- info: 'SchemaCore.journal_notReversible' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.journal_notReversible
+
+/-- info: 'SchemaCore.apply_eq_patchW' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.apply_eq_patchW
+
+/-- info: 'SchemaCore.witnessOf_valid' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.witnessOf_valid
+
+/-- info: 'SchemaCore.replay_of_run' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.replay_of_run
+
+/-- info: 'SchemaCore.journal_differentiates' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.journal_differentiates
+
+/-- info: 'SchemaCore.decJournal?_encJournal_append' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.decJournal?_encJournal_append
+
+/-- info: 'SchemaCore.replayMigrated?_ok' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.replayMigrated?_ok
+
+/-! ## The semantic-profiles lane (SchemaCore.Profile — the phantom's
+     erasure cone: core-triple at most; the codec-legality citations
+     ride the value codec's own cone) -/
+
+/-- info: 'SchemaCore.Profiled.iso' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.Profiled.iso
+
+/-- info: 'SchemaCore.Fixed.add?_some' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.Fixed.add?_some
+
+/-- info: 'SchemaCore.Fixed.mul?_some' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.Fixed.mul?_some
+
+/-- info: 'SchemaCore.Fixed.val_codecLegal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.Fixed.val_codecLegal

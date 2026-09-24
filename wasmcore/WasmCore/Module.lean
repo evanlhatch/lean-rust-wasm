@@ -16,9 +16,10 @@ The five questions (notes/v3/01-core.md):
 
 - **Root**: Universe (finite data, closed codes).
 - **Carrier grade**: none here; Encode carries the wire crossing.
-- **Spine reading**: the module is the registry-content the encoder
-  folds (the emitter-spine upgrade rides Kit.Emit when the module
-  gains a generated artifact — not yet, no consumer).
+- **Spine reading**: the module is the registry-content two readers
+  fold: `WasmCore.Encode` (the byte face) and `WasmCore.Wat`
+  (`watEmitter`, the Kit.Emit artifact-spine row over `Module` — the
+  WAT text face).
 - **Ladder rung**: rung 1 (closed data).
 - **Gate row**: none at the gates yet (WasmCore is not in
   Gates.Packages' gated set) + the golden byte-tie in WasmCoreTests.

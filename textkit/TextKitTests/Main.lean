@@ -8,13 +8,14 @@
 3. The mined scanners' pins (scanNat/scanIdent/expect/startsWith) +
    the scan-then-print round-trips.
 4. The error-shape pins: malformed input refuses with the RIGHT
-   ParseError shape — position, expected-set, context, suggest.
+   ParseError shape — position, valid-set, context, suggest — and the
+   Diag projection renders the envelope's shape (the convergence).
 
-The runner is TestKit's (`mainOfSuites` — doctrine 12 §9: tests are
+The runner is TestingKit's (`mainOfSuites` — doctrine 12 §9: tests are
 data folds). Two Specs: the leaf scanners (scanners + mined) and the
 combinators (combinators + alternation + labels + the error shapes).
 The SABOTAGE cases are the Specs' NEGATIVES — each must FAIL, guarded
-by TestKit's vacuity tripwire (a control that stops failing is louder
+by TestingKit's vacuity tripwire (a control that stops failing is louder
 than a broken pin; the old exactly-once check is its instance).
 
 Proof-side pins (the reduction checks + the axiom gate's #print axioms
@@ -23,11 +24,11 @@ Evidence, not architecture — the five-question block lives in the modules unde
 -/
 
 import TextKit
-import TestKit.Harness
+import TestingKit.Harness
 import TextKitTests.Axioms
 
 open TextKit
-open TestKit
+open TestingKit
 
 /-- Two parse outcomes agree (value or error shape). -/
 def exceptEq [BEq α] (a b : Except ParseError (α × List Char)) : Bool :=
@@ -42,9 +43,10 @@ def errOf (r : Except ParseError (α × List Char)) : Option ParseError :=
   | .error e => Option.some e
   | .ok _ => none
 
-/-- The default error shape (comparing against constructed values). -/
+/-- The default error shape (comparing against constructed values) —
+    the envelope's ONE construction path (`ParseError.base`). -/
 def plainErr (pos : Nat) (expected : List String) : ParseError :=
-  { pos, expected, context := [], suggest := none }
+  ParseError.base pos expected
 
 /-! ## Sabotage fixtures — the negatives' producers -/
 
@@ -63,7 +65,7 @@ def sabNoJump : GParser Char :=
      let _ ← pchar 'a'
      pchar 'a'
 
-/-! ## The specs (TestKit's data folds) -/
+/-! ## The specs (TestingKit's data folds) -/
 
 /-- The leaf scanners (the scanner + mined pins) + their sabotage
     controls. -/
@@ -168,11 +170,13 @@ def combinatorSpec : Spec :=
       assert (exceptEq (runG (orElse (pchar 'a') (pchar 'b')) "ab".toList) (.ok ('a', ['b'])))
         "left success wins"
       assert ((errOf (runG (label "item" (pchar 'x')) "y".toList))
-          == Option.some { pos := 0, expected := ["item"], context := ["item"], suggest := none })
-        "label sets expected + context"
+          == Option.some { ParseError.base 0 ["item"] with
+                           message := "expected item",
+                           context := [Label.at "item"] })
+        "label sets valid + context + message"
       assert (
           match errOf (runG (label "outer" (label "inner" (pchar 'x'))) "y".toList) with
-          | Option.some e => e.context == ["outer", "inner"]
+          | Option.some e => e.context.map (·.name) == ["outer", "inner"]
           | none => false)
         "label stacks context"
       assert (
@@ -190,7 +194,18 @@ def combinatorSpec : Spec :=
       assert ((errOf (runG (pchar 'a') "".toList)) == Option.some (plainErr 0 ["'a'"]))
         "empty input refuses pchar"
       assert ((errOf (runG (some (pchar 'a')) "b".toList)) == Option.some (plainErr 0 ["'a'"]))
-        "some refuses zero matches")
+        "some refuses zero matches"
+      -- the CONVERGENCE pin: a ParseError IS a Diag — the projection
+      -- renders the envelope's shape (code + severity + message + valid)
+      assert ((errOf (runG (pchar 'a') "b".toList)).map (·.toDiag.toString)
+          == Option.some "[TK1001] error: parse error — valid: 'a'")
+        "ParseError's Diag projection renders the envelope's shape"
+      assert ((errOf (runG (pchar 'a') "b".toList)).map (·.toDiag.valid)
+          == Option.some ["'a'"])
+        "ParseError's valid slot rides the envelope"
+      assert ((errOf (runG (pchar 'a') "b".toList)).map (·.toDiag.severity)
+          == Option.some Severity.error)
+        "ParseError's severity rides the envelope")
     [ ("the sabotaged optional still yields none",
         fun _ =>
           assert (exceptEq (runG sabOptional "b".toList) (.ok (none, "b".toList)))
@@ -202,6 +217,6 @@ def combinatorSpec : Spec :=
     4 42
 
 def main : IO UInt32 := do
-  TestKit.mainOfSuites
+  TestingKit.mainOfSuites
     [ ("TextKit.scanners", [scannerSpec])
     , ("TextKit.combinators", [combinatorSpec]) ]

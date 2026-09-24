@@ -202,3 +202,36 @@ finding, not a blocker.
 **D35. One writer per artifact; byte-tie is law; never hand-edit a
 generated file; the gates are the executable doctrine.** (The oldest
 rules — they survived every review.)
+
+## From the surface discussion (2026-09-24, the owner's direction)
+
+**D36. The frontend inherits idioms, never invents them.** The surface
+vocabulary is the two inherited idioms — the snapshot idiom (SQL:
+tables/keys/refs/rules) and the stream idiom (git/dbsp: journals/deltas/
+views) — proven CONJUGATE by the fusion bridges (journal = D∘run). The
+categorical machinery (folds/carriers/engines) is implementation, never
+exposed. → 16-surface.md §§1-3.
+
+**D37. The evidence entourage picks the weakest SUFFICIENT evidence.**
+Construction-guaranteed facts get NO generated proof (the type is the
+evidence); decidable facts get kernel proofs, never sweeps; unbounded
+facts get sweeps + controls + validity-preserving shrinkers. The tier is
+computed from the evidence kind; redundant generated proofs are lint
+findings. → 16 §3.
+
+**D38. The semantic-profiles lane is ACTIVATED** (was WATCH) — the
+game-engine product forces the float question: `Float Deterministic`
+(fixed-point, codec-legal) vs `Float Fast` (honest forfeits) as phantom
+indices; Money/units/time profiles erase at runtime. → 16 §4.5.
+
+**D39. The model's strengthening program**: carrier-as-graph unification
+→ the coalgebraic half (finality — TraceModel's missing deep theorems)
+→ the hyperproperty substrate (self-composition + the security
+observer) → the Descr functorial deepening → typed contexts (with the
+first language). → 16 §4.
+
+**D40. The game-engine activation**: ECS = the data plane (change
+detection IS incremental maintenance; parallel scheduling IS the
+disjointness theorem); rollback = the fusion bridges; saves =
+migrations; assets = the provenance ledger; budgets = the cost lane.
+No vertical features; each reading is rows + instances. → 16 §6.

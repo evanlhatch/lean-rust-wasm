@@ -34,6 +34,23 @@ def secondEntry : DemoLaneItem := { name := "second", weight := 2 }
     else
       Lean.throwError "lane replay drifted: wrong item count or order"
 
+-- THE ENTOURAGE HOOKS (16-surface §3 at the lane face): the
+-- registration auto-filled the obligation view (the attests labels,
+-- one per item) + the ledger demand (the lane records the collections
+-- it READS — its own extension — plus the rows it folds). A drift
+-- FAILS the build.
+#eval show Lean.CoreM Unit from do
+  let env ← Lean.getEnv
+  let d := demoLaneItemLedgerDemand env
+  if demoLaneItemObligationView env == ["first", "second"]
+      && d.collections == [Kit.Ledger.namesOf "KitTests.demoLaneItemExt"]
+      && d.rows == [Kit.Ledger.namesOf "first", Kit.Ledger.namesOf "second"]
+      && d.emitterRev == "register_lane" then
+    pure ()
+  else
+    Lean.throwError "lane entourage hooks drifted: the obligation view or \
+      the ledger demand did not auto-fill"
+
 /- NEGATIVE CONTROL: a duplicate entry name is the closed-world
     refusal (Kit.Diag's `closedWorld` — got + the taken names + the
     ONE engine's did-you-mean). -/

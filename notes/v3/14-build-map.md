@@ -41,7 +41,7 @@ map of the tree being ported FROM.
 |---|---|---|
 | codegen-core (kit, Emit spine, GenKit/AttrKit, registries) | PORT nearly whole | the kit generalizes to the graded carrier on arrival (Phase 2's work lands AS the port) |
 | TextKit | PORT | the parser core; the typed bidirectional grammar layer is Phase 4's build ON TOP of it |
-| TestKit | PORT | PropSpec/lcg/harness; Shrink lands per its spec |
+| TestingKit | PORT | PropSpec/lcg/harness; Shrink lands per its spec |
 | LintKit | PORT | the linter engine + the table, incl. the enforcement lints |
 | gates | PORT + grow | the driver + the subcommands; the audit/manifest channels land per 09 |
 | Machines | PORT | the machine lane + the fusion bridges; the TraceModel denotation arrives with its first concurrent consumer (Phase 8) |
@@ -60,7 +60,7 @@ map of the tree being ported FROM.
 ## 2. The build order (the phase alignment)
 
 1. **The scaffold + the C0 machinery:** the new tree's lakefile + the
-   gates' thin skeleton + codegen-core + TextKit + TestKit + LintKit
+   gates' thin skeleton + codegen-core + TextKit + TestingKit + LintKit
    ported. The doctrine's discipline (the byte-tie, the axiom gate, the
    lints, the kernel sweep) runs from the first commit.
 2. **The C1 cores:** schema-core (the Ty universe + the row layer + the

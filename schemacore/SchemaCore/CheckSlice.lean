@@ -1,7 +1,7 @@
 /-
 # SchemaCore.CheckSlice — the check lane's registered fixture
 
-Owner: the SchemaCore agent (the macht tree, `schemacore/`).
+Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 
 The check lane's end-to-end fixture: the `@[check]` entries append to
 `checkExt` at elaboration (the default builder — a `def` of the item
@@ -107,8 +107,10 @@ def mixedRows : List (RowVals exampleCheckFields) := [goodRow, badRow]
     unless (c.scopedDiags items).isEmpty do
       throwError s!"check lane legality drifted for `{c.name}`: \
         {c.scopedDiags items}"
-  -- the obligation view: both rows compute decidableNow
-  unless checks.all (fun c => c.obligation.tier == .decidableNow) do
+  -- the obligation view: both rows compute decidableNow (the claim
+  -- index needs no table for the tier's read — `[]` names the type,
+  -- the claim's content is not read here)
+  unless checks.all (fun c => (c.obligation []).tier == .decidableNow) do
     throwError "check lane obligation tier drifted"
 
 /- NEGATIVE CONTROL: a duplicate entry name is the closed-world

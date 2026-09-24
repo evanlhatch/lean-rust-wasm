@@ -190,7 +190,7 @@ bolero feature is missing for ranges**.
     on an existing file.
 - The division of labor stays: **Lean PropSpec = proving lane** (the
   seeded, shrinking, negative-controlled properties over the spec's
-  semantics — `lean/TestKit/TestKit/PropSpec.lean`), **bolero = Rust
+  semantics — `lean/TestingKit/TestingKit/PropSpec.lean`), **bolero = Rust
   exploration lane** (never-panic floors + differential oracles over
   the Rust twin), **Kani = bounded proof lane over Rust primitives**.
   Nothing moves between lanes without a note in this doc.
@@ -282,7 +282,7 @@ suite fails the gate").
 not by the dependency.
 
 **Design — the negative control as a sibling test in the same file
-(the TestKit shape, in Rust):** every fuzz file ships a
+(the TestingKit shape, in Rust):** every fuzz file ships a
 `negative_control` test that runs the SAME checker machinery against a
 deliberately-sabotaged subject and REQUIRES the violation to be caught.
 Two concrete forms, both verified writable against the API:

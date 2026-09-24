@@ -208,7 +208,10 @@ unsafe def run : IO UInt32 := do
         pending := pending.push (s!"{dispName f.file}:{ln}", n)
   -- 3. resolve: one package env at a time in this process (the memory
   --    shape in the header); a load failure is a gate failure — an
-  --    unloadable tree verifies nothing
+  --    unloadable tree verifies nothing. Not `Gates.withPkgEnv`: this
+  --    gate folds ALL gated packages, a load failure is a collected
+  --    loadError row with the `just build` hint, not a first-failure
+  --    gate exit (the combinator's shape).
   let mut loadErrors : Array String := #[]
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get

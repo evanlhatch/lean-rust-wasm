@@ -1,12 +1,22 @@
 /- # SchemaCore.Codec — the binary value codec over the closed `Ty` universe
 
-Owner: the SchemaCore codec lane (the macht tree, `schemacore/`).
+Owner: the SchemaCore codec lane (the mandate tree, `schemacore/`).
 Driving decisions: notes/v3/15-patterns.md #2 (THE append-form codec law:
 `dec (enc a ++ rest) = some (a, rest)` — codecs compose under bind BECAUSE
 the law is append-form); notes/v3/13-interfaces.md (the atoms row: the
 append-form law per codec); notes/v3/12-construction.md §4 (the codec
 recipe); notes/v3/01-core.md §4 (the `Kit.Codec` grade — the
 accepted-byte policy explicit, here as the EXACT IMAGE of the encoder).
+
+THE FOLD DISCIPLINE (SchemaCore.Fold): the ENCODER is the dependent
+fold — `encVal = foldValue valEncAlg` (01 §1's initial-algebra shape
+for the indexed family; the wire format's rows live in the algebra
+`valEncAlg`, the sibling rows carry the count/concat carrier the
+length prefixes consume). The DECODER stays a hand match — its
+recursion is over the input byte stream (the parse direction), which
+no `ValueAlg` row can state; see Fold.lean's honest-residue note. The
+master theorems keep their STATEMENTS and re-key their proofs onto the
+fold's equation lemmas (`encVal_*`).
 
 THE WIRE (one line per shape, tags are data):
 
@@ -57,6 +67,7 @@ Core-only (imports SchemaCore.Value only — the cone rule).
 -/
 
 import SchemaCore.Value
+import SchemaCore.Fold
 import Kit.Varint
 
 namespace SchemaCore
@@ -589,24 +600,145 @@ theorem encKey_decKey?_eq : ∀ (k : KeyTy) (bs : List UInt8) (v : Value k.toTy)
       simp only [encKey]
       exact decStringraw?_eq bs s _ hd
 
-/-! ## The value codec over the CLOSED universe -/
+/-! ## The value codec over the CLOSED universe — the encoder as the
+     dependent fold -/
 
-/-- Encode a schema-typed value. Composite arms reuse the combinators;
-    the key positions ride `encKey` directly (the `toTy` indirection
-    would break the structural recursion — the legacy lesson). -/
-def encVal : (t : Ty) → Value t → List UInt8
-  | .bool, .bool b => encBool b
-  | .u64, .u64 n => encVarNat n.toNat
-  | .i64, .i64 n => encVarNat (zigzag n.toInt)
-  | .string, .string s => encList encChar s.toList
-  | .option _, .none => [0]
-  | .option t, .some v => 1 :: encVal t v
-  | .result ok _, .ok v => 0 :: encVal ok v
-  | .result _ err, .err v => 1 :: encVal err v
-  | .list t, .list vl => encList (encVal t) (vListToList vl)
-  | .map k v, .map m => encList (encPair (encKey k) (encVal v)) (vMapToList m)
-  | .set k, .set vl => encList (encKey k) (vListToList vl)
-  | .bounded _, .bounded f => encVarNat f.val
+/-- The wire-format ALGEBRA (the dependent fold's rows — the wire as
+    data). Carriers: the value rows emit bytes (`fun _ => List UInt8`);
+    the SIBLING rows carry the element count alongside the concatenated
+    bytes (`Nat × List UInt8`) — the count is framing data the value's
+    `list`/`map`/`set` rows prepend (the length prefix the raw
+    catamorphism cannot recover). A new `Value` ctor refuses to compile
+    until this algebra grows its row. -/
+def valEncAlg : ValueAlg
+    (fun _ => List UInt8) (fun _ => Nat × List UInt8)
+    (fun _ _ => Nat × List UInt8) where
+  bool := encBool
+  u64 := fun n => encVarNat n.toNat
+  i64 := fun n => encVarNat (zigzag n.toInt)
+  string := fun s => encList encChar s.toList
+  none := [0]
+  some := fun bs => 1 :: bs
+  ok := fun bs => 0 :: bs
+  err := fun bs => 1 :: bs
+  list p := encVarNat p.1 ++ p.2
+  map p := encVarNat p.1 ++ p.2
+  set p := encVarNat p.1 ++ p.2
+  bounded f := encVarNat f.val
+  vnil := (0, [])
+  vcons := fun e p => (p.1 + 1, e ++ p.2)
+  mnil := (0, [])
+  mcons := fun ke ve p => (p.1 + 1, ke ++ ve ++ p.2)
+
+/-- The sibling rows' equation set (the count/concat discipline, `rfl`). -/
+theorem valEncAlg_vnil (t : Ty) :
+    valEncAlg.vnil (t := t) = ((0 : Nat), ([] : List UInt8)) := rfl
+theorem valEncAlg_vcons (t : Ty) (e : List UInt8) (p : Nat × List UInt8) :
+    valEncAlg.vcons (t := t) e p = (p.1 + 1, e ++ p.2) := rfl
+theorem valEncAlg_mnil (k : KeyTy) (v : Ty) :
+    valEncAlg.mnil (k := k) (v := v) = ((0 : Nat), ([] : List UInt8)) := rfl
+theorem valEncAlg_mcons (k : KeyTy) (v : Ty) (ke ve : List UInt8)
+    (p : Nat × List UInt8) :
+    valEncAlg.mcons (k := k) (v := v) ke ve p = (p.1 + 1, ke ++ ve ++ p.2) := rfl
+theorem valEncAlg_list (t : Ty) (p : Nat × List UInt8) :
+    valEncAlg.list (t := t) p = encVarNat p.1 ++ p.2 := rfl
+theorem valEncAlg_map (k : KeyTy) (v : Ty) (p : Nat × List UInt8) :
+    valEncAlg.map (k := k) (v := v) p = encVarNat p.1 ++ p.2 := rfl
+theorem valEncAlg_set (k : KeyTy) (p : Nat × List UInt8) :
+    valEncAlg.set (k := k) p = encVarNat p.1 ++ p.2 := rfl
+
+/-- THE ENCODER = the dependent fold over `valEncAlg` (the migration:
+    the ONE walk over the GADT family — 01 §1's initial-algebra shape
+    for the indexed case — with the wire format's rows as an algebra
+    instance). -/
+def encVal : (t : Ty) → Value t → List UInt8 := foldValue valEncAlg
+
+/-- The fold's equation set in the proof-facing form (each `rfl`:
+    the dependent fold's structural reduction + the algebra row;
+    `decVal_encVal_append`/`encVal_decVal_eq` consume THESE). -/
+theorem encVal_bool (b : Bool) : encVal .bool (.bool b) = encBool b := rfl
+theorem encVal_u64 (n : UInt64) : encVal .u64 (.u64 n) = encVarNat n.toNat := rfl
+theorem encVal_i64 (n : Int64) :
+    encVal .i64 (.i64 n) = encVarNat (zigzag n.toInt) := rfl
+theorem encVal_string (s : String) :
+    encVal .string (.string s) = encList encChar s.toList := rfl
+theorem encVal_none (t : Ty) : encVal (.option t) .none = [0] := rfl
+theorem encVal_some (t : Ty) (v : Value t) :
+    encVal (.option t) (.some v) = 1 :: encVal t v := rfl
+theorem encVal_ok (ok err : Ty) (v : Value ok) :
+    encVal (.result ok err) (.ok v) = 0 :: encVal ok v := rfl
+theorem encVal_err (ok err : Ty) (v : Value err) :
+    encVal (.result ok err) (.err v) = 1 :: encVal err v := rfl
+
+/-- The scalar-key coherence: the key encoder IS the fold's scalar
+    slice at the key's injected index (the key positions ride the ONE
+    walk — the legacy `toTy`-indirection lesson's resolution). -/
+theorem encKey_foldVal (k : KeyTy) (v : Value k.toTy) :
+    encKey k v = foldValue valEncAlg k.toTy v := by
+  cases k <;> cases v <;> rfl
+
+/-- The list sibling's fold characterization: the count/concat carrier
+    computes exactly the length-prefixed list's payload. -/
+theorem foldVList_valEnc : ∀ {t : Ty} (vl : VList t),
+    foldVList valEncAlg vl
+      = ((vListToList vl).length, ((vListToList vl).map (encVal t)).flatten)
+  | _, .nil => by simp [foldVList, valEncAlg_vnil, vListToList]
+  | _, .cons _ _ => by
+      rw [foldVList_cons, valEncAlg_vcons, vListToList, List.length_cons,
+        List.map_cons, List.flatten_cons, foldVList_valEnc]
+      rfl
+
+/-- The map sibling's fold characterization (the pair entries' bytes
+    are `encKey ++ encVal` — the coherence above rides the induction). -/
+theorem foldVMap_valEnc : ∀ {k : KeyTy} {v : Ty} (m : VMap k v),
+    foldVMap valEncAlg m
+      = ((vMapToList m).length,
+         ((vMapToList m).map (fun p => encKey k p.1 ++ encVal v p.2)).flatten)
+  | _, _, .nil => by simp [foldVMap, valEncAlg_mnil, vMapToList]
+  | _, _, .cons _ _ _ => by
+      rw [foldVMap_cons, valEncAlg_mcons, vMapToList, List.length_cons,
+        List.map_cons, List.flatten_cons, foldVMap_valEnc,
+        ← encKey_foldVal]
+      rfl
+
+/-- The pair entry's map face (the fold's element bytes vs the
+    combinator's — pointwise definition, so the maps agree). -/
+theorem map_encPair (k : KeyTy) (v : Ty) (xs : List (Value k.toTy × Value v)) :
+    xs.map (encPair (encKey k) (encVal v))
+      = xs.map (fun p => encKey k p.1 ++ encVal v p.2) :=
+  List.map_congr_left (fun _ _ => rfl)
+
+/-- The scalar-key map face (the fold's scalar slice vs the key
+    encoder — pointwise coherence, so the maps agree). -/
+theorem map_encKey (k : KeyTy) (xs : List (Value k.toTy)) :
+    xs.map (encKey k) = xs.map (encVal k.toTy) :=
+  List.map_congr_left (fun _ _ => encKey_foldVal k _)
+
+/-- The fold's `list` equation in the combinator-facing form (the
+    length-prefix framing, as the pre-fold arm stated it). -/
+theorem encVal_list (t : Ty) (vl : VList t) :
+    encVal (.list t) (.list vl) = encList (encVal t) (vListToList vl) := by
+  show valEncAlg.list (foldVList valEncAlg vl) = encList (encVal t) (vListToList vl)
+  rw [foldVList_valEnc, valEncAlg_list]
+  simp [encList]
+
+/-- The fold's `map` equation in the combinator-facing form. -/
+theorem encVal_map (k : KeyTy) (v : Ty) (m : VMap k v) :
+    encVal (.map k v) (.map m)
+      = encList (encPair (encKey k) (encVal v)) (vMapToList m) := by
+  show valEncAlg.map (foldVMap valEncAlg m) = _
+  rw [foldVMap_valEnc, valEncAlg_map]
+  simp [encList, map_encPair]
+
+/-- The fold's `set` equation in the combinator-facing form. -/
+theorem encVal_set (k : KeyTy) (vl : VList k.toTy) :
+    encVal (.set k) (.set vl) = encList (encKey k) (vListToList vl) := by
+  show valEncAlg.set (foldVList valEncAlg vl) = encList (encKey k) (vListToList vl)
+  rw [foldVList_valEnc, valEncAlg_set]
+  simp [encList, map_encKey]
+
+theorem encVal_bounded (cap : Nat) (f : Fin cap) :
+    encVal (.bounded cap) (.bounded f) = encVarNat f.val := rfl
 
 /-- The append-form decoder: returns the value AND the remaining bytes.
     Every out-of-policy shape refuses (`none`), never a silent misparse:
@@ -699,25 +831,25 @@ theorem decVal_encVal_append : ∀ (t : Ty) (v : Value t) (rest : List UInt8),
   | bool =>
       intro v rest
       cases v
-      simp [encVal, decVal, decBool?_encBool_append]
+      simp [encVal_bool, decVal, decBool?_encBool_append]
   | u64 =>
       intro v rest
       cases v
-      simp [encVal, decVal, decU64raw?_append]
+      simp [encVal_u64, decVal, decU64raw?_append]
   | i64 =>
       intro v rest
       cases v
-      simp [encVal, decVal, decI64raw?_append]
+      simp [encVal_i64, decVal, decI64raw?_append]
   | string =>
       intro v rest
       cases v
-      simp [encVal, decVal, decStringraw?_append]
+      simp [encVal_string, decVal, decStringraw?_append]
   | option t ih =>
       intro v rest
       cases v with
-      | none => simp [encVal, decVal, decByte?_cons]
+      | none => simp [encVal_none, decVal, decByte?_cons]
       | some x =>
-          simp only [encVal, decVal, decByte?_cons, List.cons_append,
+          simp only [encVal_some, decVal, decByte?_cons, List.cons_append,
             if_neg (by decide : ¬((1 : UInt8) = 0))]
           rw [ih x rest]
           simp
@@ -725,11 +857,11 @@ theorem decVal_encVal_append : ∀ (t : Ty) (v : Value t) (rest : List UInt8),
       intro v rest
       cases v with
       | ok x =>
-          simp only [encVal, decVal, decByte?_cons, List.cons_append]
+          simp only [encVal_ok, decVal, decByte?_cons, List.cons_append]
           rw [ihok x rest]
           simp
       | err x =>
-          simp only [encVal, decVal, decByte?_cons, List.cons_append,
+          simp only [encVal_err, decVal, decByte?_cons, List.cons_append,
             if_neg (by decide : ¬((1 : UInt8) = 0))]
           rw [iherr x rest]
           simp
@@ -737,7 +869,7 @@ theorem decVal_encVal_append : ∀ (t : Ty) (v : Value t) (rest : List UInt8),
       intro v rest
       cases v with
       | list vl =>
-          simp only [encVal, decVal, encList, List.append_assoc,
+          simp only [encVal_list, decVal, encList, List.append_assoc,
             decVarNat?_encVarNat_append]
           rw [decManyBind?_enc_append (decVal t) (encVal t) ih (vListToList vl) rest]
           simp [listToVList_vListToList]
@@ -745,7 +877,7 @@ theorem decVal_encVal_append : ∀ (t : Ty) (v : Value t) (rest : List UInt8),
       intro v rest
       cases v with
       | map m =>
-          simp only [encVal, decVal, encList, List.append_assoc,
+          simp only [encVal_map, decVal, encList, List.append_assoc,
             decVarNat?_encVarNat_append]
           rw [decManyBind?_enc_append _ _
             (decPair?_encPair_append (encKey k) (encVal v) (decKey? k) (decVal v)
@@ -755,7 +887,7 @@ theorem decVal_encVal_append : ∀ (t : Ty) (v : Value t) (rest : List UInt8),
       intro v rest
       cases v with
       | set vl =>
-          simp only [encVal, decVal, encList, List.append_assoc,
+          simp only [encVal_set, decVal, encList, List.append_assoc,
             decVarNat?_encVarNat_append]
           rw [decManyBind?_enc_append (decKey? k) (encKey k) (decKey?_encKey_append k)
             (vListToList vl) rest]
@@ -764,7 +896,7 @@ theorem decVal_encVal_append : ∀ (t : Ty) (v : Value t) (rest : List UInt8),
       intro v rest
       cases v with
       | bounded f =>
-          simp only [encVal, decVal, decVarNat?_encVarNat_append, dif_pos f.isLt]
+          simp only [encVal_bounded, decVal, decVarNat?_encVarNat_append, dif_pos f.isLt]
 
 /-- The value decoder's exact-image inversion: a successful decode's
     input is exactly an encoding plus a suffix — the accepted-byte
@@ -820,7 +952,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
             subst hvf
             subst hvr
             rw [decByte?_eq bs b0 _ hd]
-            simp [encVal, hb0]
+            simp [encVal_none, hb0]
           · by_cases hb1 : b0 = 1
             · rw [if_neg hb0, if_pos hb1] at h
               obtain ⟨x, r', hd2, hv, hr⟩ :=
@@ -828,7 +960,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
               subst hv
               subst hr
               rw [decByte?_eq bs b0 _ hd, ih r x _ hd2]
-              simp [encVal, hb1]
+              simp [encVal_some, hb1]
             · rw [if_neg hb0, if_neg hb1] at h
               simp at h
   | result ok err ihok iherr =>
@@ -847,7 +979,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
             subst hv
             subst hr
             rw [decByte?_eq bs b0 _ hd, ihok r x _ hd2]
-            simp [encVal, hb0]
+            simp [encVal_ok, hb0]
           · by_cases hb1 : b0 = 1
             · rw [if_neg hb0, if_pos hb1] at h
               obtain ⟨x, r', hd2, hv, hr⟩ :=
@@ -855,7 +987,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
               subst hv
               subst hr
               rw [decByte?_eq bs b0 _ hd, iherr r x _ hd2]
-              simp [encVal, hb1]
+              simp [encVal_err, hb1]
             · rw [if_neg hb0, if_neg hb1] at h
               simp at h
   | list t ih =>
@@ -878,7 +1010,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
               subst hvr
               obtain ⟨hlen, hbs⟩ := decManyBind?_eq (encVal t) ih n r xs _ hd2
               rw [decVarNat?_encVarNat_eq bs n r hd, hbs]
-              simp [encVal, encList, vListToList_listToVList, ← hlen]
+              simp [encVal_list, encList, vListToList_listToVList, ← hlen]
   | map kt vt ih =>
       intro bs v rest h
       simp only [decVal] at h
@@ -905,7 +1037,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
                   (encKey_decKey?_eq kt) ih
               obtain ⟨hlen, hbs⟩ := decManyBind?_eq _ hPair n r kvs _ hd2
               rw [decVarNat?_encVarNat_eq bs n r hd, hbs]
-              simp [encVal, encList, vMapToList_listToVMap, ← hlen]
+              simp [encVal_map, encList, vMapToList_listToVMap, ← hlen]
   | set k =>
       intro bs v rest h
       simp only [decVal] at h
@@ -927,7 +1059,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
               obtain ⟨hlen, hbs⟩ :=
                 decManyBind?_eq (encKey k) (encKey_decKey?_eq k) n r xs _ hd2
               rw [decVarNat?_encVarNat_eq bs n r hd, hbs]
-              simp [encVal, encList, vListToList_listToVList, ← hlen]
+              simp [encVal_set, encList, vListToList_listToVList, ← hlen]
   | bounded cap =>
       intro bs v rest h
       simp only [decVal] at h
@@ -943,7 +1075,7 @@ theorem encVal_decVal_eq : ∀ (t : Ty) (bs : List UInt8) (v : Value t) (rest : 
             subst hvf
             subst hvr
             rw [decVarNat?_encVarNat_eq bs n _ hd]
-            simp only [encVal]
+            simp only [encVal_bounded]
           · rw [dif_neg hn] at h
             simp at h
 
