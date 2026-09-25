@@ -314,6 +314,11 @@ def commitDuel : Kit.Duel.VectorSet where
   dir := commitDuelDir
   name := "commit-slice"
   generator := "SchemaCore.Commit"
+  -- The manifest sits next to Rust code (the artifact-headers gate's
+  -- shape contract checks the `//` spelling) — the DRY sweep: the
+  -- style is the VectorSet's OWN field, the emitter's only behavioral
+  -- parameter.
+  style := .doubleSlash
   vectors := duelProposals.map (fun np =>
     { path := commitDuelPath np.1
       contents := (proposalBytes np.2).toByteArray })
@@ -321,20 +326,12 @@ def commitDuel : Kit.Duel.VectorSet where
     (commitDuelPath np.1, expectOf np.2))
 
 /-- The duel's emitter (the manifest rides the TEXT lane, the vectors
-    the BINARY lane — the existing duel emitter's shape, a second
-    directory). -/
-def commitDuelEmitter : Kit.Emit.Emitter (DataRegistry Item) where
-  name := s!"duel:{commitDuel.name}"
-  style := .doubleSlash
-  specSource := "SchemaCore.Slice"
-  outputs := [commitDuel.dir ++ "/manifest.txt"]
-  binaryOutputs := commitDuel.vectors.map (·.path)
-  binaryOutputs_nodup := commitDuel.vectors_nodup
-  run _ :=
-    [ { path := commitDuel.dir ++ "/manifest.txt"
-      , contents := Kit.Duel.manifestBody commitDuel } ]
-  runBinary := some fun _ => commitDuel.vectors
-  law := some fun reg => (reg.items.map reg.nameOf).Nodup
+    the BINARY lane) — Kit.Duel's ONE emitter body (`emitterWith`) at
+    this lane's parameters: the DataRegistry spec + the registry law.
+    Never hand-rolled here (the DRY sweep). -/
+def commitDuelEmitter : Kit.Emit.Emitter (DataRegistry Item) :=
+  Kit.Duel.emitterWith commitDuel "SchemaCore.Slice"
+    (law := some fun reg => (reg.items.map reg.nameOf).Nodup)
 
 /-! ## The Rust consumer (the handwritten command + the duel's other side) -/
 
@@ -372,35 +369,12 @@ use schema_generated::{dec_u64, enc_varint};
 /// The duel manifest, compile-time pinned to the committed artifact.
 const MANIFEST: &str = include_str!(\"duel-commit/manifest.txt\");
 
-/// The generated crate's repo-root prefix (the manifest's rows are
-/// repo-root-relative; the test binary's cwd is the crate root).
-const CRATE_PREFIX: &str = \"crates/schema-generated/\";
-
-/// Kit.Duel's consumer contract: skip the 2-line GENERATED header and
-/// the `generator` provenance row, split each row on the tab.
-fn manifest_rows() -> Vec<(String, Option<String>)> {
-    MANIFEST
-        .lines()
-        .skip(2)
-        .filter(|line| !line.is_empty() && !line.starts_with(\"generator\t\"))
-        .map(|line| {
-            let mut parts = line.split('\\t');
-            let path = parts.next().expect(\"manifest row: path\").to_string();
-            let expect = parts.next().expect(\"manifest row: expectation\");
-            (path, expect.strip_prefix(\"decode \").map(str::to_string))
-        })
-        .collect()
-}
-
-/// Re-base a manifest row's repo-root-relative path to the crate root.
-fn crate_path(row_path: &str) -> &str {
-    match row_path.strip_prefix(CRATE_PREFIX) {
-        Some(p) => p,
-        None => row_path,
-    }
-}
-
-/// The fixture mirror (SchemaCore.Commit's fixtureSnap): version 1,
+"
+  ++ Kit.Duel.rustCratePrefix
+  ++ Kit.Duel.rustManifestRows "(String, Option<String>)"
+      "(path, expect.strip_prefix(\"decode \").map(str::to_string))"
+  ++ Kit.Duel.rustCratePath
+  ++ "/// The fixture mirror (SchemaCore.Commit's fixtureSnap): version 1,
 /// two accounts, an empty ledger.
 #[derive(Clone)]
 struct Account {

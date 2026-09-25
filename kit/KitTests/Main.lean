@@ -63,8 +63,10 @@ def bitOptIso : Iso Bool (Option Unit) where
   inv_to b := by cases b <;> rfl
 
 /-- The honest wire codec for one bit over small naturals: bytes 0/1,
-    policy `n < 2`, decode refuses everything else. -/
-def bitEncode : Bool → Nat := fun b => cond b 1 0
+    policy `n < 2`, decode refuses everything else. The encode IS the
+    upstream `Bool.toNat` (the dupDefBodies discipline: the upstream
+    declaration cited, never copied). -/
+def bitEncode : Bool → Nat := Bool.toNat
 def bitDecode : Nat → Option Bool := fun n => if n < 2 then some (n % 2 == 1) else none
 def bitPolicy : Nat → Prop := fun n => n < 2
 
@@ -74,7 +76,7 @@ def bitCodec : Codec Nat Bool where
   policy := bitPolicy
   decode_encode := by
     intro b
-    cases b <;> simp [bitEncode, bitDecode, cond]
+    cases b <;> simp [bitEncode, bitDecode]
   decode_some_policy := by
     intro a b h
     unfold bitDecode at h
@@ -395,8 +397,15 @@ def toyR : Rel Nat (Nat → Nat) := fun n f => ∀ acc, f acc = n + acc
 
 def toyLeaf₁ : Nat → Nat := fun n => n
 def toyUn₁ : Nat → Nat := fun a => a + a
-def toyBin₁ : Nat → Nat → Nat := fun a b => a + b
-def toyLeaf₂ : Nat → Nat → Nat := fun n acc => n + acc
+/-- The direct-side binary row: the sum. Its body is shared with the
+    accumulator-side leaf `toyLeaf₂` below (the dupDefBodies
+    discipline: one definition, two roles — never a copy). The row is
+    `Nat.add` itself — the upstream constant cited, never re-spelled
+    (the dupDefBodies upstream class). -/
+def toyBin₁ : Nat → Nat → Nat := Nat.add
+/-- The accumulator-side leaf (state + acc): the SAME body as the
+    direct side's binary row `toyBin₁` — shared, not copied. -/
+def toyLeaf₂ : Nat → Nat → Nat := toyBin₁
 def toyUn₂ : (Nat → Nat) → Nat → Nat := fun f acc => f (f acc)
 def toyBin₂ : (Nat → Nat) → (Nat → Nat) → Nat → Nat := fun f g acc => f (g acc)
 
@@ -2245,6 +2254,8 @@ hs✝ : a1.Sem r
 ⊢ False
 ---
 error: `simp` made no progress
+---
+error: [KB0009] error: declare_bridge bt5: the generated theorem failed to elaborate — wrongness does not elaborate (a refused bridge commits nothing; Lean's sorry recovery never lands)
 -/
 #guard_msgs in
 declare_bridge bt5 := sabExpCheck, BExp.Sem where

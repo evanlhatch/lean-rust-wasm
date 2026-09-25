@@ -301,3 +301,23 @@ open SchemaCore
 /-- info: 'SchemaCore.Fixed.val_codecLegal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms SchemaCore.Fixed.val_codecLegal
+
+/-! ## The writable-views lane (SchemaCore.View — the lens laws' cone:
+     core-triple at most; the determinacy consumption rides the Keys
+     lane's own cone) -/
+
+/-- info: 'SchemaCore.viewPut_get' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.viewPut_get
+
+/-- info: 'SchemaCore.viewPut_preserves' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.viewPut_preserves
+
+/-- info: 'SchemaCore.KeyDecl.filter_matches_le_one' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.filter_matches_le_one
+
+/-- info: 'SchemaCore.keyedViewLens' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.keyedViewLens

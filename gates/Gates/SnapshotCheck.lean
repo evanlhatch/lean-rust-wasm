@@ -55,7 +55,7 @@ def snapshotPath : System.FilePath := "notes/universe.snapshot"
 
 /-- `gates snapshot-check [--write]` — exit 1 on any refusal. -/
 unsafe def run (write : Bool) : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "snapshot-check" pkg fun env => do
     let fresh ←
       match SchemaCore.snapshotOfEnv env with

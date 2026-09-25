@@ -82,7 +82,13 @@ Core-only (imports SchemaCore.Keys + SchemaCore.Pred — the cone rule).
 
 import SchemaCore.Keys
 import SchemaCore.Pred
+import Kit.ListExtras
 import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+-- The generic List lemmas (fold commutation, filterMap congruence, the
+-- Perm appends) are Kit.ListExtras' — the DRY sweep's ONE copy, never
+-- re-rolled here.
+open Kit.ListExtras
 
 namespace SchemaCore
 
@@ -106,14 +112,6 @@ def ColPath.set {n : String} {t : Ty} : {fs : List Field} →
   | _, .here, .cons _ vs, v => .cons v vs
   | _, .there p, .cons a vs, v => .cons a (p.set vs v)
 
-/-- A name inequality as a Bool pin (the write-spine lemmas' small
-    step; core ships the contrapositive `not_eq_of_beq_eq_false`). -/
-theorem String.beq_false_of_ne' {a b : String} (h : a ≠ b) :
-    (a == b) = false := by
-  cases hb : (a == b) with
-  | false => rfl
-  | true => exact absurd (eq_of_beq hb) h
-
 /-- The projection is INVISIBLE to a write at another column: setting
     column `n` leaves the projection at `m ≠ n` unchanged (the legacy
     `ColPath.set_project?_neutral`). -/
@@ -128,7 +126,7 @@ theorem ColPath.set_project?_neutral {n : String} {t : Ty} :
       cases row with
       | cons a vs =>
           have hnm : n ≠ m := fun h => hm h.symm
-          simp only [ColPath.set, RowVals.project?, String.beq_false_of_ne' hnm]
+          simp only [ColPath.set, RowVals.project?, beq_false_of_ne hnm]
           rfl
   | there p ih =>
       intro row v m hm
@@ -362,40 +360,6 @@ theorem Pred.check_applySets {fs : List Field} (p : Pred fs) :
 
 /-! ## Law 3 — two write folds with disjoint columns commute -/
 
-/-- A step that commutes with every element of a fold pushes through
-    the fold (generic — reused by the keyed delta's commutation). -/
-theorem foldl_step_push {α β : Type} {f : β → α → β}
-    {s : List α} {c : α}
-    (hc : ∀ c₂ ∈ s, ∀ b, f (f b c) c₂ = f (f b c₂) c) :
-    ∀ b, s.foldl f (f b c) = f (s.foldl f b) c := by
-  induction s with
-  | nil => intro _; rfl
-  | cons c₂ rest ih =>
-      intro b
-      simp only [List.foldl_cons]
-      show rest.foldl f (f (f b c) c₂) = f (rest.foldl f (f b c₂)) c
-      rw [hc c₂ (List.mem_cons_self) b]
-      exact ih (fun c' hc' => hc c' (List.mem_cons_of_mem c₂ hc')) _
-
-/-- Adjacent-block exchange for a fold of pairwise-commuting steps
-    (generic). -/
-theorem foldl_append_comm {α β : Type} {f : β → α → β}
-    {s₁ s₂ : List α}
-    (hc : ∀ c₁ ∈ s₁, ∀ c₂ ∈ s₂, ∀ b, f (f b c₁) c₂ = f (f b c₂) c₁) :
-    ∀ b, (s₁ ++ s₂).foldl f b = (s₂ ++ s₁).foldl f b := by
-  induction s₁ with
-  | nil => intro b; simp
-  | cons c₁ s₁' ih =>
-      intro b
-      simp only [List.cons_append, List.foldl_cons]
-      rw [ih (fun x hx => hc x (List.mem_cons_of_mem c₁ hx)) (f b c₁)]
-      show (s₂ ++ s₁').foldl f (f b c₁) = (s₂ ++ c₁ :: s₁').foldl f b
-      rw [List.foldl_append, List.foldl_append]
-      show s₁'.foldl f (s₂.foldl f (f b c₁))
-        = s₁'.foldl f (f (s₂.foldl f b) c₁)
-      rw [foldl_step_push (f := f) (s := s₂) (c := c₁)
-        (fun c₂ hc₂ b' => hc c₁ (List.mem_cons_self) c₂ hc₂ b') b]
-
 /-- LAW 3: two SET folds with DISJOINT columns commute (the legacy
     `applySets_comm` — the value-read premises are gone: the values are
     literals, so disjoint names are the whole premise). -/
@@ -571,42 +535,12 @@ theorem newRow_bind_keepRow (c : UpdateCompat u₁ u₂ rows) (r : RowVals fs)
   · rw [if_neg h₂]
     rfl
 
-/-- Nested filterMap as a per-element bind (the lift bridge). -/
-@[nolint linter.guestlang.zeroCitation "load-bearing: the update-commutativity law stack — consumed via `apply2_comm` (pinned by SchemaTests.Main's renameRestockCompat witness)"]
-theorem filterMap_filterMap {α β γ : Type} {f : α → Option β}
-    {g : β → Option γ} :
-    ∀ l : List α, (l.filterMap f).filterMap g
-      = l.filterMap (fun a => (f a).bind g) := by
-  intro l
-  induction l with
-  | nil => rfl
-  | cons a as ih =>
-      simp only [List.filterMap_cons]
-      cases h : f a with
-      | none =>
-          simpa [h] using ih
-      | some b =>
-          simp only [List.filterMap_cons]
-          cases h' : g b with
-          | none => simpa [h'] using ih
-          | some cres => simp [h', ih]
-
-/-- Pointwise filterMap congruence (core ships `filter_congr` only). -/
-@[nolint linter.guestlang.zeroCitation "load-bearing: the update-commutativity law stack — consumed via `apply2_comm` (pinned by SchemaTests.Main's renameRestockCompat witness)"]
-theorem filterMap_congr {α β : Type} {f g : α → Option β} {l : List α}
-    (h : ∀ x ∈ l, f x = g x) : l.filterMap f = l.filterMap g := by
-  induction l with
-  | nil => rfl
-  | cons x xs ih =>
-      simp only [List.filterMap_cons]
-      rw [h x (List.mem_cons_self), ih (fun y hy => h y (List.mem_cons_of_mem x hy))]
-
 /-- The keep-channels commute at the table (Law 4's core). -/
 @[nolint linter.guestlang.zeroCitation "load-bearing: the update-commutativity law stack — consumed via `apply2_comm` (pinned by SchemaTests.Main's renameRestockCompat witness)"]
 theorem filterMap_keepRow_comm (c : UpdateCompat u₁ u₂ rows) :
     (rows.filterMap u₂.keepRow).filterMap u₁.keepRow
       = (rows.filterMap u₁.keepRow).filterMap u₂.keepRow := by
-  rw [filterMap_filterMap, filterMap_filterMap]
+  rw [List.filterMap_filterMap, List.filterMap_filterMap]
   exact filterMap_congr (fun r _ => (c.keepRow_bind_comm r).symm)
 
 /-- u₁'s inserts over u₂'s kept table = over the original table. -/
@@ -614,7 +548,7 @@ theorem filterMap_keepRow_comm (c : UpdateCompat u₁ u₂ rows) :
 theorem filterMap_newRow_keepRow (c : UpdateCompat u₁ u₂ rows) :
     (rows.filterMap u₂.keepRow).filterMap u₁.newRow
       = rows.filterMap u₁.newRow := by
-  rw [filterMap_filterMap]
+  rw [List.filterMap_filterMap]
   exact filterMap_congr (fun r hr => c.newRow_bind_keepRow r hr)
 
 /-- A refused table passes the keep-channel untouched. -/
@@ -673,28 +607,6 @@ theorem refused_newRows (c : UpdateCompat u₁ u₂ rows) :
   | false => rfl
 
 end UpdateCompat
-
-/-- The cons-through-append shuffle (the append-comm step). -/
-theorem permConsAppend {α : Type} (x : α) :
-    ∀ (l₂ xs : List α), (x :: (l₂ ++ xs)).Perm (l₂ ++ x :: xs) := by
-  intro l₂
-  induction l₂ with
-  | nil => intro _; exact List.Perm.refl _
-  | cons y ys ih =>
-      intro xs
-      show (x :: y :: (ys ++ xs)).Perm (y :: (ys ++ x :: xs))
-      exact (List.Perm.swap y x (ys ++ xs)).trans (List.Perm.cons y (ih xs))
-
-/-- `l₁ ++ l₂ ~ l₂ ++ l₁` (core ships `Perm.append_left`/`append_right`
-    but not append-commutativity). -/
-theorem permAppendComm {α : Type} :
-    ∀ (l₁ l₂ : List α), (l₁ ++ l₂).Perm (l₂ ++ l₁) := by
-  intro l₁ l₂
-  induction l₁ with
-  | nil => rw [List.nil_append, List.append_nil]
-  | cons x xs ih =>
-      show (x :: (xs ++ l₂)).Perm (l₂ ++ x :: xs)
-      exact (List.Perm.cons x ih).trans (permConsAppend x l₂ xs)
 
 /-- LAW 5a (the general form): compatible updates commute UP TO
     PERMUTATION of the final table (the insert blocks swap — row order
@@ -835,13 +747,12 @@ theorem keyImgs_nil {fs : List Field} {key : String} :
     keyImgs fs key [] = [] := rfl
 
 /-- The BEQ-FALSE direction of the lawful equality (the legacy
-    `FieldVal.beq_eq_false_pair_of_ne` — the new beq is UNCONDITIONALLY
-    lawful, so the codec-closure hypotheses are gone). -/
+    `FieldVal.beq_eq_false_pair_of_ne`): core's `beq_false_of_ne` at
+    the FieldVal instance (the DRY sweep — the case-bash twin is gone,
+    the sites cite core through this one-line bridge). -/
 theorem FieldVal.beq_false_of_ne {a b : FieldVal} (h : a ≠ b) :
-    a.beq b = false := by
-  cases hb : a.beq b with
-  | false => rfl
-  | true => exact absurd ((FieldVal.beq_eq_true_iff_eq a b).mp hb) h
+    a.beq b = false :=
+  _root_.beq_false_of_ne h
 
 /-- `map` is the identity when every element is fixed. -/
 theorem map_eq_self_of_forall {α : Type} {f : α → α} {l : List α}

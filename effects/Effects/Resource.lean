@@ -61,6 +61,7 @@ Core-only: no mathlib, no Batteries (the cone rule). Imports Kit.Change
 -/
 
 import Kit.Change
+import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
 
 namespace Effects.Resource
 
@@ -75,8 +76,10 @@ def NoDup' : List Rsc → Prop
   | [] => True
   | f :: rest => f ∉ rest ∧ NoDup' rest
 
+@[nolint linter.guestlang.zeroCitation "load-bearing: the invariant's base case — consumed by `dropL_nodup` in this module + the tests' fixture contexts (EffectsTests ctx0/propSplit)"]
 theorem noDup'_nil : NoDup' ([] : List Rsc) := ⟨⟩
 
+@[nolint linter.guestlang.zeroCitation "load-bearing: the invariant's cons case — consumed by `dropL_nodup` in this module + the tests' fixture contexts (EffectsTests ctx0/propSplit)"]
 theorem noDup'_cons {f : Rsc} {rest : List Rsc}
     (hf : f ∉ rest) (hnd : NoDup' rest) : NoDup' (f :: rest) := ⟨hf, hnd⟩
 
@@ -90,6 +93,7 @@ def dropL : List Rsc → Rsc → List Rsc
 
 /-- THE spent fact: with a duplicate-free context, the spent resource
     is gone from the split. -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by `Ctx.spent` (the packaged spent fact the split's type rides)"]
 theorem dropL_spent (c : List Rsc) (h : Rsc) (hnd : NoDup' c) :
     h ∉ dropL c h := by
   cases c with
@@ -108,6 +112,7 @@ theorem dropL_spent (c : List Rsc) (h : Rsc) (hnd : NoDup' c) :
 
 /-- Context splitting: every OTHER resource survives the split — the
     discipline's whole content (consume `h`, carry the rest). -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by `dropL_nodup` + `Ctx.kept_survive` in this module (the kept law the tests pin at data level)"]
 theorem dropL_kept (c : List Rsc) (h g : Rsc) (hne : g ≠ h) (hnd : NoDup' c) :
     g ∈ dropL c h ↔ g ∈ c := by
   cases c with
@@ -138,6 +143,7 @@ theorem dropL_kept (c : List Rsc) (h g : Rsc) (hne : g ≠ h) (hnd : NoDup' c) :
           exact List.mem_cons_of_mem f ((dropL_kept rest h g hne h2).mpr hr)
 
 /-- The split preserves the invariant (the context stays a context). -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by `Ctx.drop` (the split preserves the context's set shape)"]
 theorem dropL_nodup (c : List Rsc) (h : Rsc) (hnd : NoDup' c) :
     NoDup' (dropL c h) := by
   cases c with
@@ -170,11 +176,13 @@ def Ctx.drop (c : Ctx) (h : Rsc) : Ctx :=
 
 /-- Context splitting: every other resource survives (the kept law,
     packaged over the context). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (split_kept) + EffectsTests.Axioms (#print axioms); the kept law, packaged over the context"]
 theorem Ctx.kept_survive (c : Ctx) (h g : Rsc) (hne : g ≠ h) :
     g ∈ (c.drop h).elems ↔ g ∈ c.elems :=
   dropL_kept c.elems h g hne c.nodup
 
 /-- THE spent fact, packaged: the spent resource is gone. -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by `Handle.consume` (the spent fact rides the split's type)"]
 theorem Ctx.spent (c : Ctx) (h : Rsc) : h ∉ (c.drop h).elems :=
   dropL_spent c.elems h c.nodup
 
@@ -195,6 +203,7 @@ def Handle.consume {c : Ctx} {h : Rsc} (_hd : Handle c h) :
     exists — the reuse fails to typecheck (the teeth: EffectsTests
     constructs a handle in a spent context and the elaboration
     refuses). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests.Axioms (#print axioms); THE double-spend pin — the reuse fails to typecheck (the teeth's general statement)"]
 theorem Handle.split_disallows {c : Ctx} {h : Rsc} (hd : Handle c h) :
     ¬ (h ∈ hd.consume.1.elems) :=
   hd.consume.2
@@ -207,6 +216,7 @@ def spendCount : Nat → Nat → Option Nat := Kit.monusApply
 
 /-- The counted composition law: two spends are one spend of the sum
     (the monus compose — `Kit.monusApply_compose`, cited). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (count_compose_pin) + EffectsTests.Axioms (#print axioms); the counted composition law (Kit.monusApply_compose, cited)"]
 theorem spendCount_compose (s a b : Nat) :
     spendCount s (a + b)
       = (spendCount s a).bind (fun r => spendCount r b) :=
@@ -218,7 +228,15 @@ theorem spendCount_compose (s a b : Nat) :
     level. The refusal exists ONLY at the split's type level
     (`Handle.split_disallows`). This is why `Effects.Basic`'s row and
     this count can NEVER be the whole discipline. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (count_blind_pin) + EffectsTests.Axioms (#print axioms); D7's counted face — the count truncates, never refuses"]
 theorem monus_cannot_refuse (d : Nat) : spendCount 0 d = some 0 := by
   simp [spendCount, Kit.monusApply]
+
+-- The Prop-face projections the structures auto-generate — the
+-- discipline's API (the context's set-discipline field, the handle's
+-- evidence field: the permission IS the proof), never cited by name
+-- outside.
+attribute [nolint linter.guestlang.zeroCitation "public API: the discipline's Prop-face field — the context's set-discipline row (the spent fact is only available against a duplicate-free context) / the handle's evidence field (the permission IS the proof, rung 1); constructed by the tests' fixtures, read when the registry lane's resource table mounts"]
+  Ctx.nodup Handle.live
 
 end Effects.Resource

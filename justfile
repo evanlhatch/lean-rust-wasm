@@ -10,7 +10,7 @@ build:
 # convention: `<Lib>Tests`, the slice's historical `SchemaTests` kept);
 # a gates row (the manifest discipline) checks the lakefile's test exes
 # against this list, so a new library that forgets its entry fails CI.
-test_libs := "KitTests TextKitTests TestingKitTests SchemaTests WasmCoreTests LintKitTests WitTests MachinesTests ZSetTests InspectorTests DatalogTests ScaffoldTests CostTests AnalysisTests QueryTests GuestTests VortexTests EffectsTests"
+test_libs := "KitTests TextKitTests TestingKitTests SchemaTests WasmCoreTests LintKitTests WitTests MachinesTests ZSetTests InspectorTests DatalogTests ScaffoldTests CostTests AnalysisTests QueryTests GuestTests VortexTests EffectsTests CircuitTests ComponentTests ContractsTests GatesTests"
 
 test:
 	lake build
@@ -26,6 +26,7 @@ lint:
 # the full battery's cost is the kernel-check's module replay.
 check:
 	lake build
+	lake exe gates packages-check
 	lake exe gates gen-check
 	lake exe gates docs-check
 	lake exe gates code-registry-check
@@ -36,12 +37,22 @@ check:
 	lake exe lintkit
 
 # The gates machine: the gate registry's `all` — one driver, every row,
-# first failure stops (notes/v3/09-gates-ops.md §3). Rows: axioms,
-# docs-check, gen-check, code-registry-check, snapshot-check, audit,
-# artifact-headers, native-policy, coverage, kernel-check. The byte-tie's
-# writer side is `just gen`. THIS is the integration battery.
+# first failure stops (notes/v3/09-gates-ops.md §3). Rows: packages-check,
+# axioms, docs-check, gen-check, code-registry-check, snapshot-check,
+# audit, artifact-headers, native-policy, coverage, kernel-check,
+# ownership, breaking. The byte-tie's writer side is `just gen` (the
+# component lane's: `just componentgen`). THIS is the integration battery.
 gates:
 	lake exe gates all
+
+# The impact-aware dev loop (09 §6): the change set (jj, fallback git)
+# → affected modules → affected artifacts → ONLY their gates. Any gap
+# widens to the full run (the conservatism invariant: never
+# under-reports) — until the artifact ledger lands, that is every run,
+# honestly.
+impacted:
+	lake build
+	lake exe gates impacted
 
 # The schema regen (the byte-tie's writer side: regen + commit the
 # artifact; a drift with no regen fails `just gates`).
@@ -57,6 +68,13 @@ wasmgen:
 
 # Single gates (the loud re-baseline: `just gates-axioms-write` refuses a
 # non-empty diff without `--accept-drift` — append it by hand).
+# The gated-table drift guard (the single gated set: Gates.Packages'
+# table × the lakefile, both directions + every row root's source).
+gates-packages-check:
+	lake exe gates packages-check
+
+# The loud re-baseline: `just gates-axioms-write` refuses a
+# non-empty diff without `--accept-drift` — append it by hand.
 gates-axioms:
 	lake exe gates axioms
 
@@ -111,3 +129,10 @@ gates-ownership:
 # verdict + the exit-code discipline; unremedied = 2, the loud warning).
 gates-breaking:
 	lake exe gates breaking
+
+# The component slice regen (the component lane's writer side: the
+# world text + the component bytes + the .hdr sidecar through the emit
+# spine; the SKEW CHECK runs at generation — a world/component drift
+# refuses loudly, nothing written).
+componentgen:
+	lake exe componentgen

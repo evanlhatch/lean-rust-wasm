@@ -17,16 +17,22 @@ re-exported — this module re-exports by importing):
 - `SchemaCore.Codec` — the binary value lane (the wire grade over
   `Value`) + the append-form master law.
 - `SchemaCore.Derive` — the GENERIC derivation layer over the
-  description: the record codec (`deriveEnc`/`deriveDec` + the
-  append-form law `deriveCodec_correct` + the exact-image
-  `deriveDec_eq`), the wire grade `deriveCodec`, and the row bridge
-  (`toRowF`/`ofRowF` + `rowBridgeIso`) — each law proved ONCE over the
+  description: the record codec as ALGEBRA values over the ONE walk
+  (`foldDescr` — 16-surface §4.4's functorial deepening), the
+  correctness claims as claim algebras discharged by the ONE generic
+  theorem `law_of_rows` (the append-form law `deriveCodec_correct` +
+  the exact-image `deriveDec_eq` are instances), the wire grade
+  `deriveCodec`, and the row bridge (`toRowF`/`ofRowF` +
+  `rowBridgeIso`) — each law proved ONCE over the
   description structure.
 - `SchemaCore.DeriveMeta` — the deriving-handler mounts
   (`deriving WireCodec`, `deriving row_bridge`): the per-record thin
   wrappers, the curated refusals (the Diag envelope), lazily per
   capability.
 - `SchemaCore.Emit` — the slice's emitter + the shared regen core.
+- `SchemaCore.Emit.Journal` — the journal duel's emitter: the Event
+  lane's golden bytes for the `mandate-delta` crate (the delta/journal
+  wire's differential vectors, Kit.Duel's convention).
 - `SchemaCore.Snapshot` — the universe snapshot (the registry-state
   serialization: the canonical sorted one-line-per-item format, the
   total print/parse pair, the PROVED round trip `parse_print`, the
@@ -59,10 +65,34 @@ re-exported — this module re-exports by importing):
   face + the join faces under the stable-ids fragment), the named fallback
   checker for deltas outside the fragment, and the agreement theorem — the
   maintained relation IS the recomputed relation.
+- `SchemaCore.View` — the writable-views lane (02 §7's relational lenses):
+  the view = selection + projection over the keyed table's rows (the
+  writeback-TYPED column twin of `Query.Cols`), the reader laws over the
+  write spine, the WRITABLE FRAGMENT derived from the key's determinacy
+  (the fiber is at most one under the checked `uniqueOn`), the TOTAL
+  classifier whose refusals carry the ambiguity as data, the lens
+  (`ViewLens`/`keyedViewLens`) with both round-trip laws as fields
+  (read-after-write; unchanged-view preservation), the complement frame
+  (the unprojected columns survive), and the delta integration (the
+  applied edit's verdict carries the shared `RowDelta` + the post-state
+  through the keyed applicator).
 - `SchemaCore.Profile` — the semantic-profiles lane (16-surface §4.5):
   the closed `Profile` enum + the erasing phantom wrapper + the
   deterministic-float model (`Fixed` — the fixed-point carrier, the
   `Money Cents` shape) with its promise/forfeit laws.
+- `SchemaCore.Confluence` — the coordination classifier (02 §8's
+  invariant confluence): the four-row verdict
+  (`safeUnderMerge` / `safeUnderPartition` / `requiresCoordination`
+  with the remedy named / `unknown` honestly), the proved sufficient
+  condition (the pair commutes via the update lane's `UpdateCompat`
+  pack AND the invariant is merge-closed — `MergeSafe.ofSufficient`
+  earns the ∀-tables claim from the decidable faces), the overdraw
+  witness at the balance carrier (the doctrine's own example: two
+  individually-valid withdrawals jointly overdraw — the witness as
+  data, the classifier refusing the safe call), the counterexample
+  query returning the violating rows as data, and the Prop-indexed
+  obligation rows (the provided-table claims at `decidableNow`; the
+  ∀-tables claim at the loud `provedAtElab`-only open row).
 
 The five questions (notes/v3/01-core.md): answered per submodule (the
 list above); the umbrella itself answers none — it is the import
@@ -78,6 +108,7 @@ import SchemaCore.Item
 import SchemaCore.RowVals
 import SchemaCore.Register
 import SchemaCore.Emit
+import SchemaCore.Emit.Journal
 import SchemaCore.Snapshot
 import SchemaCore.Diff
 import SchemaCore.Describe
@@ -93,3 +124,5 @@ import SchemaCore.EntityMachine
 import SchemaCore.Violate
 import SchemaCore.Commit
 import SchemaCore.IncViolate
+import SchemaCore.View
+import SchemaCore.Confluence

@@ -33,7 +33,11 @@ record (`gen/schema-slice.wit`) and the mandate tree's WIT emitter:
   their consumers: variant items port (the `variant` decl), guest
   adapter generation (funcs + worlds), the skew check (its parser).
   Growing the closed `Ty`/item grammars is compiler-driven (every
-  fold's exhaustiveness).
+  fold's exhaustiveness). PARTIAL GROWTH LANDED: the world carrier
+  (`Wit.World` — funcs + worlds as data over the records-only item
+  model) rides the component lane's emission (`Guest.Component`);
+  variants/resources/`use` are still out, with the same named
+  consumers.
 - **no parser** — `Wit.Render` is ONE-directional (AST → text, total).
   Text → AST (the skew-check's parser; the round-trip law) is a LATER
   order — no round-trip claim is made here.

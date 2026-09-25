@@ -92,6 +92,7 @@ The five questions (notes/v3/01-core.md):
 import Wit
 import Wit.Render
 import TextKit.Combinators
+import TextKit.Literals
 import TextKit.Lemmas
 import Kit.Correspondence
 
@@ -545,14 +546,38 @@ theorem tok_self (s : String) (off : Nat) (rest : List Char) :
     exact List.drop_left
   simp [Cursor.advBy, hd]
 
-/-- A literal whose head differs from the input's head is refused (the
-    error value is `tok`'s own). -/
+/-- The token refusal, cursor-head face (the miss direction's shared
+    base): a nonempty literal whose head differs from the input's head
+    is refused (the error value is `tok`'s own). -/
 theorem tok_ne (s : String) (off : Nat) (c0 : Char) (w : List Char) (c : Char)
     (rest : List Char) (hc : s.toList = c0 :: w) (hne : c0 ≠ c) :
     TextKit.tok s ⟨off, c :: rest⟩ = .error (ParseError.base off [s!"'{s}'"]) := by
   unfold TextKit.tok
   rw [hc]
   simp [hne]
+
+/-- The token refusal, cursor-head face (the miss direction's shared
+    base for the arm lemmas): a nonempty literal whose head differs
+    from the cursor's head is refused, cursor offset carried. -/
+theorem tok_miss (s : String) (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ s.toList.head?) (hk : s ≠ "") :
+    TextKit.tok s ⟨off, cs⟩ = .error (ParseError.base off [s!"'{s}'"]) := by
+  have hne' : s.toList ≠ [] := by
+    intro h
+    exact hk (String.toList_inj.mp h)
+  unfold TextKit.tok
+  cases hs : s.toList with
+  | nil => rw [hs] at hne'; exact absurd rfl hne'
+  | cons c0 w =>
+      rw [hs] at hne
+      cases cs with
+      | nil => simp [List.isPrefixOf]
+      | cons c rest =>
+          have hc : c0 ≠ c := by
+            intro hcon
+            rw [hcon] at hne
+            simp at hne
+          simp [List.isPrefixOf, hc]
 
 /-! ### the name scanner (TextKit's satisfy + many, exactly) -/
 
@@ -818,6 +843,36 @@ theorem binaryArm_self (openS : String) (k : Ty → Ty → Ty) (a b : Ty)
     rw [h1]; omega
   rw [hoff]
 
+/-! ### the arms' miss direction (the shared refusal: the opener's
+    head ≠ the input's head → the arm refuses; proved ONCE per arm
+    shape over `tok_miss`, cited at every dispatch position) -/
+
+/-- An atom arm misses when the input's head differs from its
+    keyword's head (the token refusal, the curated set untouched). -/
+theorem atomArm_miss (kw : String) (s : Scalar) (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ kw.toList.head?) (hk : kw ≠ "") :
+    atomArm kw s ⟨off, cs⟩ = .error (tokErr off kw) := by
+  unfold atomArm tokErr
+  rw [tok_miss kw off cs hne hk]
+
+/-- A unary arm misses when the input's head differs from its
+    opener's head (the inner parser is never reached). -/
+theorem unaryArm_miss (openS : String) (k : Ty → Ty) (inner : GParser Ty)
+    (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ openS.toList.head?) (hk : openS ≠ "") :
+    unaryArm openS k inner ⟨off, cs⟩ = .error (tokErr off openS) := by
+  unfold unaryArm tokErr
+  rw [tok_miss openS off cs hne hk]
+
+/-- A binary arm misses when the input's head differs from its
+    opener's head (the inner parser is never reached). -/
+theorem binaryArm_miss (openS : String) (k : Ty → Ty → Ty) (inner : GParser Ty)
+    (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ openS.toList.head?) (hk : openS ≠ "") :
+    binaryArm openS k inner ⟨off, cs⟩ = .error (tokErr off openS) := by
+  unfold binaryArm tokErr
+  rw [tok_miss openS off cs hne hk]
+
 
 theorem ty_i64_list : (Render.ty (.atom .i64)).toList = ['i', '6', '4'] := rfl
 theorem ty_string_list : (Render.ty (.atom .string)).toList = ['s', 't', 'r', 'i', 'n', 'g'] := rfl
@@ -851,39 +906,33 @@ theorem tyP_ok (t : Ty) :
               rw [ty_atom, scalar_u64]
               simp only [tyP, tyArms]
               have hf1 : atomArm "bool" .bool ⟨off, "u64".toList ++ rest⟩
-                  = .error (tokErr off "bool") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "bool") :=
+                atomArm_miss "bool" .bool off _ (by simp) (by decide)
               rw [orElse_ok_right hf1
                 (orElse_ok_left (atomArm_self "u64" .u64 off rest hr))]
           | i64 =>
               rw [ty_atom, scalar_i64]
               simp only [tyP, tyArms]
               have hf1 : atomArm "bool" .bool ⟨off, "i64".toList ++ rest⟩
-                  = .error (tokErr off "bool") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "bool") :=
+                atomArm_miss "bool" .bool off _ (by simp) (by decide)
               have hf2 : atomArm "u64" .u64 ⟨off, "i64".toList ++ rest⟩
-                  = .error (tokErr off "u64") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "u64") :=
+                atomArm_miss "u64" .u64 off _ (by simp) (by decide)
               rw [orElse_ok_right hf1 (orElse_ok_right hf2
                 (orElse_ok_left (atomArm_self "i64" .i64 off rest hr)))]
           | string =>
               rw [ty_atom, scalar_string]
               simp only [tyP, tyArms]
               have hf1 : atomArm "bool" .bool ⟨off, "string".toList ++ rest⟩
-                  = .error (tokErr off "bool") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "bool") :=
+                atomArm_miss "bool" .bool off _ (by simp) (by decide)
               have hf2 : atomArm "u64" .u64 ⟨off, "string".toList ++ rest⟩
-                  = .error (tokErr off "u64") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "u64") :=
+                atomArm_miss "u64" .u64 off _ (by simp) (by decide)
               have hf3 : atomArm "i64" .i64 ⟨off, "string".toList ++ rest⟩
-                  = .error (tokErr off "i64") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "i64") :=
+                atomArm_miss "i64" .i64 off _ (by simp) (by decide)
               rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
                 (orElse_ok_left (atomArm_self "string" .string off rest hr))))]
   | option a ih =>
@@ -893,26 +942,18 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_left
               (unaryArm_self "option<" Ty.option a tyP f off rest hlen (by decide) ih)))))]
@@ -923,31 +964,21 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf5 : unaryArm "option<" Ty.option (tyP f)
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "option<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
+          have hf5 : unaryArm "option<" Ty.option (tyP f) ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "option<") :=
+            unaryArm_miss "option<" Ty.option (tyP f) off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_right hf5 (orElse_ok_left
               (unaryArm_self "list<" Ty.list a tyP f off rest hlen (by decide) ih))))))]
@@ -958,36 +989,24 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf5 : unaryArm "option<" Ty.option (tyP f)
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "option<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
-          have hf6 : unaryArm "list<" Ty.list (tyP f)
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "list<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
+          have hf5 : unaryArm "option<" Ty.option (tyP f) ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "option<") :=
+            unaryArm_miss "option<" Ty.option (tyP f) off _ (by simp) (by decide)
+          have hf6 : unaryArm "list<" Ty.list (tyP f) ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "list<") :=
+            unaryArm_miss "list<" Ty.list (tyP f) off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_right hf5 (orElse_ok_right hf6
               (orElse_ok_left (binaryArm_self "result<" Ty.result a b tyP f off rest hlen
@@ -999,41 +1018,27 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf5 : unaryArm "option<" Ty.option (tyP f)
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "option<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
-          have hf6 : unaryArm "list<" Ty.list (tyP f)
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "list<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
-          have hf7 : binaryArm "result<" Ty.result (tyP f)
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "result<") := by
-              unfold binaryArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
+          have hf5 : unaryArm "option<" Ty.option (tyP f) ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "option<") :=
+            unaryArm_miss "option<" Ty.option (tyP f) off _ (by simp) (by decide)
+          have hf6 : unaryArm "list<" Ty.list (tyP f) ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "list<") :=
+            unaryArm_miss "list<" Ty.list (tyP f) off _ (by simp) (by decide)
+          have hf7 : binaryArm "result<" Ty.result (tyP f) ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "result<") :=
+            binaryArm_miss "result<" Ty.result (tyP f) off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_right hf5 (orElse_ok_right hf6
               (orElse_ok_right hf7 (orElse_ok_left
@@ -1044,15 +1049,11 @@ theorem tyP_ok (t : Ty) :
 
 /-! ## the round-trip kit — the render→parse direction (05 §1's first law) -/
 
-/-! ### the literal charlists (the tiny local rfl family: one per
-    literal, the snapshot lane's `lparen` precedent) -/
+/-! ### the literal charlists — the SHARED tokens cite TextKit.Literals
+    (the ONE home: `lit_nl`/`lit_sp`/`lit_comma`/`lit_nlsp4`/`lit_sp4`/
+    `lit_colsp`); the per-format word + block spellings stay local (the
+    doctrine: per-format literals ARE the format's content) -/
 
-theorem L_nl : "\n".toList = ['\n'] := rfl
-theorem L_nlsp4 : "\n    ".toList = '\n' :: "    ".toList := rfl
-theorem L_sp : " ".toList = [' '] := rfl
-theorem L_sp4 : "    ".toList = [' ', ' ', ' ', ' '] := rfl
-theorem L_colsp : ": ".toList = ':' :: " ".toList := rfl
-theorem L_comma : ",".toList = [','] := rfl
 theorem L_ob : " {\n".toList = ' ' :: '{' :: '\n' :: [] := rfl
 theorem L_cb : "\n  }\n".toList = '\n' :: ' ' :: ' ' :: '}' :: '\n' :: [] := rfl
 theorem L_rbnl : "}\n".toList = '}' :: '\n' :: [] := rfl
@@ -1215,16 +1216,16 @@ theorem fieldsGo_ok (fs : List Field) :
             omega
           simp only [Render.fieldsTailJoin, Render.field, String.toList_append,
             List.cons_append, List.nil_append, List.append_assoc,
-            L_nl, L_sp4, fieldsGo, tok_nlsp4, fieldCore]
+            TextKit.lit_nl, TextKit.lit_sp4, fieldsGo, tok_nlsp4, fieldCore]
           rw [identP_self nameChar f.name (off + "\n    ".length)
               (": ".toList ++ ((Render.ty f.ty).toList
                 ++ (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))))
               (hn f (List.mem_cons_self))
-              (by simp [nameChar, L_colsp, TextKit.isIdentChar])]
+              (by simp [nameChar, TextKit.lit_colsp, TextKit.isIdentChar])]
           simp only [tok_self]
           have hr' : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).head?.all
               (fun c => !(TextKit.isIdentChar c || c == '-')) = true := by
-            simp [L_comma, TextKit.isIdentChar]
+            simp [TextKit.lit_comma, TextKit.isIdentChar]
           rw [tyP_ok f.ty fuel
               (off + "\n    ".length + f.name.length + ": ".length)
               (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))
@@ -1232,7 +1233,7 @@ theorem fieldsGo_ok (fs : List Field) :
                 have h3 := field_len f
                 have h4 : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).length
                     = 1 + (Render.fieldsTailJoin fs).length + sfx.length := by
-                  rw [List.length_append, L_comma, List.length_append,
+                  rw [List.length_append, TextKit.lit_comma, List.length_append,
                     String.length_toList, List.length_cons, List.length_nil]
                   omega
                 omega)
@@ -1287,16 +1288,16 @@ theorem fieldsP_ok (fs : List Field) :
             omega
           simp only [Render.fieldsJoin, Render.field, String.toList_append,
             List.cons_append, List.nil_append, List.append_assoc,
-            L_sp4, fieldsP, tok_sp4, fieldCore, List.head?_cons]
+            TextKit.lit_sp4, fieldsP, tok_sp4, fieldCore, List.head?_cons]
           rw [identP_self nameChar f.name (off + "    ".length)
               (": ".toList ++ ((Render.ty f.ty).toList
                 ++ (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))))
               (hn f (List.mem_cons_self))
-              (by simp [nameChar, L_colsp, TextKit.isIdentChar])]
+              (by simp [nameChar, TextKit.lit_colsp, TextKit.isIdentChar])]
           simp only [tok_self]
           have hr' : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).head?.all
               (fun c => !(TextKit.isIdentChar c || c == '-')) = true := by
-            simp [L_comma, TextKit.isIdentChar]
+            simp [TextKit.lit_comma, TextKit.isIdentChar]
           rw [tyP_ok f.ty fuel
               (off + "    ".length + f.name.length + ": ".length)
               (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))
@@ -1305,7 +1306,7 @@ theorem fieldsP_ok (fs : List Field) :
                 have h5 := fieldsJoin_len f fs
                 have h4 : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).length
                     = 1 + (Render.fieldsTailJoin fs).length + sfx.length := by
-                  rw [List.length_append, L_comma, List.length_append,
+                  rw [List.length_append, TextKit.lit_comma, List.length_append,
                     String.length_toList, List.length_cons, List.length_nil]
                   omega
                 omega)

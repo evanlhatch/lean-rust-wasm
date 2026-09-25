@@ -106,6 +106,7 @@ def encodeInstr : Instr → List UInt8
   | .localset n => 0x21 :: encVarNat n
   | .localtee n => 0x22 :: encVarNat n
   | .call fn => 0x10 :: encVarNat fn
+  | .callindirect ty => 0x11 :: (0x00 :: encVarNat ty)  -- the type index + the ONE table's 0x00
   | .mem op offset align =>
       [memOpcode op] ++ (encVarNat (align.getD (memAlignDefault op)) ++ encVarNat offset)
   | .op o => opOpcode o
@@ -140,11 +141,25 @@ def encodeFuncEntry (f : Func) : List UInt8 :=
   let bodyBytes := localsBytes ++ (encodeBody f.body ++ [0x0B])
   encVarNat bodyBytes.length ++ bodyBytes
 
-/-- One export entry: name (UTF-8, length-prefixed) + kind + index. -/
-def encodeExport (e : Export) : List UInt8 :=
+/-- One export entry: name (UTF-8, length-prefixed) + kind + index
+    (func kind 0x00, memory kind 0x02 — the binary format's). -/def encodeExport (e : Export) : List UInt8 :=
   let nameBytes := e.name.toByteArray.toList
   match e.desc with
   | .func idx => (encVarNat nameBytes.length ++ nameBytes) ++ (0x00 :: encVarNat idx)
+  | .memory idx => (encVarNat nameBytes.length ++ nameBytes) ++ (0x02 :: encVarNat idx)
+
+/-- One table entry: the funcref element type (0x70) + the limits
+    (no-max form 0x00, min = the entries' length — the table's size IS
+    its initialization). -/
+def encodeTable (t : Table) : List UInt8 :=
+  0x70 :: (0x00 :: encVarNat t.init.length)
+
+/-- One ACTIVE element segment (form 0x00: table 0 implied): the
+    offset expression `i32.const 0; end`, then the function indices in
+    order — the table's initialization face. -/
+def encodeElem (t : Table) : List UInt8 :=
+  0x00 :: ([0x41, 0x00, 0x0B]
+    ++ (encVarNat t.init.length ++ (t.init.map encVarNat |>.foldl (· ++ ·) [])))
 
 /-- A section: id + length-prefixed content. -/
 def encodeSection (id : UInt8) (content : List UInt8) : List UInt8 :=
@@ -155,8 +170,10 @@ def encodePreamble : List UInt8 :=
   [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]
 
 /-- THE module encoder: the minimal sections in the binary format's
-    fixed order (type 1, function 3, memory 5, export 7, code 10),
-    each elided when empty; `memMin = 0` omits memory. Total by
+    fixed order (type 1, function 3, table 4, memory 5, export 7,
+    element 9, code 10), each elided when empty; `memMin = 0` omits
+    memory, `tables = []` omits the table section, and the element
+    section covers only the tables WITH entries. Total by
     construction — every fold is structural, every size an encVarNat. -/
 def encodeModule (m : Module) : List UInt8 :=
   encodePreamble
@@ -166,11 +183,18 @@ def encodeModule (m : Module) : List UInt8 :=
     ++ (if m.funcs.isEmpty then [] else
         encodeSection 3 (encVarNat m.funcs.length ++ (m.funcs.map (fun f => encVarNat f.tyIdx)
           |>.foldl (· ++ ·) [])))
+    ++ (if m.tables.isEmpty then [] else
+        encodeSection 4 (encVarNat m.tables.length
+          ++ (m.tables.map encodeTable |>.foldl (· ++ ·) [])))
     ++ (if m.memMin = 0 then [] else
         encodeSection 5 (encVarNat 1 ++ [0x00] ++ encVarNat m.memMin))
     ++ (if m.exports.isEmpty then [] else
         encodeSection 7 (encVarNat m.exports.length
           ++ (m.exports.map encodeExport |>.foldl (· ++ ·) [])))
+    ++ (let elems := m.tables.filter (fun t => !t.init.isEmpty)
+        if elems.isEmpty then [] else
+        encodeSection 9 (encVarNat elems.length
+          ++ (elems.map encodeElem |>.foldl (· ++ ·) [])))
     ++ (if m.funcs.isEmpty then [] else
         encodeSection 10 (encVarNat m.funcs.length
           ++ (m.funcs.map encodeFuncEntry |>.foldl (· ++ ·) [])))

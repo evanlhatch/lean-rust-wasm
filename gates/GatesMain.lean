@@ -24,8 +24,11 @@ import Gates
 
 open Cli
 
+unsafe def runPackagesCheck (_p : Parsed) : IO UInt32 := Gates.PackagesCheck.run
+
 unsafe def runAxioms (p : Parsed) : IO UInt32 :=
   Gates.Axioms.run (p.hasFlag "write") (p.hasFlag "accept-drift")
+    ((p.flag? "package").map fun f => f.value)
 
 unsafe def runDocsCheck (_p : Parsed) : IO UInt32 := Gates.DocsCheck.run
 
@@ -41,7 +44,8 @@ unsafe def runAudit (_p : Parsed) : IO UInt32 := Gates.Audit.run
 
 unsafe def runArtifactHeaders (_p : Parsed) : IO UInt32 := Gates.ArtifactHeaders.run
 
-unsafe def runNativePolicy (_p : Parsed) : IO UInt32 := Gates.NativePolicy.run
+unsafe def runNativePolicy (p : Parsed) : IO UInt32 :=
+  Gates.NativePolicy.run ((p.flag? "package").map fun f => f.value)
 
 unsafe def runCoverage (p : Parsed) : IO UInt32 :=
   Gates.Coverage.run (p.hasFlag "write") (p.hasFlag "accept-drift") (p.hasFlag "strict")
@@ -52,7 +56,17 @@ unsafe def runOwnership (_p : Parsed) : IO UInt32 := Gates.Ownership.run
 
 unsafe def runBreaking (_p : Parsed) : IO UInt32 := Gates.Breaking.run
 
+unsafe def runImpacted (p : Parsed) : IO UInt32 :=
+  Gates.Impact.run (p.hasFlag "print-only")
+    ((p.flag? "paths").map fun f =>
+      (f.value.splitOn ",").map (·.trimAscii.toString) |>.filter (· != ""))
+
 unsafe def runAll (_p : Parsed) : IO UInt32 := Gates.runAll
+
+unsafe def packagesCheckCmd : Cmd := `[Cli|
+  "packages-check" VIA runPackagesCheck; ["0.1.0"]
+  "The gated-table drift guard: every lakefile [[lean_lib]] must have its \\n   Gates.Packages row (a new library without its gates row fails CI), \\n   every row must name a real library, and every row root's source file \\n   must exist. The single gated set: Gates.Packages' table."
+]
 
 unsafe def axiomsCmd : Cmd := `[Cli|
   "axioms" VIA runAxioms; ["0.1.0"]
@@ -65,6 +79,8 @@ unsafe def axiomsCmd : Cmd := `[Cli|
     "accept-drift";   "Deliberate re-baseline: allow --write to overwrite a NON-EMPTY diff \
       (a drifted report). Without it --write REFUSES any non-empty diff — \
       a re-baseline must not pre-authorize future taint (the baseline discipline)."
+    package : String; "Shard: scan ONE gated package (--package=<dir>, the \
+      child dispatch's own body; its report block is its stdout)."
 ]
 
 unsafe def docsCheckCmd : Cmd := `[Cli|
@@ -106,6 +122,19 @@ unsafe def breakingCmd : Cmd := `[Cli|
   "The breaking gate (notes/universe.snapshot vs the replayed registry): \n   the snapshot-pair diff (the net change over the name key) + the \n   three-way verdict + the exit-code discipline (clean=0, remedied=0 \n   with the evidence named, unremedied=2 — the loud warning). Requires build."
 ]
 
+unsafe def impactedCmd : Cmd := `[Cli|
+  "impacted" VIA runImpacted; ["0.1.0"]
+  "The impact-aware dev loop (09 §6): the VCS change set (jj, fallback \
+   git) → affected modules (the import-closure walk) → affected \
+   artifacts (the ledger's forward query) → ONLY their gates. Any gap \
+   in the graph's knowledge widens to the FULL run — the affected set \
+   never under-reports."
+
+  FLAGS:
+    "print-only";  "Print the verdict without running the gates."
+    paths;         "The manual change set: comma-separated paths (overrides the VCS diff)."
+]
+
 unsafe def allCmd : Cmd := `[Cli|
   "all" VIA runAll; ["0.1.0"]
   "Every registered gate in one run (the gate registry's driver)."
@@ -123,7 +152,11 @@ unsafe def artifactHeadersCmd : Cmd := `[Cli|
 
 unsafe def nativePolicyCmd : Cmd := `[Cli|
   "native-policy" VIA runNativePolicy; ["0.1.0"]
-  "The native_decide grandfathering gate: every gated declaration's axiom \\n   cone scanned for the `_native.native_decide.` trust base; uses outside \\n   the committed allowlist set FAIL, and a STALE allowlist entry (a module \\n   that no longer depends on native_decide) FAILS too — the ratchet is \\n   fail-closed both ways. Requires build."
+  "The native_decide grandfathering gate: every gated declaration's axiom \\n   cone scanned for the `_native.native_decide.` trust base; uses outside \\n   the committed allowlist set FAIL, and a STALE allowlist entry (a module \\n   that no longer depends on native_decide) FAILS too — the ratchet is \\n   fail-closed both ways. Runs one child process per gated package (the \\n   memory discipline). Requires build."
+
+  FLAGS:
+    package : String;  "Shard: scan ONE gated package (--package=<dir>, the \
+      child dispatch's own body)."
 ]
 
 unsafe def coverageCmd : Cmd := `[Cli|
@@ -154,7 +187,7 @@ unsafe def gatesCmd : Cmd := `[Cli|
   "gates" NOOP; ["0.1.0"]
   "The gates driver (the pipeline-as-machine row, notes/v3/09-gates-ops.md §3)."
 
-  SUBCOMMANDS: axiomsCmd; docsCheckCmd; genCheckCmd; codeRegistryCheckCmd; snapshotCheckCmd; auditCmd; artifactHeadersCmd; nativePolicyCmd; coverageCmd; kernelCheckCmd; ownershipCmd; breakingCmd; allCmd
+  SUBCOMMANDS: packagesCheckCmd; axiomsCmd; docsCheckCmd; genCheckCmd; codeRegistryCheckCmd; snapshotCheckCmd; auditCmd; artifactHeadersCmd; nativePolicyCmd; coverageCmd; kernelCheckCmd; ownershipCmd; breakingCmd; impactedCmd; allCmd
 ]
 
 unsafe def main (args : List String) : IO UInt32 :=

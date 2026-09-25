@@ -89,6 +89,19 @@ unsafe def main : IO UInt32 := do
       (fun _ f =>
         pure { items := r.reg.items.length
              , contentHash := Kit.Emit.bytesHash f.contents })
+    -- The JOURNAL DUEL's write (the Event lane's duel — the
+    -- mandate-delta crate's vectors: the manifest rides the text
+    -- lane, the vectors the binary loop; the SAME loop shape; the
+    -- spec is Unit — a pinned-constant vector set).
+    let _journalDuelRows ← Kit.Emit.runEmitters "schema"
+      [(SchemaCore.Emit.Journal.journalDuelEmitter, ())]
+      (fun _ f =>
+        pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    let _journalDuelBinRows ← Kit.Emit.runBinaryEmitters "schema"
+      [(SchemaCore.Emit.Journal.journalDuelEmitter, ())]
+      (fun _ f =>
+        pure { items := r.reg.items.length
+             , contentHash := Kit.Emit.bytesHash f.contents })
     -- The GOLDEN MODULE (the byte-tie's theorem face, 09 §2): the same
     -- regen run writes the committed goldens' Lean-side twin — the
     -- embedded bodies + the kernel-discharged tie theorems + the teeth

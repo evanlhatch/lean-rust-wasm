@@ -115,7 +115,7 @@ def coneOfRoot? : Name → Option Cone
   -- C0 tests + exe drivers (verified imports: their C0 lib + TestingKit
   -- + Lean — nothing cone-high).
   | `KitTests | `TestingKitTests | `TextKitTests => some .c0machinery
-  | `LintMain | `GatesMain => some .c0machinery
+  | `LintMain | `GatesMain | `GatesTests => some .c0machinery
   -- C1 domain cores + their tests + the schema package's own regen
   -- driver (verified imports: Kit/TextKit + each other; SchemaCore.Emit
   -- ← Wit/Wit.Render, same cone; SchemaMain ← SchemaCore + Lean).
@@ -132,9 +132,20 @@ def coneOfRoot? : Name → Option Cone
   -- composition joins, imports Kit only (the cone rule) — the
   -- ZSet/Cost precedent.
   | `Effects | `EffectsTests => some .c1domain
+  -- Contracts: the contract lanes' wp engine (notes/v3/08-capabilities.md
+  -- §36): requires/ensures + the wp transformer over the honest minimal
+  -- imperative fragment (skip/assign/seq/cond), over the effects lane's
+  -- State model — ONE state model, two lanes. The obligations ride
+  -- Kit.Obligation read-only (imports Kit.Obligation + Effects.Footprint
+  -- only — the cone rule; the ZSet/Cost precedent).
+  | `Contracts | `ContractsTests => some .c1domain
   | `Analysis | `AnalysisTests => some .c1domain
   | `Query | `QueryTests => some .c1domain
   | `Vortex | `VortexTests => some .c1domain
+  -- Circuit: the incremental circuit lane's seed (03 §8-9) — the
+  -- operator templates + the stepped delta over the Z-set substrate +
+  -- the substrate's query-fragment compilation (ZSet.Query).
+  | `Circuit | `CircuitTests => some .c1domain
   -- C2: the host-side tooling lanes — read the domain cores' public
   -- surfaces without being domain cores: Inspector ← SchemaCore.Check
   -- (+ Kit.Obligation, Lean); Scaffold ← Kit + TestingKit (the AppSpec →
@@ -152,6 +163,13 @@ def coneOfRoot? : Name → Option Cone
   -- content IS the app rung) + Scaffold's test root, which consumes
   -- DemoApp.Tests (C3) for the byte-tie and so sits at C3 honestly.
   | `DemoApp | `ScaffoldTests => some .c3app
+  -- LedgerApp: the dogfood skeleton's generated + hand-owned modules
+  -- (ScaffoldLedger lib, same discipline as DemoApp — the generator's
+  -- own output, the C3 app rung).
+  | `LedgerApp => some .c3app
+  -- ComponentTests: the component lane's battery + fixtures (the
+  -- GuestTests discipline: the tests ride the lane's cone).
+  | `ComponentTests => some .c2theory
   | _ => none
 
 /-- The per-importer-cone EXTERNAL ban (06 §8): the kernel cones C0/C1

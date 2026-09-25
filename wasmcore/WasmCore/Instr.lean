@@ -36,10 +36,14 @@ The subset is MINED from `legacy/lean/wasm-backend/WasmBackend/Wat.lean`
 (the 19 `Op` ctors, verbatim), locals, direct calls, control flow,
 one-page memory ops. DELIBERATE EXCLUSIONS (each lands with its first
 consumer — the leftover rule): globals, `return_call`,
-`call_indirect`, `memory.copy`, `select`'s typed/reference extension,
+`memory.copy`, `select`'s typed/reference extension,
 float and SIMD ops (floats are VALUE types here; float instructions
 arrive with the op table), block result types, `raw` (the legacy
-splice escape hatch has no consumer in a fresh core).
+splice escape hatch has no consumer in a fresh core). LANDED: the
+indirect-call lane's `callindirect` (the funcref-table dispatch — the
+closures' first-class application face; the type index is the type
+section's, the table index is the wire's constant 0 — the ONE table,
+`Module.tableAt`).
 
 The five questions (notes/v3/01-core.md):
 
@@ -98,6 +102,7 @@ inductive Instr where
   | i64const (n : Nat)
   | localget (n : Nat) | localset (n : Nat) | localtee (n : Nat)
   | call (fn : Nat)
+  | callindirect (ty : Nat)
   | mem (op : MemOp) (offset : Nat) (align : Option Nat)
   | op (o : Op)
   | br (depth : Nat) | brif (depth : Nat)
@@ -123,6 +128,7 @@ def iSize : Instr → Nat
   | .localset _ => 1
   | .localtee _ => 1
   | .call _ => 1
+  | .callindirect _ => 1
   | .mem _ _ _ => 1
   | .op _ => 1
   | .br _ => 1

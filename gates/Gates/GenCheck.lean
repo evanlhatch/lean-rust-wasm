@@ -18,6 +18,15 @@ compare the gate ADOPTS (never re-encodes): the bytes tie EXACTLY (a
 binary has no volatile region) and the committed `.hdr` sidecar must
 name the fresh bytes' hash. The text lane's `tieOf` is untouched.
 
+THE COMPONENT LANE (the re-audit's finding: the component artifacts'
+byte-tie ran ONLY inside ComponentTests — outside the gates spine, a
+tampered `gen/component-slice.wasm` passed every gate). The same two
+loops fold the component lane's regen — `Guest.Component.regen` over
+`ComponentTests.Pipeline`'s ONE pipeline copy (the writer
+`componentgen`'s own; the LCNF re-run rides it — the writer and the
+gate share one encoding), the text lane through `tieOf`, the binary
+lane + `.hdr` sidecars through `tieBytes`.
+
 The teeth: hand-edit the committed artifact → gen-check fails →
 `just gen` restores. A gate without teeth is decoration (09).
 
@@ -39,6 +48,7 @@ import Gates.Packages
 import Gates.Common
 import SchemaCore
 import WasmCore
+import ComponentTests.Pipeline
 
 open Lean
 
@@ -75,7 +85,7 @@ unsafe def run : IO UInt32 := do
   -- withPkgEnv replays the extensions (loadExts := true) and absorbs the
   -- sysroot init + the LOAD FAILED exit (this gate's name kept in the
   -- failure line).
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "gen-check" pkg fun env => do
     match SchemaCore.regen env with
     | .error e =>
@@ -106,7 +116,41 @@ unsafe def run : IO UInt32 := do
           IO.eprintln s!"gen-check: DUEL REGEN FAILED — {e}"
           failed := true
       | .ok db => duelFresh := db
-      for f in r.files ++ wasmFresh.1 ++ duelFresh.1 do
+      -- THE JOURNAL DUEL's regen (env-free — a pinned-constant vector
+      -- set cannot fail; SchemaCore.Emit.Journal.regen is the writer's
+      -- and the gate's ONE copy, WasmCore.Duel.regen's shape): the
+      -- manifest joins the text compare, the vectors the binary loop.
+      let journalFresh := SchemaCore.Emit.Journal.regen
+      -- THE COMPONENT LANE's regen (the same ONE pipeline the
+      -- `componentgen` writer runs — ComponentTests.Pipeline, shared;
+      -- the skew check rides each regen, so a regen failure here is the
+      -- checker's refusal, not a gate bug): the scalar lane (the LCNF
+      -- re-run's product) + the string lane (the pure-data fixture).
+      let mut compFresh :
+          List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile := ([], [])
+      match ← ComponentTests.Pipeline.loadCoreModule with
+      | .error e =>
+          IO.eprintln s!"gen-check: COMPONENT PIPELINE FAILED — {e}"
+          failed := true
+      | .ok core => do
+        match Guest.Component.regen (ComponentTests.Pipeline.scalarSpec core) with
+        | .error e =>
+            IO.eprintln s!"gen-check: COMPONENT REGEN FAILED — {e}"
+            failed := true
+        | .ok cf =>
+          -- the string lane: the skew CHECK rides regen; the ROWS come
+          -- from the writer's write path (Pipeline.stringRows — regen is
+          -- the SCALAR emitter's, its string-spec rows name scalar paths)
+          match Guest.Component.regen ComponentTests.Pipeline.stringSpec with
+          | .error e =>
+              IO.eprintln s!"gen-check: COMPONENT STRING REGEN FAILED — {e}"
+              failed := true
+          | .ok _ =>
+            let sf := ComponentTests.Pipeline.stringRows
+              ComponentTests.Pipeline.stringSpec
+            compFresh := (cf.1 ++ sf.1, cf.2 ++ sf.2)
+      for f in r.files ++ wasmFresh.1 ++ duelFresh.1 ++ compFresh.1
+          ++ journalFresh.1 do
         let path : System.FilePath := f.path
         unless ← path.pathExists do
           IO.eprintln s!"gen-check: {f.path} ABSENT — run `just gen` and commit"
@@ -125,7 +169,7 @@ unsafe def run : IO UInt32 := do
       -- (no volatile region; the bytes tie EXACTLY) — and the committed
       -- `.hdr` sidecar must name the fresh bytes' hash (the sidecar's
       -- own hash check rides the same verdict).
-      for f in wasmFresh.2 ++ duelFresh.2 do
+      for f in wasmFresh.2 ++ duelFresh.2 ++ journalFresh.2 do
         let path : System.FilePath := f.path
         unless ← path.pathExists do
           IO.eprintln s!"gen-check: {f.path} ABSENT — run `just wasmgen` and commit"
@@ -145,9 +189,32 @@ unsafe def run : IO UInt32 := do
           IO.eprintln s!"gen-check: {f.path} DRIFTED ({why}) — \
             run `just wasmgen` and commit (never hand-edit a generated file)"
           failed := true
+      -- the component lane's binaries: the same tieBytes loop, the
+      -- component writer's regen command named (the lanes' writers differ)
+      for f in compFresh.2 do
+        let path : System.FilePath := f.path
+        unless ← path.pathExists do
+          IO.eprintln s!"gen-check: {f.path} ABSENT — run `just componentgen` and commit"
+          failed := true
+          continue
+        let committed ← IO.FS.readBinFile path
+        let sidecar : System.FilePath := Kit.Emit.sidecarPath f.path
+        unless ← sidecar.pathExists do
+          IO.eprintln s!"gen-check: {sidecar} ABSENT — the component lane's \
+            header sidecar; run `just componentgen` and commit"
+          failed := true
+          continue
+        let sidecarText ← IO.FS.readFile sidecar
+        match Kit.Emit.tieBytes sidecarText committed f.contents with
+        | .tied => tied := tied + 1
+        | .drifted why => do
+          IO.eprintln s!"gen-check: {f.path} DRIFTED ({why}) — \
+            run `just componentgen` and commit (never hand-edit a generated file)"
+          failed := true
       if failed then return 1
       IO.println s!"gen-check: clean — {tied} artifact(s) byte-tied \
-        (text + binary lanes; the duel's manifest + vectors included)"
+        (text + binary lanes; the duel's manifest + vectors and the \
+        component lane's world text + bytes included)"
       return 0
 
 end Gates.GenCheck

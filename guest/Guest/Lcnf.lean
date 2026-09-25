@@ -17,10 +17,14 @@ pattern):
   (`getLocalImpureDecl?` — the compiled decl never joins the
   environment's constants).
 
-The honest first cut (this slice): ONE target function at a time,
-the target's fap callees are the extern scalar primitives (the op
-surface — no closure completion fixpoint yet; the multi-target
-closure walk is the named follow-up, Lower.lean's header).
+The honest face (this slice): ONE target function at a time
+(`readDecl?`), or a ROOT + its closure FAMILY from one run
+(`readFamily?` — the internal `_closed`/`_lam` constants cannot root
+their own pipeline run — observed: `Unknown constant` — they ride the
+root's cache); the target's fap callees are the extern scalar
+primitives (the op surface — no closure completion fixpoint yet; the
+multi-target closure walk is the named follow-up, Lower.lean's
+header).
 
 The five questions (notes/v3/01-core.md):
 
@@ -77,5 +81,38 @@ def readDecl? (env : Lean.Environment) (target : Lean.Name) :
   catch e =>
     return .error
       s!"Guest.Lcnf: the LCNF pipeline failed for `{target}`: {toString e}"
+
+/-- Read a ROOT decl + a FAMILY of names from the SAME pipeline run (the
+    closure discipline's reader face): the pipeline's roots are the USER
+    decls — an internal `_closed`/`_lam` constant CANNOT root its own
+    run (observed: `Unknown constant` — the pipeline compiles the
+    user-level closure and pulls the family into its local cache), so
+    the family rides the root's run and each name is fetched from that
+    one cache. The order of `family` IS the module's decl order (the
+    function-table indices the pap stores). -/
+def readFamily? (env : Lean.Environment) (root : Lean.Name)
+    (family : List Lean.Name) :
+    IO (Except String (List (Decl .impure))) := do
+  let ctx : Lean.Core.Context :=
+    { fileName := "<guest-lcnf>", fileMap := default
+    , options := lcnfOptions }
+  let state : Lean.Core.State := { env := env }
+  try
+    let act : Lean.CoreM (Except String (List (Decl .impure))) := do
+      Lean.Compiler.LCNF.main #[root] lcnfOptions
+      let mut out : List (Decl .impure) := []
+      for t in family do
+        match ← Lean.Compiler.LCNF.getLocalImpureDecl? t with
+        | some d => out := out ++ [d]
+        | none =>
+            return .error
+              s!"Guest.Lcnf: no impure-phase LCNF decl for `{t}` in the \
+                 root `{root}`'s family run"
+      pure (Except.ok out)
+    let (r, _) ← act.toIO ctx state
+    return r
+  catch e =>
+    return .error
+      s!"Guest.Lcnf: the LCNF pipeline failed for `{root}`: {toString e}"
 
 end Guest

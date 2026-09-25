@@ -5,13 +5,25 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+# The persistence lane: the append-only delta log — the byte-exact port
+# of SchemaCore's journal codec (the journal written on the component's
+# effects; the full lifecycle integration is a later order).
+mandate-delta = { path = "../mandate-delta" }
+# The ATOM codec's single home (the generated crate, byte-tied to
+# SchemaCore.Codec by the gates + the duel vectors): the commit duel
+# decodes the Lean-emitted proposal vectors through IT, never a
+# hand-mirrored varint (the drift class the wave-23 dedup closed).
+# mandate-delta already consumes it; the host rides the same rule.
+schema-generated = { path = "../schema-generated" }
 # The engine — version twin of legacy/crates/guestlang-host (wasmtime 47).
 # Features mirror legacy's minus everything the first seed doesn't use:
-# core modules only (no component-model, no wasi, no async, no pooling).
+# core modules + the component-model path (the component lane's host
+# face: the component loads, the export calls with typed values).
 wasmtime = { version = "47", default-features = false, features = [
   "cranelift",
   "runtime",
   "std",
+  "component-model",
 ] }
 # The typed-error derive (12 §8's no-bare-panics discipline). The
 # fast-observe fault registry integration (the E-codes, the causal

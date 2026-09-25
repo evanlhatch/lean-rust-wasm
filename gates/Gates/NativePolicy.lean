@@ -96,46 +96,77 @@ unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
     let ((decls, native), _) ← (analyzeEnv modRoots).toIO ctx { env := env }
     return { dir := pkg.dir, decls := decls.size, native := native }
 
-/-- The gate: per gated package, flag every decl on the native_decide
-    trust base outside the allowlist (fail-closed), and check the
-    allowlist's own entries for staleness (fail-closed the other way —
-    a done exile must be removed). Exit 0 iff clean. -/
-unsafe def run : IO UInt32 := do
+/-- The gate, ONE package per process (the shard): flag every decl on
+    the native_decide trust base outside the allowlist (fail-closed),
+    and check this package's allowlist entries for staleness
+    (fail-closed the other way — a done exile must be removed). Exit 0
+    iff clean. The SHARD exists for the same reason as the lint
+    driver's: libgc's conservative stack scan retains each dropped env
+    — folding all 37 gated packages' envs in one process peaked past
+    the OOM line (observed, SIGTERM) once the table completed. -/
+unsafe def runPackage (pkg : PkgSpec) : IO UInt32 := do
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
-  let mut failed := false
-  let mut totalNative := 0
-  -- the stale check consumes the allowlist: an entry no scan matches
-  -- survives here and fails the gate
-  let mut stale : Array (String × Name) := allowlistedNative
-  for pkg in gatedPackages do
-    let r ← analyzePkg base pkg
-    match r.loadError with
-    | some e =>
+  let r ← analyzePkg base pkg
+  match r.loadError with
+  | some e =>
       IO.println s!"{pkg.dir}: LOAD FAILED — {e}"
+      return 1
+  | none =>
+    let mut failed := false
+    let mut totalNative := 0
+    -- this package's allowlist slice: an entry no scan matches
+    -- survives here and fails the shard
+    let mut stale : Array (String × Name) :=
+      allowlistedNative.filter fun (d, _) => d == pkg.dir
+    for (m, d) in r.native do
+      totalNative := totalNative + 1
+      if allowlistedNative.contains (pkg.dir, m) then
+        stale := stale.erase (pkg.dir, m)
+        IO.println s!"{pkg.dir}: {d} — on the native_decide trust base, \
+          DISCLOSED ({m} is an allowlisted exile)"
+      else
+        IO.eprintln s!"{pkg.dir}: VIOLATION — {d} (module {m}) depends on \
+          the native_decide trust base outside the allowlist"
+        failed := true
+    unless stale.isEmpty do
       failed := true
-    | none =>
-      for (m, d) in r.native do
-        totalNative := totalNative + 1
-        if allowlistedNative.contains (pkg.dir, m) then
-          stale := stale.erase (pkg.dir, m)
-          IO.println s!"{pkg.dir}: {d} — on the native_decide trust base, \
-            DISCLOSED ({m} is an allowlisted exile)"
-        else
-          IO.eprintln s!"{pkg.dir}: VIOLATION — {d} (module {m}) depends on \
-            the native_decide trust base outside the allowlist"
-          failed := true
-      IO.println s!"{pkg.dir}: {r.decls} decls checked"
-  unless stale.isEmpty do
-    failed := true
-    IO.eprintln "native-policy: STALE allowlist entries — these modules no \
-      longer depend on native_decide; remove the entries (the exile was re-proved):"
-    for (d, m) in stale do
-      IO.eprintln s!"  {d}/{m}"
-  if failed then return 1
-  IO.println s!"native-policy: clean — {totalNative} native_decide \
-    dependenc(ies) tree-wide, allowlist size {allowlistedNative.size} \
-    (the empty set is the fresh tree's honest state; the ratchet is live)"
-  return 0
+      IO.eprintln "native-policy: STALE allowlist entries — these modules no \
+        longer depend on native_decide; remove the entries (the exile was re-proved):"
+      for (d, m) in stale do
+        IO.eprintln s!"  {d}/{m}"
+    unless failed do
+      IO.println s!"native-policy: {pkg.dir} — {r.decls} decls checked, \
+        {totalNative} native_decide dependency(ies), allowlist clean"
+    return if failed then 1 else 0
+
+/-- The gate: per gated package, one CHILD process (the shard above;
+    the same shape `Gates.runAll` uses for the gate rows), stdio
+    inherited so the findings stream live; first failure fails the
+    fold. Exit 0 iff every shard is clean. -/
+unsafe def run (package : Option String) : IO UInt32 := do
+  match package with
+  | some dir =>
+      match gatedPackages.toList.find? fun p => p.dir == dir with
+      | none =>
+          IO.eprintln s!"native-policy: --package={dir} names no \
+            Gates.Packages row"
+          return 1
+      | some pkg => runPackage pkg
+  | none =>
+      let mut failed := false
+      for pkg in gatedPackages do
+        let child ← IO.Process.spawn
+          { cmd := "lake"
+          , args := #["exe", "gates", "native-policy",
+                      s!"--package={pkg.dir}"]
+          , stdout := .inherit, stderr := .inherit }
+        let code ← child.wait
+        if code != 0 then failed := true
+      if failed then return 1
+      IO.println s!"native-policy: clean — every gated package's decls \
+        inside the allowlist ({gatedPackages.size} shard(s); the ratchet \
+        is live)"
+      return 0
 
 end Gates.NativePolicy

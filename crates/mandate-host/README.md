@@ -10,9 +10,17 @@ implementation).
   `.hdr` sidecar (the content hash re-derived consumer-side — the
   `Kit.Emit.bytesHash` LCG fold, pinned against the committed sidecar
   by test), and runs its `answer` export to the golden `i64 42`.
+- It loads the COMPONENT path the same way: `gen/component-slice.wasm`
+  (the guest function — LCNF-compiled — wrapped as a component through
+  the canonical-ABI scalar fragment, the world `gen/component-slice.wit`
+  as the contract side) — its `add64 : (u64, u64) -> u64` export is
+  called with typed values to the golden `5`; the signature teeth are
+  the engine's typed lift, the world surface is presence-checked (a
+  world/component skew refuses).
 - It checks the artifact set's completeness (`wasm-slice.wasm`,
-  `wasm-slice.wasm.hdr`, `schema-slice.wit`) and the WIT surface's
-  presence (the `macht:slice` package, the GENERATED header).
+  `wasm-slice.wasm.hdr`, `schema-slice.wit`, and the component lane's
+  trio) and the WIT surfaces' presence (the `macht:slice` package, the
+  GENERATED headers).
 - Any drift — bytes, sidecar, or surface — is a typed STARTUP REFUSAL
   (`HostError`), never a silently-different execution.
 
@@ -36,5 +44,7 @@ cargo test
 ```
 
 Deps: `wasmtime 47` (the engine — version twin of
-legacy/crates/guestlang-host, features trimmed to core modules) +
-`thiserror 2` (the typed-error derive). Nothing else.
+legacy/crates/guestlang-host, features trimmed to core modules + the
+component-model path) + `thiserror 2` (the typed-error derive) +
+`wat` (dev — the tamper/golden teeth build their variant binaries,
+components included). Nothing else.

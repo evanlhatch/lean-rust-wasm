@@ -82,6 +82,12 @@ re-invented).
 -/
 
 import SchemaCore.Commit
+import Kit.Change
+import Kit.ListExtras
+
+-- The filters' commutation is Kit.ListExtras' (the DRY sweep's ONE
+-- copy — core ships `filter_filter`, never the commuted form).
+open Kit.ListExtras (filter_filter_comm)
 
 namespace SchemaCore
 
@@ -324,56 +330,58 @@ def accStep? (d : RowDelta accountFields) (st : AccState) : Option AccState :=
            , negs := negUpd st.table st.negs r }
   | _ => none
 
-/-- The account fold (an Option fold — the first `none` poisons it). -/
+/-- The account fold — Kit.Change's ONE poison-fold (`optionFoldl`)
+    at the maintained account step (the DRY sweep: the first `none`
+    poisons it, the fold's shape is the ladder's own operation). -/
 def accFold? (ds : List (RowDelta accountFields)) (st : AccState) : Option AccState :=
-  match ds with
-  | [] => some st
-  | d :: rest =>
-      match accStep? d st with
-      | none => none
-      | some st₁ => accFold? rest st₁
+  Kit.optionFoldl (fun st d => accStep? d st) ds st
 
 /-- THE ACCOUNT FOLD'S AGREEMENT (the once-proof for every account-delta
     list in the fragment): the folded table IS the keyed application's
     table, and the maintained face is the recomputed face (up to the
-    executable image's order). -/
+    executable image's order). The induction is Kit.Change's
+    `optionFoldl_agree` — the lanes instantiate `R` (the table identity
+    + the maintained face), never re-roll it. -/
+def accStepAgreeR (st : AccState) (t : List (RowVals accountFields)) : Prop :=
+  st.table = t ∧ List.Perm st.negs (negativeAccounts t)
+
 theorem accFold_agree (ds : List (RowDelta accountFields)) :
     ∀ (st : AccState), List.Perm st.negs (negativeAccounts st.table) →
       ∀ st' : AccState, accFold? ds st = some st' →
         st'.table = List.foldl (fun t d => applyRowDelta "id" d t) st.table ds
           ∧ List.Perm st'.negs (negativeAccounts st'.table) := by
-  induction ds with
-  | nil =>
-      intro st hp st' hacc
-      simp only [accFold?, Option.some.injEq] at hacc
-      subst hacc
-      exact ⟨rfl, hp⟩
-  | cons d rest ih =>
-      intro st hp st' hacc
-      simp only [accFold?] at hacc
-      cases hd : accStep? d st with
-      | none => simp [hd] at hacc
-      | some st₁ =>
-          simp only [hd] at hacc
-          have hstep : st₁.table = applyRowDelta "id" d st.table
-              ∧ List.Perm st₁.negs (negativeAccounts st₁.table) := by
-            cases d with
-            | insert => simp [accStep?] at hd
-            | remove => simp [accStep?] at hd
-            | update r =>
-                have h₁ : st₁ = { table := applyRowDelta "id" (RowDelta.update r)
-                                    st.table
-                                , negs := negUpd st.table st.negs r } :=
-                  by simpa [accStep?] using hd.symm
-                rw [h₁]
-                exact ⟨rfl, negUpd_agree st.table st.negs r hp⟩
-          obtain ⟨ht₁, hp₁⟩ := ih st₁ hstep.2 st' hacc
-          refine ⟨?_, hp₁⟩
-          have e : List.foldl (fun t d => applyRowDelta "id" d t) st.table
-                (d :: rest)
-              = List.foldl (fun t d => applyRowDelta "id" d t) st₁.table rest := by
-            simp only [List.foldl_cons, ← hstep.1]
-          rw [e, ← ht₁]
+  intro st hp
+  have h : ∀ st' : AccState, accFold? ds st = some st' →
+      accStepAgreeR st'
+        (List.foldl (fun t d => applyRowDelta "id" d t) st.table ds) :=
+    Kit.optionFoldl_agree
+      (f := fun (st : AccState) (d : RowDelta accountFields) => accStep? d st)
+      (plain := fun (t : List (RowVals accountFields))
+          (d : RowDelta accountFields) => applyRowDelta "id" d t)
+      (R := accStepAgreeR)
+      (hstep := fun d st t st' hs hR => by
+        cases d with
+        | insert => simp [accStep?] at hs
+        | remove => simp [accStep?] at hs
+        | update r =>
+            have h₁ : st' = { table := applyRowDelta "id" (RowDelta.update r)
+                                st.table
+                            , negs := negUpd st.table st.negs r } := by
+              simpa [accStep?] using hs.symm
+            subst h₁
+            have hp' : List.Perm st.negs (negativeAccounts st.table) := by
+              rw [hR.1]
+              exact hR.2
+            refine ⟨?_, ?_⟩
+            · rw [hR.1]
+            · rw [← hR.1]
+              exact negUpd_agree st.table st.negs r hp')
+      ds st st.table ⟨rfl, hp⟩
+  intro st' hacc
+  obtain ⟨ht, hp'⟩ := h st' hacc
+  refine ⟨ht, ?_⟩
+  rw [ht]
+  exact hp'
 
 /-! ## The dangling faces' maintained step (the join face, in-fragment) -/
 
@@ -401,17 +409,14 @@ theorem applyRowDelta_remove_tid (k : FieldVal)
   rw [applyRowDelta]
   exact List.filter_congr fun o _ => by rw [trKey_proj o]
 
-/-- The join face's fold (an Option fold — the first `none` poisons it). -/
+/-- The join face's fold — Kit.Change's ONE poison-fold (`optionFoldl`)
+    at the maintained join step (the DRY sweep; the first `none`
+    poisons it). -/
 def dangFold1? (ids : List UInt64) (get : RowVals transferFields → UInt64)
     (ds : List (RowDelta transferFields))
     (dangs : List (RowVals transferFields)) :
     Option (List (RowVals transferFields)) :=
-  match ds with
-  | [] => some dangs
-  | d :: rest =>
-      match dangStep1? ids get d dangs with
-      | none => none
-      | some dangs₁ => dangFold1? ids get rest dangs₁
+  Kit.optionFoldl (fun dangs d => dangStep1? ids get d dangs) ds dangs
 
 /-- THE JOIN FACE'S STEP AGREEMENT, insert arm (exact — the filter's
     append law: the new row is judged against the CURRENT ids). -/
@@ -428,21 +433,14 @@ theorem dangStep1_insert (ids : List UInt64)
 
 /-- THE JOIN FACE'S STEP AGREEMENT, remove arm (exact — the filters'
     commutation: dropping the removed key image's rows drops exactly its
-    dangles). -/
-theorem filter_filter_comm' {α : Type} (p q : α → Bool) (l : List α) :
-    List.filter p (List.filter q l) = List.filter q (List.filter p l) := by
-  rw [List.filter_filter, List.filter_filter,
-    List.filter_congr (q := fun a => q a && p a)
-      (fun a (_ : a ∈ l) => by cases p a <;> cases q a <;> rfl)]
-
-theorem dangStep1_remove (ids : List UInt64)
+    dangles). -/theorem dangStep1_remove (ids : List UInt64)
     (get : RowVals transferFields → UInt64)
     (T dangs : List (RowVals transferFields)) (k : FieldVal)
     (h : dangs = List.filter (fun u => !decide (get u ∈ ids)) T) :
     dangStep1? ids get (RowDelta.remove k) dangs
       = some (List.filter (fun u => !decide (get u ∈ ids))
           (List.filter (fun o => !FieldVal.beq (trKey o) k) T)) := by
-  rw [dangStep1?, h, filter_filter_comm']
+  rw [dangStep1?, h, filter_filter_comm]
 
 /-- THE FOLD'S ID STABILITY: a fold that returned `some` never left the
     fragment (every step was an update), so the id list is stable — the
@@ -454,12 +452,12 @@ theorem accFold_ids : ∀ (ds : List (RowDelta accountFields)) (st : AccState),
   induction ds with
   | nil =>
       intro st st' hacc
-      simp only [accFold?, Option.some.injEq] at hacc
+      simp only [accFold?, Kit.optionFoldl, Option.some.injEq] at hacc
       subst hacc
       rfl
   | cons d rest ih =>
       intro st st' hacc
-      simp only [accFold?] at hacc
+      simp only [accFold?, Kit.optionFoldl_cons] at hacc
       cases hd : accStep? d st with
       | none => simp [hd] at hacc
       | some st₁ =>
@@ -479,7 +477,9 @@ theorem accFold_ids : ∀ (ds : List (RowDelta accountFields)) (st : AccState),
 
 /-- THE JOIN FOLD'S AGREEMENT (the once-proof for every transfer-delta
     list in the fragment): the maintained face IS the recomputed face —
-    exact, both are the endpoint's filter over the applied table. -/
+    exact, both are the endpoint's filter over the applied table. The
+    induction is Kit.Change's `optionFoldl_agree` — `R` is the dangle
+    filter's equality; the per-arm step agreements discharge `hstep`. -/
 theorem dangFold1_agree (ids : List UInt64)
     (get : RowVals transferFields → UInt64) :
     ∀ (ds : List (RowDelta transferFields))
@@ -489,32 +489,34 @@ theorem dangFold1_agree (ids : List UInt64)
         dangFold1? ids get ds dangs = some dangs' →
           dangs' = List.filter (fun u => !decide (get u ∈ ids))
               (List.foldl (fun t d => applyRowDelta "tid" d t) T ds) := by
-  intro ds
-  induction ds with
-  | nil =>
-      intro T dangs h dangs' hf
-      simp only [dangFold1?, Option.some.injEq] at hf
-      rw [List.foldl_nil, ← hf, h]
-  | cons d rest ih =>
-      intro T dangs h dangs' hf
-      simp only [dangFold1?] at hf
-      cases hd : dangStep1? ids get d dangs with
-      | none => simp [hd] at hf
-      | some dangs₁ =>
-          simp only [hd] at hf
-          have hstep : dangs₁ = List.filter (fun u => !decide (get u ∈ ids))
-              (applyRowDelta "tid" d T) := by
-            cases d with
-            | insert t =>
-                rw [dangStep1_insert ids get T dangs t h] at hd
-                rw [applyRowDelta_insert]
-                exact Option.some.inj hd.symm
-            | remove k =>
-                rw [dangStep1_remove ids get T dangs k h] at hd
-                rw [applyRowDelta_remove_tid]
-                exact Option.some.inj hd.symm
-            | update t => simp [dangStep1?] at hd
-          exact ih (applyRowDelta "tid" d T) dangs₁ hstep dangs' hf
+  have hstep : ∀ (d : RowDelta transferFields)
+      (dangs T dangs' : List (RowVals transferFields)),
+      dangStep1? ids get d dangs = some dangs' →
+      dangs = List.filter (fun u => !decide (get u ∈ ids)) T →
+      dangs' = List.filter (fun u => !decide (get u ∈ ids))
+        (applyRowDelta "tid" d T) := by
+    intro d dangs T dangs' hs hR
+    cases d with
+    | insert t =>
+        rw [dangStep1_insert ids get T dangs t hR] at hs
+        rw [applyRowDelta_insert]
+        exact Option.some.inj hs.symm
+    | remove k =>
+        rw [dangStep1_remove ids get T dangs k hR] at hs
+        rw [applyRowDelta_remove_tid]
+        exact Option.some.inj hs.symm
+    | update t => simp [dangStep1?] at hs
+  intro ds T dangs hR
+  have h := Kit.optionFoldl_agree
+    (f := fun (dangs : List (RowVals transferFields))
+        (d : RowDelta transferFields) => dangStep1? ids get d dangs)
+    (plain := fun (t : List (RowVals transferFields))
+        (d : RowDelta transferFields) => applyRowDelta "tid" d t)
+    (R := fun (dangs T : List (RowVals transferFields)) =>
+      dangs = List.filter (fun u => !decide (get u ∈ ids)) T)
+    hstep ds dangs T hR
+  intro dangs' hf
+  exact h dangs' hf
 
 /-! ## THE INCREMENTAL VIOLATION CHECK -/
 

@@ -27,12 +27,19 @@
 //! enum is the honest first seed, one variant per future fault row.
 
 pub mod artifact;
+pub mod component;
 pub mod duel;
 pub mod engine;
+pub mod persistence;
 
 pub use artifact::{GenSlice, bytes_hash};
+pub use component::{
+    load_component, load_string_component, run_component, run_string_component, GUEST_EXPORT,
+    GUEST_GOLDEN, STRING_GOLDEN, STRING_GOLDEN_INPUT, STRING_GUEST_EXPORT,
+};
 pub use duel::{DuelReport, DuelRow, Expectation, RowVerdict, run_duel};
 pub use engine::{GOLDEN_ANSWER, run_answer, run_slice};
+pub use persistence::Journal;
 
 use std::path::{Path, PathBuf};
 
@@ -97,6 +104,32 @@ pub enum HostError {
     /// The module ran but did not produce the golden.
     #[error("golden answer mismatch: got {got}, expected {GOLDEN_ANSWER}")]
     AnswerMismatch { got: i64 },
+
+    /// The component lane's WORLD skew: the committed `.wit` surface
+    /// does not carry the world contract the host consumes (the
+    /// generated header, the package line, the world block naming the
+    /// guest export). The world is the SSOT — a skew refuses.
+    #[error("component world skew: {0}")]
+    WorldSkew(&'static str),
+
+    /// The component's export exists but does not have the signature
+    /// the typed lift demands (`expected` = the contract the world
+    /// declares — the canonical-ABI typed lift refuses; the string
+    /// lane's `(ptr, len)` lowering and the tuple lane's flattening
+    /// ride the same tooth).
+    #[error("component export signature: expected {0}")]
+    ComponentSignature(&'static str),
+
+    /// The component ran but did not produce the golden (the typed
+    /// call's result is the model's fact, consumed — never re-derived).
+    #[error("component answer mismatch: got {got}, expected {expected}")]
+    ComponentAnswerMismatch { got: u64, expected: u64 },
+
+    /// The persistence seam's delta-log failure (the journal beside the
+    /// host: a torn tail recovers; a corrupt frame refuses — typed,
+    /// never a panic, never a silent truncation).
+    #[error("journal: {0}")]
+    Journal(#[from] mandate_delta::DeltaError),
 }
 
 /// The `gen/` directory's location as shipped by the toolchain

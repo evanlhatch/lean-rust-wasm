@@ -203,7 +203,7 @@ def baselinePath : System.FilePath := "notes/coverage-matrix.md"
     write-or-diff baseline tail. Exit 1 on drift/absent baseline, a
     regen failure, or (with `--strict`) any registry-quiet ctor. -/
 unsafe def run (write acceptDrift strict : Bool) : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "coverage" pkg fun env => do
     match SchemaCore.regen env with
     | .error e =>

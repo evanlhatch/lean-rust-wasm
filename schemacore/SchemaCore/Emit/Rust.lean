@@ -566,6 +566,10 @@ def duelVectors : Kit.Duel.VectorSet where
   dir := duelDir
   name := "schema-codec"
   generator := "SchemaCore.Emit.Rust"
+  -- The manifest sits next to the generated Rust surface; the
+  -- artifact-headers gate's shape contract checks the `//` spelling
+  -- (the DRY sweep: the style is the VectorSet's OWN field).
+  style := .doubleSlash
   vectors :=
     (atomGoldens.map fun p =>
       { path := duelPath p.1, contents := p.2.2.toByteArray }) ++
@@ -581,23 +585,13 @@ def duelVectors : Kit.Duel.VectorSet where
     (tamperVectors.map fun p => (duelPath p.1, Kit.Duel.Expect.refuse))
 
 /-- THE DUEL EMITTER: the manifest rides the TEXT lane, the vectors
-    the BINARY lane (Kit.Duel's emitter shape over the schema regen's
-    spec — the seed's `Kit.Duel.emitter` is the `Unit`-spec face of
-    exactly this). Style is `.doubleSlash`, not the seed's `.hash`:
-    the manifest sits next to the generated Rust surface and the
-    artifact-headers gate's shape contract checks the `//` spelling. -/
-def duelEmitter : Emitter (DataRegistry Item) where
-  name := s!"duel:{duelVectors.name}"
-  style := .doubleSlash
-  specSource := "SchemaCore.Slice"
-  outputs := [duelVectors.dir ++ "/manifest.txt"]
-  binaryOutputs := duelVectors.vectors.map (·.path)
-  binaryOutputs_nodup := duelVectors.vectors_nodup
-  run _ :=
-    [ { path := duelVectors.dir ++ "/manifest.txt"
-      , contents := Kit.Duel.manifestBody duelVectors } ]
-  runBinary := some fun _ => duelVectors.vectors
-  law := some fun reg => (reg.items.map reg.nameOf).Nodup
+    the BINARY lane — Kit.Duel's ONE emitter body (`emitterWith`) at
+    this lane's parameters: the DataRegistry spec + the registry law
+    (the DRY sweep; the style is the VectorSet's own `.doubleSlash`
+    field, the artifact-headers gate's shape contract reads it). -/
+def duelEmitter : Emitter (DataRegistry Item) :=
+  Kit.Duel.emitterWith duelVectors "SchemaCore.Slice"
+    (law := some fun reg => (reg.items.map reg.nameOf).Nodup)
 
 /-- The generated integration test's ROPE — the duel's Rust CONSUMER
     (Kit.Duel's contract: the manifest is read, never re-encoded; the
@@ -606,7 +600,8 @@ def duelEmitter : Emitter (DataRegistry Item) where
     see the module header's honest gap. The rope is EXPOSED for the
     golden module's chunk literals (libRope's note). -/
 def differentialRope : Text :=
-  .str "//! GENERATED differential vectors + the Rust half of the Lean<->Rust
+  Text.cat
+    [ .str "//! GENERATED differential vectors + the Rust half of the Lean<->Rust
 //! codec correspondence (notes/v3/03 section 3's differential level).
 //! The vectors ride Kit.Duel's vector-set convention: the duel
 //! directory tests/duel/ carries the vector files plus manifest.txt
@@ -620,42 +615,20 @@ use schema_generated::{dec_bool, dec_i64, dec_string, dec_u64, enc_str,
 /// The duel manifest, compile-time pinned to the committed artifact.
 const MANIFEST: &str = include_str!(\"duel/manifest.txt\");
 
-/// The generated crate's repo-root prefix (the manifest's rows are
-/// repo-root-relative; the test binary's cwd is the crate root).
-const CRATE_PREFIX: &str = \"crates/schema-generated/\";
-
-/// One parsed manifest row: the vector path + the decode note (None =
+"
+    , .str Kit.Duel.rustCratePrefix
+    , .str "/// One parsed manifest row: the vector path + the decode note (None =
 /// the row expects a typed refusal).
 struct Row {
     path: String,
     note: Option<String>,
 }
 
-/// Kit.Duel's consumer contract: skip the 2-line GENERATED header and
-/// the `generator` provenance row, split each row on the tab.
-fn manifest_rows() -> Vec<Row> {
-    MANIFEST
-        .lines()
-        .skip(2)
-        .filter(|line| !line.is_empty() && !line.starts_with(\"generator\\t\"))
-        .map(|line| {
-            let mut parts = line.split('\\t');
-            let path = parts.next().expect(\"manifest row: path\").to_string();
-            let expect = parts.next().expect(\"manifest row: expectation\");
-            Row { path, note: expect.strip_prefix(\"decode \").map(str::to_string) }
-        })
-        .collect()
-}
-
-/// Re-base a manifest row's repo-root-relative path to the crate root.
-fn crate_path(row_path: &str) -> &str {
-    match row_path.strip_prefix(CRATE_PREFIX) {
-        Some(p) => p,
-        None => row_path,
-    }
-}
-
-/// The parsed atom pin (the manifest's `decode atom ...` note IS the
+"
+    , .str (Kit.Duel.rustManifestRows "Row"
+        "Row { path, note: expect.strip_prefix(\"decode \").map(str::to_string) }")
+    , .str Kit.Duel.rustCratePath
+    , .str "/// The parsed atom pin (the manifest's `decode atom ...` note IS the
 /// value-level pin — a drift from the bytes fails the test loudly).
 #[derive(Debug, PartialEq, Eq)]
 enum Atom {
@@ -802,7 +775,7 @@ fn manifest_refuse_rows_refuse() {
         }
     }
 }
-"
+"]
 
 /-- The differential's body: ONE render at the file boundary. -/
 def renderDifferential : String :=

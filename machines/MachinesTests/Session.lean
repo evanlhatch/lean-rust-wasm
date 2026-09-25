@@ -89,8 +89,10 @@ theorem peerAgrees : IsDualOf serverFix gFix := ⟨rfl⟩
 
 /- THE ELABORATION TOOTH: a hand-written peer whose direction does not
     flip does NOT compile — the mismatched conversation fails
-    definitional equality at elaboration time. (Block comment: a
-    docstring here would attach to the #guard_msgs command, not the
+    definitional equality at elaboration time. An `example` (never a
+    named theorem): a FAILED declaration commits with `sorryAx` (Lean's
+    error recovery) — the tooth stays, no sorry lands. (Block comment:
+    a docstring here would attach to the #guard_msgs command, not the
     theorem — the parse-error trap in its docstring form.) -/
 /-- error: Application type mismatch: The argument
   rfl
@@ -101,7 +103,7 @@ but is expected to have type
 in the application
   { agrees := rfl } -/
 #guard_msgs in
-theorem badPeer : IsDualOf (.send .bye .done) gFix := ⟨rfl⟩
+example : IsDualOf (.send .bye .done) gFix := ⟨rfl⟩
 
 /-! ## The session-as-machine: conformance teeth -/
 

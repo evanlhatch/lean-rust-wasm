@@ -89,7 +89,10 @@ unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
   | .error e =>
     return { dir := pkg.dir, loadError := some e }
   | .ok env =>
-    let modRoots := pkg.roots.map (·.getRoot)
+    -- the package's EXACT roots (no getRoot widening): the fixture-rig
+    -- namespaces' planted violators must stay out of the decl-level
+    -- sweep (the lint driver's lintModulesExact discipline, same reason)
+    let modRoots := pkg.roots
     let ctx : Core.Context := { fileName := "<gates-axioms>", fileMap := default }
     let (res, _) ← (analyzeEnv modRoots).toIO ctx { env := env }
     let (decls, findings, axs) := res
@@ -127,41 +130,70 @@ def renderBlock (r : PkgReport) : List String :=
         else toString r.violations.size ++ " (see gate output)"}"
     , "" ]
 
-/-- Render the global report (deterministic: package order fixed). -/
-def render (reports : Array PkgReport) : String :=
-  String.intercalate "\n" (reportHeader ++ (reports.toList.flatMap renderBlock))
-
-/-- Print one package's result line + violation messages; return whether
-    it failed (load error or allowlist violations). -/
-def printReport (r : PkgReport) : IO Bool := do
+/-- One package's result line + violation messages, on STDERR (the
+    shard's human face; stdout is the report block). Returns whether it
+    failed (load error or allowlist violations). -/
+def printReportStderr (r : PkgReport) : IO Bool := do
   match r.loadError with
   | some e =>
-    IO.println s!"{r.dir}: LOAD FAILED — {e}"
-    return true
+      IO.eprintln s!"{r.dir}: LOAD FAILED — {e}"
+      return true
   | none =>
-    IO.println s!"{r.dir}: {r.decls} decls, axioms [{String.intercalate ", " (r.axioms.map toString).toList}], {r.violations.size} violation(s)"
-    for v in r.violations do
-      IO.println v.message
-    return !r.violations.isEmpty
+      IO.eprintln s!"{r.dir}: {r.decls} decls, axioms [{String.intercalate ", " (r.axioms.map toString).toList}], {r.violations.size} violation(s)"
+      for v in r.violations do
+        IO.eprintln v.message
+      return !r.violations.isEmpty
 
-unsafe def run (write acceptDrift : Bool) : IO UInt32 := do
-  -- initSearchPath reads LEAN_PATH (`lake exe` supplies the dep closure)
-  -- + the sysroot; loadPkgEnv prepends the root build dir per import.
-  -- Not `Gates.withPkgEnv`: this gate folds ALL gated packages and a load
-  -- failure is a per-package loadError report row, not a first-failure
-  -- gate exit (the combinator's shape).
+/-- ONE package's shard (the per-package process — the memory
+    discipline: libgc's conservative stack scan retains each dropped
+    env, and 37 gated packages folded in one process peaked past the
+    OOM line, observed): the report BLOCK on stdout (the parent
+    assembles the baseline from the shards' blocks), the human line +
+    violations on stderr, exit 1 on violations or a load failure. -/
+unsafe def runPkg (pkg : PkgSpec) : IO UInt32 := do
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
-  let mut reports : Array PkgReport := #[]
-  let mut failed := false
-  for pkg in gatedPackages do
-    let r ← analyzePkg base pkg
-    reports := reports.push r
-    if ← printReport r then failed := true
-  let text := render reports
-  -- the write-or-diff tail: reportGate's accept-drift discipline
-  Driver.reportGate "axioms" "report" "the axiom surface changed"
-    reportPath text write acceptDrift failed
-    "axioms: clean — every decl's cone inside the allowlist, report in sync"
+  let r ← analyzePkg base pkg
+  for l in renderBlock r do
+    IO.println l
+  let failed ← printReportStderr r
+  return if failed then 1 else 0
+
+/-- `gates axioms [--package=<dir>]` — the shard dispatch: with the
+    flag, ONE package's scan (the child's body, its report block on
+    stdout); without, one CHILD PROCESS per gated package (stdio
+    inherited for the human faces) and the captured blocks assembled
+    into the committed baseline's fresh render. -/
+unsafe def run (write acceptDrift : Bool) (package : Option String) : IO UInt32 := do
+  match package with
+  | some dir =>
+      match gatedPackages.toList.find? fun p => p.dir == dir with
+      | none =>
+          IO.eprintln s!"axioms: --package={dir} names no Gates.Packages row"
+          return 1
+      | some pkg => runPkg pkg
+  | none =>
+      -- initSearchPath reads LEAN_PATH (`lake exe` supplies the dep
+      -- closure) + the sysroot; the shards' loadPkgEnv prepends the
+      -- root build dir per import.
+      Lean.initSearchPath (← Lean.findSysroot)
+      let mut blocks : Array String := #[]
+      let mut failed := false
+      for pkg in gatedPackages do
+        let child ← IO.Process.spawn
+          { cmd := "lake"
+          , args := #["exe", "gates", "axioms", s!"--package={pkg.dir}"]
+          , stdout := .piped, stderr := .inherit }
+        let block ← child.stdout.readToEnd
+        let code ← child.wait
+        blocks := blocks.push block
+        if code != 0 then failed := true
+      let text :=
+        String.intercalate "\n"
+          (reportHeader ++ (blocks.toList.flatMap (·.splitOn "\n")))
+      -- the write-or-diff tail: reportGate's accept-drift discipline
+      Driver.reportGate "axioms" "report" "the axiom surface changed"
+        reportPath text write acceptDrift failed
+        "axioms: clean — every decl's cone inside the allowlist, report in sync"
 
 end Gates.Axioms

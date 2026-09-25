@@ -65,7 +65,7 @@ def registeredMigrations : List SchemaCore.Migration := []
 
 /-- `gates breaking` — the diff + verdict + the exit-code discipline. -/
 unsafe def run : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "breaking" pkg fun env => do
     -- 1. the baseline: the committed snapshot, through the ONE parser
     unless ← snapshotPath.pathExists do

@@ -11,7 +11,10 @@ dual-reading tie); notes/v3/12-construction.md §1 (`deriving WireCodec`).
 ## What is generic here (and what is NOT)
 
 EVERYTHING in this module is a structural fold over `Descr` (or over
-the row layer's `List Field`), with its law proved ONCE:
+the row layer's `List Field`), with its law proved ONCE. The deepening
+(16-surface §4.4): the walk is `foldDescr` — the handlers and the
+correctness claims are ALGEBRA values over it, at `Type` and at
+`Prop` respectively:
 
 - `boxVList` / `boxVMap` — the index-free sibling rebuilders (the
   match column is the list alone; a GADT matcher whose index is
@@ -28,18 +31,26 @@ the row layer's `List Field`), with its law proved ONCE:
 - `encNat` / `decNat?` — the NATIVE face of the ONE wire:
   `encNat t v = encVal t (mkValue t v)` BY CONSTRUCTION — no second
   byte format exists to drift; the record wire IS the value wire.
-- `deriveEnc` / `deriveDec` (+ the product walk `encProdOf` /
-  `decProdOf?`) — the record codec: fields encoded in schema order,
-  each field's bytes the value codec's.
-- `deriveCodec_correct` — THE generic theorem
-  (`dec (enc d v ++ rest) = some (v, rest)`, proved once over the
-  description structure) + `deriveDec_eq` (the exact-image inversion).
+- `encAlg` / `decAlg` — the record codec as ALGEBRA VALUES (16-surface
+  §4.4's functorial deepening): `deriveEnc`/`deriveDec` (and the
+  product walks `encProdOf`/`decProdOf?`) are `foldDescr`/`foldFields`
+  over them — the handlers are DATA, the ONE walk (Describe.lean's
+  `DescrAlg` + the equation set) carries the recursion.
+- `codecCorrectAlg` / `decEqAlg` — the CORRECTNESS CLAIMS as claim
+  algebras: `deriveCodec_correct` (the append-form law,
+  15-patterns #2) and `deriveDec_eq` (the exact-image inversion) are
+  `law_of_rows` over them — the ONE induction, performed in the
+  generic theorem, never per-handler; a capability's proof content is
+  exactly its per-ctor rows.
 - `deriveCodec` — the wire grade as a `Kit.Codec` value over
   `Descr.Ty d`, policy = the exact image.
 - `rowTyOf` / `toRowF` / `ofRowF` + `rowBridgeIso` — the row bridge,
   generic over the field list: BOTH round-trip laws + the ONE
   `Kit.Iso` (the consolidation every per-lane bridge needs — the
-  `@[row_bridge]` shape, RowVals.lean's note).
+  `@[row_bridge]` shape, RowVals.lean's note). The row bridge's
+  composition is over the field LIST, not `Descr` — its one-cons-case
+  inductions are minimal and their leaf content rides the value-level
+  round trips; it is NOT a `DescrAlg` (Describe.lean's honest residue).
 
 The per-record surface is the META module's (`SchemaCore.DeriveMeta`):
 thin wrappers (`Example.codec := (deriveCodec Example.descr)
@@ -54,12 +65,14 @@ The five questions (notes/v3/01-core.md):
   generic definitions + generic theorems").
 - carrier: the interpretations are Type-valued dependent folds over
   the closed `Descr`/field-list structures (wrong-shape data
-  unrepresentable at the leaves).
+  unrepresentable at the leaves) — the handlers as `DescrAlg` values,
+  the claims as claim algebras (16-surface §4.4).
 - spine reading: the derivation stage — `Descr` → capability surface
   (codec, row bridge) — consumed by the per-record thin wrappers.
 - ladder rung: structural folds, kernel-visible (concrete
-  descriptions reduce by `rfl`); the laws are structural inductions
-  citing the atom laws (pattern #2's composition).
+  descriptions reduce by `rfl`); the laws are claim-algebra rows
+  discharged by `law_of_rows` — the ONE induction, in the generic
+  theorem — citing the atom laws (pattern #2's composition).
 - gate row: SchemaTests' derive suite (the generic-theorem citation
   pins + the wire-tie known answers + the negative controls) + the
   axiom report.
@@ -338,52 +351,117 @@ theorem decNat?_eq : ∀ (t : Ty) (bs : List UInt8) (v : t.toType)
   rw [encVal_decVal_eq t bs w.1 w.2 hw, ← h1]
   simp only [encNat, mkValue_eval]
 
-/-! ## The record codec — the generic definitions over `Descr` -/
+/-! ## The record codec — the generic definitions over `Descr`
+    (the handlers as ALGEBRAS — 16-surface §4.4) -/
 
-mutual
+/-- THE ENCODER ALGEBRA: the record codec's per-ctor rows (verbatim
+    from the pre-fold walk) as a `DescrAlg` value — the forward
+    handler IS data. The carriers ride the description's denotation:
+    `P d = Descr.Ty d → List UInt8`, the field sibling
+    `Q fs = prodTyOf fs → List UInt8` (the product row is the
+    identity — the product's bytes ARE its fields' bytes). -/
+def encAlg :
+    DescrAlg (P := fun d => Descr.Ty d → List UInt8)
+      (Q := fun fs => prodTyOf fs → List UInt8) where
+  prim t := encNat t
+  option _ enc := fun v =>
+    match v with
+    | none => [0]
+    | some x => 1 :: enc x
+  list _ enc xs := encList enc xs
+  product _ _ enc := enc
+  pnil := fun _ => []
+  pcons _ _ _ enc rest' p := enc p.1 ++ rest' p.2
+
+/-- THE DECODER ALGEBRA: the inverse rows as a `DescrAlg` value (the
+    cons arm rides `Option.bind`/`map` — the STANDARD lemmas fire on
+    them; a nested GADT-match's equation is matcher-opaque to the
+    rewriter). -/
+def decAlg :
+    DescrAlg (P := fun d => List UInt8 → Option (Descr.Ty d × List UInt8))
+      (Q := fun fs => List UInt8 → Option (prodTyOf fs × List UInt8)) where
+  prim t := decNat? t
+  option _ dec := fun bs =>
+    match decByte? bs with
+    | some (b0, r) =>
+        if b0 = 0 then some (none, r)
+        else if b0 = 1 then (dec r).map fun p => (some p.1, p.2)
+        else none
+    | none => none
+  list _ dec := fun bs =>
+    match decVarNat? bs with
+    | some (n, r) => decManyBind? dec n r
+    | none => none
+  product _ _ dec := dec
+  pnil := fun bs => some ((), bs)
+  pcons _ _ _ dec rest' := fun bs =>
+    (dec bs).bind fun p =>
+      Option.map (fun q => ((p.1, q.1), q.2)) (rest' p.2)
+
 /-- THE RECORD ENCODER (generic over the description, 05 §3 step 2):
-    the fields encoded in schema order, each field's bytes the value
-    codec's (`encNat` — the native face of the ONE wire). -/
-def deriveEnc : (d : Descr) → Descr.Ty d → List UInt8
-  | .prim t, v => encNat t v
-  | .option d, v =>
-      match v with
-      | none => [0]
-      | some x => 1 :: deriveEnc d x
-  | .list d, xs => encList (deriveEnc d) xs
-  | .product _ fs, v => encProdOf fs v
+    MIGRATED to the ONE walk — `foldDescr` over `encAlg` (the fields
+    encoded in schema order, each field's bytes the value codec's —
+    the native face of the ONE wire). -/
+def deriveEnc (d : Descr) : Descr.Ty d → List UInt8 := foldDescr encAlg d
 
-/-- The product walk (the field tuple's bytes: field, then the rest). -/
-def encProdOf : (fs : List (String × Descr)) → prodTyOf fs → List UInt8
-  | [], _ => []
-  | (_, d) :: rest, (x, xs) => deriveEnc d x ++ encProdOf rest xs
+/-- The product walk (the field tuple's bytes: field, then the rest)
+    — the field sibling of the ONE walk. -/
+def encProdOf (fs : List (String × Descr)) : prodTyOf fs → List UInt8 :=
+  foldFields encAlg fs
 
-/-- THE RECORD DECODER (generic): the inverse walk, append-form. -/
-def deriveDec : (d : Descr) → List UInt8 → Option (Descr.Ty d × List UInt8)
-  | .prim t, bs => decNat? t bs
-  | .option d, bs =>
-      match decByte? bs with
-      | some (b0, r) =>
-          if b0 = 0 then some (none, r)
-          else if b0 = 1 then (deriveDec d r).map fun p => (some p.1, p.2)
-          else none
-      | none => none
-  | .list d, bs =>
-      match decVarNat? bs with
-      | some (n, r) => decManyBind? (deriveDec d) n r
-      | none => none
-  | .product _ fs, bs => decProdOf? fs bs
+/-- THE RECORD DECODER (generic): the inverse walk, append-form —
+    MIGRATED to the ONE walk over `decAlg`. -/
+def deriveDec (d : Descr) : List UInt8 → Option (Descr.Ty d × List UInt8) :=
+  foldDescr decAlg d
 
-/-- The product walk's decoder (the cons arm rides `Option.bind`/`map`
-    — the STANDARD lemmas fire on them; a nested GADT-match's
-    equation is matcher-opaque to the rewriter). -/
-def decProdOf? : (fs : List (String × Descr)) → List UInt8 →
-    Option (prodTyOf fs × List UInt8)
-  | [], bs => some ((), bs)
-  | (_, d) :: rest, bs =>
-      (deriveDec d bs).bind fun p =>
-        Option.map (fun q => ((p.1, q.1), q.2)) (decProdOf? rest p.2)
-end
+/-- The product walk's decoder — the field sibling. -/
+def decProdOf? (fs : List (String × Descr)) : List UInt8 →
+    Option (prodTyOf fs × List UInt8) := foldFields decAlg fs
+
+/-- The handlers' equation sets (06 §5 — the claims' rows below cite
+    these, never the auto-generated plumbing). All `rfl`: the
+    recursion is the structural fold, so the equations are kernel
+    reduction. -/
+theorem deriveEnc_prim (t : Ty) (v : t.toType) :
+    deriveEnc (.prim t) v = encNat t v := rfl
+theorem deriveEnc_option (d : Descr) (v : Option (Descr.Ty d)) :
+    deriveEnc (.option d) v
+      = match v with | none => [0] | some x => 1 :: deriveEnc d x := rfl
+theorem deriveEnc_list (d : Descr) (xs : List (Descr.Ty d)) :
+    deriveEnc (.list d) xs = encList (deriveEnc d) xs := rfl
+theorem deriveEnc_product (n : String) (fs : List (String × Descr))
+    (v : prodTyOf fs) :
+    deriveEnc (.product n fs) v = encProdOf fs v := rfl
+theorem deriveDec_prim (t : Ty) (bs : List UInt8) :
+    deriveDec (.prim t) bs = decNat? t bs := rfl
+theorem deriveDec_option (d : Descr) (bs : List UInt8) :
+    deriveDec (.option d) bs
+      = match decByte? bs with
+        | some (b0, r) =>
+            if b0 = 0 then some (none, r)
+            else if b0 = 1 then (deriveDec d r).map fun p => (some p.1, p.2)
+            else none
+        | none => none := rfl
+theorem deriveDec_list (d : Descr) (bs : List UInt8) :
+    deriveDec (.list d) bs
+      = match decVarNat? bs with
+        | some (n, r) => decManyBind? (deriveDec d) n r
+        | none => none := rfl
+theorem deriveDec_product (n : String) (fs : List (String × Descr))
+    (bs : List UInt8) :
+    deriveDec (.product n fs) bs = decProdOf? fs bs := rfl
+theorem encProdOf_nil (v : prodTyOf []) :
+    encProdOf [] v = [] := rfl
+theorem encProdOf_cons (fn : String) (d : Descr) (fs : List (String × Descr))
+    (p : prodTyOf ((fn, d) :: fs)) :
+    encProdOf ((fn, d) :: fs) p = deriveEnc d p.1 ++ encProdOf fs p.2 := rfl
+theorem decProdOf?_nil (bs : List UInt8) :
+    decProdOf? [] bs = some ((), bs) := rfl
+theorem decProdOf?_cons (fn : String) (d : Descr) (fs : List (String × Descr))
+    (bs : List UInt8) :
+    decProdOf? ((fn, d) :: fs) bs
+      = (deriveDec d bs).bind fun p =>
+          Option.map (fun q => ((p.1, q.1), q.2)) (decProdOf? fs p.2) := rfl
 
 /-- The record codec's coverage pins (kernel-visible reduction). -/
 example : deriveEnc (.product "p" [("x", .prim .u64)]) ((3 : UInt64), ())
@@ -394,134 +472,160 @@ example : deriveDec (.product "p" [("x", .prim .u64)]) [3]
 /-- The truncation control: a dangling continuation bit refuses. -/
 example : deriveDec (.prim .u64) [0x80] = none := rfl
 
-/-! ## THE GENERIC THEOREM — proved ONCE over the description -/
+/-! ## THE GENERIC CORRECTNESS THEOREM'S INSTANCES — the claims as
+    algebras, the induction performed ONCE (16-surface §4.4) -/
 
-mutual
+/-- The append-form claim ALGEBRA (15-patterns #2 at the record level):
+    the per-ctor rows of `deriveCodec_correct` — the leaf row is the
+    value codec's master law (`decNat?_encNat_append`), the composite
+    rows compose the children's claims (each row's ONLY content). The
+    theorem is `law_of_rows` over this algebra — the ONE induction,
+    performed in the generic theorem, never per-handler. -/
+def codecCorrectAlg :
+    DescrAlg
+      (P := fun d => ∀ (v : Descr.Ty d) (rest : List UInt8),
+        deriveDec d (deriveEnc d v ++ rest) = some (v, rest))
+      (Q := fun fs => ∀ (v : prodTyOf fs) (rest : List UInt8),
+        decProdOf? fs (encProdOf fs v ++ rest) = some (v, rest)) where
+  prim t := decNat?_encNat_append t
+  option d ih := by
+    intro v rest
+    cases v with
+    | none => simp [deriveEnc_option, deriveDec_option, decByte?_cons]
+    | some x =>
+        simp only [deriveEnc_option, deriveDec_option, decByte?_cons,
+          List.cons_append, if_neg (by decide : ¬ ((1 : UInt8) = 0))]
+        rw [ih x rest]
+        simp
+  list d ih := by
+    intro v rest
+    cases v with
+    | nil =>
+        simp [deriveEnc_list, deriveDec_list, encList,
+          decVarNat?_encVarNat_append, decManyBind?]
+    | cons x xs =>
+        simp only [deriveEnc_list, deriveDec_list, encList]
+        rw [List.append_assoc, decVarNat?_encVarNat_append]
+        simp only [decManyBind?_enc_append (deriveDec d) (deriveEnc d) ih
+          (x :: xs) rest]
+  product _ _ ih := ih
+  pnil := by
+    intro v rest
+    cases v
+    simp [decProdOf?_nil, encProdOf_nil]
+  pcons fn d fs ih ihF := by
+    intro v rest
+    obtain ⟨x, xs⟩ := v
+    simp only [encProdOf_cons, List.append_assoc, decProdOf?_cons]
+    rw [ih x (encProdOf fs xs ++ rest)]
+    simp only [Option.bind_some]
+    rw [ihF xs rest]
+    rfl
+
 /-- THE APPEND-FORM LAW over the description (15-patterns #2 at the
     record level): every description's every value decodes from its
-    encoding plus ANY suffix, exactly. THE generic theorem the
-    per-record thin wrappers cite (`Example.codec := (deriveCodec
-    Example.descr).transportRight Example.tupleIso` — the wrapper's
-    law is the Kit.Codec field, whose proof routes here). -/
+    encoding plus ANY suffix, exactly. THE GENERIC THEOREM'S INSTANCE:
+    the proof is `law_of_rows` over `codecCorrectAlg` — the per-ctor
+    rows above, no induction here. The per-record thin wrappers cite
+    THIS (`Example.codec := (deriveCodec Example.descr).transportRight
+    Example.tupleIso` — the wrapper's law routes here via
+    `Kit.Codec`'s law fields). -/
 theorem deriveCodec_correct : ∀ (d : Descr) (v : Descr.Ty d) (rest : List UInt8),
-    deriveDec d (deriveEnc d v ++ rest) = some (v, rest)
-  | .prim t, v, rest => decNat?_encNat_append t v rest
-  | .option d, v, rest => by
-      cases v with
-      | none => simp [deriveEnc, deriveDec, decByte?_cons]
-      | some x =>
-          simp only [deriveEnc, deriveDec, decByte?_cons, List.cons_append,
-            if_neg (by decide : ¬ ((1 : UInt8) = 0))]
-          rw [deriveCodec_correct d x rest]
-          simp
-  | .list d, v, rest => by
-      cases v with
-      | nil =>
-          simp [deriveEnc, deriveDec, encList, decVarNat?_encVarNat_append,
-            decManyBind?]
-          rfl
-      | cons x xs =>
-          simp only [deriveEnc, deriveDec, encList]
-          rw [List.append_assoc, decVarNat?_encVarNat_append]
-          simp only [decManyBind?_enc_append (deriveDec d) (deriveEnc d)
-            (deriveCodec_correct d) (x :: xs) rest]
-          rfl
-  | .product _ fs, v, rest => decProdOf?_encProdOf_append fs v rest
+    deriveDec d (deriveEnc d v ++ rest) = some (v, rest) :=
+  law_of_rows codecCorrectAlg
 
-/-- The product walk's append-form law (the composition discipline —
-    each field rides the head law, the tail the induction). -/
-theorem decProdOf?_encProdOf_append : ∀ (fs : List (String × Descr))
-    (v : prodTyOf fs) (rest : List UInt8),
-    decProdOf? fs (encProdOf fs v ++ rest) = some (v, rest)
-  | [], v, rest => by cases v; simp [decProdOf?, encProdOf]
-  | (_, d) :: fs, (x, xs), rest => by
-      simp only [encProdOf, List.append_assoc]
-      simp only [decProdOf?]
-      rw [deriveCodec_correct d x (encProdOf fs xs ++ rest)]
-      simp only [Option.bind_some]
-      rw [decProdOf?_encProdOf_append fs xs rest]
-      rfl
-end
+-- the exact-image claim ALGEBRA: the per-ctor rows of `deriveDec_eq`
+-- (the leaf row is the value codec's inversion; the composite rows
+-- compose the children's claims). The theorem is `law_of_rows` over
+-- it — the ONE induction, in the generic theorem.
+def decEqAlg :
+    DescrAlg
+      (P := fun d => ∀ (bs : List UInt8) (v : Descr.Ty d) (rest : List UInt8),
+        deriveDec d bs = some (v, rest) → bs = deriveEnc d v ++ rest)
+      (Q := fun fs => ∀ (bs : List UInt8) (v : prodTyOf fs) (rest : List UInt8),
+        decProdOf? fs bs = some (v, rest) → bs = encProdOf fs v ++ rest) where
+  prim t := decNat?_eq t
+  option d ih := by
+    intro bs v rest h
+    rw [deriveDec_option] at h
+    cases hd : decByte? bs with
+    | none => rw [hd] at h; simp at h
+    | some p =>
+        obtain ⟨b0, r⟩ := p
+        rw [hd] at h
+        simp only at h
+        by_cases hb0 : b0 = 0
+        · rw [if_pos hb0] at h
+          obtain ⟨rfl, rfl⟩ := Option.some.inj h
+          rw [decByte?_eq bs b0 _ hd]
+          simp [deriveEnc_option, hb0]
+        · by_cases hb1 : b0 = 1
+          · rw [if_neg hb0, if_pos hb1] at h
+            obtain ⟨w, hw, hv⟩ := Option.map_eq_some_iff.mp h
+            obtain ⟨rfl, rfl⟩ := Prod.mk.inj hv
+            rw [decByte?_eq bs b0 _ hd, ih r w.1 w.2 hw]
+            simp [deriveEnc_option, hb1]
+          · rw [if_neg hb0, if_neg hb1] at h
+            simp at h
+  list d ih := by
+    intro bs v rest h
+    rw [deriveDec_list] at h
+    cases hd : decVarNat? bs with
+    | none => rw [hd] at h; simp at h
+    | some q =>
+        obtain ⟨n, r⟩ := q
+        rw [hd] at h
+        simp only at h
+        cases hd2 : decManyBind? (deriveDec d) n r with
+        | none => rw [hd2] at h; simp at h
+        | some q2 =>
+            obtain ⟨xs, r'⟩ := q2
+            rw [hd2] at h
+            obtain ⟨rfl, rfl⟩ := Option.some.inj h
+            obtain ⟨hlen, hbs⟩ := decManyBind?_eq (deriveEnc d)
+              (fun bs' v' rest' h' => ih bs' v' rest' h') n r v rest hd2
+            rw [decVarNat?_encVarNat_eq bs n r hd, hbs]
+            rw [deriveEnc_list]
+            rw [encList, hlen]
+            rw [List.append_assoc]
+  product _ _ ih := ih
+  pnil := by
+    intro bs v rest h
+    simp only [decProdOf?_nil, Option.some.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    rfl
+  pcons fn d fs ih ihF := by
+    intro bs v rest h
+    obtain ⟨x, xs⟩ := v
+    rw [decProdOf?_cons] at h
+    cases hd : deriveDec d bs with
+    | none =>
+        rw [hd] at h
+        simp only [Option.bind_none] at h
+        exact absurd h (by simp)
+    | some q =>
+        obtain ⟨x', r1⟩ := q
+        rw [hd] at h
+        simp only [Option.bind_some] at h
+        cases hd2 : decProdOf? fs r1 with
+        | none => rw [hd2] at h; simp at h
+        | some q2 =>
+            obtain ⟨xs', r2⟩ := q2
+            rw [hd2] at h
+            simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨⟨rfl, rfl⟩, rfl⟩ := h
+            rw [ih bs x' r1 hd, ihF r1 xs' r2 hd2]
+            simp [encProdOf_cons]
 
-mutual
 /-- The record decoder's exact-image inversion: a successful decode's
     input is exactly an encoding plus a suffix (the accepted-byte
-    policy's content at the record level). -/
+    policy's content at the record level). THE GENERIC THEOREM'S
+    INSTANCE: the proof is `law_of_rows` over `decEqAlg` — the
+    per-ctor rows above, no induction here. -/
 theorem deriveDec_eq : ∀ (d : Descr) (bs : List UInt8) (v : Descr.Ty d)
     (rest : List UInt8), deriveDec d bs = some (v, rest) →
-    bs = deriveEnc d v ++ rest
-  | .prim t, bs, v, rest, h => decNat?_eq t bs v rest h
-  | .option d, bs, v, rest, h => by
-      simp only [deriveDec] at h
-      cases hd : decByte? bs with
-      | none => rw [hd] at h; simp at h
-      | some p =>
-          obtain ⟨b0, r⟩ := p
-          rw [hd] at h
-          simp only at h
-          by_cases hb0 : b0 = 0
-          · rw [if_pos hb0] at h
-            obtain ⟨rfl, rfl⟩ := Option.some.inj h
-            rw [decByte?_eq bs b0 _ hd]
-            simp [deriveEnc, hb0]
-          · by_cases hb1 : b0 = 1
-            · rw [if_neg hb0, if_pos hb1] at h
-              obtain ⟨w, hw, hv⟩ := Option.map_eq_some_iff.mp h
-              obtain ⟨rfl, rfl⟩ := Prod.mk.inj hv
-              rw [decByte?_eq bs b0 _ hd, deriveDec_eq d r w.1 w.2 hw]
-              simp [deriveEnc, hb1]
-            · rw [if_neg hb0, if_neg hb1] at h
-              simp at h
-  | .list d, bs, v, rest, h => by
-      simp only [deriveDec] at h
-      cases hd : decVarNat? bs with
-      | none => rw [hd] at h; simp at h
-      | some q =>
-          obtain ⟨n, r⟩ := q
-          rw [hd] at h
-          simp only at h
-          cases hd2 : decManyBind? (deriveDec d) n r with
-          | none => rw [hd2] at h; simp at h
-          | some q2 =>
-              obtain ⟨xs, r'⟩ := q2
-              rw [hd2] at h
-              obtain ⟨rfl, rfl⟩ := Option.some.inj h
-              obtain ⟨hlen, hbs⟩ := decManyBind?_eq (deriveEnc d)
-                (deriveDec_eq d) n r v rest hd2
-              rw [decVarNat?_encVarNat_eq bs n r hd, hbs]
-              simp [deriveEnc, encList, ← hlen]
-  | .product _ fs, bs, v, rest, h => decProdOf?_eq fs bs v rest h
-
-/-- The product walk's inversion (composes the head law + the tail
-    induction). -/
-theorem decProdOf?_eq : ∀ (fs : List (String × Descr)) (bs : List UInt8)
-    (v : prodTyOf fs) (rest : List UInt8),
-    decProdOf? fs bs = some (v, rest) → bs = encProdOf fs v ++ rest
-  | [], bs, _, rest, h => by
-      simp only [decProdOf?, Option.some.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      rfl
-  | (_, d) :: fs, bs, (x, xs), rest, h => by
-      simp only [decProdOf?] at h
-      cases hd : deriveDec d bs with
-      | none =>
-          rw [hd] at h
-          simp only [Option.bind_none] at h
-          exact absurd h (by simp)
-      | some q =>
-          obtain ⟨x', r1⟩ := q
-          rw [hd] at h
-          simp only [Option.bind_some] at h
-          cases hd2 : decProdOf? fs r1 with
-          | none => rw [hd2] at h; simp at h
-          | some q2 =>
-              obtain ⟨xs', r2⟩ := q2
-              rw [hd2] at h
-              simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
-              obtain ⟨⟨rfl, rfl⟩, rfl⟩ := h
-              rw [deriveDec_eq d bs x' r1 hd, decProdOf?_eq fs r1 xs' r2 hd2]
-              simp [encProdOf]
-end
+    bs = deriveEnc d v ++ rest :=
+  law_of_rows decEqAlg
 
 /-! ## THE WIRE GRADE — the record codec as a `Kit.Codec` value -/
 

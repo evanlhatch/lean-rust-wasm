@@ -154,6 +154,16 @@ inductive ValidateError where
   /-- A function's type index is past the type section (`fn` = the
       function's index). -/
   | typeIndexRange (fn tyIdx : Nat)
+  /-- `callindirect` over an ABSENT table (the module declares no
+      table section — the indirect-call lane's table-index
+      discipline; the wire's table index is the constant 0). -/
+  | unboundTable
+  /-- `callindirect`'s type index is past the type section. -/
+  | indirectTypeRange (tyIdx : Nat)
+  /-- A table entry names a function index past the function section
+      (the table's initialization is the active-element face — a
+      dangling entry would dispatch to nothing). -/
+  | tableEntryRange (fn : Nat)
   /-- The per-function wrapper: the module driver pins WHICH function
       refused (the Diag context's frame). -/
   | atFunc (i : Nat) (e : ValidateError)
@@ -175,6 +185,9 @@ def ecUnbalancedEnd : Kit.ECode := ⟨"WV1007"⟩
 def ecUnboundLocal : Kit.ECode := ⟨"WV1008"⟩
 def ecUnboundFunc : Kit.ECode := ⟨"WV1009"⟩
 def ecTypeIndexRange : Kit.ECode := ⟨"WV1010"⟩
+def ecUnboundTable : Kit.ECode := ⟨"WV1011"⟩
+def ecIndirectTypeRange : Kit.ECode := ⟨"WV1012"⟩
+def ecTableEntryRange : Kit.ECode := ⟨"WV1013"⟩
 
 end ValidateError
 
@@ -227,6 +240,19 @@ def ValidateError.toDiag : ValidateError → Kit.Diag
       { code := ecTypeIndexRange
         , message := s!"function {fn}: type index {tyIdx} out of range"
         , got := some s!"type index {tyIdx}" }
+  | .unboundTable =>
+      { code := ecUnboundTable
+        , message := "call_indirect over an absent table: the module declares no \
+          table section (the indirect-call lane needs table 0)"
+        , got := some "no table" }
+  | .indirectTypeRange tyIdx =>
+      { code := ecIndirectTypeRange
+        , message := s!"call_indirect: type index {tyIdx} out of range"
+        , got := some s!"type index {tyIdx}" }
+  | .tableEntryRange fn =>
+      { code := ecTableEntryRange
+        , message := s!"table entry names function {fn} — past the function section"
+        , got := some s!"function index {fn}" }
   | .atFunc i e =>
       let d := e.toDiag
       { d with context := Kit.Label.at s!"function {i}" :: d.context }
@@ -238,11 +264,14 @@ def ValidateError.render (e : ValidateError) : String :=
 /-! ## The checker -/
 
 /-- The typing context: locals (params ++ declared, index-keyed), the
-    call environment, and the enclosing function's results REVERSED
+    call environment, the TYPE section's lookup (the indirect-call
+    lane's `callindirect` type-index check — the ONE table discipline's
+    static face), and the enclosing function's results REVERSED
     (head-top stacks make `resRev` the return's expected stack). -/
 structure Ctx where
   lty : Nat → Option ValType
   fenv : Nat → Option FuncType
+  tenv : Nat → Option FuncType
   resRev : List ValType
 
 /-- The frame forms — the structured sub-body instructions. -/
@@ -293,6 +322,21 @@ def stepFlag (c : Ctx) :
         match popPush ft.params.reverse ft.results.reverse s with
         | some s' => .ok (false, s')
         | none => .error (.operandMismatch ft.params.reverse s)
+  | .callindirect ty, s =>
+      -- THE INDIRECT-CALL row (the static face): the type index must
+      -- resolve (the validator's indirectTypeRange refusal), the
+      -- callee INDEX is the i32 on TOP (popped first), then the args
+      -- against the declared type — the runtime's table lookup + type
+      -- check are Exec's (the trap teeth there).
+      match c.tenv ty with
+      | none => .error (.indirectTypeRange ty)
+      | some ft =>
+        match s with
+        | .i32 :: ts =>
+          match popPush ft.params.reverse ft.results.reverse ts with
+          | some s' => .ok (false, s')
+          | none => .error (.operandMismatch ft.params.reverse ts)
+        | _ => .error (.operandMismatch [.i32] s)
   | .mem op _ _, s =>
       match popPush (memPop op) (memPush op) s with
       | some s' => .ok (false, s')
@@ -441,6 +485,10 @@ inductive StepTy : Ctx → List ValType → Instr → List ValType → Prop wher
       c.lty n = some t → StepTy c (t :: ts) (.localtee n) (t :: ts)
   | op (c : Ctx) (ts : List ValType) (o : Op) :
       StepTy c (opPop o ++ ts) (.op o) (opPush o ++ ts)
+  | callindirect (c : Ctx) (ts : List ValType) (ty : Nat) (ft : FuncType) :
+      c.tenv ty = some ft →
+      StepTy c (.i32 :: (ft.params.reverse ++ ts)) (.callindirect ty)
+        (ft.results.reverse ++ ts)
   | mem (c : Ctx) (ts : List ValType) (m : MemOp) (off : Nat) (al : Option Nat) :
       StepTy c (memPop m ++ ts) (.mem m off al) (memPush m ++ ts)
   | call (c : Ctx) (ts : List ValType) (fn : Nat) (ft : FuncType) :
@@ -571,6 +619,34 @@ theorem stepFlag_localtee_shape (c : Ctx) (n : Nat) (s : List ValType) (b : Bool
           rw [htu]
       · simp at h
 
+/-- `callindirect ty` computes live only on `.i32 :: (ft.params.reverse ++ ts)`
+    with `c.tenv ty = some ft` (the indirect-call row: the callee INDEX
+    pops first, then the declared type's params). -/
+theorem stepFlag_callindirect_shape (c : Ctx) (ty : Nat) (s : List ValType) (b : Bool)
+    (mid : List ValType) (h : stepFlag c (.callindirect ty) s = .ok (b, mid)) :
+    b = false ∧
+    ∃ (ft : FuncType) (ts : List ValType),
+      c.tenv ty = some ft ∧ s = .i32 :: (ft.params.reverse ++ ts)
+        ∧ mid = ft.results.reverse ++ ts := by
+  cases hten : c.tenv ty with
+  | none => simp [hten, stepFlag] at h
+  | some ft =>
+    cases s with
+    | nil => simp [hten, stepFlag] at h
+    | cons t ts =>
+      simp only [hten, stepFlag] at h
+      cases t with
+      | i32 =>
+          simp only [stepFlag] at h
+          split at h
+          · next hp =>
+              rw [Except.ok.injEq, Prod.mk.injEq] at h
+              obtain ⟨ts2, hs1, hs2⟩ := popPush_some _ _ _ _ hp
+              subst hs1
+              exact ⟨h.1.symm, ft, ts2, rfl, rfl, h.2.symm.trans hs2⟩
+          · simp at h
+      | _ => simp [stepFlag] at h
+
 /-- The pop/push families' ok-shape (`op`/`mem`/`call` ride the ONE
     operand-shape engine, so ONE inversion covers them): a live step
     forces the pop/push to fire exactly on `pop ++ ts`. -/
@@ -634,6 +710,12 @@ theorem stepFlag_sound (c : Ctx) (i : Instr) (s mid : List ValType)
         subst hs
         subst hmid
         exact Or.inl (StepTy.call c ts fn ft hf)
+  | callindirect ty =>
+      obtain ⟨-, ft, ts, hten, hv, hmid⟩ :=
+        stepFlag_callindirect_shape c ty s false mid h
+      subst hv
+      subst hmid
+      exact Or.inl (StepTy.callindirect c ts ty ft hten)
   | mem m off al =>
       obtain ⟨ts, hs, hmid⟩ := stepFlag_popPush_shape c _ (memPop m) (memPush m) s mid
         (by simp only [stepFlag]) h
@@ -735,13 +817,13 @@ theorem stepFlag_complete (c : Ctx) (s mid : List ValType) (i : Instr)
     time (the row's own wf pins are `OpTable.opRow_wf`/`memRow_wf`).
     Type content is pinned in WasmCoreTests' sig pins. -/
 theorem opSig_covers : ∀ o : Op,
-    stepFlag (Ctx.mk (fun _ => none) (fun _ => none) []) (.op o) (opPop o ++ [])
+    stepFlag (Ctx.mk (fun _ => none) (fun _ => none) (fun _ => none) []) (.op o) (opPop o ++ [])
       = .ok (false, opPush o ++ []) :=
   fun o => stepFlag_complete _ _ _ _ (StepTy.op _ [] o)
 
 /-- The mem-op drift-guard (same decide over the closed universe). -/
 theorem memSig_covers : ∀ m : MemOp,
-    stepFlag (Ctx.mk (fun _ => none) (fun _ => none) []) (.mem m 0 none) (memPop m ++ [])
+    stepFlag (Ctx.mk (fun _ => none) (fun _ => none) (fun _ => none) []) (.mem m 0 none) (memPop m ++ [])
       = .ok (false, memPush m ++ []) :=
   fun m => stepFlag_complete _ _ _ _ (StepTy.mem _ [] m 0 none)
 
@@ -1029,6 +1111,21 @@ theorem checkBody_sound (c : Ctx) :
               (by simp only [stepFlag, hf]) hfold0
           subst hs
           exact consIh c k _ _ is _ r0 hk (StepTy.call c ts fn ft hf) hrest ih
+      | callindirect ty =>
+        cases hten : c.tenv ty with
+        | none =>
+          simp [checkStep, stepFlag, hten, foldl_poisoned] at hfold0
+        | some ft =>
+          rcases foldl_cons_step _ _ _ _ _ hfold0 with ⟨mid, hst⟩ | ⟨mid, hst, hrest⟩
+          · -- the stopped face: `callindirect` never transfers (the
+            -- shape lemma pins b = false)
+            obtain ⟨hb, -, -, -, -, -⟩ := stepFlag_callindirect_shape _ ty _ _ _ hst
+            simp at hb
+          · obtain ⟨-, ft, ts, hten, hv, hmid⟩ :=
+              stepFlag_callindirect_shape c ty s false mid hst
+            subst hv
+            subst hmid
+            exact consIh c k _ _ is _ r0 hk (StepTy.callindirect c ts ty ft hten) hrest ih
       | mem m off al =>
         obtain ⟨ts, hs, hrest⟩ :=
           fold_popPush c s _ is (memPop m) (memPush m) r0 (by simp only [stepFlag]) hfold0
@@ -1069,63 +1166,64 @@ theorem checkBody_sound (c : Ctx) :
 /-! ## The function judgment + the kit's CheckedProp -/
 
 /-- The judgment's context for one function: params ++ locals keyed by
-    index, the call environment, the reversed results. -/
-def fnCtx (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func) : Ctx :=
+    index, the call environment, the type section's lookup (the
+    indirect-call lane's static face), the reversed results. -/
+def fnCtx (fenv tenv : Nat → Option FuncType) (ft : FuncType) (f : Func) : Ctx :=
   Ctx.mk (lty := fun n => (ft.params ++ f.locals)[n]?) (fenv := fenv)
-    (resRev := ft.results.reverse)
+    (tenv := tenv) (resRev := ft.results.reverse)
 
 /-- The per-function judgment: the body's stack effect validates
     against its signature — starts empty, ends at the results (reversed
     for the head-top convention). -/
-def checkFunc (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func) :
+def checkFunc (fenv tenv : Nat → Option FuncType) (ft : FuncType) (f : Func) :
     Except ValidateError Unit :=
-  match checkBody (fnCtx fenv ft f) [] f.body with
+  match checkBody (fnCtx fenv tenv ft f) [] f.body with
   | .ok s' =>
       if s' = ft.results.reverse then .ok ()
       else .error (.unbalancedEnd ft.results.reverse s')
   | .error e => .error e
 
 /-- The decidable shadow of `checkFunc` (the CheckedProp's check). -/
-def funcCheck (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func) : Bool :=
-  match checkFunc fenv ft f with
+def funcCheck (fenv tenv : Nat → Option FuncType) (ft : FuncType) (f : Func) : Bool :=
+  match checkFunc fenv tenv ft f with
   | .ok () => true
   | .error _ => false
 
-theorem checkFunc_sound (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func)
-    (h : checkFunc fenv ft f = .ok ()) :
-    BodyTy (fnCtx fenv ft f) [] f.body ft.results.reverse := by
+theorem checkFunc_sound (fenv tenv : Nat → Option FuncType) (ft : FuncType) (f : Func)
+    (h : checkFunc fenv tenv ft f = .ok ()) :
+    BodyTy (fnCtx fenv tenv ft f) [] f.body ft.results.reverse := by
   rw [checkFunc] at h
   split at h
   · next s' hs' =>
       split at h
       · next hres =>
           rw [hres] at hs'
-          exact checkBody_sound (fnCtx fenv ft f) (lSize f.body) [] f.body
+          exact checkBody_sound (fnCtx fenv tenv ft f) (lSize f.body) [] f.body
             ft.results.reverse (Nat.le_refl _) hs'
       · simp at h
   · simp at h
 
-theorem checkFunc_complete (fenv : Nat → Option FuncType) (ft : FuncType) (f : Func)
-    (h : BodyTy (fnCtx fenv ft f) [] f.body ft.results.reverse) :
-    checkFunc fenv ft f = .ok () := by
-  rw [checkFunc, checkBody_complete (fnCtx fenv ft f) (lSize f.body) [] f.body
+theorem checkFunc_complete (fenv tenv : Nat → Option FuncType) (ft : FuncType) (f : Func)
+    (h : BodyTy (fnCtx fenv tenv ft f) [] f.body ft.results.reverse) :
+    checkFunc fenv tenv ft f = .ok () := by
+  rw [checkFunc, checkBody_complete (fnCtx fenv tenv ft f) (lSize f.body) [] f.body
     ft.results.reverse (Nat.le_refl _) h]
   simp
 
 /-- Pattern #1 through the kit (Kit.CheckedProp): the relation
     (`BodyTy`) + the decidable checker (`funcCheck`) + the proved
     bridge. COMPLETE for this fragment — `.proved`, never defaulted. -/
-def funcChecked (fenv : Nat → Option FuncType) (ft : FuncType) : Kit.CheckedProp Func where
-  P f := BodyTy (fnCtx fenv ft f) [] f.body ft.results.reverse
-  check f := funcCheck fenv ft f
-  sound f h := checkFunc_sound fenv ft f (by
+def funcChecked (fenv tenv : Nat → Option FuncType) (ft : FuncType) : Kit.CheckedProp Func where
+  P f := BodyTy (fnCtx fenv tenv ft f) [] f.body ft.results.reverse
+  check f := funcCheck fenv tenv ft f
+  sound f h := checkFunc_sound fenv tenv ft f (by
     unfold funcCheck at h
-    cases hc : checkFunc fenv ft f with
+    cases hc : checkFunc fenv tenv ft f with
     | ok u => rfl
     | error e => rw [hc] at h; simp at h)
   complete? := .proved (fun f h => by
-    show funcCheck fenv ft f = true
-    rw [funcCheck, checkFunc_complete fenv ft f h])
+    show funcCheck fenv tenv ft f = true
+    rw [funcCheck, checkFunc_complete fenv tenv ft f h])
 
 /-! ## The module driver -/
 
@@ -1137,14 +1235,64 @@ def checkFuncs (m : Module) : Nat → List Func → Except ValidateError Unit
       match m.typeAt f.tyIdx with
       | none => .error (.typeIndexRange i f.tyIdx)
       | some ft =>
-        match checkFunc m.fenv ft f with
+        match checkFunc m.fenv m.typeAt ft f with
         | .ok () => checkFuncs m (i + 1) fs
         | .error e => .error (.atFunc i e)
 
-/-- The module-level driver: every function's body validates against
-    its (resolved) signature, indices included. -/
+/-! ### The table discipline (the indirect-call lane's module face) -/
+
+mutual
+/-- Does the instruction use the indirect call? (The frame forms walk
+    their bodies — a `callindirect` inside a block demands the table
+    just the same.) -/
+def instrIndirect : Instr → Bool
+  | .callindirect _ => true
+  | .block b => bodyIndirect b
+  | .loop b => bodyIndirect b
+  | .if_ t e => bodyIndirect t || bodyIndirect e
+  | _ => false
+
+/-- The body walk (the mutual sibling). -/
+def bodyIndirect : List Instr → Bool
+  | [] => false
+  | i :: is => instrIndirect i || bodyIndirect is
+end
+
+/-- The entries' bound walk (`checkEntries`' helper): every entry
+    names a bound function (never a dangling dispatch target). -/
+def entryBounded (m : Module) : List Nat → Except ValidateError Unit
+  | [] => .ok ()
+  | fn :: rest =>
+      match m.funcs[fn]? with
+      | none => .error (.tableEntryRange fn)
+      | some _ => entryBounded m rest
+
+/-- Every entry of every table names a bound function. -/
+def checkEntries (m : Module) : List Table → Except ValidateError Unit
+  | [] => .ok ()
+  | t :: ts =>
+      match entryBounded m t.init with
+      | .ok () => checkEntries m ts
+      | .error e => .error e
+
+/-- THE TABLE-INDEX DISCIPLINE (the module driver's indirect-call
+    face): a body that uses `callindirect` demands the table's
+    PRESENCE (the wire's table index is the constant 0), and every
+    table entry names a bound function. -/
+def checkTables (m : Module) : Except ValidateError Unit :=
+  if m.tables.isEmpty then
+    if m.funcs.any (fun f => bodyIndirect f.body) then .error .unboundTable
+    else .ok ()
+  else
+    checkEntries m m.tables
+
+/-- The module-level driver: the table discipline first (the
+    indirect-call lane's static face), then every function's body
+    validates against its (resolved) signature, indices included. -/
 def checkModule (m : Module) : Except ValidateError Unit :=
-  checkFuncs m 0 m.funcs
+  match checkTables m with
+  | .error e => .error e
+  | .ok () => checkFuncs m 0 m.funcs
 
 /-- The module check's PER-FUNCTION resolution: a module that checks
     resolves every function's type index and validates its body
@@ -1153,7 +1301,7 @@ def checkModule (m : Module) : Except ValidateError Unit :=
 theorem checkFuncs_some (m : Module) :
     ∀ (fs : List Func) (i j : Nat) (f : Func),
       checkFuncs m i fs = .ok () → fs[j]? = some f →
-      ∃ ft, m.typeAt f.tyIdx = some ft ∧ checkFunc m.fenv ft f = .ok () := by
+      ∃ ft, m.typeAt f.tyIdx = some ft ∧ checkFunc m.fenv m.typeAt ft f = .ok () := by
   intro fs
   induction fs with
   | nil => intro i j f _ h; simp at h

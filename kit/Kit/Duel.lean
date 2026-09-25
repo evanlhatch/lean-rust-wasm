@@ -148,6 +148,13 @@ structure VectorSet where
   vectors : List BinaryFile
   /-- The expectation per vector path (the consumer contract's data). -/
   expects : List (String × Expect)
+  /-- The manifest's header comment style: `.hash` when the manifest
+      sits beside other `#`-header artifacts, `.doubleSlash` when it
+      sits next to Rust code (the artifact-headers gate's shape
+      contract reads THIS field through the emitter — the DRY sweep's
+      consolidation: the style is the only behavioral parameter the
+      duel lanes differ in). Defaults to the seed's `.hash`. -/
+  style : CommentStyle := .hash
   /-- THE one-writer discipline: two vectors cannot share one path. -/
   vectors_nodup : (vectors.map (·.path)).Nodup := by decide
   /-- Two expectations cannot name one vector (contradictory rows). -/
@@ -182,20 +189,81 @@ def expectsCovered (vs : VectorSet) : Bool :=
 
 /-! ## The vector-set emitter (through the ONE spine) -/
 
-/-- The vector-set emitter: the manifest rides the TEXT lane, the
-    vectors the BINARY lane — one emitter per duel directory (the
-    one-writer discipline; the paths' nodup rides the VectorSet's own
-    proof field, not a second proof). -/
-def emitter (vs : VectorSet) : Emitter Unit where
+/-- The vector-set emitter, lane-parameterized (the DRY sweep's ONE
+    body — the duel lanes were hand-rolling exactly this shape): the
+    manifest rides the TEXT lane, the vectors the BINARY lane; the
+    per-lane differences are exactly the spec type (the fold's input),
+    the specSource provenance, the header style (the VectorSet's OWN
+    field), and the optional emission law. The one-writer discipline
+    rides the VectorSet's proof fields, never a second proof. -/
+def emitterWith {Spec : Type} (vs : VectorSet) (specSource : String)
+    (law : Option (Spec → Prop) := none) : Emitter Spec where
   name := s!"duel:{vs.name}"
-  style := .hash
-  specSource := vs.generator
+  style := vs.style
+  specSource := specSource
   outputs := [vs.dir ++ "/manifest.txt"]
   outputs_nodup := by simp
   binaryOutputs := vs.vectors.map (·.path)
   binaryOutputs_nodup := vs.vectors_nodup
   run _ := [{ path := vs.dir ++ "/manifest.txt", contents := manifestBody vs }]
   runBinary := some fun _ => vs.vectors
+  law := law
+
+/-- The vector-set emitter (the seed's pinned-constant face: spec
+    `Unit`, the generator as the provenance — KitTests' driver pin). -/
+def emitter (vs : VectorSet) : Emitter Unit :=
+  emitterWith vs vs.generator
+
+/-! ## The Rust consumers' shared preamble (the ONE copy) -/
+
+/-- The Rust duel consumers' shared preamble — `const CRATE_PREFIX`
+    (the generated crate's repo-root prefix; byte-identical in every
+    Rust-side consumer, so it lives HERE once — the DRY sweep's string
+    consolidation; gen-check's byte-tie proves the splices identical). -/
+def rustCratePrefix : String :=
+  "/// The generated crate's repo-root prefix (the manifest's rows are
+/// repo-root-relative; the test binary's cwd is the crate root).
+const CRATE_PREFIX: &str = \"crates/schema-generated/\";
+
+"
+
+/-- The Rust duel consumers' shared preamble — `fn crate_path` (the
+    row path's re-basing; byte-identical in every consumer). -/
+def rustCratePath : String :=
+  "/// Re-base a manifest row's repo-root-relative path to the crate root.
+fn crate_path(row_path: &str) -> &str {
+    match row_path.strip_prefix(CRATE_PREFIX) {
+        Some(p) => p,
+        None => row_path,
+    }
+}
+
+"
+
+/-- The Rust duel consumers' shared `fn manifest_rows` (Kit.Duel's
+    consumer contract: skip the 2-line GENERATED header + the
+    `generator` provenance row, split each row on the tab — ONE parse
+    walk). The row SHAPE is the consumer's: `rowTy` names the Vec's
+    element type, `rowExpr` the produced row — the only two
+    byte-differences between the lanes' copies. -/
+def rustManifestRows (rowTy rowExpr : String) : String :=
+  "/// Kit.Duel's consumer contract: skip the 2-line GENERATED header and
+/// the `generator` provenance row, split each row on the tab.
+fn manifest_rows() -> Vec<" ++ rowTy ++ "> {
+    MANIFEST
+        .lines()
+        .skip(2)
+        .filter(|line| !line.is_empty() && !line.starts_with(\"generator\\t\"))
+        .map(|line| {
+            let mut parts = line.split('\\t');
+            let path = parts.next().expect(\"manifest row: path\").to_string();
+            let expect = parts.next().expect(\"manifest row: expectation\");
+            " ++ rowExpr ++ "
+        })
+        .collect()
+}
+
+"
 
 /-! ## The Lean-side vector generator (the seeded discipline) -/
 

@@ -58,3 +58,45 @@ import WasmCore
 /-- info: 'Guest.collectScalarEnums' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms Guest.collectScalarEnums
+
+-- The effects lane's integration (Guest.Effects): the derivation +
+-- the boundary check + the obligation rows.
+/-- info: 'Guest.Effects.rowOf' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.rowOf
+
+/-- info: 'Guest.Effects.fpOf' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.fpOf
+
+/-- info: 'Guest.Effects.verdictOf' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Guest.Effects.verdictOf
+
+/-- info: 'Guest.Effects.enforce' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.enforce
+
+/-- info: 'Guest.Effects.obligationRows' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.obligationRows
+
+/-- info: 'Guest.Effects.rowDiff_nil_iff_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.rowDiff_nil_iff_le
+
+/-- info: 'Guest.Effects.verdict_over_refuses' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.verdict_over_refuses
+
+/-- info: 'Guest.Effects.verdict_not_le_refuses' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.verdict_not_le_refuses
+
+/-- info: 'Guest.Effects.verdict_le_of_not_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.verdict_le_of_not_refused
+
+/-- info: 'Guest.Effects.EffectError.toDiag' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Guest.Effects.EffectError.toDiag

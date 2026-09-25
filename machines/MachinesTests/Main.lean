@@ -306,7 +306,10 @@ machine! noEvents where
 /-! ## The battery's verdict faces (rung-3 pins) -/
 
 def statesFull : List Nat := [0, 1, 2, 7]
-def statesReachable : List Nat := [0, 1, 2]
+/-- The reachable fragment {0,1,2}: SHARED with `MachinesTests.Closure`'s
+    `states3cl` (the same worked machine's enumerated fragment — one
+    fixture, two consumers; the dupDefBodies discipline). -/
+def statesReachable : List Nat := states3cl
 
 theorem inputsFull_complete : ∀ i, i ∈ inputs3 := by
   intro i; cases i <;> simp [inputs3]

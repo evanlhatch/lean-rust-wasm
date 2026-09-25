@@ -1153,6 +1153,177 @@ def typeSafetyTeethSpec : Spec :=
           "control fired: the validated slice run answered the type error") ]
     1 42
 
+/-! ## The indirect-call lane (the table discipline) -/
+
+/-- THE INDIRECT-CALL module: func 1 (the callee: param + 1) sits in
+    the table at entry 0; func 0 pushes the arg + the table index (the
+    i32 on TOP) and dispatches through `callindirect` at the
+    signature's type index. The known answer: 41 + 1 = 42. -/
+def indirectOk : Module where
+  types := [⟨[], [.i64]⟩, ⟨[.i64], [.i64]⟩]
+  funcs :=
+    [ ⟨0, [], [ .i64const 41, .i32const 0, .callindirect 1 ]⟩
+    , ⟨1, [.i64], [ .localget 0, .i64const 1, .op .i64add ]⟩ ]
+  exports := []
+  tables := [{ init := [1] }]
+
+/-- NEGATIVE fixture: the table index 5 is past the entries — the
+    out-of-bounds RUNTIME trap (never a fabricated dispatch). -/
+def indirectOob : Module where
+  types := [⟨[], [.i64]⟩, ⟨[.i64], [.i64]⟩]
+  funcs :=
+    [ ⟨0, [], [ .i64const 41, .i32const 5, .callindirect 1 ]⟩
+    , ⟨1, [.i64], [ .localget 0, .i64const 1, .op .i64add ]⟩ ]
+  exports := []
+  tables := [{ init := [1] }]
+
+/-- NEGATIVE fixture: the entry's resolved type ⟨[i64], [i64]⟩ differs
+    from the declared one ⟨[i32], [i32]⟩ — the SIG-MISMATCH runtime
+    trap (a mismatched closure applied; NEVER a wrong call, NEVER the
+    static typeErr — the type-safety statement survives the new arm). -/
+def indirectSigMismatch : Module where
+  types := [⟨[], [.i64]⟩, ⟨[.i64], [.i64]⟩, ⟨[.i32], [.i32]⟩]
+  funcs :=
+    [ ⟨0, [], [ .i64const 41, .i32const 0, .callindirect 2 ]⟩
+    , ⟨1, [.i64], [ .localget 0, .i64const 1, .op .i64add ]⟩ ]
+  exports := []
+  tables := [{ init := [1] }]
+
+/-- NEGATIVE fixture: the type index 9 is past the type section — the
+    validator's `indirectTypeRange` refusal. -/
+def indirectTypeRangeModule : Module where
+  types := [⟨[], [.i64]⟩]
+  funcs := [⟨0, [], [ .i64const 41, .i32const 0, .callindirect 9 ]⟩]
+  exports := []
+  tables := [{ init := [0] }]
+
+/-- NEGATIVE fixture: a `callindirect` over an ABSENT table — the
+    validator's `unboundTable` refusal (the table-index discipline). -/
+def indirectNoTable : Module where
+  types := [⟨[], [.i64]⟩, ⟨[.i64], [.i64]⟩]
+  funcs :=
+    [ ⟨0, [], [ .i64const 41, .i32const 0, .callindirect 1 ]⟩
+    , ⟨1, [.i64], [ .localget 0, .i64const 1, .op .i64add ]⟩ ]
+  exports := []
+
+/-- NEGATIVE fixture: a table entry names a function past the function
+    section — the validator's `tableEntryRange` refusal. -/
+def indirectDanglingEntry : Module where
+  types := [⟨[], [.i64]⟩]
+  funcs := [⟨0, [], []⟩]
+  exports := []
+  tables := [{ init := [9] }]
+
+/-- THE INDIRECT-CALL module's bytes, pinned byte-exact: the type
+    section (two types), the function section, the TABLE section (4),
+    the ELEMENT section (9 — the active segment: offset i32.const 0,
+    the entries), the code section. -/
+def indirectBytes : List UInt8 :=
+  [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,   -- magic + version
+   0x01, 0x0A, 0x02, 0x60, 0x00, 0x01, 0x7E,          -- type section
+        0x60, 0x01, 0x7E, 0x01, 0x7E,
+   0x03, 0x03, 0x02, 0x00, 0x01,                      -- function section
+   0x04, 0x04, 0x01, 0x70, 0x00, 0x01,                -- table section
+   0x09, 0x07, 0x01, 0x00, 0x41, 0x00, 0x0B, 0x01, 0x01, -- elem section
+   0x0A, 0x15, 0x02, 0x09, 0x00, 0x42, 0x29, 0x41, 0x00, 0x11, 0x00, 0x01, 0x0B,
+             0x09, 0x01, 0x01, 0x7E, 0x20, 0x00, 0x42, 0x01, 0x7C, 0x0B]
+
+/-- THE INDIRECT-CALL module's WAT, pinned byte-exact (the table + the
+    element segment's text faces). -/
+def indirectWat : String :=
+"(module\n"
+++ "  (type (func (result i64)))\n"
+++ "  (type (func (param i64) (result i64)))\n"
+++ "  (table 1 funcref)\n"
+++ "  (elem (i32.const 0) func 1)\n"
+++ "  (func (type 0)\n"
+++ "    i64.const 41\n"
+++ "    i32.const 0\n"
+++ "    call_indirect (type 1)\n"
+++ "  )\n"
+++ "  (func (type 1)\n"
+++ "    (local i64)\n"
+++ "    local.get 0\n"
+++ "    i64.const 1\n"
+++ "    i64.add\n"
+++ "  )\n"
+++ ")\n"
+
+/-- The indirect-call lane's pins: the known answer through the table,
+    the byte-tie (the table + elem sections' bytes), the WAT tie, and
+    the validator conformance. -/
+def indirectProp : Tape → CheckResult := fun _ => do
+  assert (checkOk indirectOk) "the indirect-call module was refused"
+  assert (stackOf (run1 indirectOk 100) == some [.i64 42])
+    "the indirect call's answer drifted (41 + 1 through the table)"
+  assert (encodeModule indirectOk == indirectBytes)
+    s!"the indirect-call byte-tie mismatch: got {bytesS (encodeModule indirectOk)}"
+  assert (renderModule indirectOk == indirectWat)
+    s!"the indirect-call WAT tie mismatch: got\n{renderModule indirectOk}"
+  assert (Text.render (instrW 0 (.callindirect 1)) == "call_indirect (type 1)\n")
+    "the call_indirect spelling drifted"
+
+/-- Controls: a tampered table entry (entry 0 → func 0 — the SELF
+    call, a type error shape) must not tie the bytes; the mismatched
+    entry must NOT be the static type error. -/
+def indirectSpec : Spec :=
+  Spec.ofList "the indirect-call lane (the table discipline: lookup, type check, call)"
+    indirectProp
+    [ ("tampered table entry tied", fun _ =>
+        let tampered : Module := { indirectOk with
+          tables := [{ init := [0] }] }
+        assert (encodeModule tampered == indirectBytes)
+          "control fired: the tampered table entry tied")
+    , ("the sig mismatch answered the STATIC type error", fun _ =>
+        assert (trapOf (run1 indirectSigMismatch 100) == some Trap.typeErr)
+          "control fired: the sig mismatch was laundered into typeErr — \
+            the type-safety statement would be false")
+    , ("the OOB index completed", fun _ =>
+        assert (isOk (run1 indirectOob 100))
+          "control fired: the out-of-bounds dispatch completed")
+    ]
+    1 42
+
+/-- The trap teeth + the validator's refusal KINDS for the lane (the
+    envelope discipline: every new refusal fires with its exact ctor
+    + payload; the runtime traps are the NAMED kinds). -/
+def indirectTeethProp : Tape → CheckResult := fun _ => do
+  -- the runtime teeth: OOB traps, sig mismatch traps (never a wrong call)
+  assert (trapOf (run1 indirectOob 100) == some Trap.tabOOB)
+    "the out-of-bounds index did not answer the tabOOB trap"
+  assert (trapOf (run1 indirectSigMismatch 100) == some Trap.indirectSig)
+    "the sig mismatch did not answer the indirectSig trap"
+  -- the validator teeth: the refusal kinds with their payloads
+  assert (errOf indirectTypeRangeModule ==
+    some (ValidateError.atFunc 0 (ValidateError.indirectTypeRange 9)))
+    "indirectTypeRange kind/payload drifted"
+  assert (errOf indirectNoTable == some (ValidateError.unboundTable))
+    "unboundTable kind drifted"
+  assert (errOf indirectDanglingEntry ==
+    some (ValidateError.tableEntryRange 9))
+    "tableEntryRange kind/payload drifted"
+  -- the ledger honesty: the UNVALIDATED faces answer unmodeled, never
+  -- a fabricated dispatch
+  assert (isUnmodeled (run1 indirectTypeRangeModule 100))
+    "the unvalidated type range did not answer the honest unmodeled"
+
+/-- Controls: the WRONG kind/payload must NOT fire (a kind conflation
+    or a drifted payload is caught). -/
+def indirectTeethSpec : Spec :=
+  Spec.ofList "the indirect-call teeth (the named runtime traps + the validator's refusal kinds)"
+    indirectTeethProp
+    [ ("the OOB trap mislabeled memOOB", fun _ =>
+        assert (trapOf (run1 indirectOob 100) == some Trap.memOOB)
+          "control fired: the OOB dispatch was answered as memOOB")
+    , ("the dangling entry accepted", fun _ =>
+        assert (checkOk indirectDanglingEntry)
+          "control fired: the dangling table entry was accepted")
+    , ("the tableless module accepted", fun _ =>
+        assert (checkOk indirectNoTable)
+          "control fired: the tableless callindirect was accepted")
+    ]
+    1 42
+
 /-! ## The driver -/
 
 def main : IO UInt32 :=
@@ -1168,5 +1339,6 @@ def main : IO UInt32 :=
     , ("WasmCore.Slice/byte-tie", [tieBytesSpec])
     , ("WasmCore.Exec", [execSpec, execTrapSpec, execFuelSpec])
     , ("WasmCore.Exec/calls", [execCallSpec])
+    , ("WasmCore.Exec/indirect", [indirectSpec, indirectTeethSpec])
     , ("WasmCore.Exec/type-safety", [typeSafetyTeethSpec])
     , ("WasmCore.Duel", [duelSpec]) ]

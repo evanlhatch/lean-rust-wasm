@@ -8,6 +8,9 @@ Module map:
   definitions (equation-lemma-friendly).
 - `TextKit.Lemmas` — the inversion kit: `startsWith_self`/`expect_self`,
   the head-predicate exclusions, the bare-name inversion.
+- `TextKit.Literals` — the shared literal-toList rfl family (the
+newline/space/comma/paren singletons + the whitespace-run composites);
+per-format word spellings stay with their format.
 - `TextKit.Suggest` — the ONE did-you-mean engine (the ranked
   bounded edit distance + the one tree-wide suffix, as data) + the ONE
   diagnostic envelope `Diag` (05 §4's seven fields + `closedWorld`,
@@ -35,6 +38,7 @@ pins the core triple over the headline lemmas.
 module
 
 public import TextKit.Basic
+public import TextKit.Literals
 public import TextKit.Lemmas
 public import TextKit.Suggest
 public import TextKit.Diag

@@ -58,6 +58,8 @@ Doctrine slots (notes/v3/01-core.md, the five questions):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
+import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
 namespace Effects
 
 /-! ## The closed atoms -/
@@ -88,6 +90,7 @@ def unionMem {α : Type} [DecidableEq α] : List α → List α → List α
 
 /-- One union step: membership through the membership-checked cons.
     (The helper keeps `mem_unionMem` free of mixed unfolded forms.) -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: this module's helper — consumed by `mem_unionMem`'s proof (THE membership law the rows and the footprint key join cite)"]
 theorem mem_step {α : Type} [DecidableEq α] (x e : α) (a : List α) :
     x ∈ (if e ∈ a then a else e :: a) ↔ x ∈ a ∨ x = e := by
   by_cases h : e ∈ a
@@ -151,6 +154,7 @@ def memB (e : Effect) : Row → Bool
   | [] => false
   | g :: r => if g = e then true else memB e r
 
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by `Row.sub_iff_le`'s proof in this module (the decidability behind the check boundary's elaboration-time teeth)"]
 theorem memB_iff (e : Effect) (r : Row) : memB e r = true ↔ e ∈ r := by
   cases r with
   | nil => simp [memB]
@@ -173,6 +177,7 @@ def sub (a b : Row) : Bool :=
   | [] => true
   | e :: r => memB e b && sub r b
 
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by this module's `Decidable (Row.le)` instance (the check boundary's teeth) + pinned by EffectsTests.Axioms (#print axioms)"]
 theorem sub_iff_le (a b : Row) : sub a b = true ↔ le a b := by
   cases a with
   | nil => simp [sub, le, List.not_mem_nil]
@@ -199,6 +204,7 @@ instance (a b : Row) : Decidable (le a b) :=
     `Effects.unionMem`, cited). -/
 def join (a b : Row) : Row := unionMem a b
 
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (mem_join_both/mem_join_absent cite it); THE membership law of the rows' join — the semantics every lattice law reads"]
 theorem mem_join (x : Effect) (a b : Row) :
     x ∈ join a b ↔ x ∈ a ∨ x ∈ b := mem_unionMem x a b
 
@@ -208,9 +214,11 @@ def sameMembers (a b : Row) : Prop := ∀ e, e ∈ a ↔ e ∈ b
 /-! ### The lattice laws (stated over the semantics, never the syntax) -/
 
 /-- The empty row permits nothing — the pure discipline. -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by this module's proofs of `Row.join_nil_right`/`Row.join_nil_left` (the lattice's law set)"]
 theorem mem_nil (x : Effect) : x ∈ ([] : Row) ↔ False := by
   simp
 
+@[nolint linter.guestlang.zeroCitation "public API: the lattice's law set (the seed's API — the empty-row law of the pure discipline; the row-handler/interpreter layer is the header's named first consumer)"]
 theorem join_nil_right (a : Row) : sameMembers (join a []) a := by
   intro x
   rw [mem_join, mem_nil]
@@ -221,6 +229,7 @@ theorem join_nil_right (a : Row) : sameMembers (join a []) a := by
     | inr hf => exact hf.elim
   · exact fun hx => Or.inl hx
 
+@[nolint linter.guestlang.zeroCitation "public API: the lattice's law set (the seed's API — the empty-row law of the pure discipline; the row-handler/interpreter layer is the header's named first consumer)"]
 theorem join_nil_left (a : Row) : sameMembers (join [] a) a := by
   intro x
   rw [mem_join, mem_nil]
@@ -233,12 +242,14 @@ theorem join_nil_left (a : Row) : sameMembers (join [] a) a := by
 
 /-- Idempotence: joining a row with itself changes nothing. THE D7 pin's
     engine — see `Effects.row_blind_to_double_spend`. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests.Axioms (#print axioms); THE D7 pin's engine — `Effects.row_blind_to_double_spend` consumes it in this module"]
 theorem join_idem (a : Row) : sameMembers (join a a) a := by
   intro x
   rw [mem_join]
   exact ⟨fun hx => hx.elim id id, fun hx => Or.inl hx⟩
 
 /-- Commutativity: the join is the union, order-free. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests.Axioms (#print axioms); the join's commutativity law (the row is a finite set — order-free)"]
 theorem join_comm (a b : Row) : sameMembers (join a b) (join b a) := by
   intro x
   rw [mem_join, mem_join]
@@ -247,6 +258,7 @@ theorem join_comm (a b : Row) : sameMembers (join a b) (join b a) := by
 /-- Associativity: the join composes in either nesting — the
     composition discipline's law (nested programs' rows join either
     way). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests.Axioms (#print axioms); the nested-composition law (a nested program's rows join either way)"]
 theorem join_assoc (a b c : Row) :
     sameMembers (join (join a b) c) (join a (join b c)) := by
   intro x
@@ -267,15 +279,19 @@ theorem join_assoc (a b c : Row) :
 
 /-! ### The order's facts -/
 
+@[nolint linter.guestlang.zeroCitation "public API: the order's facts (the seed's law set — the sub-effect discipline's reflexivity; the row-polymorphism follow-up is the header's named exclusion)"]
 theorem le_refl (a : Row) : le a a := fun _ hx => hx
 
+@[nolint linter.guestlang.zeroCitation "public API: the order's facts (the seed's law set — the transitivity the registry-driven row derivation composes through, 08 §8's named follow-up)"]
 theorem le_trans {a b c : Row} (h₁ : le a b) (h₂ : le b c) : le a c :=
   fun _ hx => h₂ _ (h₁ _ hx)
 
 /-- The join's parts sit below the join. -/
+@[nolint linter.guestlang.zeroCitation "public API: the order's facts (the join's upper-bound laws — the composition discipline's seed API; the tests' sweep pins them at the data level via `decide`)"]
 theorem le_join_left (a b : Row) : le a (join a b) :=
   fun e hx => (mem_join e a b).mpr (Or.inl hx)
 
+@[nolint linter.guestlang.zeroCitation "public API: the order's facts (the join's upper-bound laws — the composition discipline's seed API; the tests' sweep pins them at the data level via `decide`)"]
 theorem le_join_right (a b : Row) : le b (join a b) :=
   fun e hx => (mem_join e a b).mpr (Or.inr hx)
 
@@ -283,6 +299,7 @@ theorem le_join_right (a b : Row) : le b (join a b) :=
     the join permits exactly what the union of the allowances does — an
     over-permissive allowance is detectable, an under-permissive one
     refuses (the check boundary's teeth). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests.Axioms (#print axioms); THE least-upper-bound law (the check boundary's over/under-permissive teeth)"]
 theorem join_le {a b c : Row} (h₁ : le a c) (h₂ : le b c) : le (join a b) c := by
   intro x hx
   rcases (mem_join x a b).mp hx with hx | hx
@@ -335,6 +352,7 @@ end Comp
     at the atom) — the lost usage accounting is exactly what the row
     CANNOT express, and why `Effects.Resource` exists as a separate
     structure. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (d7_theorem_pin) + EffectsTests.Axioms (#print axioms); THE D7 split pin — why Resource exists as a separate structure"]
 theorem row_blind_to_double_spend :
     Row.sameMembers
       (Row.join [Effect.consume] [Effect.consume])

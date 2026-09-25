@@ -531,7 +531,7 @@ theorem insertKeyW_nonzero [wk : WKind K] [ck : CanonKey α] [DecidableEq α] (k
         exact hr q hq
       · rw [if_neg hw0] at hq
         rcases List.mem_cons.mp hq with rfl | hq
-        · exact false_of_not_eq_true hw0
+        · exact (Bool.eq_false_iff).mpr hw0
         · exact hr q hq
     · rw [if_neg hkk] at hq
       by_cases hlt : ck.lt k k'
@@ -544,7 +544,7 @@ theorem insertKeyW_nonzero [wk : WKind K] [ck : CanonKey α] [DecidableEq α] (k
           · exact hr q hq
         · rw [if_neg hw] at hq
           rcases List.mem_cons.mp hq with rfl | hq
-          · exact false_of_not_eq_true hw
+          · exact (Bool.eq_false_iff).mpr hw
           · rcases List.mem_cons.mp hq with hq1 | hq
             · subst hq1
               exact hhead

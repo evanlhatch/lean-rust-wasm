@@ -64,6 +64,7 @@ import Gates.Packages
 import Gates.Common
 import SchemaCore
 import WasmCore
+import Guest.Component
 
 open Lean
 open Kit (DataRegistry)
@@ -99,6 +100,15 @@ def duelEmitters :
     List (Kit.Emit.Emitter (List (String × Kit.Duel.Expect))) :=
   [WasmCore.Duel.duelEmitter]
 
+/-- The COMPONENT lane's REAL emitter (over `Guest.Component.Spec` —
+    the fourth spec type; the `just componentgen` write path: the
+    world text `gen/component-slice.wit` + the component bytes
+    `gen/component-slice.wasm` + its `.hdr` sidecar). The emitter is
+    PURE (Guest.Component imports no Lean compiler machinery at its
+    own face — the LCNF re-run lives in the driver). -/
+def componentEmitters : List (Kit.Emit.Emitter Guest.Component.Spec) :=
+  [Guest.Component.componentEmitter, Guest.Component.stringComponentEmitter]
+
 /-- The golden module: the `schema` exe's own write (SchemaMain's
     golden-body write — the byte-tie's theorem face). NOT an emitter
     output; the writer's declaration lives in SchemaMain, named here
@@ -115,7 +125,8 @@ def declaredOutputs : List String :=
   let fromEmitters :=
     ((realEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
       ++ (wasmEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
-      ++ (duelEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten)
+      ++ (duelEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
+      ++ (componentEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten)
   let deduped :=
     (List.foldl (fun acc p => if acc.contains p then acc else p :: acc)
       [] fromEmitters).reverse
@@ -264,15 +275,17 @@ unsafe def run : IO UInt32 := do
   let realOutputs := realEmitters.map fun e => e.outputs ++ e.binaryOutputs
   let wasmOutputs := wasmEmitters.map fun e => e.outputs ++ e.binaryOutputs
   let duelOutputs := duelEmitters.map fun e => e.outputs ++ e.binaryOutputs
+  let componentOutputs := componentEmitters.map fun e => e.outputs ++ e.binaryOutputs
   let v := verdict declared onDisk absent.reverse
-    (realOutputs ++ wasmOutputs ++ duelOutputs)
+    (realOutputs ++ wasmOutputs ++ duelOutputs ++ componentOutputs)
   -- the kits' cross-emitter verdicts over the REAL sets (exercised,
   -- not assumed; the collision rows above name the paths) + the
   -- cross-set one-writer face.
   let disjoint := Kit.Emit.outputsDisjoint realEmitters
     && Kit.Emit.outputsDisjoint wasmEmitters
     && Kit.Emit.outputsDisjoint duelEmitters
-    && decide ((realOutputs ++ wasmOutputs ++ duelOutputs).flatten.Nodup)
+    && Kit.Emit.outputsDisjoint componentEmitters
+    && decide ((realOutputs ++ wasmOutputs ++ duelOutputs ++ componentOutputs).flatten.Nodup)
   match v with
   | .clean d o =>
       unless disjoint do
@@ -284,8 +297,8 @@ unsafe def run : IO UInt32 := do
         on-disk artifact(s) under the roots, declared-vs-actual agrees \
         both ways, emitters pairwise disjoint (Kit.Emit.outputsDisjoint \
         = true over ALL real sets — SchemaCore + the wasm lane + the \
-        duel lane — cross-set flatten nodup); collision negative \
-        control: fired"
+        duel lane + the component lane — cross-set flatten nodup); \
+        collision negative control: fired"
       return 0
   | .dirty fs =>
       for f in fs do
@@ -303,7 +316,8 @@ unsafe def run : IO UInt32 := do
       unless disjoint do
         IO.eprintln s!"ownership: Kit.Emit.outputsDisjoint = false over \
           the real emitter sets ({realEmitters.length} SchemaCore + \
-          {wasmEmitters.length} wasm + {duelEmitters.length} duel)"
+          {wasmEmitters.length} wasm + {duelEmitters.length} duel + \
+          {componentEmitters.length} component)"
       return 1
 
 end Gates.Ownership

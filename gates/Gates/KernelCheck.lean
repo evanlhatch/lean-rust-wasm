@@ -72,7 +72,11 @@ open Lean
 
 namespace Gates.KernelCheck
 
-/-- Modules whose expected lean4lean failure is the reduceBool gap
+/-- Modules whose expected lean4lean failure is a DISCLOSED gap —
+    each entry names its module + the class: the reduceBool gap
+    (lean4lean does not support it) or the replay-budget timeout
+    (the giant golden theorems' full-bytes rfl reductions exceed the
+    replay budget; the real kernel accepts them at build).
     (caveat (a)): the tree's disclosed native_decide sites. The
     native-policy gate owns their enforcement; a failure HERE for any
     OTHER module is a real finding. The fresh tree: EMPTY (zero
@@ -84,13 +88,21 @@ namespace Gates.KernelCheck
 -- duplicated — distinct bodies keep the dupDefBodies linter quiet
 -- (its @[nolint] escape hatch is currently unresolvable — see
 -- LintKit.Basic's attr registration).
-def knownReduceBoolGaps : List (String × Name) := []
+def knownGaps : List (String × Name) :=
+  [("replay-budget", `SchemaCore.Goldens)]
 
-/-- The tree's srcDirs (the lakefile's lean_lib srcDirs) — a module is
-    OURS iff its source file exists under one of them. -/
-def srcDirs : Array System.FilePath :=
-  #["gates", "lintkit", "testingkit", "textkit", "kit", "schemacore",
-   "wasmcore", "zset", "machines", "wit", "guest"]
+/-- The tree's srcDirs — DERIVED from Gates.Packages' table (the single
+    source; the hand-copied list this replaces had drifted: the newest
+    lanes' modules were skipped silently as "not ours"). A module is
+    OURS iff its source file exists under one of the table's srcDirs. -/
+def srcDirs : Array System.FilePath := Id.run do
+  let dirs : List System.FilePath :=
+    Gates.gatedPackages.toList.map (·.srcDir)
+  -- dedup, order-preserving (the cone order)
+  let mut acc : List System.FilePath := []
+  for d in dirs do
+    if !(acc.contains d) then acc := d :: acc
+  acc.reverse.toArray
 
 /-- The lean4lean exe, built on demand (only the exe target — its
     Theory/Verify libs are lean4lean's own proof lane, not the
@@ -237,7 +249,7 @@ unsafe def run : IO UInt32 := do
     for m in o.rejected do
       -- the fresh tree: no (pkg, module) key — the gap list names bare
       -- modules; a gap entry silences exactly its module
-      if knownReduceBoolGaps.any (fun (_, gm) => gm == m) then
+      if knownGaps.any (fun (_, gm) => gm == m) then
         gaps := gaps.push m
       else
         failures := failures.push m
@@ -250,7 +262,7 @@ unsafe def run : IO UInt32 := do
       that gains decls is checked):"
     for m in skipped do IO.println s!"  {m}"
   unless gaps.isEmpty do
-    IO.println "kernel-check: known reduceBool gaps (caveat (a) — native-policy owns these):"
+    IO.println "kernel-check: disclosed gaps (the class per entry: reduceBool — native-policy owns; replay-budget — the real kernel accepts at build):"
     for m in gaps do IO.println s!"  {m}"
   if failures.isEmpty && killed.isEmpty then
     IO.println s!"kernel-check: clean — {checked} module(s) replayed by the \

@@ -46,6 +46,7 @@ Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
 import Effects.Basic
+import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
 
 namespace Effects
 
@@ -65,6 +66,7 @@ abbrev Fp := List Key
     (`Effects.unionMem`, cited; one mechanism, two instances). -/
 def Fp.join : Fp → Fp → Fp := unionMem
 
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by this module's `wr_frame_of_join` + `Cmd.seq` proofs (the frame rule composes through the join)"]
 theorem Fp.mem_join (k : Key) (a b : Fp) :
     k ∈ Fp.join a b ↔ k ∈ a ∨ k ∈ b := mem_unionMem k a b
 
@@ -97,6 +99,7 @@ structure Cmd where
 /-- THE frame rule: two states agreeing OUTSIDE the footprint still
     agree outside it after the command runs — the write's reach is
     exactly the declared footprint. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (frame_pin) + EffectsTests.Axioms (#print axioms); THE frame rule — the write's reach is exactly the footprint"]
 theorem Cmd.frame (c : Cmd) (s s' : State)
     (h : ∀ k, k ∉ c.fp → s k = s' k) :
     ∀ k, k ∉ c.fp → c.wr s k = c.wr s' k := by
@@ -110,6 +113,7 @@ theorem Cmd.frame (c : Cmd) (s s' : State)
     then after `c₁` the states agree on the joined footprint — the
     frame rule + the dependence laws, composed (the seq proofs' shared
     lemma). -/
+@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by `Cmd.seq`'s proofs in this module (the seq proofs' shared lemma — the frame rule + the dependence laws, composed)"]
 theorem wr_frame_of_join (c₁ c₂ : Cmd) (s s' : State)
     (h : ∀ k, k ∈ Fp.join c₁.fp c₂.fp → s k = s' k) :
     ∀ k, k ∈ Fp.join c₁.fp c₂.fp → c₁.wr s k = c₁.wr s' k := by
@@ -156,9 +160,17 @@ def Cmd.seq (c₁ c₂ : Cmd) : Cmd where
     footprint — THE composition law the effects lane's rows predict
     (the join is the upper bound; the footprint's join is its
     state-side twin). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by EffectsTests (seq_pin) + EffectsTests.Axioms (#print axioms); the composition pin — the frame rule composes"]
 theorem Cmd.seq_reads (c₁ c₂ : Cmd) (s s' : State)
     (h : ∀ k, k ∈ Fp.join c₁.fp c₂.fp → s k = s' k) :
     (c₁.seq c₂).run s = (c₁.seq c₂).run s' :=
   (c₁.seq c₂).reads_depend s s' h
+
+-- The Cmd laws' Prop-face projections — the rung-3 laws carried at
+-- construction (an unlawful command is unconstructible: the tests'
+-- fixtures discharge them), consumed in-module by the frame rule's
+-- composition (`wr_frame_of_join`, `Cmd.frame`, `Cmd.seq`).
+attribute [nolint linter.guestlang.zeroCitation "public API: the command's law, carried at construction (rung 3 — an unlawful command is unconstructible; the tests' fixtures discharge it) + consumed in-module by the frame rule's composition"]
+  Cmd.reads_depend Cmd.writes_depend Cmd.writes_preserve
 
 end Effects

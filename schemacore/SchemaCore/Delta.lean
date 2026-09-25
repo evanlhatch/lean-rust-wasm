@@ -498,26 +498,39 @@ theorem patchW?_of_valid {fs : List Field} (rows : List (RowVals fs))
   simp [patchW?, h]
 
 /-- The witnessed journal's application: the patches in order, each
-    checked — the Option accumulator is the fallibility carrier (a
-    lying witness poisons the fold, never silently passes). -/
+    checked — Kit.Change's ONE poison-fold (`optionFoldl`, the DRY
+    sweep's consolidation; the Option accumulator is the fallibility
+    carrier: a lying witness poisons the fold, never silently passes). -/
 def witnessedApply (fs : List Field) (log : List (WDelta fs))
     (X : Option (List (RowVals fs))) : Option (List (RowVals fs)) :=
-  log.foldl (fun acc w => acc.bind (fun r => patchW? r w)) X
+  X.bind fun r =>
+    Kit.optionFoldl (fun (r : List (RowVals fs)) (w : WDelta fs) => patchW? r w)
+      log r
+
+/-- The one-step face (the fold's cons equation at the Option start). -/
+theorem witnessedApply_cons (fs : List Field) (w : WDelta fs)
+    (d : List (WDelta fs)) (X : Option (List (RowVals fs))) :
+    witnessedApply fs (w :: d) X
+      = witnessedApply fs d (X.bind (fun r => patchW? r w)) := by
+  simp only [witnessedApply, Kit.optionFoldl_cons, Option.bind_assoc]
 
 theorem witnessedApply_append (fs : List Field) (a b : List (WDelta fs))
     (X : Option (List (RowVals fs))) :
     witnessedApply fs (a ++ b) X
       = witnessedApply fs b (witnessedApply fs a X) := by
-  simp only [witnessedApply, List.foldl_append]
+  rw [witnessedApply, witnessedApply, witnessedApply]
+  simp only [Kit.optionFoldl_append, Option.bind_assoc]
 
 theorem witnessedApply_none (fs : List Field) (d : List (WDelta fs)) :
     witnessedApply fs d none = none := by
-  induction d with
-  | nil => rfl
-  | cons w d' ih =>
-      rw [show witnessedApply fs (w :: d') none
-            = witnessedApply fs d' (none.bind (fun r => patchW? r w))
-          from rfl, Option.bind_none, ih]
+  simp [witnessedApply]
+
+/-- The single-step journal (the fold's one-element face). -/
+theorem witnessedApply_single (fs : List Field) (w : WDelta fs)
+    (X : Option (List (RowVals fs))) :
+    witnessedApply fs [w] X = X.bind (fun r => patchW? r w) := by
+  simp only [witnessedApply, Kit.optionFoldl]
+  cases X <;> simp
 
 /-- The witnessed journal's inverse: swap old and new, REVERSE the
     order (the legacy `invertW` lifted to the fold). -/
@@ -535,26 +548,14 @@ theorem witnessedApply_reverse_inv (fs : List Field) :
   induction d with
   | nil =>
       intro rows rows' h
-      simp only [witnessedApply, List.foldl_nil] at h
-      simp only [witnessedApply, List.foldl_nil, List.reverse_nil,
-        List.map_nil]
-      exact congrArg some (Option.some.inj h).symm
+      rw [witnessedApply] at h ⊢
+      simp only [Kit.optionFoldl_nil, Option.bind_some] at h ⊢
+      exact h.symm
   | cons w d' ih =>
       intro rows rows' h
-      rw [List.reverse_cons, List.map_append, witnessedApply_append]
-      -- the goal's tail: the inverse journal applied to the folded state
-      show witnessedApply fs [invertW w]
-          (witnessedApply fs (List.map invertW d'.reverse) (some rows'))
-        = some rows
-      rw [show witnessedApply fs [invertW w] (witnessedApply fs (List.map invertW d'.reverse) (some rows'))
-            = (witnessedApply fs (List.map invertW d'.reverse) (some rows')).bind
-                (fun r => patchW? r (invertW w))
-          from rfl]
-      -- the head's checked patch
-      rw [show witnessedApply fs (w :: d') (some rows)
-            = witnessedApply fs d' ((some rows).bind (fun r => patchW? r w))
-          from rfl,
-        Option.bind_some] at h
+      rw [List.reverse_cons, List.map_append, witnessedApply_append,
+        List.map_singleton, witnessedApply_single]
+      rw [witnessedApply_cons, Option.bind_some] at h
       cases hp : patchW? rows w with
       | none =>
           rw [hp] at h

@@ -64,21 +64,51 @@ twin-path pin still cites it. The coherence laws
 denotation and rendering ARE the boundary's wherever both speak) are
 the factored fact `tyOfDescr_some`'s two citations.
 
+## The functorial deepening (16-surface §4.4) — the honest shape
+
+`Descr` IS the pattern functor's fixed point, in the only form that
+pays at this size: the initial object its inductive declaration
+already gives (no category machinery is imported — the functor's
+algebras are the RECORD below, the fixed point's universal property
+is the fold). Every derivation over the description is an ALGEBRA
+(`DescrAlg`: one row per constructor + the field-sibling rows) and
+every walk is `foldDescr`/`foldFields` — ONE recursion, the handlers
+supply rows. The correctness claims ride the same record at `Prop`:
+**the generic correctness theorem** is the fold itself at the claim
+algebra (`law_of_rows`) — a handler built as a fold whose per-ctor
+claim rows are lawful is correct, by the ONE induction the fold
+performs. The per-capability theorems (`tyOfDescr_some` here;
+`deriveCodec_correct`/`deriveDec_eq` in Derive.lean) are INSTANCES:
+they supply rows, never inductions.
+
+Honest residue (each named): `badTagRefused` (Derive.lean) is NOT an
+algebra — its option row re-enters the child DECODER (the parser
+direction consumes the input stream, the algebra's rows receive
+already-built subresults — the same reason `decVal` stays a hand match
+in Fold.lean); `hasOption`/`encNonempty` are entourage plumbing with
+no proof family — an algebra would add five rows to retire zero
+inductions. The row bridge (`toRowF`/`ofRowF`) composes over the
+field LIST, not `Descr` — its one-cons-case inductions are already
+minimal and their leaf content rides the value-level round trips
+(the `Ty` fold's discipline, deepened in Fold.lean).
+
 Core-only EXCEPT the reflector (the meta declarations below — the
 elaboration-time surface; the pure universe + interpretation +
 derivations are core and never import meta names).
 
 The five questions (notes/v3/01-core.md):
 - root: Universe — the ONE deliberate meta-universe (D19): closed
-  description codes + total denotation (`Descr.Ty`).
+  description codes + total denotation (`Descr.Ty`); the description
+  universe's initial-algebra face is the `DescrAlg` fold below.
 - carrier: the interpretation is a Type-valued fold (wrong-shape
   denotations unrepresentable; the product's tuple is the canonical
-  row shape — the record↔tuple bridge is the row-iso lane).
+  row shape — the record↔tuple bridge is the row-iso lane); the
+  handlers/claims are `DescrAlg` values at any `Sort`.
 - spine reading: the REFLECTION stage's typed face — declaration →
-  `describe` → `Descr` → (generic derivation) → capability surface.
-- ladder rung: the derivations are structural folds (kernel-visible;
-  concrete descriptions reduce by `rfl`); the coherence laws are
-  functional inductions.
+  `describe` → `Descr` → (the ONE walk's algebras) → capability
+  surface.
+- ladder rung: the fold is structural (kernel-visible; concrete
+  descriptions reduce by `rfl`); the claims are algebra rows.
 - gate row: the axiom report (SchemaCore roots) + SchemaTests' pins +
   the curated-refusal negative controls (build-time teeth via `#eval`).
 -/
@@ -130,6 +160,7 @@ mutual
       computed by `prodTyOf` (the structural field walk; a mutual
       block over a sibling cons chain could not infer structural
       recursion here). -/
+  @[reducible]
   def Descr.Ty : Descr → Type
     | .prim t => t.toType
     | .option d => Option d.Ty
@@ -145,77 +176,209 @@ example : Descr.Ty (.product "Example"
   [("ready", .prim .bool), ("count", .prim .u64)]) =
   (Bool × (UInt64 × Unit)) := rfl
 
+/-! ## The functorial deepening — the ONE walk over the description
+    (16-surface §4.4) -/
+
+/-- THE DESCRIPTION ALGEBRA (16-surface §4.4's pattern functor read as
+    data): one row per `Descr` constructor + the field-sibling rows
+    (the `ValueAlg` discipline — ONE record carries the whole nested
+    family). The carrier `P` rides any `Sort`: `Type`-valued `P` are
+    the handlers (the codec's encoder/decoder, the drawer), `Prop`-
+    valued `P` are the correctness claims — the SAME record, the SAME
+    fold. A new `Descr` constructor refuses to compile until every
+    algebra grows its row (15-patterns #15's compiler-driven extension
+    point, one level up from `TyAlg`).
+
+    Hand-written, not `declare_fold`-generated: the generator's scope
+    refuses the NESTED shape (the product's `List (String × Descr)`
+    field is `Kit.Derive.Fold` eKD0005's named exclusion), exactly
+    like the GADT family's `foldValue`. -/
+structure DescrAlg (P : Descr → Sort u) (Q : List (String × Descr) → Sort u) where
+  /-- The leaf row: the boundary universe's type rides raw. -/
+  prim : ∀ (t : Ty), P (.prim t)
+  /-- The optional row: receives the child's result. -/
+  option : ∀ (d : Descr), P d → P (.option d)
+  /-- The sequence row: receives the child's result. -/
+  list : ∀ (d : Descr), P d → P (.list d)
+  /-- The record row: receives the field walk's result. -/
+  product : ∀ (n : String) (fs : List (String × Descr)), Q fs → P (.product n fs)
+  /-- The empty field list. -/
+  pnil : Q []
+  /-- One field: the field's name + description ride raw, the field's
+      result and the tail's result are the subresults. -/
+  pcons : ∀ (fn : String) (d : Descr) (fs : List (String × Descr)),
+      P d → Q fs → Q ((fn, d) :: fs)
+
+mutual
+/-- THE ONE WALK (the initial-algebra fold over the description —
+    01 §1 at the meta-universe): mutual over the field sibling,
+    structural (the same nested shape `drawDescr` walks),
+    kernel-visible. Every derivation over `Descr` is THIS walk
+    applied to an algebra; a new ctor extends it exactly once. -/
+def foldDescr {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) : (d : Descr) → P d
+  | .prim t => alg.prim t
+  | .option d => alg.option d (foldDescr alg d)
+  | .list d => alg.list d (foldDescr alg d)
+  | .product n fs => alg.product n fs (foldFields alg fs)
+
+def foldFields {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) : (fs : List (String × Descr)) → Q fs
+  | [] => alg.pnil
+  | (fn, d) :: rest => alg.pcons fn d rest (foldDescr alg d) (foldFields alg rest)
+end
+
+/-- The equation set (06 §5 — consumers prove against these, never
+    against brecOn plumbing). All `rfl`: the recursion is structural,
+    so the equations are kernel reduction. -/
+theorem foldDescr_prim {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) (t : Ty) :
+    foldDescr alg (.prim t) = alg.prim t := rfl
+theorem foldDescr_option {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) (d : Descr) :
+    foldDescr alg (.option d) = alg.option d (foldDescr alg d) := rfl
+theorem foldDescr_list {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) (d : Descr) :
+    foldDescr alg (.list d) = alg.list d (foldDescr alg d) := rfl
+theorem foldDescr_product {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) (n : String) (fs : List (String × Descr)) :
+    foldDescr alg (.product n fs) = alg.product n fs (foldFields alg fs) := rfl
+theorem foldFields_nil {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) : foldFields alg [] = alg.pnil := rfl
+theorem foldFields_cons {P : Descr → Sort u} {Q : List (String × Descr) → Sort u}
+    (alg : DescrAlg P Q) (fn : String) (d : Descr) (fs : List (String × Descr)) :
+    foldFields alg ((fn, d) :: fs)
+      = alg.pcons fn d fs (foldDescr alg d) (foldFields alg fs) := rfl
+
+/-- THE GENERIC CORRECTNESS THEOREM (16-surface §4.4's "one generic
+    correctness theorem instead of per-handler proofs"): a correctness
+    claim family `C` over the descriptions whose per-ctor ROWS are
+    lawful (each composite claim built from the children's claims —
+    the algebra's rows) holds EVERYWHERE, by the ONE induction the
+    fold performs. The per-capability theorems are instances: they
+    supply the rows (`tyOfDescr_some` here; `deriveCodec_correct` /
+    `deriveDec_eq` in Derive.lean), never an induction. -/
+theorem law_of_rows {C : Descr → Prop} {CF : List (String × Descr) → Prop}
+    (alg : DescrAlg C CF) : ∀ d, C d := foldDescr alg
+
 /-! ## The projection into the boundary universe -/
+
+/-- The projection ALGEBRA: the description's projection into the
+    closed boundary universe `Ty` (the registry's field type) as a
+    `DescrAlg` value — the rows verbatim from the pre-fold walk. -/
+def tyAlg : DescrAlg (fun _ => Option Ty) (fun _ => Option Ty) where
+  prim t := some t
+  option _ rest := .option <$> rest
+  list _ rest := .list <$> rest
+  product _ _ _ := none
+  pnil := none
+  pcons _ _ _ _ rest := rest
 
 /-- The description's projection into the closed boundary universe `Ty`
     (the registry's field type). `none` = the description is a PRODUCT
     — a record, not a boundary leaf. This is the interop spine: the
-    registry's `Item` reads descriptions THROUGH it. -/
-def tyOfDescr : Descr → Option Ty
-  | .prim t => some t
-  | .option d => .option <$> tyOfDescr d
-  | .list d => .list <$> tyOfDescr d
-  | .product _ _ => none
+    registry's `Item` reads descriptions THROUGH it. MIGRATED to the
+    ONE walk (16-surface §4.4). -/
+def tyOfDescr : Descr → Option Ty := foldDescr tyAlg
+
+/-- The projection's equation set (the fold's rows at the concrete
+    algebra — the coherence proof below cites these). -/
+theorem tyOfDescr_prim (t : Ty) : tyOfDescr (.prim t) = some t := rfl
+theorem tyOfDescr_option (d : Descr) :
+    tyOfDescr (.option d) = Option.map (.option) (tyOfDescr d) := rfl
+theorem tyOfDescr_list (d : Descr) :
+    tyOfDescr (.list d) = Option.map (.list) (tyOfDescr d) := rfl
+theorem tyOfDescr_product (n : String) (fs : List (String × Descr)) :
+    tyOfDescr (.product n fs) = none := rfl
 
 /-! ## The first generic derivation — the rendering (the proof the layer pays) -/
 
-/-- THE FIRST GENERIC DERIVATION over the description (05 §3 step 2's
-    shape): the WIT-flavored type rendering, one structural fold,
-    generic over `Descr`. Leaf positions DELEGATE to the boundary's
-    one renderer (`renderTy` — 06 §7's one-reifier-family rule); a
-    product renders as its wire-name reference — the record BODY is
-    the emitter lane's (`SchemaCore.Emit.renderWit` over the registry),
-    never duplicated here. -/
-def deriveRender : Descr → String
-  | .prim t => renderTy t
-  | .option d => s!"option<{deriveRender d}>"
-  | .list d => s!"list<{deriveRender d}>"
-  | .product n _ => s!"record<{kebabName ((n.splitOn ".").getLast!)}>"
+/-- The rendering ALGEBRA (the rows verbatim from the pre-fold walk).
+    Leaf positions DELEGATE to the boundary's one renderer (`renderTy`
+    — 06 §7's one-reifier-family rule); a product renders as its
+    wire-name reference — the record BODY is the emitter lane's
+    (`SchemaCore.Emit.renderWit` over the registry), never duplicated
+    here. -/
+def renderAlg : DescrAlg (fun _ => String) (fun _ => String) where
+  prim t := renderTy t
+  option _ rest := s!"option<{rest}>"
+  list _ rest := s!"list<{rest}>"
+  product n _ _ := s!"record<{kebabName ((n.splitOn ".").getLast!)}>"
+  pnil := ""
+  pcons _ _ _ _ rest := rest
 
-/-- THE FACTORED COHERENCE FACT (the twin `fun_induction` scripts
-    collapsed — the two laws below are its two CITATIONS, one case
-    script total): a description that projects to `t` BOTH denotes
-    `t`'s reification AND renders as `t`'s rendering — the projection
-    is the only road into the boundary universe. -/
-theorem tyOfDescr_some (d : Descr) :
-    ∀ t, tyOfDescr d = some t →
-      Descr.Ty d = t.toType ∧ deriveRender d = renderTy t := by
-  fun_induction tyOfDescr d
-  case case1 t0 =>
-    intro t h
+/-- THE FIRST GENERIC DERIVATION over the description (05 §3 step 2's
+    shape): the WIT-flavored type rendering — MIGRATED to the ONE walk
+    (16-surface §4.4): the handler IS an algebra value. -/
+def deriveRender : Descr → String := foldDescr renderAlg
+
+/-- The rendering's equation set (the coherence proof below cites
+    these). The product row's name mangling is string machinery —
+    equation lemmas, not `rfl` pins (the same tier as `kebabName`). -/
+theorem deriveRender_prim (t : Ty) : deriveRender (.prim t) = renderTy t := rfl
+theorem deriveRender_option (d : Descr) :
+    deriveRender (.option d) = s!"option<{deriveRender d}>" := rfl
+theorem deriveRender_list (d : Descr) :
+    deriveRender (.list d) = s!"list<{deriveRender d}>" := rfl
+theorem deriveRender_product (n : String) (fs : List (String × Descr)) :
+    deriveRender (.product n fs)
+      = s!"record<{kebabName ((n.splitOn ".").getLast!)}>" := rfl
+
+/-- THE COHERENCE CLAIM ALGEBRA: the factored fact's per-ctor rows —
+    the option/list rows compose the child's coherence (the ONLY
+    content), the product row refuses (a product projects to `none`).
+    The instance below is `law_of_rows`' first citation — the induction
+    is the fold's, performed ONCE in the generic theorem. -/
+def coherenceAlg :
+    DescrAlg
+      (P := fun d => ∀ t, tyOfDescr d = some t →
+        Descr.Ty d = t.toType ∧ deriveRender d = renderTy t)
+      (Q := fun _ => True) where
+  prim t := fun t' h => by
+    rw [tyOfDescr_prim] at h
     cases h
     exact ⟨rfl, rfl⟩
-  case case2 d ih =>
-    intro t h
+  option d ih := by
+    intro t' h
     cases hd : tyOfDescr d with
-    | none =>
-        rw [hd] at h
-        exact absurd h (by simp)
+    | none => rw [tyOfDescr_option, hd, Option.map_none] at h; cases h
     | some t0 =>
-        rw [hd] at h
-        rw [show Ty.option <$> some t0 = some (.option t0) from rfl] at h
+        rw [tyOfDescr_option, hd] at h
+        simp only [Option.map_some] at h
         cases h
         show Option d.Ty = Option t0.toType ∧
           s!"option<{deriveRender d}>" = s!"option<{renderTy t0}>"
         rw [(ih t0 hd).1, (ih t0 hd).2]
         exact ⟨rfl, rfl⟩
-  case case3 d ih =>
-    intro t h
+  list d ih := by
+    intro t' h
     cases hd : tyOfDescr d with
-    | none =>
-        rw [hd] at h
-        exact absurd h (by simp)
+    | none => rw [tyOfDescr_list, hd, Option.map_none] at h; cases h
     | some t0 =>
-        rw [hd] at h
-        rw [show Ty.list <$> some t0 = some (.list t0) from rfl] at h
+        rw [tyOfDescr_list, hd] at h
+        simp only [Option.map_some] at h
         cases h
         show List d.Ty = List t0.toType ∧
           s!"list<{deriveRender d}>" = s!"list<{renderTy t0}>"
         rw [(ih t0 hd).1, (ih t0 hd).2]
         exact ⟨rfl, rfl⟩
-  case case4 _ _ =>
-    intro t h
-    exact absurd h (by simp)
+  product _ _ _ := fun t h => by
+    rw [tyOfDescr_product] at h
+    cases h
+  pnil := trivial
+  pcons _ _ _ _ _ := trivial
+
+/-- THE FACTORED COHERENCE FACT (the pre-deepening twin `fun_induction`
+    scripts retired — the two laws below are its two CITATIONS): a
+    description that projects to `t` BOTH denotes `t`'s reification
+    AND renders as `t`'s rendering — the projection is the only road
+    into the boundary universe. THE GENERIC THEOREM'S FIRST INSTANCE:
+    the proof is `law_of_rows` over `coherenceAlg` — the per-ctor rows
+    above, no induction here (16-surface §4.4). -/
+theorem tyOfDescr_some (d : Descr) :
+    ∀ t, tyOfDescr d = some t →
+      Descr.Ty d = t.toType ∧ deriveRender d = renderTy t :=
+  law_of_rows coherenceAlg d
 
 /-- LAW: the projection and the denotation agree — wherever the
     description projects to `t`, its denotation IS `t`'s reification
@@ -236,20 +399,32 @@ theorem deriveRender_coherent (d : Descr) :
 
 /-! ## The bridge onto the registry's first-order rows -/
 
+/-- The flattening ALGEBRA: the field walk as a `DescrAlg` value (the
+    sub-results' shapes ride the rows; the cons row reads the field's
+    OWN description — the name + description ride raw). -/
+def itemAlg :
+    DescrAlg (P := fun _ => Unit) (Q := fun _ => Except Kit.Diag (List Field)) where
+  prim _ := ()
+  option _ _ := ()
+  list _ _ := ()
+  product _ _ _ := ()
+  pnil := .ok []
+  pcons fn d _ _ rest' :=
+    match tyOfDescr d with
+    | some t => (rest').map fun fs' => { name := fn, ty := t } :: fs'
+    | none =>
+        .error (Kit.Diag.closedWorld ⟨"SD0006"⟩
+          s!"`{fn}`: a nested product field is outside the registry's \
+            first-order row shape — a row holds one `Ty` per field"
+          .error fn
+          ["a leaf, option, or list field (something `tyOfDescr` maps)"])
+
 /-- The field walk: an ordered field list flattens to the registry's
-    `List Field` (registration order). A NESTED PRODUCT field is
-    outside the row shape — the curated refusal (`SD0006`). -/
-def itemOfFields : List (String × Descr) → Except Kit.Diag (List Field)
-  | [] => .ok []
-  | (fn, fd) :: rest =>
-      match tyOfDescr fd with
-      | some t => (itemOfFields rest).map fun fs' => { name := fn, ty := t } :: fs'
-      | none =>
-          .error (Kit.Diag.closedWorld ⟨"SD0006"⟩
-            s!"`{fn}`: a nested product field is outside the registry's \
-              first-order row shape — a row holds one `Ty` per field"
-            .error fn
-            ["a leaf, option, or list field (something `tyOfDescr` maps)"])
+    `List Field` (registration order). MIGRATED to the ONE walk (the
+    field sibling of `foldDescr`). A NESTED PRODUCT field is outside
+    the row shape — the curated refusal (`SD0006`). -/
+def itemOfFields : List (String × Descr) → Except Kit.Diag (List Field) :=
+  foldFields itemAlg
 
 /-- The bridge: a description flattens onto the registry's `Item` (the
     describe → register direction). A NON-PRODUCT description is not a

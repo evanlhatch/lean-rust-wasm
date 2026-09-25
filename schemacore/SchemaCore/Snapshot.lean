@@ -99,6 +99,7 @@ import Kit.Diag
 import SchemaCore.Item
 import SchemaCore.Register
 import TextKit.Lemmas
+import TextKit.Literals
 
 namespace SchemaCore
 
@@ -484,11 +485,9 @@ def tyBreakOk : List Char → Prop :=
 def suffixOk (suffix : List Char) : Prop :=
   suffix = [] ∨ suffix.head? = some '\n'
 
-theorem lparen : "(".toList = ['('] := rfl
-theorem rparen : ")".toList = [')'] := rfl
-theorem lcomma : ",".toList = [','] := rfl
-theorem lspace : " ".toList = [' '] := rfl
-theorem rnewline : "\n".toList = ['\n'] := rfl
+/-! The literal-toList tokens (`lparen`/`rparen`/`lcomma`/`lspace`/
+    `rnewline`) are TextKit.Literals' (`lit_lparen`/… — the ONE home,
+    shared with the WIT lane); this file cites them directly. -/
 
 /-! The takeWhile/dropWhile scan family (takeDrop_head/takeDrop_stop/
 takeWhile_stop/dropWhile_stop) is TextKit.Lemmas' — the kit owns the
@@ -625,7 +624,7 @@ theorem headOk_renderFields (fs : List Field) (suffix : List Char)
       · rw [h]; simp
       · rw [h]; simp [sepOk]
   | cons f fs =>
-      simp only [renderFields, String.toList_append, List.cons_append, lspace,
+      simp only [renderFields, String.toList_append, List.cons_append, TextKit.lit_sp,
         List.head?_cons, Option.all_some]
       simp [sepOk]
 
@@ -644,7 +643,7 @@ theorem tyBreakOk_renderFields (fs : List Field) (suffix : List Char)
         rw [h]
         simp
   | cons f fs =>
-      simp only [renderFields, String.toList_append, List.cons_append, lspace,
+      simp only [renderFields, String.toList_append, List.cons_append, TextKit.lit_sp,
         ]
       simp [tyBreakOk]
 
@@ -743,8 +742,8 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText_option, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy]
+          simp only [tyText_option, String.toList_append, List.cons_append, TextKit.lit_lparen,
+            TextKit.lit_rparen, List.append_assoc, List.nil_append, parseTy]
           rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
             (w := "option".toList) (by decide) (headOk_lparen _)]
           simp
@@ -756,8 +755,8 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText_list, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy]
+          simp only [tyText_list, String.toList_append, List.cons_append, TextKit.lit_lparen,
+            TextKit.lit_rparen, List.append_assoc, List.nil_append, parseTy]
           rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
             (w := "list".toList) (by decide) (headOk_lparen _)]
           simp
@@ -769,8 +768,8 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText_result, String.toList_append, List.cons_append, lparen,
-            rparen, lcomma, List.append_assoc, List.nil_append, parseTy]
+          simp only [tyText_result, String.toList_append, List.cons_append, TextKit.lit_lparen,
+            TextKit.lit_rparen, TextKit.lit_comma, List.append_assoc, List.nil_append, parseTy]
           rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
             (w := "result".toList) (by decide) (headOk_lparen _)]
           simp
@@ -785,8 +784,8 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText_map, String.toList_append, List.cons_append, lparen,
-            rparen, lcomma, List.append_assoc, List.nil_append, parseTy]
+          simp only [tyText_map, String.toList_append, List.cons_append, TextKit.lit_lparen,
+            TextKit.lit_rparen, TextKit.lit_comma, List.append_assoc, List.nil_append, parseTy]
           rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
             (w := "map".toList) (by decide) (headOk_lparen _)]
           simp
@@ -804,8 +803,8 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText_set, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy]
+          simp only [tyText_set, String.toList_append, List.cons_append, TextKit.lit_lparen,
+            TextKit.lit_rparen, List.append_assoc, List.nil_append, parseTy]
           rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
             (w := "set".toList) (by decide) (headOk_lparen _)]
           simp
@@ -819,8 +818,8 @@ theorem parseTy_tyText (t : Ty) : ∀ (fuel : Nat) (sfx : List Char),
       cases fuel with
       | zero => omega
       | succ fuel =>
-          simp only [tyText_bounded, String.toList_append, List.cons_append, lparen,
-            rparen, List.append_assoc, List.nil_append, parseTy]
+          simp only [tyText_bounded, String.toList_append, List.cons_append, TextKit.lit_lparen,
+            TextKit.lit_rparen, List.append_assoc, List.nil_append, parseTy]
           rw [TextKit.takeWhile_stop (p := Char.isAlphanum)
             (w := "bounded".toList) (by decide) (headOk_lparen _)]
           simp
@@ -860,7 +859,7 @@ theorem parseFields_render (fs : List Field) : ∀ (tyFuel loop : Nat) (suffix :
           have hfn := nameOk_all f.name (h1 f (List.mem_cons_self))
           have hne := nameOk_ne_str f.name (h1 f (List.mem_cons_self))
           simp only [renderFields, String.toList_append, List.cons_append,
-            List.nil_append, List.append_assoc, lspace, parseFields,
+            List.nil_append, List.append_assoc, TextKit.lit_sp, parseFields,
             TextKit.expect_self,
             TextKit.takeWhile_stop (p := sepOk) (w := f.name.toList) hfn
               (headOk_space_sep _),
@@ -912,7 +911,7 @@ theorem parseItems_printItems (its : List Item) : ∀ (tyFuel loop : Nat),
       | succ loop =>
           obtain ⟨h1, h2, h3, h4⟩ := hmem it (List.mem_cons_self)
           simp only [printItems, String.toList_append, List.cons_append,
-            List.nil_append, List.append_assoc, rnewline]
+            List.nil_append, List.append_assoc, TextKit.lit_nl]
           rw [parseItems_cons tyFuel loop _
             (append_cons_ne_nil (renderLine it).toList '\n'
               (printItems its).toList),

@@ -128,6 +128,7 @@ def instrW (ind : Nat) : Instr → Text
   | .localset n => lineW ind s!"local.set {n}"
   | .localtee n => lineW ind s!"local.tee {n}"
   | .call fn => lineW ind s!"call {fn}"
+  | .callindirect ty => lineW ind s!"call_indirect (type {ty})"
   | .mem op offset align => lineW ind s!"{memName op}{memArgsW offset align}"
   | .op o => lineW ind (opName o)
   | .br d => lineW ind s!"br {d}"
@@ -185,21 +186,39 @@ def funcW (ind : Nat) (f : Func) : Text :=
     , bodyW (ind + 1) f.body
     , lineW ind ")" ]
 
-/-- One export: `(export "name" (func idx))` — the name through
-    `strW` (quoted, escaped), the index from the data. -/
+/-- One export: `(export "name" (func idx))` or the memory arm —
+    `(export "name" (memory idx))` (the canonical-ABI adapter face's
+    memory export). The name through `strW` (quoted, escaped), the
+    index from the data. -/
 def exportW (ind : Nat) (e : Export) : Text :=
   match e.desc with
   | .func idx => lineW ind s!"(export {strW e.name} (func {idx}))"
+  | .memory idx => lineW ind s!"(export {strW e.name} (memory {idx}))"
+
+/-- One table: `(table {n} funcref)` — the size from the entries'
+    length (the table's data face; the element type is funcref in
+    every honest use). -/
+def tableW (ind : Nat) (t : Table) : Text :=
+  lineW ind s!"(table {t.init.length} funcref)"
+
+/-- One active element segment: `(elem (i32.const 0) func i0 i1 …)` —
+    the table's initialization face, the offset spelled from the DATA
+    (the constant-0 face of the wire's `i32.const 0; end`). -/
+def elemW (ind : Nat) (t : Table) : Text :=
+  lineW ind s!"(elem (i32.const 0) func{t.init.foldl (fun s n => s ++ " " ++ toString n) ""})"
 
 /-- The module's fields as text: types, memory (elided at
-    `memMin = 0` — the same elision the binary format makes),
-    exports, functions — the fold in the binary sections' order. -/
+    `memMin = 0` — the same elision the binary format makes), tables,
+    exports, element segments, functions — the fold in the binary
+    sections' order. -/
 def moduleText (m : Module) : Text :=
   Text.cat
     [ lineW 0 "(module"
     , Text.cat (m.types.map (typeW 1))
     , (if m.memMin = 0 then Text.nil else lineW 1 s!"(memory {m.memMin})")
+    , Text.cat (m.tables.map (tableW 1))
     , Text.cat (m.exports.map (exportW 1))
+    , Text.cat ((m.tables.filter (fun t => !t.init.isEmpty)).map (elemW 1))
     , Text.cat (m.funcs.map (funcW 1))
     , lineW 0 ")" ]
 

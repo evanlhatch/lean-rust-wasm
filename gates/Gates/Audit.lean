@@ -85,7 +85,7 @@ def auditFindings (rules : List AuditRule) (emitted : String) : List String :=
     emitters' declared outputs) against the rule list. Exit 1 on any
     violation or absent artifact. -/
 unsafe def run : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "audit" pkg fun env => do
     match SchemaCore.regen env with
     | .error e =>

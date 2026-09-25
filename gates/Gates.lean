@@ -3,6 +3,10 @@ Gates — the Lean-side gates driver (the pipeline-as-machine row,
 notes/v3/09-gates-ops.md §3). The root aggregate of the thin skeleton.
 
 - `Gates.Packages`   — the gated package set + the shared env loader
+- `Gates.PackagesCheck` — the gated-table drift guard (the table ×
+                       lakefile agreement both directions + every row
+                       root's source file — a new library without its
+                       gates row fails CI)
 - `Gates.Common`     — the report-gate combinator (the write-or-diff
                        baseline tail with the loud re-baseline discipline)
 - `Gates.Axioms`     — the per-library axiom sweep (kernel CollectAxioms,
@@ -36,6 +40,9 @@ notes/v3/09-gates-ops.md §3). The root aggregate of the thin skeleton.
 - `Gates.Breaking`    — the breaking gate (the committed universe snapshot
                        vs the replayed registry: the diff + the three-way
                        verdict + the exit-code discipline — unremedied = 2)
+- `Gates.Impact`      — the impact-aware gating core (09 §6: the change
+                       set → affected modules → artifacts → gates; the
+                       conservatism theorems; the `impacted` driver)
 
 The five questions (notes/v3/01-core.md): the registry answers none
 directly — it is the gates machine's data row (09 §3): root = Universe
@@ -55,6 +62,7 @@ single gate; `lake` is the in-tree spawn precedent (KernelCheck), the
 subcommand interface is the justfile's rows verbatim.
 -/
 import Gates.Packages
+import Gates.PackagesCheck
 import Gates.Common
 import Gates.Axioms
 import Gates.DocsCheck
@@ -68,6 +76,7 @@ import Gates.Coverage
 import Gates.KernelCheck
 import Gates.Ownership
 import Gates.Breaking
+import Gates.Impact
 
 open Gates
 
@@ -76,9 +85,9 @@ driver over the set, notes/v3/09-gates-ops.md §3). The dispatch lives
 in GatesMain (the exe); this list is the single source of WHAT runs.
 -/
 def Gates.gateNames : List String :=
-  ["axioms", "docs-check", "gen-check", "code-registry-check",
-   "snapshot-check", "audit", "artifact-headers", "native-policy",
-   "coverage", "kernel-check", "ownership", "breaking"]
+  ["packages-check", "axioms", "docs-check", "gen-check",
+   "code-registry-check", "snapshot-check", "audit", "artifact-headers",
+   "native-policy", "coverage", "kernel-check", "ownership", "breaking"]
 
 /-- `gates all` — every registered gate in one run; the first failure
 stops the machine. Each gate is a CHILD process (see the module header:

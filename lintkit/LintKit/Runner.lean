@@ -250,6 +250,20 @@ def lintModules (mods : Array Name) (cfg : DriverConfig := {}) :
   let modFindings ← runModuleLinters (← getEnv) roots cfg
   return (declFindings ++ modFindings).qsort fun a b => Name.quickLt a.decl b.decl
 
+/-- `lintModules` over the EXACT module names (no `getRoot` widening):
+the sweep covers the named modules' own code only. The gated-table
+consumer (LintMain's per-package fold) needs this for the fixture-rig
+roots whose namespace siblings are PLANTED violators (the
+`LintKitTests`/`LintKitFixtures` rigs exist to fail the linters —
+their consumers are the LintKitTests pins, which demand exactly that
+failure; a namespace-widened sweep would gate a permanent red). -/
+def lintModulesExact (mods : Array Name) (cfg : DriverConfig := {}) :
+    CoreM (Array LintFinding) := do
+  let decls ← packageDecls (← getEnv) mods
+  let declFindings ← runLintersOnDecls decls cfg
+  let modFindings ← runModuleLinters (← getEnv) mods cfg
+  return (declFindings ++ modFindings).qsort fun a b => Name.quickLt a.decl b.decl
+
 /-- Initialize the search paths for a lint run (the exe runs from the
 repo root; the package's own build dir is prepended so its modules win
 over same-named dependency modules). -/

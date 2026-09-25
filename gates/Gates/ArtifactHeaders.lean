@@ -67,7 +67,7 @@ def headerVerdict (committed : String) : HeaderVerdict :=
 /-- `gates artifact-headers` — presence + shape over every committed
     generated artifact. Exit 1 on any malformed/absent header. -/
 unsafe def run : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "artifact-headers" pkg fun env => do
     match SchemaCore.regen env with
     | .error e =>
