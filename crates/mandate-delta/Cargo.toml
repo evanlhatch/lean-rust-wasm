@@ -1,0 +1,38 @@
+# mandate-delta — the host's persistence lane: the append-only delta log.
+#
+# The byte format is the LEAN side's codec, ported byte-exact — the wire
+# comes FROM the Lean emission, never invented here:
+#   - the delta frames: SchemaCore.Event's `encDelta`/`decDelta?` (the
+#     tag byte in ctor order 0/1/2 + the self-delimiting payload);
+#   - the atoms: SchemaCore.Codec (bool byte, canonical-minimal LEB128
+#     varint, zigzag i64, char-varint strings — NOT UTF-8);
+#   - the whole-log wire: SchemaCore.Event's `encJournal`/`decJournal?`
+#     (varint count + frames), the duel surface.
+# The row/key encodings are the documented instantiation of the Lean
+# journal codec's `encR`/`encK` PARAMETERS (the Lean side leaves them
+# polymorphic; see README.md — the row rides the shared `encList`
+# combinator shape).
+#
+# ONE dependency, deliberately: the ATOM codec's single home is the
+# generated crate (`schema-generated` — the Rust emitter's artifact,
+# byte-tied to SchemaCore.Codec by `gates gen-check` + the duel
+# vectors). This crate consumes that codec instead of mirroring it —
+# a hand-mirrored atom codec here would be a second spec of the same
+# wire (the drift this crate's byte-exactness rests on never
+# happening). The duel vectors (tests/duel/, the journal duel emitter
+# SchemaCore.Emit.Journal's artifacts) pin the WHOLE wire against the
+# Lean kernel's own emissions. The durable backend is std::fs,
+# no unsafe, typed errors end to end.
+
+[package]
+name = "mandate-delta"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Host-side persistence for SchemaCore's delta/journal model: append-only delta log, replay, witnessed inversion, crash recovery"
+
+[dependencies]
+schema-generated = { path = "../schema-generated" }
+
+[dev-dependencies]
