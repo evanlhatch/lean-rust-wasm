@@ -21,11 +21,12 @@ This file supplies exactly that, honestly:
   Any strict total order serves canonicalization — no structure is
   claimed beyond that (the wire never sees this order).
 
-Also the two row shapes the fragment's result typing needs (02 §2-3):
-`Row.append` (the equijoin's result row: the left schema ++ the right
-schema — the result row type is COMPUTED) + `Row.at` (the positional
-field read the projection's column data consumes). Both with their
-injection laws.
+Also the equijoin's result-row shape the fragment's result typing
+needs (02 §2-3): `Row.append` (the left schema ++ the right schema —
+the result row type is COMPUTED), with its injection law. (The old
+positional field read `Row.field` is GONE: the projection's column
+data reads the row directly — the v2 `Cols` redesign; the leftover
+rule removed the orphan.)
 
 Deliberate exclusions (02 §2's honest boundary, named): negation,
 aggregation, universal conditions, ordering semantics — each needs
@@ -103,15 +104,6 @@ theorem bytes_eq : ∀ (fs : List Field) (r1 r2 : RowVals fs),
               rw [d2] at d1
               injection Option.some.inj d1 with hv hrest
               rw [hv, ih rest2 rest1 hrest]
-
-/-! ## The positional field read (the projection columns' reader) -/
-
-/-- The `i`-th field value of a schema-aligned row — the projection's
-    column reader (total: the index is in range by construction). -/
-def field : (fs : List Field) → RowVals fs → (i : Fin fs.length) → Value fs[i.val].ty
-  | _ :: _, .cons v _, ⟨0, _⟩ => v
-  | _ :: _, .cons _ vs, ⟨n + 1, h⟩ =>
-      field _ vs ⟨n, Nat.lt_of_succ_lt_succ h⟩
 
 /-! ## The row concatenation (the equijoin's result row shape) -/
 

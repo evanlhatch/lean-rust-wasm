@@ -165,6 +165,41 @@ def checkTextTeeth : M Unit := do
   let dymNoBacktick := checkDidyoumeanDiscipline "lean/x/X.lean"
     "throw s!\"oracle row: unknown fn '{fn}'\"\n"
   check "didyoumeanDiscipline requires a backticked payload" dymNoBacktick.isEmpty
+  -- noLinterSetOption: the `false` ban fires; the enable, the non-linter
+  -- set_option, comments, and string literals are quiet; Tests files are
+  -- exempt (the fixtures' enable-shape is the negative control's own form).
+  let lsoBan := checkNoLinterSetOption "lean/x/X.lean"
+    "set_option linter.guestlang.bareChecker false in\ndef x := 1\n"
+  check "noLinterSetOption flags the linter-silencing set_option" (lsoBan.size == 1)
+  let lsoEnable := checkNoLinterSetOption "lean/x/X.lean"
+    "set_option linter.guestlang.decideFirst true in\ndef x := 1\n"
+  check "noLinterSetOption is quiet on an ENABLE" lsoEnable.isEmpty
+  let lsoNonLinter := checkNoLinterSetOption "lean/x/X.lean"
+    "set_option maxHeartbeats 0 in\ndef x := 1\n"
+  check "noLinterSetOption is quiet on a non-linter set_option" lsoNonLinter.isEmpty
+  let lsoComment := checkNoLinterSetOption "lean/x/X.lean"
+    "-- set_option linter.guestlang.bareChecker false\ndef x := 1\n"
+  check "noLinterSetOption ignores comments" lsoComment.isEmpty
+  let lsoTests := checkNoLinterSetOption "lean/x/XTests/Main.lean"
+    "set_option linter.guestlang.bareChecker false in\ndef x := 1\n"
+  check "noLinterSetOption exempts Tests files" lsoTests.isEmpty
+  -- bareExample: a new file's bare example fires; the seeded allowance
+  -- stays quiet; the overage fires; Tests files are exempt; a named decl
+  -- mentioning example and a comment are quiet.
+  let beNew := checkBareExample "lean/x/X.lean" "example : 1 = 1 := rfl\n"
+  check "bareExample flags a source root's bare example" (beNew.size == 1)
+  let beSeeded := checkBareExample "schemacore/SchemaCore/RowVals.lean"
+    (String.intercalate "" (List.replicate 2 "example : 1 = 1 := rfl\n"))
+  check "bareExample accepts sites within the seeded allowance" beSeeded.isEmpty
+  let beOver := checkBareExample "schemacore/SchemaCore/RowVals.lean"
+    (String.intercalate "" (List.replicate 3 "example : 1 = 1 := rfl\n"))
+  check "bareExample flags overage past the allowance" (beOver.size == 1)
+  let beTests := checkBareExample "lean/x/XTests/Main.lean" "example : 1 = 1 := rfl\n"
+  check "bareExample exempts Tests files" beTests.isEmpty
+  let beNamed := checkBareExample "lean/x/X.lean" "def examples : Nat := 1\n"
+  check "bareExample is quiet on a name mentioning example" beNamed.isEmpty
+  let beComment := checkBareExample "lean/x/X.lean" "-- example : 1 = 1\ndef x := 1\n"
+  check "bareExample ignores comments" beComment.isEmpty
   -- srcRootFor: the first root-prefixing mapping wins; none falls through.
   let mapped := srcRootFor #[(`Kit, "kit"), (`KitMore, "other")] `Kit.CodeRegistry
   check "srcRootFor maps a root-prefixed module" (mapped == some "kit")
@@ -212,8 +247,16 @@ unsafe def run : M UInt32 := do
   check "guestBan is default-OFF (census)" (!(linter.guestlang.guestBan).defValue)
   check "decideFirst is default-OFF (census)"
     (!(linter.guestlang.decideFirst).defValue)
-  check "graduation is default-OFF (census)"
-    (!(linter.guestlang.graduation).defValue)
+  -- PROMOTED (the codec→iso constructor landed; every census finding
+  -- graduated): the graduation linter is a GATE now.
+  check "graduation is default-ON (gate — the promotion)"
+    ((linter.guestlang.graduation).defValue)
+  -- the enforcement wave's two text lints: the bypass ban + the example
+  -- blind spot are GATE lints (default-ON), not censuses.
+  check "noLinterSetOption is default-ON (gate)"
+    ((linter.guestlang.noLinterSetOption).defValue)
+  check "bareExample is default-ON (gate)"
+    ((linter.guestlang.bareExample).defValue)
   check "zeroCitation is default-OFF (census)"
     (!(linter.guestlang.zeroCitation).defValue)
   check "bareChecker is default-ON (gate)"
@@ -248,6 +291,22 @@ unsafe def run : M UInt32 := do
         && f.decl == `LintKitFixturesUntabled.Violator)
   for f in gapFindings do
     IO.println s!"  [cone-gap] {f.decl}"
+
+  -- ENV teeth, layer 1c: the ONE-ENVELOPE adapter (B1, 05 §4) — every
+  -- finding's Diag carries the linter's registry-allocated LK code and
+  -- the VERBATIM message (the render face enriches, never rewrites);
+  -- the negative control is the verbatim-message pin (no re-rendering
+  -- regression) + the code's linter mapping (not the catch-all LK0000).
+  check "cone finding's diag carries the LK code + the verbatim message"
+    (coneFindings.all fun f => f.diag.code == ⟨"LK0011"⟩
+      && f.diag.message == f.message
+      && f.diag.severity == .warning)
+  check "the catch-all LK0000 is NOT on the registered linters' path"
+    (linterCode `linter.guestlang.coneImports != ⟨"LK0000"⟩
+      && linterCode `linter.guestlang.nope == ⟨"LK0000"⟩)
+  check "the text-lint diag carries the site label"
+    ((LintKit.textDiag `linter.guestlang.noNewPartial "a.lean" 7 "m").context
+      == [{ name := "a.lean", detail := "7" }])
 
   -- ENV teeth, layer 2: the fixture closure — census linters enabled via
   -- the CLI-override path (which is the override path's own test).

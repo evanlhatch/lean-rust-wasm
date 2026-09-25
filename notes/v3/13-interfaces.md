@@ -35,7 +35,7 @@ owning module's header — and the missing generated doc is a named gap
 |---|---|---|---|
 | the envelope (version + length + payload) | schema-lang Codec | version checked first; mismatch = named refusal | both language ports ride the append-form law |
 | the atoms (varint, fixed ints, tags, lists, maps, strings, tensors) | schema-lang Codec/CodecValue | `dec (enc a ++ rest) = some (a, rest)` per codec | maps are canonical key-sorted; tensor dims live in the SCHEMA, not the wire |
-| the universe snapshot | schema-lang Snapshot (the ONE writer); the committed `goldens/universe.snapshot` baseline | the sweep + the Lean↔Rust differential; the round-trip LAW is deferred (decisions.md) with its cost record | lossless by design (the WIT view is the lossy one, never the baseline) |
+| the universe snapshot | schema-lang Snapshot (the ONE writer); the committed `goldens/universe.snapshot` baseline | the sweep + the Lean↔Rust differential; the round-trip LAW is LANDED — `itemsCodec.toIsoOfExact` (the raw-line ≅ typed-item `Iso`, built from the total decode + the exactness law) | lossless by design (the WIT view is the lossy one, never the baseline) |
 
 ## The diagnostic + generation contracts
 

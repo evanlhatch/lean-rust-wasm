@@ -29,8 +29,8 @@ controls is unconstructible (the unrepresentable grade).
 - spine reading: none — every package's test exe folds it.
 - ladder rung: rung 3 — the control-count proof discharges `by
 decide` at listable sites (the header note above).
-- gate row: none — TestingKit is outside Gates.Packages' gated set; the
-test exes are its consumers.
+- gate row: TestingKit's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); the test exes are its consumers.
 -/
 
 module

@@ -29,6 +29,15 @@ Suites:
 5. `sweep` — the LCG-seeded property sweep with the mandatory negative
    controls: the join-as-intersection sabotage, the footprint-leak
    sabotage, the monus-refusal sabotage.
+6. `signature` — the algebraic presentations (Effects.Signature): the
+   pure reference interpreter's laws pinned at data level, the worked
+   programs under the pure + cost-graded readings, the agreement pins
+   (Kit.Rel + Kit.Interpretation + the api/perf observer faces), the
+   cost-honesty pin, and the UNLAWFUL-SIGNATURE teeth (a stale read, a
+   clock rewind, a dropped journal entry — each fails to construct).
+7. `fault` — the fault-injection seed: lawful (constructs), the
+   injections counted, the ghost entry visible, the KV channel
+   untouched.
 
 Axiom self-check: `Axioms.lean` (imported below) pins `#print axioms`
 over the laws — NO axioms at all, or the build fails.
@@ -41,7 +50,7 @@ import TestingKit.Spec
 import TestingKit.Harness
 import EffectsTests.Axioms
 
-open Effects Effects.Resource TestingKit
+open Effects Effects.Resource Effects.Signature TestingKit
 
 namespace EffectsTests
 
@@ -264,23 +273,33 @@ is false -/
 @[nolint linter.guestlang.axiomAllowlist "the teeth: a deliberately-failing decl; Lean's error recovery plants the sorryAx"]
 theorem footprintLeak : cmdIncr1.wr (fun _ => 5) 9 = 99 := by decide
 
-/-! ## Suite 5: the LCG-seeded sweep + the mandatory negative controls -/
+/-! ## Suite 5: the universal join laws + the mandatory negative controls -/
 
-/-- The join's membership law, swept: membership in the join is
-    membership in either side, for drawn rows and a drawn probe. -/
-def propJoin (t : Tape) : CheckResult := do
-  let (i, t₁) := t.below 8
-  let (j, t₂) := t₁.below 8
-  let (k, _) := t₂.below 8
+/-- One drawn-instance check, kept as the universal law's body: the
+    join's membership law (membership in the join IS membership in
+either side), the upper-bound law, and the idempotence — at atoms i, j,
+    k of the closed 8-atom lattice. -/
+def joinInstanceOk (i j k : Nat) : Bool :=
   let a : Row := [effOf i]
   let b : Row := [effOf j]
   let e : Effect := effOf k
-  assert ((decide (e ∈ Row.join a b)) == ((decide (e ∈ a)) || (decide (e ∈ b))))
-    "the join's membership law broke"
-  assert ((decide (Row.le a (Row.join a b))) && (decide (Row.le b (Row.join a b))))
-    "the join's upper-bound law broke"
-  assert ((decide (Row.le (Row.join a a) a)) && (decide (Row.le a (Row.join a a))))
-    "the join's idempotence broke"
+  ((decide (e ∈ Row.join a b)) == ((decide (e ∈ a)) || (decide (e ∈ b))))
+    && (decide (Row.le a (Row.join a b))) && (decide (Row.le b (Row.join a b)))
+    && (decide (Row.le (Row.join a a) a)) && (decide (Row.le a (Row.join a a)))
+
+/-- THE UNIVERSAL JOIN LAWS (the inherited-correctness audit's F2): the
+    old sweep drew 12 seeds from the SAME closed 8-atom world — every
+    drawn instance was one of the 512 atom triples, each literally
+    decided. The universal theorem decides all of them ONCE
+    (decidableNow is the honest tier over a closed finite world; a
+    sampled sweep of a decidable closed world understates what is
+    known). -/
+def joinLawsUniversal : Bool :=
+  (List.range 8).all fun i => (List.range 8).all fun j =>
+    (List.range 8).all fun k => joinInstanceOk i j k
+
+theorem joinLawsUniversal_decided : joinLawsUniversal = true := by
+  decide
 
 /-- The split's discipline, swept: consume a drawn resource (≠ 3), the
     other survives, the spent one is gone. -/
@@ -332,10 +351,11 @@ def negMonusRefusal (_t : Tape) : CheckResult := do
     "the monus-refusal sabotage was not caught"
 
 def specLattice : Spec := Spec.ofList "effects-lattice"
-  propJoin
+  (fun _ => assert joinLawsUniversal
+    "the universal join law broke (the 512-atom-triple decision)")
   [ ("join-as-intersection", negJoinIntersection),
     ("monus-refusal", negMonusRefusal) ]
-  12 20250901
+  1 20250901
 
 def specResources : Spec := Spec.ofList "effects-resources"
   (fun t => do
@@ -345,6 +365,231 @@ def specResources : Spec := Spec.ofList "effects-resources"
     ("join-as-intersection", negJoinIntersection) ]
   12 20250902
 
+/-! ## Suite 6: the signature + the interpreters + the agreement -/
+
+/-- The fixture state: cells read 7, an empty journal, clock 100. -/
+def st0 : RefState := { cells := fun _ => 7, journal := [], clock := 100 }
+
+-- the reads' law at data: a read after its write sees the write
+theorem sig_get_put_pin : (pureGet 1 (purePut 1 42 st0)).1 = 42 := rfl
+
+-- the writes' reach at data: the journal untouched
+theorem sig_put_journal_pin : refJournal (purePut 1 42 st0) = [] := rfl
+
+-- the journal's law at data: the entry is recorded
+theorem sig_append_mem_pin : 42 ∈ refJournal (pureAppend 42 st0) := by
+  simp [pureAppend, refJournal]
+
+-- the clock's laws at data: the reading is the clock, one tick forward
+theorem sig_now_pin :
+    (pureNow st0).1 = 100 ∧ refClock (pureNow st0).2 = 101 := ⟨rfl, rfl⟩
+
+-- THE WORKED KV PROGRAM under the pure reference: reads see the write
+theorem kv_pure_pin : (kvProgram pureSig st0).1 = 42 := rfl
+
+-- THE WORKED JOURNAL+CLOCK PROGRAM under the pure reference
+theorem log_pure_pin :
+    (logProgram pureSig st0).1 = 100
+    ∧ (logProgram pureSig st0).2.journal = [42]
+    ∧ (logProgram pureSig st0).2.clock = 101 := by
+  simp [logProgram, pureSig, pureNow, pureAppend, pureGet, purePut, st0]
+
+-- the cost schedule fixture: read 3, write 2, append 5, tick 7
+def c1 : OpCost := ⟨3, 2, 5, 7⟩
+
+-- THE SAME PROGRAM under the cost-graded reading: same value, same
+-- journal, same clock; the cost is the composed schedule (17)
+theorem log_cost_pin :
+    (logProgram (Interpreter.cost pureSig c1) (st0, 0)).1 = 100
+    ∧ (logProgram (Interpreter.cost pureSig c1) (st0, 0)).2.1.journal = [42]
+    ∧ (logProgram (Interpreter.cost pureSig c1) (st0, 0)).2.1.clock = 101
+    ∧ (logProgram (Interpreter.cost pureSig c1) (st0, 0)).2.2 = 17 := by
+  simp [logProgram, pureSig, Interpreter.cost, Cost.natCost, Cost.NatCost.compose,
+        pureNow, pureAppend, pureGet, purePut, st0, c1]
+
+-- the agreement theorem, cited (Kit.Rel + Kit.Interpretation)
+theorem agree_pin :
+    (logPair pureSig c1).R ((logPair pureSig c1).eval₁ st0)
+      ((logPair pureSig c1).eval₂ st0) :=
+  logProgram_agrees pureSig c1 st0
+
+-- the cost honesty, cited (no silent undercount)
+theorem cost_honest_pin :
+    (logProgram (Interpreter.cost pureSig c1) (st0, 0)).2.2
+      = c1.putCost + c1.getCost + c1.appendCost + c1.nowCost :=
+  logProgram_cost_honest pureSig c1 st0
+
+-- THE API-OBSERVER AGREEMENT, cited: the same execution under Kit.apiObs
+theorem api_pin :
+    (Kit.apiObs Nat).see (pureExec (logProgram pureSig st0) refJournal)
+      = (Kit.apiObs Nat).see
+          (costExec (logProgram (Interpreter.cost pureSig c1) (st0, 0)) refJournal) :=
+  api_agrees pureSig c1 st0
+
+-- THE PERF-OBSERVER VISIBILITY, cited: the cost is NOT hidden from perf
+theorem perf_pin :
+    (Kit.perfObs Nat).see (pureExec (logProgram pureSig st0) refJournal)
+      ≠ (Kit.perfObs Nat).see
+          (costExec (logProgram (Interpreter.cost pureSig c1) (st0, 0)) refJournal) :=
+  perf_sees_cost pureSig c1 st0 (by decide)
+
+/- THE UNLAWFUL-SIGNATURE TEETH (the type-level refusals): a signature
+   whose laws are unprovable doesn't construct. Three violations, one
+   per law family: -/
+
+/-- The stale read: `get` ignores the pending write — `get_put` has no
+    proof, the signature fails to construct. -/
+def staleGet (_k : Key) (s : RefState) : Val × RefState := (0, s)
+
+/-- error: unsolved goals
+k : Key
+v : Val
+s : RefState
+⊢ 0 = v -/
+#guard_msgs in
+@[nolint linter.guestlang.axiomAllowlist "the teeth: a deliberately-failing decl; Lean's error recovery plants the sorryAx"]
+def staleSig : Signature RefState where
+  get := staleGet
+  put := purePut
+  append := pureAppend
+  now := pureNow
+  journalOf := refJournal
+  clockOf := refClock
+  get_put := by intro k v s; simp [staleGet, purePut]
+  put_journal := pure_put_journal
+  append_mem := pure_append_mem
+  now_mono := pure_now_mono
+  now_read_le := pure_now_read_le
+
+/-- The clock rewind: `now` moves the clock BACK — `now_mono` has no
+    proof, the signature fails to construct. -/
+def rewindNow (s : RefState) : Nat × RefState := (s.clock, { s with clock := s.clock - 1 })
+
+/-- error: unsolved goals
+s : RefState
+⊢ s.clock ≤ s.clock - 1
+---
+error: unsolved goals
+s : RefState
+⊢ s.clock ≤ s.clock - 1 -/
+#guard_msgs in
+@[nolint linter.guestlang.axiomAllowlist "the teeth: a deliberately-failing decl; Lean's error recovery plants the sorryAx"]
+def rewSig : Signature RefState where
+  get := pureGet
+  put := purePut
+  append := pureAppend
+  now := rewindNow
+  journalOf := refJournal
+  clockOf := refClock
+  get_put := pure_get_put
+  put_journal := pure_put_journal
+  append_mem := pure_append_mem
+  now_mono := by intro s; simp [rewindNow, refClock]
+  now_read_le := by intro s; simp [rewindNow, refClock]
+
+/-- The dropped entry: `append` records a ghost INSTEAD of the entry —
+    `append_mem` has no proof, the signature fails to construct. -/
+def dropAppend (_e : Entry) (s : RefState) : RefState :=
+  { s with journal := s.journal ++ [999] }
+
+/-- error: unsolved goals
+e : Entry
+s : RefState
+⊢ e ∈ s.journal ∨ e = 999 -/
+#guard_msgs in
+@[nolint linter.guestlang.axiomAllowlist "the teeth: a deliberately-failing decl; Lean's error recovery plants the sorryAx"]
+def dropSig : Signature RefState where
+  get := pureGet
+  put := purePut
+  append := dropAppend
+  now := pureNow
+  journalOf := refJournal
+  clockOf := refClock
+  get_put := pure_get_put
+  put_journal := pure_put_journal
+  append_mem := by intro e s; simp [dropAppend, refJournal]
+  now_mono := pure_now_mono
+  now_read_le := pure_now_read_le
+
+/-! ## Suite 7: the fault-injection seed -/
+
+/-- The fault-injection interpreter over the pure reference: ghost
+    entry 999, law-invisible, counted. -/
+def faultI : Signature (FaultCar RefState) := Interpreter.fault pureSig 999
+
+-- THE WORKED PROGRAM under the fault injector: lawful (it constructed),
+-- the injections counted (one append + one now = 2), the ghost visible,
+-- the clock double-ticked (the reading 101, not 100 — the api face DOES
+-- see the fault: the laws pin the clock's DIRECTION, never its step)
+theorem fault_pin :
+    (logProgram faultI ⟨st0, 0⟩).1 = 101
+    ∧ (logProgram faultI ⟨st0, 0⟩).2.base.journal = [999, 42]
+    ∧ (logProgram faultI ⟨st0, 0⟩).2.injected = 2 := by
+  simp [logProgram, faultI, pureSig, Interpreter.fault, pureNow, pureAppend,
+        pureGet, purePut, st0]
+
+-- the KV channel is UNTOUCHED by the seed's injections: the same
+-- worked KV program agrees under the pure and the fault readings
+theorem kv_fault_pin :
+    (kvProgram pureSig st0).1 = (kvProgram faultI ⟨st0, 0⟩).1 := rfl
+
+/-! ## Suite 8: the sweep + the mandatory negative controls -/
+
+/-- The interpreters' discipline, swept: drawn clock + drawn schedule,
+    the pure and cost-graded runs agree on the value channel, the
+    journal, and the clock; the cost is the composed schedule; the
+    fault injector counts 2 and its ghost is visible; the KV channel
+    is fault-invisible. -/
+def propInterp (t : Tape) : CheckResult := do
+  let (c₀, t₁) := t.below 20
+  let (g, t₂) := t₁.below 4
+  let (p, t₃) := t₂.below 4
+  let (a, t₄) := t₃.below 4
+  let (n, _) := t₄.below 4
+  let st : RefState := { cells := fun _ => 7, journal := [], clock := c₀ }
+  let c : OpCost := ⟨g + 1, p + 1, a + 1, n + 1⟩
+  let rp := logProgram pureSig st
+  let rc := logProgram (Interpreter.cost pureSig c) (st, 0)
+  assert (rp.1 == rc.1) "the pure/cost value agreement broke"
+  assert (rp.2.journal == rc.2.1.journal) "the pure/cost journal agreement broke"
+  assert (rp.2.clock == rc.2.1.clock) "the pure/cost clock agreement broke"
+  assert (rc.2.2 == c.putCost + c.getCost + c.appendCost + c.nowCost)
+    "the cost honesty broke (a silent undercount)"
+  let rf := logProgram (Interpreter.fault pureSig 999) ⟨st, 0⟩
+  assert (rf.2.injected == 2) "the fault count broke"
+  assert (rf.2.base.journal.contains 999) "the ghost entry vanished"
+  assert ((kvProgram pureSig st).1 == (kvProgram faultI ⟨st, 0⟩).1)
+    "the fault injector touched the KV channel"
+
+/-- The AGREEMENT sabotage: claims the pure and cost-graded runs'
+    api results DIFFER — caught (the cost is an annotation; the value
+    channel is the source's). -/
+def negAgreement (_t : Tape) : CheckResult := do
+  let rp := logProgram pureSig st0
+  let rc := logProgram (Interpreter.cost pureSig c1) (st0, 0)
+  assert (rp.1 != rc.1) "the agreement sabotage was not caught"
+
+/-- The UNDERCOUNT sabotage: claims the cost-graded run's final cost is
+    ZERO — caught (every operation's cost appears in the composed
+    annotation: logProgram_cost_honest). -/
+def negCostUndercount (_t : Tape) : CheckResult := do
+  assert ((logProgram (Interpreter.cost pureSig c1) (st0, 0)).2.2 == 0)
+    "the undercount sabotage was not caught"
+
+/-- The GHOST-INVISIBLE sabotage: claims the fault injector's ghost
+    entry is NOT in the journal — caught (the seed's fault is data,
+    visible in the carrier). -/
+def negGhostInvisible (_t : Tape) : CheckResult := do
+  assert (!(logProgram faultI ⟨st0, 0⟩).2.base.journal.contains 999)
+    "the ghost-invisible sabotage was not caught"
+
+def specSignature : Spec := Spec.ofList "effects-signature"
+  propInterp
+  [ ("agreement", negAgreement),
+    ("cost-undercount", negCostUndercount),
+    ("ghost-invisible", negGhostInvisible) ]
+  12 20250903
+
 end EffectsTests
 
-def main : IO UInt32 := TestingKit.mainOfSuites [("Effects", [EffectsTests.specLattice, EffectsTests.specResources])]
+def main : IO UInt32 := TestingKit.mainOfSuites [("Effects", [EffectsTests.specLattice, EffectsTests.specResources, EffectsTests.specSignature])]

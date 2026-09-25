@@ -75,7 +75,7 @@ def unitsMoved : Nat :=
 -- drift FAILS the build.
 #eval show Lean.CoreM Unit from do
   let env ← Lean.getEnv
-  match ledgerAppItemRegistry env with
+  match ← ledgerAppItemRegistry env with
   | .error e => Lean.throwError s!"lane fold drifted: {e}"
   | .ok reg =>
     let names := reg.items.map (·.name)

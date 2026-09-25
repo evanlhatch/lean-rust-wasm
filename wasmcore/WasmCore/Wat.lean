@@ -64,9 +64,9 @@ The five questions (notes/v3/01-core.md):
   note above).
 - **Ladder rung**: rung 1 (total structural fold); the byte-tie is
   the test-pinned regression until the gen-check row lands.
-- **Gate row**: none at the gates yet (WasmCore is not in
-  Gates.Packages' gated set; the gen-check wiring is the named
-  follow-up) + the WasmCoreTests golden/spelling pins.
+- **Gate row**: WasmCore's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it; the gen-check wiring is landed)
+  + the WasmCoreTests golden/spelling pins.
 
 Consumer trail: rides `Kit.Text` (the rope), `Kit.Emit` (the spine),
 `WasmCore.Types` + `WasmCore.Instr` + `WasmCore.OpTable` (the ONE
@@ -94,24 +94,107 @@ def indentW (n : Nat) : String := String.join (List.replicate n "  ")
     source — every line ends exactly once). -/
 def lineW (ind : Nat) (s : String) : Text := .str (indentW ind ++ s ++ "\n")
 
-/-- The WAT string literal (module/name fields — always quoted,
-    escaped). Mined from legacy `Wat.strW`. -/
-def strW (s : String) : String :=
-  "\"" ++ (s.replace "\\" "\\\\" |> fun t => t.replace "\"" "\\\"") ++ "\""
+/-- One escaped character (the WAT string escape discipline: the
+    backslash and the quote are backslash-escaped, every other char is
+    itself). The escape is the PER-CHAR map the parser inverts
+    (`WasmCore.WatParse.unescTo_escW`). -/
+def escChar (c : Char) : List Char :=
+  if c == '\\' then ['\\', '\\'] else if c == '"' then ['\\', '"'] else [c]
 
-/-- The value types' WAT spelling (the type grammar's words — not op
-    rows; the op table owns op spellings only). -/
-def valTypeW : ValType → String
-  | .i32 => "i32" | .i64 => "i64" | .f32 => "f32" | .f64 => "f64"
-  | .funcref => "funcref" | .externref => "externref"
+/-- The escaped character run (the per-char map; byte-identical to the
+    legacy replace-then-replace spelling — each char is escaped
+    independently, and neither escape's output feeds the other's
+    matcher). -/
+def escW : List Char → List Char
+  | [] => []
+  | c :: cs => escChar c ++ escW cs
+
+/-- The WAT string literal (module/name fields — always quoted,
+    escaped). Mined from legacy `Wat.strW`; re-spelled over the
+    per-char `escW` map (the same bytes — the parser's round-trip
+    laws consume THIS spelling's structure). -/
+def strW (s : String) : String :=
+  "\"" ++ String.ofList (escW s.toList) ++ "\""
+
+/-! ## The spellings (the ONE keyword source — 07 R6's no-parallel-table
+     rule at the keyword face: the emitter's templates and the WAT
+     parser's tokens (`WasmCore.WatParse`) are THIS list's projections;
+     a spelling drift is a compile break, never a silent re-spell. The
+     OP/MEM-OP spellings ride the ONE op table's `name` field as before
+     (`opName`/`memName` — never spelled here). -/
+
+/-- The module opener. -/
+def kwModule : String := "(module"
+/-- The type-section line's head. -/
+def kwType : String := "(type (func"
+/-- The params operand. -/
+def kwParam : String := " (param "
+/-- The results operand. -/
+def kwResult : String := " (result "
+/-- The memory-section line's head. -/
+def kwMemSec : String := "(memory "
+/-- The table-section line's head. -/
+def kwTable : String := "(table "
+/-- The table line's tail (the ONE funcref table's element type). -/
+def kwFuncref : String := " funcref)"
+/-- The export line's head. -/
+def kwExport : String := "(export "
+/-- The export descriptor's words (the desc token's decode targets —
+    shared with the ref operands' spellings below). -/
+def kwFuncWord : String := "func"
+def kwMemWord : String := "memory"
+/-- The export's func-ref operand. -/
+def kwFuncRef : String := " (" ++ kwFuncWord ++ " "
+/-- The export's memory-ref operand. -/
+def kwMemRef : String := " (" ++ kwMemWord ++ " "
+/-- The func's declaration line (the type by index). -/
+def kwFuncDecl : String := "(func (type "
+/-- The local declaration line. -/
+def kwLocal : String := "(local "
+/-- The element segment's head (the active offset-0 face). -/
+def kwElem : String := "(elem (i32.const 0) func"
+/-- The const instructions. -/
+def kwI32const : String := "i32.const"
+def kwI64const : String := "i64.const"
+/-- The local instructions. -/
+def kwLocalget : String := "local.get"
+def kwLocalset : String := "local.set"
+def kwLocaltee : String := "local.tee"
+/-- The call instructions. -/
+def kwCall : String := "call"
+def kwCallindirect : String := "call_indirect"
+/-- The indirect call's type operand. -/
+def kwTypeOpnd : String := " (type "
+/-- The branch instructions. -/
+def kwBr : String := "br"
+def kwBrif : String := "br_if"
+/-- The structural markers. -/
+def kwBlock : String := "block"
+def kwLoop : String := "loop"
+def kwIf : String := "if"
+def kwEnd : String := "end"
+def kwElse : String := "else"
+/-- The plain control words. -/
+def kwReturn : String := "return"
+def kwDrop : String := "drop"
+def kwSelect : String := "select"
+def kwUnreachable : String := "unreachable"
+/-- The memarg operands (structured fields — rendered from the DATA). -/
+def kwOffset : String := " offset="
+def kwAlign : String := " align="
+
+/-- The value types' WAT spelling — Types.lean's `renderValType` (the
+    ONE spelling; not op rows — the op table owns op spellings only).
+    The checker's diagnostics cite the same. -/
+def valTypeW : ValType → String := renderValType
 
 /-- The memarg operands, rendered from the DATA: a zero offset is
     elided (the format's default), an explicit align is spelled, the
     row's elided default (`memAlignDefault`) stays unspelled — never
     baked numbers (the legacy clobber-bug note, module header). -/
 def memArgsW (offset : Nat) (align : Option Nat) : String :=
-  (if offset = 0 then "" else s!" offset={offset}") ++
-  (match align with | some a => s!" align={a}" | none => "")
+  (if offset = 0 then "" else s!"{kwOffset}{offset}") ++
+  (match align with | some a => s!"{kwAlign}{a}" | none => "")
 
 /-! ## The instruction fold — the spellings ride the ONE op table -/
 
@@ -122,30 +205,31 @@ mutual
     by construction — explicit arms, the fold is the size-measured
     walk `iSize` names. -/
 def instrW (ind : Nat) : Instr → Text
-  | .i32const n => lineW ind s!"i32.const {n}"
-  | .i64const n => lineW ind s!"i64.const {n}"
-  | .localget n => lineW ind s!"local.get {n}"
-  | .localset n => lineW ind s!"local.set {n}"
-  | .localtee n => lineW ind s!"local.tee {n}"
-  | .call fn => lineW ind s!"call {fn}"
+  | .i32const n => lineW ind s!"{kwI32const} {n}"
+  | .i64const n => lineW ind s!"{kwI64const} {n}"
+  | .localget n => lineW ind s!"{kwLocalget} {n}"
+  | .localset n => lineW ind s!"{kwLocalset} {n}"
+  | .localtee n => lineW ind s!"{kwLocaltee} {n}"
+  | .call fn => lineW ind s!"{kwCall} {fn}"
+  | .callindirect ty => lineW ind s!"{kwCallindirect}{kwTypeOpnd}{ty})"
   | .mem op offset align => lineW ind s!"{memName op}{memArgsW offset align}"
   | .op o => lineW ind (opName o)
-  | .br d => lineW ind s!"br {d}"
-  | .brif d => lineW ind s!"br_if {d}"
+  | .br d => lineW ind s!"{kwBr} {d}"
+  | .brif d => lineW ind s!"{kwBrif} {d}"
   | .block body =>
-      Text.cat [lineW ind "block", bodyW (ind + 1) body, lineW ind "end"]
+      Text.cat [lineW ind kwBlock, bodyW (ind + 1) body, lineW ind kwEnd]
   | .loop body =>
-      Text.cat [lineW ind "loop", bodyW (ind + 1) body, lineW ind "end"]
+      Text.cat [lineW ind kwLoop, bodyW (ind + 1) body, lineW ind kwEnd]
   | .if_ thenI elseI =>
-      Text.cat [lineW ind "if", bodyW (ind + 1) thenI,
+      Text.cat [lineW ind kwIf, bodyW (ind + 1) thenI,
         (match elseI with
         | [] => Text.nil  -- the binary's else-elision, mirrored in text
-        | _ => Text.cat [lineW ind "else", bodyW (ind + 1) elseI]),
-        lineW ind "end"]
-  | .ret => lineW ind "return"
-  | .drop => lineW ind "drop"
-  | .select => lineW ind "select"
-  | .unreach => lineW ind "unreachable"
+        | _ => Text.cat [lineW ind kwElse, bodyW (ind + 1) elseI]),
+        lineW ind kwEnd]
+  | .ret => lineW ind kwReturn
+  | .drop => lineW ind kwDrop
+  | .select => lineW ind kwSelect
+  | .unreach => lineW ind kwUnreachable
 
 /-- A body's lines: each instruction's text in order (the `end`s are
     the structural forms' OWN — a flat list carries none, exactly as
@@ -162,44 +246,62 @@ end
 def paramListW (ps : List ValType) : String :=
   match ps with
   | [] => ""
-  | _ => " (param " ++ String.intercalate " " (ps.map valTypeW) ++ ")"
+  | _ => kwParam ++ String.intercalate " " (ps.map valTypeW) ++ ")"
 
 /-- The results operand (same shape). -/
 def resultListW (rs : List ValType) : String :=
   match rs with
   | [] => ""
-  | _ => " (result " ++ String.intercalate " " (rs.map valTypeW) ++ ")"
+  | _ => kwResult ++ String.intercalate " " (rs.map valTypeW) ++ ")"
 
 /-- One type: `(type (func (param …) (result …)))`, operands elided
     when empty — from the FuncType's data. -/
 def typeW (ind : Nat) (ft : FuncType) : Text :=
-  lineW ind s!"(type (func{paramListW ft.params}{resultListW ft.results}))"
+  lineW ind s!"{kwType}{paramListW ft.params}{resultListW ft.results}))"
 
 /-- One function: the type BY INDEX (the AST's reference discipline),
     one `(local T)` per declared local (beyond the type's params),
     then the body's lines, nested. -/
 def funcW (ind : Nat) (f : Func) : Text :=
   Text.cat
-    [ lineW ind s!"(func (type {f.tyIdx})"
-    , Text.cat (f.locals.map (fun t => lineW (ind + 1) s!"(local {valTypeW t})"))
+    [ lineW ind s!"{kwFuncDecl}{f.tyIdx})"
+    , Text.cat (f.locals.map (fun t => lineW (ind + 1) s!"{kwLocal}{valTypeW t})"))
     , bodyW (ind + 1) f.body
     , lineW ind ")" ]
 
-/-- One export: `(export "name" (func idx))` — the name through
-    `strW` (quoted, escaped), the index from the data. -/
+/-- One export: `(export "name" (func idx))` or the memory arm —
+    `(export "name" (memory idx))` (the canonical-ABI adapter face's
+    memory export). The name through `strW` (quoted, escaped), the
+    index from the data. -/
 def exportW (ind : Nat) (e : Export) : Text :=
   match e.desc with
-  | .func idx => lineW ind s!"(export {strW e.name} (func {idx}))"
+  | .func idx => lineW ind s!"{kwExport}{strW e.name}{kwFuncRef}{idx}))"
+  | .memory idx => lineW ind s!"{kwExport}{strW e.name}{kwMemRef}{idx}))"
+
+/-- One table: `(table {n} funcref)` — the size from the entries'
+    length (the table's data face; the element type is funcref in
+    every honest use). -/
+def tableW (ind : Nat) (t : Table) : Text :=
+  lineW ind s!"{kwTable}{t.init.length}{kwFuncref}"
+
+/-- One active element segment: `(elem (i32.const 0) func i0 i1 …)` —
+    the table's initialization face, the offset spelled from the DATA
+    (the constant-0 face of the wire's `i32.const 0; end`). -/
+def elemW (ind : Nat) (t : Table) : Text :=
+  lineW ind s!"{kwElem}{t.init.foldl (fun s n => s ++ " " ++ toString n) ""})"
 
 /-- The module's fields as text: types, memory (elided at
-    `memMin = 0` — the same elision the binary format makes),
-    exports, functions — the fold in the binary sections' order. -/
+    `memMin = 0` — the same elision the binary format makes), tables,
+    exports, element segments, functions — the fold in the binary
+    sections' order. -/
 def moduleText (m : Module) : Text :=
   Text.cat
-    [ lineW 0 "(module"
+    [ lineW 0 kwModule
     , Text.cat (m.types.map (typeW 1))
-    , (if m.memMin = 0 then Text.nil else lineW 1 s!"(memory {m.memMin})")
+    , (if m.memMin = 0 then Text.nil else lineW 1 s!"{kwMemSec}{m.memMin})")
+    , Text.cat (m.tables.map (tableW 1))
     , Text.cat (m.exports.map (exportW 1))
+    , Text.cat ((m.tables.filter (fun t => !t.init.isEmpty)).map (elemW 1))
     , Text.cat (m.funcs.map (funcW 1))
     , lineW 0 ")" ]
 

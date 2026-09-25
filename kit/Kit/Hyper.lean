@@ -51,6 +51,22 @@ The five questions (notes/v3/01-core.md):
 - gate row: the axiom pins in `KitTests.Axioms` + the KitTests pins —
   positive, negative, and the mandatory controls (the self-pair-only
   audit and the loose relation are the producers).
+- leftover rule: KEPT — the substrate of 16 §4.3's ranked program (the
+  doctrine commits to the power jump, not to a consumer-first lane).
+  Its consumer is the first security-facing lane claim (the
+  noninterference citation a lanes' claim will ride — 08 §35's
+  property taxonomy's safety rows at the power); the worked instances
+  + the pins above are the standing evidence until that claim lands.
+  The schedule-independence boundary note above is the named
+  first-consumer rule for the rest.
+- the consumer deadline (07's parked-table discipline, comment-level):
+  the NAMED candidate consumer is the asyncband models'
+  schedule-independence claim (16 §4.3's lane — the two-run carrier is
+  exactly its shape). DEADLINE: a KEPT row that outlives its SECOND
+  phase boundary without that consumer (or a named successor) is a
+  finding — the parked table's own rule fires, wire or delete, in the
+  boundary's commit. The boundary audits read this header, not the
+  table alone.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/

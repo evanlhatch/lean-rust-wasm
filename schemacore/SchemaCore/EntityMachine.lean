@@ -71,6 +71,7 @@ cone rule; no mathlib, no Batteries).
 
 import SchemaCore.Update
 import Machines.Dsl
+import Kit.Derive.Cascade
 
 namespace SchemaCore
 
@@ -536,6 +537,16 @@ theorem keyPart_nil_iff (d : EntityMachineDecl) (decls : List KeyDecl) :
       | none => simp [hb]
       | some kd => simp [hb]
 
+/-- The ENDPOINT rung's chunk law at the cascade's chunk face: the
+    flatMap chunk's iff, stated at the record's field form
+    (`endpointsDeclared`) — the per-element bridge + the all-connect,
+    composed once (the record face's rows cite the chunk level). -/
+theorem endpointsFlat_nil_iff (d : EntityMachineDecl) :
+    (d.transitions.flatMap (endpointsPart d)) = [] ↔
+      endpointsDeclared d = true := by
+  simp only [Kit.Derive.Cascade.flatMap_nil_iff, endpointsDeclared,
+    List.all_eq_true, endpointsPart_nil_iff]
+
 /-- The WF relation (the Prop side of the cascade) — the table's WF
     obligation's content. -/
 structure EntityWf (d : EntityMachineDecl) (fs : List Field)
@@ -549,27 +560,30 @@ structure EntityWf (d : EntityMachineDecl) (fs : List Field)
   /-- The declared key resolves (or there is none). -/
   keyOk : entityKeyOk d decls = true
 
+-- THE WF CASCADE (Kit.Derive.Cascade's `declare_cascade` — the
+-- preset is the generator's first production consumer): the rung
+-- chunk laws above are the ROWS' bridges (the cases analyses are the
+-- domain's content — the generator composes them, it does not
+-- re-derive them), and the master iff + the two projections are
+-- GENERATED: `EntityWf`'s fields ARE the rung relations, in
+-- declaration order (the record face).
+declare_cascade entityCascade (d : EntityMachineDecl) (fs : List Field)
+    (decls : List KeyDecl) :=
+  entityDiags d fs decls, EntityWf d fs decls where
+  | col := via colDiags_nil_iff
+  | endpoints := via endpointsFlat_nil_iff
+  | names := via namesPart_nil_iff
+  | key := via keyPart_nil_iff
+
 /-- THE WF BRIDGE (pattern #1): the checker never lies in either
-    direction — an empty Diag envelope IS the WF relation. -/
+    direction — an empty Diag envelope IS the WF relation. The name is
+    the preset's API (the consumers'); the proof is the GENERATED iff
+    — one citation (the migration pin: the hand master's append/flatMap
+    chase died into `entityCascade_eq_nil_iff`). -/
 theorem entityDiags_eq_nil_iff (d : EntityMachineDecl) (fs : List Field)
     (decls : List KeyDecl) :
-    entityDiags d fs decls = [] ↔ EntityWf d fs decls := by
-  constructor
-  · intro h
-    obtain ⟨h3, h4⟩ := List.eq_nil_of_append_eq_nil h
-    obtain ⟨h5, h6⟩ := List.eq_nil_of_append_eq_nil h3
-    obtain ⟨h1, h2⟩ := List.eq_nil_of_append_eq_nil h5
-    exact ⟨(colDiags_nil_iff d fs).mp h1,
-      List.all_eq_true.mpr (fun t ht =>
-        (endpointsPart_nil_iff d t).mp (List.flatMap_eq_nil_iff.mp h2 t ht)),
-      (namesPart_nil_iff d).mp h6,
-      (keyPart_nil_iff d decls).mp h4⟩
-  · rintro ⟨hcol, htr, hnames, hkey⟩
-    refine List.append_eq_nil_iff.mpr ⟨?_, (keyPart_nil_iff d decls).mpr hkey⟩
-    refine List.append_eq_nil_iff.mpr ⟨?_, (namesPart_nil_iff d).mpr hnames⟩
-    refine List.append_eq_nil_iff.mpr ⟨(colDiags_nil_iff d fs).mpr hcol, ?_⟩
-    exact List.flatMap_eq_nil_iff.mpr (fun t ht =>
-      (endpointsPart_nil_iff d t).mpr ((List.all_eq_true.mp htr) t ht))
+    entityDiags d fs decls = [] ↔ EntityWf d fs decls :=
+  entityCascade_eq_nil_iff d fs decls
 /-! ## The claims + the obligation rows (the Prop-indexed view)
 
 The entity-machine obligation's fact: a transition's keyed update
@@ -1002,16 +1016,36 @@ def elabSchemaEntityMachine : Lean.Elab.Command.CommandElab := fun stx => do
         list's, discharged at the instance). -/
     def $(mkIdentFrom stx (baseName ++ "Fields").toName) : List Field := $fieldsT))
   let fieldsRef : Lean.Term := ⟨mkIdentFrom stx (baseName ++ "Fields").toName⟩
-  let keysRhs : Lean.Term ← match key? with
-    | some kId =>
-        let kName := kId.getId.toString
-        `(term| [ (⟨$(strT recName), $fieldsRef, $(strT kName), []⟩ : KeyDecl) ])
-    | none => `(term| [])
-  elabCommand (← `(command|
+  -- The Keys artifact splits on `key?:` — with a clause the body is the
+  -- machine's OWN declaration data (the record name, the fields ref, the
+  -- key), a `def` whose alpha-equivalence across two machines would be a
+  -- REAL collision; without, the body is the keys lane's empty set —
+  -- every keyless machine's body is `[]`, so a `def` per machine is a
+  -- spurious duplicate-body cluster. The generated surface stays clean
+  -- by construction: the keyless case emits an `abbrev` — the
+  -- role-named transparent alias that `LintKit.DupDefBodies`' calibration
+  -- excludes BY DESIGN (the machine name is the only difference —
+  -- a boundary marker, not a copied body).
+  match key? with
+  | some kId =>
+      let kName := kId.getId.toString
+      elabCommand (← `(command|
     /-- The keys lane's declaration set for the record (the preset's
         `key:` clause; `entityKeyOk` resolves against THIS — the ONE
         `keyDeclFor` reading, shared with the update lane's WF rung). -/
-    def $(mkIdentFrom stx (baseName ++ "Keys").toName) : List KeyDecl := $keysRhs))
+    def $(mkIdentFrom stx (baseName ++ "Keys").toName) : List KeyDecl :=
+      [ (⟨$(strT recName), $fieldsRef, $(strT kName), []⟩ : KeyDecl) ]))
+  | none =>
+      elabCommand (← `(command|
+    /-- The keys lane's declaration set for the record — EMPTY (no
+        `key:` clause; `entityKeyOk` resolves against THIS — the ONE
+        `keyDeclFor` reading, shared with the update lane's WF rung).
+        An `abbrev`, not a `def`: a keyless machine's Keys set is the
+        role-named empty marker (the machine name is the only
+        difference), the dupDefBodies calibration's transparent-alias
+        case — a per-machine `def` of `[]` would be a spurious
+        duplicate-body cluster. -/
+    abbrev $(mkIdentFrom stx (baseName ++ "Keys").toName) : List KeyDecl := []))
   let keysRef : Lean.Term := ⟨mkIdentFrom stx (baseName ++ "Keys").toName⟩
 
   -- Artifact 3b — the declaration row (the provenance data)

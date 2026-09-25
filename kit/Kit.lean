@@ -21,16 +21,19 @@ into scope, but this module re-exports by importing):
   instances with the counterexample pairs as data).
 - `Kit.Obligation` — the obligation substrate (closed Tier + Evidence,
   the mis-wire rule, the decide backends).
-- `Kit.Registry` — the value-level registries (DataRegistry, CodedRegistry).
+- `Kit.Registry` — the value-level registry (DataRegistry; the retired
+  CodedRegistry's discipline lives in Kit.CodeRegistry + Kit.CheckedProp).
 - `Kit.CheckedProp` — relation + checker + bridge discipline.
 - `Kit.Emit` — the emitter spine (pure run, outputs nodup in the type,
   the header/content-hash discipline, the driver fold).
 - `Kit.Suggest` — the ONE did-you-mean engine (the bounded edit
   distance + the suffix rendering as data).
-- `Kit.FreshName` — the fresh-name discipline (the verdict + the
-  curated duplicate rejection, mined from legacy GenKit).
 - `Kit.Diag` — the ONE diagnostic envelope (05 §4: ECode, Label, the
   closed five severities, the closedWorld constructor, the rendering).
+- `Kit.Cli` — the ONE exe-driver discipline (design-wave-30 C7: the
+  subcommand table + the shared flags + the verdict/exit mapping; the
+  help text is GENERATED from the table, the unknown subcommand/flag
+  fails through the closed-world Diag).
 - `Kit.Lane` — the lane substrate (`register_lane <Item>`: the env
   extension + the attribute mount as one kit call; 12 §2's steps 1–2).
 - `Kit.CodeRegistry` — the persisted E-code registry (05 §4: stable
@@ -45,6 +48,12 @@ into scope, but this module re-exports by importing):
 - `Kit.Varint` — the ONE LEB128 varint (the shared byte primitive: the
   encode/decode pair + the append-form law + the exact-image policy as
   a `Kit.Codec`; the C0 home both domain cores' codecs consume).
+- `Kit.Proto` — the format-generic protobuf primitives (the tag/wire-type
+  discipline, the length-delimited/repeat faces, the signed varint +
+  ASCII string faces, the oneof/message-field combinator layer, the
+  clean-suffix discipline, and the `WireTarget` row structure) — the
+  promotion out of the substrait lane, landed with its second consumer
+  (the vortex DType proto face).
 - `Kit.Text` — the rope text-builder (06 §7b: the emitters' STRUCTURE
   carrier — `Text` chunk tree, O(1) `app`/`cat`/`sepBy`, ONE render;
   the byte-tie's bridge laws).
@@ -55,18 +64,12 @@ into scope, but this module re-exports by importing):
   snake/kebab + `rustIdent`) + THE post-mangle uniqueness discipline
   (`collDiags` + the `collDiags_eq_nil_iff` bridge — the mined
   `mangleCollDiags_eq_nil_iff`).
-- `Kit.Json` — the minimal JSON builders (`jsonStr` — the ONE escaping
-  decision — + obj/objPad/arr; pre-rendered texts, no `Json` AST).
-- `Kit.Validation` — the error-accumulating applicative (the
-  anti-early-exit surface: `foldlM`/`traverse` collect ALL failures;
-  NO `Monad` — bind cannot accumulate).
-
 The five questions (notes/v3/01-core.md): this umbrella answers none
 on its own — root, carrier, spine, and rung are each submodule's (the
-list above is where the answers live). Gate row: none directly — Kit
-itself is not yet in Gates.Packages' gated set (the per-library axiom
-sweep covers LintKit/Gates/SchemaCore), so the KitTests axiom pins are
-the standing evidence.
+list above is where the answers live). Gate row: Kit's row in
+Gates.Packages' gated set — the per-library axiom sweep + the lint
+driver cover every Kit root; the KitTests axiom pins are the standing
+evidence.
 -/
 
 import Kit.Correspondence
@@ -77,15 +80,14 @@ import Kit.Registry
 import Kit.CheckedProp
 import Kit.Emit
 import Kit.Suggest
-import Kit.FreshName
 import Kit.Diag
+import Kit.Cli
 import Kit.Lane
 import Kit.CodeRegistry
 import Kit.Change
 import Kit.Observer
 import Kit.Varint
+import Kit.Proto
 import Kit.Text
 import Kit.Duel
 import Kit.Mangle
-import Kit.Json
-import Kit.Validation

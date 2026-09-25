@@ -11,6 +11,15 @@ InspectorMain — the `inspector` exe: the evidence-chain inspector
     lake exe inspector trust           — the tree's trust surface
     lake exe inspector whatif          — the what-if report over the
                                          fixture journal (08 #20)
+    lake exe inspector explain         — the explanations lane (02 §11:
+                                         why present / why absent /
+                                         which change repairs)
+    lake exe inspector duel [<name>]   — the committed duel vectors' REPLAY
+                                         (the regression discipline) + the
+                                         divergences' EXPLAIN (the witness +
+                                         the ledger rows). No name = every
+                                         registered duel; a name/directory is
+                                         the closed world (did-you-mean).
     lake exe inspector                 — the sweep (the report mode)
 
 Exit codes: `why` exits 1 only on an unknown label (the loud miss);
@@ -21,7 +30,11 @@ only on an unknown constant; `uncited`/`trust` are report-only (exit 0)
 — the census's gate promotion is lintkit's question, the teeth are the
 gates' rows. `whatif` is report-only (exit 0): the divergence is the
 ANSWER, not a failure — a what-if over the committed fixture always
-succeeds, and a net-zero what-if renders its honest `none` line. `report` is the gates' future sweep — the teeth are 09 §3's
+succeeds, and a net-zero what-if renders its honest `none` line.
+`duel` is the REPLAY — a regression surface, so it has teeth: a
+divergence, a malformed manifest, or an unknown duel name exits 1
+(the legacy oracle-runner's probe contract); a clean replay exits 0
+and renders the ledger's zero line. `report` is the gates' future sweep — the teeth are 09 §3's
 (a registered obligation with no discharge, or evidence resolving to
 nothing, fails the run), so gaps/defects exit 1.
 
@@ -39,6 +52,41 @@ import Lean
 open Inspector
 open Lean
 
+/-- The replayed-envs dispatch (the exe's LOAD-FAILED face, ONE copy —
+the six hand-rolled dispatches collapsed): on replay failure the loud
+line + exit 1; on success the envs. -/
+unsafe def withReplayed (k : List (Inspector.PkgSpec × Lean.Environment) → IO UInt32) :
+    IO UInt32 := do
+  match ← replayEnvs with
+  | .error e =>
+      IO.eprintln s!"inspector: LOAD FAILED — {e}"
+      return 1
+  | .ok envs => k envs
+
+/-- The same face over the obligation rows (`collectReplayed`) — the
+row-level handlers' dispatch. -/
+unsafe def withReplayRows (k : List Inspector.InspRow → IO UInt32) : IO UInt32 := do
+  match ← collectReplayed with
+  | .error e =>
+      IO.eprintln s!"inspector: LOAD FAILED — {e}"
+      return 1
+  | .ok rows => k rows
+
+/-- The loaded-ledger dispatch (the two query directions' shared
+preamble): ABSENT renders the direction's honest dormant line (exit 1
+— the loud miss), a parse refusal is the review failure (exit 1);
+loaded rows hand to `k`. -/
+unsafe def withLedgerRows (absentWhy : String)
+    (k : List Kit.Ledger.LedgerRow → IO UInt32) : IO UInt32 := do
+  match ← Inspector.LedgerView.readLedger with
+  | .absent =>
+      IO.println absentWhy
+      return 1
+  | .refused e =>
+      IO.eprintln s!"inspector: the ledger REFUSED to parse — {e}"
+      return 1
+  | .loaded rows => k rows
+
 /-- Run one CoreM computation over a loaded env (the gates' toIO
     pattern — Gates.Axioms's, mirrored at the call site). -/
 unsafe def runCore (env : Lean.Environment) (act : Lean.CoreM α) : IO α := do
@@ -50,7 +98,7 @@ unsafe def runCore (env : Lean.Environment) (act : Lean.CoreM α) : IO α := do
     ABSENT = the honest dormant state (exit 0); a refusal or orphan
     flags fail the run (exit 1). -/
 unsafe def runLedger : IO UInt32 := do
-  let onDisk ← Inspector.LedgerView.scanGenerated
+  let onDisk ← Inspector.ArtifactScan.scanGenerated
   let st ← Inspector.LedgerView.readLedger
   let (text, failed) := Inspector.LedgerView.report onDisk st
   IO.println text
@@ -58,17 +106,11 @@ unsafe def runLedger : IO UInt32 := do
 
 /-- One backward query: the artifact's demand surface; an untracked
     path is the loud miss (exit 1). -/
-unsafe def runLedgerBackward (path : String) : IO UInt32 := do
-  let st ← Inspector.LedgerView.readLedger
-  match st with
-  | .absent =>
-      IO.println "inspector: the ledger is ABSENT — no row can answer a \
-        backward query yet (it lands with the first driver wiring)"
-      return 1
-  | .refused e =>
-      IO.eprintln s!"inspector: the ledger REFUSED to parse — {e}"
-      return 1
-  | .loaded rows =>
+unsafe def runLedgerBackward (path : String) : IO UInt32 :=
+  withLedgerRows
+    "inspector: the ledger is ABSENT — no row can answer a backward \
+      query yet (it lands with the first driver wiring)"
+    fun rows => do
       let (text, known) := Inspector.LedgerView.backwardAnswer rows path
       IO.println text
       return if known then 0 else 1
@@ -76,17 +118,11 @@ unsafe def runLedgerBackward (path : String) : IO UInt32 := do
 /-- One forward query: what moves if this spec name changes. Always
     answers (an empty affected set is a legitimate answer; the query is
     conservative by Kit.Ledger's proved face). -/
-unsafe def runLedgerForward (name : String) : IO UInt32 := do
-  let st ← Inspector.LedgerView.readLedger
-  match st with
-  | .absent =>
-      IO.println "inspector: the ledger is ABSENT — no row can answer a \
-        forward query yet (it lands with the first driver wiring)"
-      return 1
-  | .refused e =>
-      IO.eprintln s!"inspector: the ledger REFUSED to parse — {e}"
-      return 1
-  | .loaded rows =>
+unsafe def runLedgerForward (name : String) : IO UInt32 :=
+  withLedgerRows
+    "inspector: the ledger is ABSENT — no row can answer a forward \
+      query yet (it lands with the first driver wiring)"
+    fun rows => do
       IO.println (Inspector.LedgerView.forwardAnswer rows name)
       return 0
 
@@ -118,19 +154,15 @@ unsafe def runUncited (envs : List (Inspector.PkgSpec × Lean.Environment)) :
     replayed roots' decls, LintKit's machinery consumed) + the tiers'
     distribution + the duel status. Report-only (exit 0). -/
 unsafe def runTrust (envs : List (Inspector.PkgSpec × Lean.Environment)) :
-    IO UInt32 := do
-  match ← collectReplayed with
-  | .error e =>
-      IO.eprintln s!"inspector: LOAD FAILED — {e}"
-      return 1
-  | .ok rows =>
-      for (pkg, env) in envs do
-        let axs ← runCore env (Inspector.Trust.axiomCones env pkg.roots)
-        let total := env.header.moduleNames.size
-        let proj := (env.header.moduleNames.toList.filter (fun m =>
-          !(LintKit.coreModuleRoots.any (·.isPrefixOf m)))).length
-        IO.println (Inspector.Trust.trustReport pkg.dir proj total axs rows)
-      return 0
+    IO UInt32 :=
+  withReplayRows fun rows => do
+    for (pkg, env) in envs do
+      let axs ← runCore env (Inspector.Trust.axiomCones env pkg.roots)
+      let total := env.header.moduleNames.size
+      let proj := (env.header.moduleNames.toList.filter (fun m =>
+        !(LintKit.coreModuleRoots.any (·.isPrefixOf m)))).length
+      IO.println (Inspector.Trust.trustReport pkg.dir proj total axs rows)
+    return 0
 
 /-- The what-if report over the committed fixture journal (08 #20):
     the divergence is the answer, not a failure — report-only, exit 0. -/
@@ -138,49 +170,69 @@ def runWhatIf : IO UInt32 := do
   IO.println (Inspector.WhatIf.Report.render Inspector.WhatIf.fixtureWhatIf)
   return 0
 
+/-- The explain report (02 §11: the explanations lane — why present /
+    why absent / which change repairs; the explanations ARE the
+    answer) — report-only, exit 0 (the `whatif` precedent). -/
+def runExplain : IO UInt32 := do
+  IO.println Inspector.Explain.explainReport
+  return 0
+
+/-- The duel REPLAY (the regression discipline): replay one duel or
+    every registered duel, render each report (the Diag discipline —
+    divergences render their envelope + the ready-to-paste ledger
+    row). TEETH: a divergence, a manifest refusal, or an unknown duel
+    name exits 1 (the legacy oracle-runner's probe contract — a
+    replay is a regression, never a report-only surface). -/
+def runDuel (name : Option String) : IO UInt32 := do
+  let entries? : Option (List Inspector.DuelReplay.DuelEntry) := match name with
+    | none => some Inspector.DuelReplay.duelEntries
+    | some n =>
+        match Inspector.DuelReplay.duelEntries.find? fun e => e.name == n || e.dir == n with
+        | some e => some [e]
+        | none => none
+  match entries? with
+  | none =>
+      let got := name.getD ""
+      IO.eprintln (Kit.Diag.toString (Inspector.DuelReplay.unknownDuelDiag got))
+      return 1
+  | some entries =>
+      let mut failed := false
+      for e in entries do
+        match ← Inspector.DuelReplay.replayDuel e with
+        | .error msg =>
+            IO.eprintln (Kit.Diag.toString (Inspector.DuelReplay.manifestRefusalDiag e.dir msg))
+            failed := true
+        | .ok rows =>
+            IO.println (Inspector.DuelReplay.report e.name rows)
+            if !(rows.all (fun r => Inspector.DuelReplay.isAgree r.2)) then failed := true
+      return if failed then 1 else 0
+
 unsafe def main (args : List String) : IO UInt32 := do
   match args with
   | ["ledger"] => runLedger
   | ["ledger", "backward", path] => runLedgerBackward path
   | ["ledger", "forward", name] => runLedgerForward name
   | ["cites", thm] =>
-      match ← replayEnvs with
-      | .error e =>
-          IO.eprintln s!"inspector: LOAD FAILED — {e}"
-          return 1
-      | .ok envs => runCites envs thm.toName
+      withReplayed fun envs => runCites envs thm.toName
   | ["uncited"] =>
-      match ← replayEnvs with
-      | .error e =>
-          IO.eprintln s!"inspector: LOAD FAILED — {e}"
-          return 1
-      | .ok envs => runUncited envs
+      withReplayed runUncited
   | ["trust"] =>
-      match ← replayEnvs with
-      | .error e =>
-          IO.eprintln s!"inspector: LOAD FAILED — {e}"
-          return 1
-      | .ok envs => runTrust envs
+      withReplayed runTrust
   | ["whatif"] => runWhatIf
+  | ["explain"] => runExplain
+  | ["duel"] => runDuel none
+  | ["duel", name] => runDuel (some name)
   | ["why", label] =>
-      match ← collectReplayed with
-      | .error e =>
-          IO.eprintln s!"inspector: LOAD FAILED — {e}"
-          return 1
-      | .ok rows =>
-          IO.println (Inspector.why rows label)
-          return if Inspector.whyKnown rows label then 0 else 1
+      withReplayRows fun rows => do
+        IO.println (Inspector.why rows label)
+        return if Inspector.whyKnown rows label then 0 else 1
   | ["report"] | [] =>
-      match ← collectReplayed with
-      | .error e =>
-          IO.eprintln s!"inspector: LOAD FAILED — {e}"
-          return 1
-      | .ok rows =>
-          IO.println (Inspector.report replayPkgsRender rows)
-          -- The sweep's teeth (09 §3): gaps + defects fail the run.
-          return if rows.any (fun r => !r.isClean) then 1 else 0
+      withReplayRows fun rows => do
+        IO.println (Inspector.report replayPkgsRender rows)
+        -- The sweep's teeth (09 §3): gaps + defects fail the run.
+        return if rows.any (fun r => !r.isClean) then 1 else 0
   | _ =>
-      IO.eprintln "usage: lake exe inspector [why <label> | report | ledger \
-        [backward <path> | forward <name>] | cites <theorem> | uncited | \
-        trust | whatif]"
+      IO.eprintln "usage: lake exe inspector [why <label> | report | \
+        ledger [backward <path> | forward <name>] | cites <theorem> | \
+        uncited | trust | whatif | explain | duel [<name>]]"
       return 1

@@ -178,6 +178,118 @@ theorem replay_eq_run (g : Kit.Additive A A) (m : Machine A I)
   rw [replay, journal_eq_D_run]
   exact Machines.I_D g (stateStream m ins s)
 
+/-! ## THE ADJUNCTION: D ⊣ I (16-surface §1's conjugacy, deep form) -/
+
+/-- **THE SET-LEVEL ADJUNCTION** — the stream/table conjugacy as ONE
+    object. Two maps — `journalMap` (differentiate: run ↦ journal, the
+    journal bridge's map) and `replayMap` (integrate: journal ↦ run,
+    the replay bridge's map) — with the two round trips as PROOF
+    fields; the adjunction's unit and counit are DERIVED
+    (`Adjunction.unit`/`Adjunction.counit`), and the triangle laws are
+    PROVED from the fields (`triangle_left`/`triangle_right`), never
+    assumed. The dI instantiation (`dIAdj` below) discharges both
+    fields from the landed laws `Machines.I_D`/`Machines.D_I` — the
+    fusion bridges become the unit/counit's machine faces, not
+    parallel stories. Set-level honesty: with both round trips closed
+    the adjunction is the isomorphism-adjunction — the deep form of
+    16 §1's "one phenomenon, two readings". -/
+structure Adjunction (A : Type) (g : Kit.Additive A A) where
+  /-- Differentiate: run ↦ journal (the journal bridge's map). -/
+  journalMap : Stream A → Stream A
+  /-- Integrate: journal ↦ run (the replay bridge's map). -/
+  replayMap : Stream A → Stream A
+  /-- The unit's law: replaying the journal reconstructs the run — the
+      replay bridge's round trip (`Machines.I_D` at the dI instance). -/
+  unit_law : ∀ r, replayMap (journalMap r) = r
+  /-- The counit's law: journaling the replay recovers the journal —
+      the journal bridge's reverse leg (`Machines.D_I` at the dI
+      instance). -/
+  counit_law : ∀ j, journalMap (replayMap j) = j
+
+namespace Adjunction
+
+variable {A : Type} {g : Kit.Additive A A}
+
+/-- The adjunction's UNIT: η : Id → replayMap ∘ journalMap — a run
+    read through its journal (the replay bridge's composite). The unit
+    LAW is the field `unit_law`. -/
+def unit (a : Adjunction A g) : Stream A → Stream A :=
+  a.replayMap ∘ a.journalMap
+
+/-- The adjunction's COUNIT: ε : journalMap ∘ replayMap → Id — a
+    journal read through its replay (the journal bridge's reverse
+    composite). The counit LAW is the field `counit_law`. -/
+def counit (a : Adjunction A g) : Stream A → Stream A :=
+  a.journalMap ∘ a.replayMap
+
+/-- **THE TRIANGLE LAWS** (the adjunction's discharge), left:
+    ε ∘ L ∘ η = L — the counit closes the unit's round trip on the
+    journal side. Pure field algebra: no new induction. -/
+theorem triangle_left (a : Adjunction A g) (r : Stream A) :
+    a.counit (a.journalMap (a.unit r)) = a.journalMap r := by
+  show a.journalMap (a.replayMap (a.journalMap (a.replayMap (a.journalMap r))))
+    = a.journalMap r
+  rw [a.counit_law, a.counit_law]
+
+/-- **THE TRIANGLE LAWS**, right: η ∘ R ∘ ε = R — the unit closes the
+    counit's round trip on the replay side. -/
+theorem triangle_right (a : Adjunction A g) (j : Stream A) :
+    a.unit (a.replayMap (a.counit j)) = a.replayMap j := by
+  show a.replayMap (a.journalMap (a.replayMap (a.journalMap (a.replayMap j))))
+    = a.replayMap j
+  rw [a.unit_law, a.unit_law]
+
+end Adjunction
+
+/-- **THE D ⊣ I ADJUNCTION VALUE**: the conjugacy as ONE object —
+    differentiate/integrate with both round trips discharged by the
+    landed laws (`Machines.I_D`/`Machines.D_I`); the round-trip
+    theorems are the fields' dischargers, never re-proved. The `dI`
+    Iso VALUE (Machines.Stream) is this object's correspondence-grade
+    face; the machine-level bridges below are its unit/counit faces. -/
+def dIAdj (g : Kit.Additive A A) : Adjunction A g where
+  journalMap := D g
+  replayMap := Machines.I g
+  unit_law := Machines.I_D g
+  counit_law := D_I g
+
+/-- The JOURNAL BRIDGE as the adjunction's left map at the run: the
+    machine's journal IS `journalMap` of the run (`journal_eq_D_run`
+    restated through the object — the unit's underlying map). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by the lane's tests (MachinesTests #print axioms / the session-machine pins)"]
+theorem journal_eq_journalMap (g : Kit.Additive A A) (m : Machine A I)
+    (ins : Stream I) (s : A) :
+    journal g m ins s = (dIAdj g).journalMap (stateStream m ins s) :=
+  journal_eq_D_run g m ins s
+
+/-- The REPLAY BRIDGE as the adjunction's UNIT at the run: the replay
+    of the machine's journal IS the unit's composite at the run
+    (definitional — the bridge's shape), and the unit's law at the
+    machine (`unit_machine` below) is the landed `replay_eq_run`. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by the lane's tests (MachinesTests #print axioms / the session-machine pins)"]
+theorem replay_eq_unit (g : Kit.Additive A A) (m : Machine A I)
+    (ins : Stream I) (s : A) :
+    replay g m ins s = (dIAdj g).unit (stateStream m ins s) := rfl
+
+/-- The adjunction's UNIT LAW at the machine: the unit at a machine run
+    is the identity — the deep form's replay bridge (`replay_eq_run`
+    restated through the object). -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by the lane's tests (MachinesTests #print axioms / the session-machine pins)"]
+theorem unit_machine (g : Kit.Additive A A) (m : Machine A I)
+    (ins : Stream I) (s : A) :
+    (dIAdj g).unit (stateStream m ins s) = stateStream m ins s :=
+  replay_eq_run g m ins s
+
+/-- THE COUNIT AT THE MACHINE JOURNAL: the journal of the replay IS
+    the journal (the journal bridge's reverse leg, machine level).
+    The trichotomy's net-zero control lives at this seam: the counit
+    closes on the JOURNAL (the net deltas), never on the occurrence
+    log — `journal_of_replay` says nothing about events. -/
+@[nolint linter.guestlang.zeroCitation "public API: pinned by the lane's tests (MachinesTests #print axioms / the session-machine pins)"]
+theorem journal_of_replay (g : Kit.Additive A A) (m : Machine A I)
+    (ins : Stream I) (s : A) : D g (replay g m ins s) = journal g m ins s :=
+  D_I g (journal g m ins s)
+
 /-! ## Bisimulation as stream equality (the observer-parameterized form) -/
 
 /-- The response STATE stream: the post-tick state at each time (the

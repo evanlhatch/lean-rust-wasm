@@ -29,10 +29,10 @@
 
 use std::path::{Path, PathBuf};
 
-use wasmtime::{Engine, Module as WasmModule, Store, Trap};
+use wasmtime::Trap;
 
 use crate::artifact::bytes_hash;
-use crate::HostError;
+use crate::{HostError, engine::{export_i64, instantiate_core_module}};
 
 /// The manifest's path inside the duel directory.
 const MANIFEST: &str = "manifest.txt";
@@ -52,18 +52,6 @@ pub enum Expectation {
 }
 
 impl Expectation {
-    /// The manifest spelling (the ONE format's second column) — kept
-    /// for the round-trip face (`render ∘ parse = id`); the tests pin
-    /// it, the lib never calls it.
-    #[allow(dead_code)]
-    fn render(&self) -> String {
-        match self {
-            Expectation::Run(r) => format!("run {r}"),
-            Expectation::Trap => "trap".to_string(),
-            Expectation::Refuse => "refuse".to_string(),
-        }
-    }
-
     /// Parses one expectation column. `None` = unknown vocabulary —
     /// the caller refuses (a malformed manifest, never a guess).
     fn parse(s: &str) -> Option<Expectation> {
@@ -122,156 +110,132 @@ pub struct DuelReport {
     pub rows: Vec<DuelRow>,
 }
 
+/// The counts over any duel's rows: (agree, diverge, refused) — the
+/// fold the reports' renderings share (ONE copy for every duel lane).
+pub(crate) fn verdict_counts<'a, I: IntoIterator<Item = (&'a str, &'a RowVerdict)>>(
+    rows: I,
+) -> (usize, usize, usize) {
+    let mut a = 0;
+    let mut d = 0;
+    let mut r = 0;
+    for (_, v) in rows {
+        match v {
+            RowVerdict::Agree => a += 1,
+            RowVerdict::Diverge { .. } => d += 1,
+            RowVerdict::Refused { .. } => r += 1,
+        }
+    }
+    (a, d, r)
+}
+
+/// THE duel verdict fold (Kit.Duel.Verdict.foldRows' face): all-agree
+/// is agree; the FIRST non-agree row is the failure evidence (the
+/// minimal-counterexample discipline), its witness's `loc` repaired to
+/// the row's own path. Shared by every duel lane's report.
+pub(crate) fn fold_verdicts<'a, I: IntoIterator<Item = (&'a str, &'a RowVerdict)>>(
+    rows: I,
+) -> RowVerdict {
+    for (path, v) in rows {
+        match v {
+            RowVerdict::Agree => continue,
+            v @ (RowVerdict::Diverge { .. } | RowVerdict::Refused { .. }) => {
+                let mut w = v.clone();
+                if let RowVerdict::Diverge { loc, .. } = &mut w {
+                    *loc = path.to_string();
+                }
+                return w;
+            }
+        }
+    }
+    RowVerdict::Agree
+}
+
+/// THE honest report body (the tier sentence is part of the report —
+/// 04 §6: a duel verdict is tested agreement, never a theorem):
+/// `header`, then one line per row, then the counts line. Shared by
+/// every duel lane's report.
+pub(crate) fn render_report<'a, I: IntoIterator<Item = (&'a str, &'a RowVerdict)>>(
+    header: &str,
+    rows: I,
+) -> String {
+    let rows: Vec<(&str, &RowVerdict)> = rows.into_iter().collect();
+    let (a, d, r) = verdict_counts(rows.iter().copied());
+    let mut out = String::new();
+    out.push_str(header);
+    for (path, v) in &rows {
+        out.push_str(&format!("  {path}: {}\n", v.render()));
+    }
+    out.push_str(&format!(
+        "{n} row(s): {a} agree, {d} diverge, {r} refused",
+        n = rows.len()
+    ));
+    out
+}
+
 impl DuelReport {
     /// The counts: (agree, diverge, refused).
     pub fn counts(&self) -> (usize, usize, usize) {
-        let mut a = 0;
-        let mut d = 0;
-        let mut r = 0;
-        for row in &self.rows {
-            match row.verdict {
-                RowVerdict::Agree => a += 1,
-                RowVerdict::Diverge { .. } => d += 1,
-                RowVerdict::Refused { .. } => r += 1,
-            }
-        }
-        (a, d, r)
+        verdict_counts(self.rows.iter().map(|r| (r.path.as_str(), &r.verdict)))
     }
 
     /// THE honest rendering (the tier sentence is part of the report —
     /// 04 §6: a duel verdict is tested agreement, never a theorem).
     pub fn render(&self) -> String {
-        let (a, d, r) = self.counts();
-        let mut out = String::new();
-        out.push_str(&format!(
-            "wasm-exec duel (generator {}): TESTED AGREEMENT — the \
-             oracleSwept tier, never a theorem (notes/v3/04 §6)\n",
-            self.generator
-        ));
-        for row in &self.rows {
-            out.push_str(&format!("  {}: {}\n", row.path, row.verdict.render()));
-        }
-        out.push_str(&format!(
-            "{n} row(s): {a} agree, {d} diverge, {r} refused",
-            n = self.rows.len()
-        ));
-        out
+        render_report(
+            &format!(
+                "wasm-exec duel (generator {}): TESTED AGREEMENT — the \
+                 oracleSwept tier, never a theorem (notes/v3/04 §6)\n",
+                self.generator
+            ),
+            self.rows.iter().map(|r| (r.path.as_str(), &r.verdict)),
+        )
     }
 
     /// THE duel verdict (Kit.Duel.Verdict.foldRows' face): all-agree is
     /// agree; the FIRST non-agree row is the failure evidence (the
     /// minimal-counterexample discipline).
     pub fn verdict(&self) -> RowVerdict {
-        for row in &self.rows {
-            match &row.verdict {
-                RowVerdict::Agree => continue,
-                v @ (RowVerdict::Diverge { .. } | RowVerdict::Refused { .. }) => {
-                    let mut w = v.clone();
-                    if let RowVerdict::Diverge { loc, .. } = &mut w {
-                        *loc = row.path.clone();
-                    }
-                    return w;
-                }
-            }
-        }
-        RowVerdict::Agree
+        fold_verdicts(self.rows.iter().map(|r| (r.path.as_str(), &r.verdict)))
     }
 }
 
 /// Parses the committed manifest (the ONE format — `Kit.Duel.manifestRows`):
-/// the 2-line GENERATED header, then `generator\t<module>`, then one
-/// `<path>\t<expectation>` row per vector.
+/// the GENERATED comment header, then `generator\t<module>`, then one
+/// `<path>\t<expectation>` row per vector. The structural walk is the
+/// SHARED parser's (the manifest module — every duel lane consumes it);
+/// the expectation vocabulary is THIS lane's.
 fn parse_manifest(text: &str) -> Result<(String, Vec<(String, Expectation)>), HostError> {
-    let mut lines = text.lines();
-    // The 2-line GENERATED header (skipped; its presence is the
-    // artifact surface's shape — the headers gate owns the audit).
-    let header1 = lines
-        .next()
-        .ok_or_else(|| HostError::DuelManifest("empty manifest".to_string()))?;
-    if !header1.starts_with('#') || !header1.contains("GENERATED") {
-        return Err(HostError::DuelManifest(
-            "the manifest carries no GENERATED header".to_string(),
-        ));
-    }
-    lines
-        .next()
-        .ok_or_else(|| HostError::DuelManifest("truncated header".to_string()))?;
-
-    let mut rows = lines.filter(|l| !l.is_empty());
-    // The generator provenance row.
-    let gen_row = rows
-        .next()
-        .ok_or_else(|| HostError::DuelManifest("no generator row".to_string()))?;
-    let mut gen_parts = gen_row.split('\t');
-    let _keyword = gen_parts
-        .next()
-        .filter(|k| *k == "generator")
-        .ok_or_else(|| {
-            HostError::DuelManifest("the first row is not the generator row".to_string())
-        })?;
-    let generator = gen_parts
-        .next()
-        .ok_or_else(|| {
-            HostError::DuelManifest("the generator row names no module".to_string())
-        })?
-        .to_string();
-
-    let mut out = Vec::new();
-    for line in rows {
-        let mut parts = line.split('\t');
-        let path = parts
-            .next()
-            .filter(|p| !p.is_empty())
-            .ok_or_else(|| HostError::DuelManifest("an empty row".to_string()))?;
-        let expect = parts
-            .next()
-            .and_then(Expectation::parse)
-            .ok_or_else(|| {
-                HostError::DuelManifest(format!("{path}: unknown expectation `{expect}`", expect = &line[path.len() + 1..]))
-            })?;
-        if parts.next().is_some() {
-            return Err(HostError::DuelManifest(format!("{path}: extra columns")));
-        }
-        out.push((path.to_string(), expect));
-    }
-    if out.is_empty() {
-        return Err(HostError::DuelManifest("no expectation rows".to_string()));
-    }
-    Ok((generator, out))
+    let parsed = mandate_delta::parse_duel_manifest(text, Expectation::parse)
+        .map_err(|e| HostError::DuelManifest(e.reason))?;
+    Ok((
+        parsed.generator,
+        parsed
+            .rows
+            .into_iter()
+            .map(|r| (r.path, r.expectation))
+            .collect(),
+    ))
 }
 
 /// Runs ONE module's exported function (`() -> i64`) in a fresh
 /// engine. The outcome is the engine's OBSERVATION — a value, the
 /// typed wasm trap, or a typed refusal — never a panic (12 §8).
 fn observe(wasm: &[u8]) -> Result<Result<i64, Trap>, HostError> {
-    let engine = Engine::new(&wasmtime::Config::new())
-        .map_err(|e| HostError::Engine(format!("engine init: {e:?}")))?;
-    let module = WasmModule::from_binary(&engine, wasm)
-        .map_err(|e| HostError::EngineRefused(format!("module compile: {e:?}")))?;
-
-    // The duel's convention: the module's ONE export is the entry.
-    let mut exports = module.exports();
-    let export_count = exports.len();
-    let export_name = exports.next().map(|e| e.name().to_string());
-    if export_count != 1 {
-        return Err(HostError::EngineRefused(format!(
-            "expected exactly one export, found {export_count}"
-        )));
-    }
-    let mut store = Store::new(&engine, ());
-    let linker = wasmtime::Linker::<()>::new(&engine);
-    let instance = linker
-        .instantiate(&mut store, &module)
-        .map_err(|e| HostError::Engine(format!("instantiate: {e:?}")))?;
-    let func = instance
-        .get_func(&mut store, export_name.as_deref().unwrap_or(""))
-        .ok_or_else(|| HostError::MissingExport(export_name.clone().unwrap_or_default()))?;
-    // The typed lift IS the signature check (the engine's typed
-    // refusal — a module with any other shape is a refusal, not a
-    // misread).
-    let typed = func
-        .typed::<(), i64>(&store)
-        .map_err(|_| HostError::Signature)?;
+    let (_engine, mut store, instance) = instantiate_core_module(wasm)?;
+    // The duel's convention: the module's ONE export is the entry —
+    // discovered off the instance's own export face.
+    let export_name = {
+        let mut exports = instance.exports(&mut store);
+        let export_count = exports.len();
+        let name = exports.next().map(|e| e.name().to_string());
+        if export_count != 1 {
+            return Err(HostError::EngineRefused(format!(
+                "expected exactly one export, found {export_count}"
+            )));
+        }
+        name
+    };
+    let typed = export_i64(&mut store, &instance, export_name.as_deref().unwrap_or(""))?;
     match typed.call(&mut store, ()) {
         Ok(v) => Ok(Ok(v)),
         Err(e) => match e.downcast_ref::<Trap>() {

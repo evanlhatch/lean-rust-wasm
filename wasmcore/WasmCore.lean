@@ -31,15 +31,29 @@ re-exported — this module re-exports by importing):
   the executor-computed expectations, and the shared `regen` (the
   manifest's text lane + the vectors' binary lane through Kit.Duel —
   the host duel runner in crates/mandate-host is the consumer).
+- `WasmCore.ExecMachine` — the executor AS a machine (wave 30's A4):
+  the step/run faces as `Machines.Machine` instances (the graph of
+  the landed executor's own functions), the outcome ledger's
+  trichotomy face, the witness/observer disciplines applied, and the
+  duel's restatement as a machine simulation (`execSelfSim` + the
+  carrier-as-graph bridge).
+- `WasmCore.WitnessFragment` — the witness checker's guest-compile
+  judgment (SchemaCore.Witness's follow-up order's substrate): the
+  claim language's op surface judged op-by-op against the ONE op
+  table's closed ctor set — every operation lowers except the NAMED
+  `boolOr` gap (no `i32.or` row; the de Morgan derivation is pinned),
+  and the row-CARRIER judgment (the honest verdict: outside the
+  guest's scalar fragment) is stated in SchemaCore.Witness's header.
 
 NOT here (later orders, the leftover rule): the LCNF lowering, the
 executor/oracle, the guest adapter.
 
 The five questions (notes/v3/01-core.md): answered per submodule (the
 list above); the umbrella itself answers none — it is the import
-point. Gate row: none at the gates yet — WasmCore is not in
-Gates.Packages' gated set; the WasmCoreTests pins (the core-triple
-axiom self-check + the golden byte-tie) are the standing evidence.
+point. Gate row: WasmCore's row in Gates.Packages' gated set — the
+per-library axiom sweep + the lint driver cover every root; the
+WasmCoreTests pins (the core-triple axiom self-check + the golden
+byte-tie) are the standing evidence.
 -/
 
 import WasmCore.Types
@@ -52,3 +66,5 @@ import WasmCore.Wat
 import WasmCore.Slice
 import WasmCore.Exec
 import WasmCore.Duel
+import WasmCore.ExecMachine
+import WasmCore.WitnessFragment

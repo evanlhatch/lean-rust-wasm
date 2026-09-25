@@ -252,8 +252,7 @@ meta def dupDefBodiesTest (decl : Name) : MetaM (Option MessageData) := do
   -- (a) in-package cluster mates
   match ← dupMates? decl with
   | some mates =>
-    let some idx := env.getModuleIdxFor? decl | return none
-    let mod := env.header.moduleNames[idx]!
+    let some mod := modOfDecl env decl | return none
     return some m!"duplicate definition body (alpha-equivalent, modulo binder \
       names) also borne by {mates.toList} across this package root `{mod.getRoot}` \
       — deduplicate, or opt out with `@[nolint linter.guestlang.dupDefBodies \

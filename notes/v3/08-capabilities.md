@@ -6,14 +6,62 @@ the inventory — the detail lives in the named design docs where they
 exist (notes/design-*.md); this file's version is the contract.
 
 **Status discipline (the leftover rule applied to this file):** every
-entry is exactly one of — LANDED (in the tree, gated), SPEC (designed,
+entry is exactly one of — LANDED (in the tree, gated), PARTIAL (the
+landed scope is named in the entry; the named remainder is SPEC and
+lands under the leftover rule like anything else), SPEC (designed,
 accepted, scheduled — the full spec above is earned at build time),
-WATCH (one line + its trigger). A SPEC entry that lands moves to LANDED
-in the same commit. Nothing here is "half-built": an in-flight
-capability is SPEC until its gate row is green. The current set:
-everything in §§1–11 is LANDED in the current tree; §§12–28 are SPEC
-(the data-plane/boundary/monitoring additions); §§29–34 are SPEC; the
-watch list is WATCH.
+WATCH (one line + its trigger). A SPEC entry that lands moves to
+LANDED in the same commit; a PARTIAL entry's named remainder is the
+only honest way anything is "half-built". The discipline is MECHANICAL
+(B5): the status table below is the gate's data — `gates docs-check`
+RESOLVES every LANDED/PARTIAL row's decl citations against the gated
+tree's environments (a landed scope names a real declaration) and
+REFUSES a SPEC/PARTIAL `pending` citation that resolves (the section
+landed; the promotion is owed). A LANDED/PARTIAL row without a
+citation is a finding. The table:
+
+| § | status | landed (must resolve) | pending (must NOT resolve) | the scope note |
+|---|---|---|---|---|
+| 1 | LANDED | `WireCodec` `deriveRender` | | the records + the deriving protocol (the reflection path is `Describe`) |
+| 2 | LANDED | `KeyDecl` | | keys + foreign keys — determinacy theorems driving API shape |
+| 3 | LANDED | `UpdateItem` | | the v2 updates: multi-set/insert/delete over declared keys |
+| 4 | LANDED | `CheckItem` | | the table invariants, discharged at the computed tier |
+| 5 | LANDED | `EntityMachineDecl` | | the entity-machine preset (`schema_entity_machine`) |
+| 6 | LANDED | `Contract` | | the pre/postconditions (the contracts lane's obligation mounts) |
+| 7 | LANDED | `replayEvents` | | the event sourcing (the generated replay/inversion/codec laws) |
+| 8 | PARTIAL | `Effect` | | the closed lattice + the footprint laws landed; "effect rows derive from registry items" is the lane's named exclusion |
+| 9 | LANDED | `Session` | | the dual-checked sessions (`Machines.Session`) |
+| 10 | PARTIAL | `Verdict` | `until` `eventually` `alwaysEventually` | the bounded exploration landed (`Machines.Explore`); the liveness ops exist nowhere in the tree — SPEC |
+| 11 | LANDED | `ShrinkerV` | | the shrinking (`TestingKit`'s validity-preserving shrinkers) |
+| 12 | SPEC | | | the relational spec layer (02 §1) |
+| 13 | LANDED | `IsBag` | | the weighted relations — the ℤ instance; the provenance-polynomial weight kind stays SPEC (the lane's named exclusion) |
+| 14 | LANDED | `evalQ` | | the query fragment (the constraint-driven result typing) |
+| 15 | LANDED | `checkDeltaInc` | | the incremental violation relations (03 §8's ΔV face — `SchemaCore.IncViolate` + `Violate`'s queries; the commit gate is the empty-result verdict, the agreement proved, the fallback named) |
+| 16 | SPEC | | | the materialized queries (02 §10) |
+| 17 | LANDED | `ViewDef` | | the writable views (`SchemaCore.View`) |
+| 18 | LANDED | `Confluent` | | the coordination classifier (`SchemaCore.Confluence`) |
+| 19 | LANDED | `upcastDelta` `CompatChange` | | the migrations (`SchemaCore.Migrate` + `SchemaCore.Diff`) |
+| 20 | LANDED | `whatIfJournal` | | the what-if inspector (`Inspector.WhatIf`) |
+| 21 | SPEC | | | the WIT error channel |
+| 22 | SPEC | | | the causal error tree |
+| 23 | SPEC | | | the wires |
+| 24 | SPEC | | | the connector library |
+| 25 | SPEC | | | the capacity (bounded Petri nets) |
+| 26 | SPEC | | | the runtime monitors |
+| 27 | SPEC | | | the semantic diffs with witnesses |
+| 28 | SPEC | | | the checked operational plans |
+| 29 | SPEC | | | the routing |
+| 30 | SPEC | | | the middleware |
+| 31 | SPEC | | | the dependency injection |
+| 32 | SPEC | | | the transport semantics |
+| 33 | SPEC | | | the caching |
+| 34 | SPEC | | | the configuration |
+| 35 | SPEC | | | the property taxonomy |
+| 36 | LANDED | `wp` | | the contracts (`requires`/`ensures` with wp-composition) |
+| 37 | SPEC | | | the systems observability lane |
+
+The WATCH entries carry no decl (one line + its trigger, unchanged
+below).
 
 ## The declaration surface (the product core)
 

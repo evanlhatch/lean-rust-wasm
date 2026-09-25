@@ -73,30 +73,31 @@ fresh port — the ratchet only tightens: a new checker needs a bridge
 theorem, not a row here. -/
 def bareCheckerAllowance : List (Name × String) := []
 
+/-- One module's (decl, info) pairs — the two bridge walks' shared
+same-module resolution prelude (the env-walk twins collapsed). -/
+def moduleDecls (env : Environment) (mod : Name) :
+    Array (Name × ConstantInfo) :=
+  (env.constants.map₁.toList.filterMap fun (n, info) =>
+      match env.getModuleIdxFor? n with
+      | some idx => if env.header.moduleNames[idx]! == mod then some (n, info) else none
+      | none => none).toArray
+
 /-- Same-module NAME bridge: SOME theorem in `mod` whose name mentions
 the checker's leaf name. -/
 def moduleHasBridge (env : Environment) (mod : Name) (leaf : String) : Bool :=
-  env.constants.map₁.toList.any fun (n, info) =>
+  (moduleDecls env mod).any fun (n, info) =>
     match info with
-    | .thmInfo _ =>
-      match env.getModuleIdxFor? n with
-      | some idx => (env.header.moduleNames[idx]!) == mod
-          && (n.toString.splitOn leaf).length > 1
-      | none => false
+    | .thmInfo _ => (n.toString.splitOn leaf).length > 1
     | _ => false
 
 /-- Same-module REGISTRATION bridge: some def in `mod` whose VALUE
 mentions the checker's full name (the CheckedProp shape:
 `check := CodeRegistry.check`). -/
 def moduleHasRegistration (env : Environment) (mod : Name) (decl : Name) : Bool :=
-  env.constants.map₁.toList.any fun (n, info) =>
+  (moduleDecls env mod).any fun (n, info) =>
     n != decl &&
     match info with
-    | .defnInfo di =>
-      match env.getModuleIdxFor? n with
-      | some idx => (env.header.moduleNames[idx]!) == mod
-          && di.value.getUsedConstants.contains decl
-      | none => false
+    | .defnInfo di => di.value.getUsedConstants.contains decl
     | _ => false
 
 meta def bareCheckerTest (decl : Name) : MetaM (Option MessageData) := do
@@ -104,10 +105,9 @@ meta def bareCheckerTest (decl : Name) : MetaM (Option MessageData) := do
   let env ← getEnv
   let some (.defnInfo di) := env.find? decl | return none
   if ← isReducible decl then return none
-  -- Tests modules exempt: fixtures don't ship proofs
-  let some idx := env.getModuleIdxFor? decl | return none
-  let mod := env.header.moduleNames[idx]!
-  if (mod.toString.splitOn ".").contains "Tests" then return none
+  -- Tests modules exempt: fixtures don't ship proofs (LintKit.isTestModule)
+  let some mod := modOfDecl env decl | return none
+  if isTestModule mod then return none
   -- name shape: leaf matches a checker prefix
   let some leaf := (match decl with | .str _ s => some s | _ => none) | return none
   unless isCheckerLeaf leaf do return none

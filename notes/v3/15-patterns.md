@@ -126,6 +126,83 @@ helpers + the DSL clause rejections. Why right: the error IS the API's
 teaching surface. When not: internal invariant panics (documented
 impossible states keep their panics with comments).
 
+**17. The grammar's ctor-armed recursion wall (the layered
+composition).** A RECURSIVE domain type (`option`/`list`/`result`
+nesting a `Ty`) cannot be the fix of the ctor-armed grammar engine:
+(1) `altE`'s uniform payload forces each ctor arm to re-type its
+seq-spine tuple back to `Ty` through a `rel`, and `Kit.Codec`'s
+`decode_encode` law holds for EVERY payload value — an option-arm
+codec must round-trip a scalar through an option-shaped raw, which no
+decode of that raw shape can return; the ctor-discriminating arm codec
+cannot exist. (2) The restructures (per-arm re-typing rels; one fix
+over a sum) move the same wall one level out, and the closed law
+family has no rel-over-fix face (`parse_print_fix` is the bare-fix
+face; `FixFree` excludes fix). (3) `SelfPathE`'s over-approximation
+forces each arm's total `encode` to embed a strictly smaller `Ty` at
+its `selfE` slot for scalar payloads — unsatisfiable under any
+nesting-monotone measure. The answer is NOT effort at the engine: it
+is the LAYERED COMPOSITION — the recursive level stays the
+hand-riding-TextKit zone (a fuel-bounded parser + its ONE round-trip
+induction), presented to the grammar as a GUARDED lexeme leaf
+(`print = the renderer`, `scan = the hand parser` guarded to the
+canonical spelling, which makes `scan_exact` hold by pure take/drop
+algebra); every acyclic level rides the engine. Canonical:
+SchemaCore.Snapshot's `tyAtom` + Wit.Parse's `tyAtom`. Why right: the
+wall is structural (the three points), the layering keeps the engine's
+laws for everything they cover, and the hand zone is ONE induction per
+format, not a parallel engine. When not: a non-recursive format —
+there is no wall, everything rides the engine.
+
+**18. The streaming/append-form codec.** A byte codec's round-trip law
+is stated in APPEND form — `dec (enc xs ++ rest) = some (xs, rest)` —
+admissibility gated by a decidable `inDomain` checked at the emission
+boundary, the off-domain loss pinned by the mandatory negative control
+(#5); the semantic retention law is the SAME law cited at the semantic
+grade (where the grade allows, riding `Kit.Correspondence`'s `Codec`
+as an instance — the theorem a citation of the instance's
+`decode_encode`, never a second statement). Canonical: Vortex.Codecs
+(the byte layer: the per-encoding append-form laws + `inDomain` + the
+controls) + Vortex.Encoding's `forCodec` (the semantic grade). Why
+right: the residual bytes are what make codecs compose under bind —
+each decoder consumes a prefix and yields the rest, so the compound
+laws (dict, constant, identity) are ONE-LINE instances chained through
+the varint's law — and the whole-input form is the special case
+`rest = []`. Named honestly: `Kit.Correspondence.Codec`'s whole-input
+`decode_encode` is the right carrier where there is no residual stream
+(value codecs), but it cannot express the append form or a lossy
+encode — a lossy codec (constant) keeps the pattern's conditional form
+and cites the byte layer's instance as canonical instead of lying
+about the grade. When not: the container/framing level (the vortex
+FILE: metadata trees, record batches) is not a prefix stream — it
+lands with its first consumer, per the leftover rule.
+
+**19. The parse-route generator (render-to-source + re-parse).** A command
+generator whose generated commands capture BINDINGS — match arms over an
+inductive family, constructor-headed patterns, GADT index patterns —
+emits the generated commands as SOURCE TEXT, parsed by the real parser
+(`Lean.Parser.runParserCategory` over the `command` category) and
+delaborated fresh, never spliced as quotation syntax. The wave-29 wall
+(DepFold's two recorded defeats): a quotation-spliced pattern elaborates
+under the quotation's macro-scope hygiene, and a GADT index pattern
+elaborates to projection garbage (`.result ok err` → `ok.result err`) or
+dies silently to the elaborator's sorry recovery, while the
+BYTE-IDENTICAL hand spelling elaborates clean — the quotation route's
+generated syntax is not hand code, and no respelling of the splice fixes
+it, because the discriminator is the hygiene scopes, not the spelling.
+The parse route removes the dependence: freshly parsed syntax
+elaborates exactly like hand code, and the generated statements can
+carry the hand spellings verbatim (the strongest byte-tie a migration
+can ask for). Canonical: `Kit.Derive.DepFold`, which the wave-30 probe
+then migrated `Kit.Derive.Fold` onto (the recipe: 12 §6).
+Why right: the emission discipline and the elaborator can no longer
+disagree — the generated surface IS source text. When NOT to use it:
+simple quotations without binding capture — a generated decl whose
+patterns bind nothing elaborates identically through the quotation
+route, and the splice is smaller than the renderer would be (12 §6's
+clause surface is the shape). Cost note: the re-parse runs the real
+parser at elaboration time — the elab-watch budget covers it (a
+generated command's parse is noise next to its elaboration).
+
 ## The meta-pattern (why this file exists)
 
 Every pattern above replaced a FAMILY of hand-rolled variants. The

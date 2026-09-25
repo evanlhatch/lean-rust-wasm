@@ -75,3 +75,23 @@ open Effects Effects.Resource
 /-- info: 'Effects.Cmd.seq_reads' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms Effects.Cmd.seq_reads
+
+/-- info: 'Effects.Signature.pure_get_put' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Effects.Signature.pure_get_put
+
+/-- info: 'Effects.Signature.logProgram_agrees' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Effects.Signature.logProgram_agrees
+
+/-- info: 'Effects.Signature.logProgram_cost_honest' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Effects.Signature.logProgram_cost_honest
+
+/-- info: 'Effects.Signature.api_agrees' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Effects.Signature.api_agrees
+
+/-- info: 'Effects.Signature.perf_sees_cost' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms Effects.Signature.perf_sees_cost

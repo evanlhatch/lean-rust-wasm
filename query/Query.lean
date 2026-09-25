@@ -24,16 +24,31 @@ image over the ONE codec, the lex order, the `CanonKey`/`DecidableEq`
 instances, the row append/field readers), `Query.Expr` (the typed
 fragment + the Prop-level spec `QSat` + the key-join surface),
 `Query.Eval` (the weighted evaluation + the bridge + the
-weight-polymorphism).
+weight-polymorphism), `Query.TypedBridge` (the Q↔Typed.Schema
+crossing — the schema `Retraction`, the row `Codec`, the join-free
+lowering `qToRel`, and the agreement theorems BOTH directions against
+`Substrait.Eval`; design-forward-surface §3), `Query.QLang` (the
+`qlang!` surface: the Lean-embedded query pipeline elaborating to the
+typed `Q` — by-name resolution + the structured refusals at
+ELABORATION time), `Query.Explain` (the
+explanations lane: the why-present derivation + the why-absent blocker
+under the declared completeness — 02 §11), `Query.Repair` (the repair
+discipline's seed: the violation's candidate keyed delta, checked
+against the specification — 02 §11).
 
 Honest boundary (02 §2, named): negation, aggregation, universal
 conditions, and ordering semantics are NOT in this fragment — each
 needs explicit additional semantics with named laws, and none is
 smuggled in here.
 
-Core-only (imports SchemaCore + ZSet — the cone rule).
+Core-only (imports SchemaCore + ZSet + Substrait — the cone rule; the
+Substrait edge is `Query.TypedBridge`'s crossing, no cycle).
 -/
 
 import Query.Basic
 import Query.Expr
 import Query.Eval
+import Query.TypedBridge
+import Query.QLang
+import Query.Explain
+import Query.Repair

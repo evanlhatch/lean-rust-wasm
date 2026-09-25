@@ -24,8 +24,11 @@ closed universe gets its fold):
 HONEST SCOPE (each refusal is a curated `Kit.Diag`, the unsupported
 shape NAMED — 05 §4):
 
-- indexed (GADT) inductives — the DEPENDENT fold (the motive riding the
-  index, 06 §2's `foldValue` discipline) is the named extension;
+- indexed (GADT) inductives — the DEPENDENT fold (the motive riding
+  the index, 06 §2's `foldValue` discipline) has LANDED as
+  `Kit.Derive.DepFold`'s `declare_dependent_fold` (the one-index,
+  ctor-headed-index fragment; multi-index, mutual-sibling, and
+  variable-index shapes stay out);
 - type parameters — the parameter-threaded fragment is the named
   extension (V1 is the parameter-free closed fragment);
 - empty constructor sets — the empty universe's fold is `nomatch`,
@@ -39,6 +42,14 @@ The proof discipline: the generated theorems are recursor-driven
 templates over the ctor data — the same build-stability class as
 `decide` (06 §10); a shape the template cannot carry fails to
 elaborate (wrongness does not elaborate).
+
+THE EMISSION IS THE PARSE ROUTE (15-patterns #19; the wave-30 probe's
+migration): the generated commands render to SOURCE TEXT + re-parse
+(`Lean.Parser.runParserCategory`), never quotation splices — the fresh
+parse elaborates exactly like hand code, and the emission carries no
+macro-scope machinery (DepFold's wave-29 lesson). The quotation-route
+helpers this module still carries are BRIDGE's (its probe has not
+landed); they stay with their consumer.
 
 E-codes: the `KD00xx` rows below (Kit-derive; the same convention as
 `Kit.Lane`'s `KL00xx` — the registry's persisted allocation is the
@@ -61,13 +72,11 @@ Five questions (notes/v3/01-core.md):
 
 import Lean
 import Kit.Diag
+import Kit.Derive.Common
 
 namespace Kit.Derive.Fold
 
 open Lean Elab Command Meta
-open Lean.Parser.Command (structSimpleBinder)
-open Lean.Parser.Term (matchAltExpr bracketedBinder)
-open Lean.Parser.Tactic (rwRule)
 
 /-! ## The curated failures -/
 
@@ -76,7 +85,9 @@ open Lean.Parser.Tactic (rwRule)
     05 §4's stable-allocation rule). The constants are the family's
     DECLARATION — the sites below use them, never a bare string, and
     the code-registry gate's coverage scan ties every spelling to its
-    allocated live row (a hand-strung code is a gate refusal). -/
+    allocated live row (a hand-strung code is a gate refusal).
+    (`throwDiag`, the refusal engine, is Kit.Derive.Common's — the
+    drivers' ONE copy; opened below.) -/
 def eKD0001 : Kit.ECode := ⟨"KD0001"⟩
 def eKD0002 : Kit.ECode := ⟨"KD0002"⟩
 def eKD0003 : Kit.ECode := ⟨"KD0003"⟩
@@ -87,17 +98,7 @@ def eKD0007 : Kit.ECode := ⟨"KD0007"⟩
 def eKD0008 : Kit.ECode := ⟨"KD0008"⟩
 def eKD0009 : Kit.ECode := ⟨"KD0009"⟩
 
-/-- Throw the refusal (the Diag rendered verbatim, the Lane discipline):
-    the unsupported shape named — the code row + the message + the error
-    severity. The Diag literal is built HERE, once: a named standalone
-    constructor would be the alpha-twin of `Kit.Lane.usageDiag` (the
-    dupDefBodies catch), and the generator's imports stay Lean +
-    Kit.Diag — no Lane delegation. The code slot is an `ECode` of the
-    registry's allocated family (above) — a bare string cannot reach
-    the throw. -/
-def throwDiag {m : Type → Type} [Monad m] [MonadError m]
-    (code : Kit.ECode) (message : String) : m α :=
-  throwError m!"{({ code := code, message := message, severity := .error } : Kit.Diag)}"
+open Kit.Derive.Common (throwDiag resolveConst?)
 
 /-! ## The inductive analysis -/
 
@@ -117,31 +118,32 @@ def baseNameOf (n : Name) : String :=
   | _ => n.toString
 
 /-- The V1-scope checks over the resolved inductive, before any ctor
-    analysis. -/
-def checkScope (ind : TSyntax `ident) (ii : InductiveVal) : CommandElabM Unit := do
-  let indName := ii.name
-  if ii.numIndices != 0 then
-    throwDiag eKD0002
-      s!"declare_fold {ind.getId}: `{indName}` is index (GADT)-indexed — \
-        the generator's scope is the SIMPLE closed inductives; the \
-        DEPENDENT fold (the motive riding the index, 06 §2) is the \
-        named extension — write it by hand (the `foldValue` shape) and \
-        cite this refusal"
-  if ii.numParams != 0 then
-    throwDiag eKD0003
-      s!"declare_fold {ind.getId}: `{indName}` has type parameters — the \
-        parameter-threaded fragment is the named extension; the V1 scope \
-        is the parameter-free closed inductives"
-  if ii.ctors.isEmpty then
-    throwDiag eKD0004
-      s!"declare_fold {ind.getId}: `{indName}` has no constructors — the \
-        empty universe's fold is `nomatch`, which an algebra record \
-        cannot carry"
-  if ii.all.length > 1 then
-    throwDiag eKD0008
-      s!"declare_fold {ind.getId}: `{indName}` is part of a MUTUAL block — \
-        the mutual-sibling fragment (the algebra record carrying the \
-        whole family's rows, the `ValueAlg` shape) is the named extension"
+    analysis (the quadruple is Kit.Derive.Common's ONE copy — the codes
+    + the message spellings are THIS driver's, byte-identical to the
+    KitTests pins). -/
+def checkScope (ind : TSyntax `ident) (ii : InductiveVal) : CommandElabM Unit :=
+  Kit.Derive.Common.checkScope ii
+    { code := eKD0002
+      message := s!"declare_fold {ind.getId}: `{ii.name}` is index \
+        (GADT)-indexed — the generator's scope is the SIMPLE closed \
+        inductives; the DEPENDENT fold (the motive riding the index, \
+        06 §2) is `Kit.Derive.DepFold`'s `declare_dependent_fold` for \
+        the one-index ctor-headed-index fragment — outside that \
+        fragment, write it by hand (the `foldValue` shape) and cite \
+        this refusal" }
+    { code := eKD0003
+      message := s!"declare_fold {ind.getId}: `{ii.name}` has type \
+        parameters — the parameter-threaded fragment is the named \
+        extension; the V1 scope is the parameter-free closed inductives" }
+    { code := eKD0004
+      message := s!"declare_fold {ind.getId}: `{ii.name}` has no \
+        constructors — the empty universe's fold is `nomatch`, which an \
+        algebra record cannot carry" }
+    { code := eKD0008
+      message := s!"declare_fold {ind.getId}: `{ii.name}` is part of a \
+        MUTUAL block — the mutual-sibling fragment (the algebra record \
+        carrying the whole family's rows, the `ValueAlg` shape) is the \
+        named extension" }
 
 /-- The per-ctor checks: explicit binders, flat non-dependent argument
     types, the recursive positions detected. -/
@@ -193,12 +195,7 @@ def checkCtor (ind : TSyntax `ident) (indName : Name) (ctorName : Name) :
     value + the per-ctor shapes. -/
 def analyzeInd (ind : TSyntax `ident) :
     CommandElabM (InductiveVal × Array CtorShape) := do
-  let resolved? : Option Name ← liftCoreM do
-    try
-      some <$> Lean.resolveGlobalConstNoOverload ind
-    catch _ =>
-      pure none
-  let some indName := resolved? |
+  let some indName := ← resolveConst? ind |
     throwDiag eKD0001
       s!"declare_fold {ind.getId}: unknown constant — valid usage: \
         `declare_fold <Inductive>` over a closed, parameter-free, \
@@ -222,21 +219,25 @@ def analyzeInd (ind : TSyntax `ident) :
   let ctorShapes ← ii.ctors.mapM (checkCtor ind ii.name)
   pure (ii, ctorShapes.toArray)
 
-/-! ## The builders -/
+/-! ## The string emission (the parse route)
 
-/- The ident token discipline (06 §7): every binder ident the generated
-    decls share (`α`, `alg`, `f`, the arg/ihs/hyp names) is built with
-    `mkIdentFrom <command syntax>` — ONE shared macro scope, so a binder
-    built in one quotation binds in every quotation that splices it. The
-    generated NAMES (`FruitAlg`, `foldFruit`, …) are plain short names
-    resolved in the consumer's namespace at `elabCommand` time. Antiquot
-    splices are BY NAME only (`$(…) ` is not quotation syntax): every
-    spliced subterm is pre-bound to a `let`. -/
+The emission is the PARSE ROUTE (15-patterns #19; DepFold's wave-29
+lesson): the generated commands are rendered to SOURCE TEXT and parsed
+by the real parser (`Lean.Parser.runParserCategory`), then elaborated —
+never spliced as quotation syntax. The quotation route this module
+landed with carried the macro-scope machinery (20 `mkIdentFrom` scope
+anchors, 26 `TSyntax` annotations, 25 splices — the ONE-shared-scope
+token discipline of 06 §7) whose failure mode is the recorded wall:
+generated syntax that does not elaborate like the byte-identical hand
+code. The parse route removes the dependence: plain source text, freshly
+parsed, elaborates exactly like hand code — and the generated
+statements carry the hand spellings verbatim (the KitTests migration
+pins are the byte-tie). -/
 
-/-- The closed FIRST-ORDER type delab (the generator's own — deterministic;
-    the stock delaborator's fallback is a synthetic hole, which would
-    elaborate as a fresh mvar — a silent wrongness). Constants, apps, and
-    non-dependent arrows/Pis only; anything else is a curated refusal. -/
+/-- The generator's delab refusal: a constructor argument type outside
+    the delaboratable fragment (constant / application / non-dependent
+    arrow shapes) — deterministic, never the stock delaborator's
+    synthetic-hole fallback (a silent wrongness). -/
 def throwUnsupportedTy {m : Type → Type} [Monad m] [MonadError m]
     (e : Expr) : m α :=
   throwDiag eKD0009
@@ -244,6 +245,18 @@ def throwUnsupportedTy {m : Type → Type} [Monad m] [MonadError m]
       generator's delaboratable fragment (constant / application / \
       non-dependent arrow shapes)"
 
+/-! ## The quotation-route helpers (Bridge's)
+
+`Kit.Derive.Bridge` still rides the quotation route and consumes these
+TSyntax-face helpers (it `open`s them from this module). Fold's OWN
+emission migrated to the parse route below; the helpers stay HERE —
+with their consumer — until Bridge's probe lands (the leftover rule:
+nothing lands without a consumer; nothing stays without one either).
+-/
+
+/-- The closed FIRST-ORDER type delab (the TSyntax face Bridge's
+    quotations splice): constants, apps, and non-dependent arrows only;
+    anything else is the curated refusal. -/
 def tyToSyntax : Expr → CommandElabM Term
   | .const n _ => pure (mkIdent n)
   | .app f a => do
@@ -259,24 +272,8 @@ def tyToSyntax : Expr → CommandElabM Term
   | .mdata _ e => tyToSyntax e
   | e => throwUnsupportedTy e
 
-/-- The algebra row's type for one ctor: one arrow segment per argument
-    (a recursive argument's segment is the carrier `α`, every other
-    argument's type passes through raw); a nullary ctor's row is `α`. -/
-def buildFieldTy (alphaId : TSyntax `ident) (c : CtorShape) : CommandElabM Term := do
-  let alphaT : Term := ⟨alphaId.raw⟩
-  let segs : Array Term ← (Array.range c.argTys.size).mapM fun i => do
-    if c.recArgs.contains i then
-      pure (⟨alphaId.raw⟩ : Term)
-    else
-      tyToSyntax c.argTys[i]!
-  -- the row: right-nested arrows (splice protection parens on the
-  -- RIGHT of `→` are semantically inert — right associativity).
-  let mut acc : Term := alphaT
-  for s in segs.reverse do
-    acc := ← `($s → $acc)
-  pure acc
-
-/-- The binder idents `a1 … aₙ` for one ctor's arguments. -/
+/-- The binder idents `a1 … aₙ` for one ctor's arguments (the shared
+    macro-scope discipline — the parse route below needs none). -/
 def argIdents (stx : Syntax) (c : CtorShape) : Array (TSyntax `ident) :=
   (Array.range c.argTys.size).map fun i =>
     mkIdentFrom stx (Name.mkSimple s!"a{i + 1}")
@@ -299,21 +296,91 @@ def argTyTerm (indId : Term) (c : CtorShape) (i : Nat) : CommandElabM Term := do
   if c.recArgs.contains i then pure indId
   else tyToSyntax c.argTys[i]!
 
-/-- The fold arm's rhs: the algebra row applied to `alg` and the
-    arguments (a recursive position re-enters the fold). -/
-def foldRhs (algRef : TSyntax `ident) (algName : Name) (foldName : Name)
-    (c : CtorShape) : CommandElabM Term := do
-  let binders := argIdents algRef.raw c
-  let algT : Term := ⟨algRef.raw⟩
-  let foldRef : Term := mkIdentFrom algRef foldName
-  let fieldFn : Term := mkIdentFrom algRef (algName ++ Name.mkSimple c.field)
-  let rhsParts : Array Term ← (Array.range c.argTys.size).mapM fun i => do
-    let bT : Term := ⟨binders[i]!.raw⟩
-    if c.recArgs.contains i then `($foldRef $algT $bT)
-    else pure bT
-  `($fieldFn $algT $rhsParts*)
+/-! ## The string emission (the parse route) -/
 
-/-! ## The command -/
+/-- Is `s` an atomic render (no parens needed as an argument)?
+    (DepFold's helper shape — `private` there, duplicated here rather
+    than promoted across the cone for 4 lines.) -/
+private def atomicS (s : String) : Bool :=
+  let bad := s.any (fun ch => ch == ' ' || ch == '(')
+  !bad
+
+/-- The closed FIRST-ORDER type renderer (the string face of the
+    generator's delab): constants (FULL names — freshly parsed source
+    resolves them, no ident-hygiene question), applications
+    (non-atomic arguments parenthesized), non-dependent arrows;
+    anything else is the curated refusal. -/
+def renderTyS : Expr → CommandElabM String
+  | .const n _ => pure n.toString
+  | .app f a => do
+      let fS ← renderTyS f
+      let aS ← renderTyS a
+      if atomicS aS then pure (fS ++ " " ++ aS)
+      else pure (fS ++ " (" ++ aS ++ ")")
+  | .forallE _ d b _ =>
+      if b.hasFVar then throwUnsupportedTy b
+      else do
+        let dS ← renderTyS d
+        let bS ← renderTyS b
+        pure (dS ++ " → " ++ bS)
+  | .mdata _ e => renderTyS e
+  | e => throwUnsupportedTy e
+
+/-- Parse ONE generated command with the real parser and elaborate it.
+    A parse failure is a curated diagnostic (the generator's own bug —
+    named, never silent). -/
+private def elabParsed (ind : TSyntax `ident) (src : String) :
+    CommandElabM Unit := do
+  let env ← getEnv
+  match Lean.Parser.runParserCategory env `command src (fileName := "<gen>") with
+  | .ok s => elabCommand s
+  | .error e =>
+    throwDiag eKD0009
+      s!"declare_fold {ind.getId}: the generated command failed to \
+        parse — the emission is out of the fragment: {e}"
+
+/-- The algebra row's type for one ctor (string face): one arrow
+    segment per argument (a recursive argument's segment is the carrier
+    `α`), right-nested; a nullary ctor's row is `α`. -/
+def buildFieldTyS (c : CtorShape) : CommandElabM String := do
+  let segs : Array String ← (Array.range c.argTys.size).mapM fun i =>
+    if c.recArgs.contains i then pure "α"
+    else renderTyS c.argTys[i]!
+  let mut acc := "α"
+  for s in segs.reverse do
+    acc := s!"{s} → {acc}"
+  pure acc
+
+/-- The ctor pattern `.ctor a1 … aₙ` (string face; dotted — the trap
+    rule). -/
+def ctorPatS (c : CtorShape) : String :=
+  if c.argTys.isEmpty then s!".{c.field}"
+  else
+    let bs := (Array.range c.argTys.size).map (fun i => s!"a{i + 1}")
+    s!".{c.field} {String.intercalate " " bs.toList}"
+
+/-- The fold arm's rhs (string face): the algebra row applied to `alg`
+    and the arguments (a recursive position re-enters the fold). -/
+def foldRhsS (base : String) (c : CtorShape) : CommandElabM String := do
+  let mut parts : Array String := #[]
+  for i in [0:c.argTys.size] do
+    if c.recArgs.contains i then
+      parts := parts.push s!"(fold{base} alg a{i + 1})"
+    else
+      parts := parts.push s!"a{i + 1}"
+  if parts.isEmpty then pure s!"{base}Alg.{c.field} alg"
+  else pure s!"{base}Alg.{c.field} alg {String.intercalate " " parts.toList}"
+
+/-- The ctor's argument binders `a1 … aₙ` (string face; the parse route
+    needs no scopes — each generated command is its own fresh parse). -/
+def argNames (c : CtorShape) : Array String :=
+  (Array.range c.argTys.size).map (fun i => s!"a{i + 1}")
+
+/-- The ihs `ih1 … ihₖ` for one ctor's recursive arguments (named by
+    their ARGUMENT position, since only the recursive positions get an
+    ih from the recursor). -/
+def ihNames (c : CtorShape) : Array String :=
+  c.recArgs.map (fun i => s!"ih{i + 1}")
 
 syntax (name := declareFoldCmd) "declare_fold " ident : command
 
@@ -321,122 +388,125 @@ syntax (name := declareFoldCmd) "declare_fold " ident : command
     the generated surface + the honest scope. -/
 @[command_elab Kit.Derive.Fold.declareFoldCmd]
 def elabDeclareFold : CommandElab
-  | stx@`(command| declare_fold $ind:ident) => do
+  | _stx@`(command| declare_fold $ind:ident) => do
     let (ii, ctorShapes) ← analyzeInd ind
-    let baseStr := baseNameOf ii.name
-    let algName := Name.mkSimple s!"{baseStr}Alg"
-    let foldName := Name.mkSimple s!"fold{baseStr}"
-    let algId : TSyntax `ident := mkIdentFrom stx algName
-    let foldId : TSyntax `ident := mkIdentFrom stx foldName
-    let indId : Term := mkIdentFrom stx ii.name
-    let recId : Term := mkIdentFrom stx (ii.name ++ `rec)
-    -- THE shared binder idents (one macro scope across every quotation).
-    let alphaId : TSyntax `ident := mkIdentFrom stx `α
-    let algRef : TSyntax `ident := mkIdentFrom stx `alg
-    let fRef : TSyntax `ident := mkIdentFrom stx `f
-    let xRef : TSyntax `ident := mkIdentFrom stx `x
-    let algT : Term := ⟨algRef.raw⟩
-    let fT : Term := ⟨fRef.raw⟩
-    let xT : Term := ⟨xRef.raw⟩
-    let alphaT : Term := ⟨alphaId.raw⟩
+    let base := baseNameOf ii.name
+    let indS := ii.name.toString
     -- THE ALGEBRA RECORD: one field per ctor, children folded.
-    let fields : Array (TSyntax `Lean.Parser.Command.structSimpleBinder) ←
-      ctorShapes.mapM fun c => do
-        let ty ← buildFieldTy alphaId c
-        let fid : TSyntax `ident := mkIdentFrom stx (Name.mkSimple c.field)
-        `(Lean.Parser.Command.structSimpleBinder| $fid:ident : $ty)
-    elabCommand (← `(command|
-      /-- GENERATED by `declare_fold` — the ALGEBRA record: one field per
-          constructor, each receiving the folded children (a recursive
-          argument's slot is the carrier). A new constructor refuses to
-          compile until every algebra grows its row (15-patterns #15). -/
-      structure $algId:ident ($alphaId : Type) where
-        $[$fields:structSimpleBinder]*))
-    -- THE FOLD: the one walk.
-    let arms : Array (TSyntax `Lean.Parser.Term.matchAlt) ←
-      ctorShapes.mapM fun c => do
-        let pat ← ctorPattern stx c
-        let rhs ← foldRhs algRef algName foldName c
-        `(matchAltExpr| | $algRef, $pat => $rhs)
-    elabCommand (← `(command|
-      /-- GENERATED by `declare_fold` — THE FOLD: the closed universe's
-          one walk (01 §1's initial-algebra face). Total, structural,
-          kernel-visible. -/
-      def $foldId:ident : $algId $alphaT → $indId → $alphaT
-        $[$arms:matchAlt]*))
+    let mut fieldLines : Array String := #[]
+    for c in ctorShapes do
+      let ty ← buildFieldTyS c
+      fieldLines := fieldLines.push s!"  {c.field} : {ty}"
+    elabParsed ind <|
+      "/-- GENERATED by `declare_fold` — the ALGEBRA record: one field per\n" ++
+      "constructor, each receiving the folded children (a recursive\n" ++
+      "argument's slot is the carrier). A new constructor refuses to\n" ++
+      "compile until every algebra grows its row (15-patterns #15). -/\n" ++
+      s!"structure {base}Alg (α : Type) where\n" ++
+      ((fieldLines.map (· ++ "\n")).foldl (· ++ ·) "")
+    -- THE FOLD: the one walk. `α` is auto-bound (the hand spelling the
+    -- fixtures pin — the fresh parse IS hand code).
+    let mut armLines : Array String := #[]
+    for c in ctorShapes do
+      let rhs ← foldRhsS base c
+      armLines := armLines.push s!"  | alg, {ctorPatS c} => {rhs}"
+    elabParsed ind <|
+      "/-- GENERATED by `declare_fold` — THE FOLD: the closed universe's\n" ++
+      "one walk (01 §1's initial-algebra face). Total, structural,\n" ++
+      "kernel-visible. -/\n" ++
+      s!"def fold{base} : {base}Alg α → {indS} → α\n" ++
+      ((armLines.map (· ++ "\n")).foldl (· ++ ·) "")
     -- THE EQUATION SET: all `rfl` (structural recursion = kernel
     -- reduction; 06 §5 — consumers prove against these).
     for c in ctorShapes do
-      let binders := argIdents stx c
-      let eqId : TSyntax `ident := mkIdentFrom stx
-        (Name.mkSimple s!"fold{baseStr}_{c.field}")
-      let impBinders : Array (TSyntax `Lean.Parser.Term.bracketedBinder) ←
-        (Array.range c.argTys.size).mapM fun i => do
-          let b : TSyntax `ident := binders[i]!
-          let bty ← argTyTerm indId c i
-          `(bracketedBinder| {$b:ident : $bty})
-      let pat ← ctorPattern stx c
-      let rhs ← foldRhs algRef algName foldName c
-      elabCommand (← `(command|
-        /-- GENERATED by `declare_fold` — one arm of the equation set
-            (06 §5): kernel reduction, cited by the initiality law's
-            template. -/
-        theorem $eqId:ident {$algRef : $algId $alphaT} $[$impBinders:bracketedBinder]* :
-            $foldId $algT $pat = $rhs := rfl))
+      let bs := argNames c
+      let mut impBinders : Array String := #[]
+      for i in [0:c.argTys.size] do
+        let ty ←
+          if c.recArgs.contains i then pure indS
+          else renderTyS c.argTys[i]!
+        impBinders := impBinders.push ("{" ++ bs[i]! ++ " : " ++ ty ++ "}")
+      let rhs ← foldRhsS base c
+      elabParsed ind <|
+        "/-- GENERATED by `declare_fold` — one arm of the equation set\n" ++
+        "    (06 §5): kernel reduction, cited by the initiality law's\n" ++
+        "    template. -/\n" ++
+        s!"theorem fold{base}_{c.field} " ++
+        s!"{String.intercalate " " impBinders.toList} :\n" ++
+        s!"    fold{base} alg ({ctorPatS c}) = {rhs} := rfl\n"
     -- THE INITIALITY LAW: the recursor template — per ctor,
     -- `rw [h_<ctor> args…, ihs…, fold<Ind>_<ctor>]` (06 §10: the
     -- template, never grind).
-    let mut hyps : Array (TSyntax `Lean.Parser.Term.bracketedBinder) := #[]
-    let mut minors : Array Term := #[]
+    let mut hyps : Array String := #[]
+    let mut minors : Array String := #[]
     for c in ctorShapes do
-      let binders := argIdents stx c
-      let ihs := ihIdents stx c
-      let hypId : TSyntax `ident := mkIdentFrom stx (Name.mkSimple s!"h_{c.field}")
-      let fieldFn : Term := mkIdentFrom stx (algName ++ Name.mkSimple c.field)
-      let hypT : Term := ⟨hypId.raw⟩
-      let explicitBinders : Array (TSyntax `Lean.Parser.Term.bracketedBinder) ←
-        (Array.range c.argTys.size).mapM fun i => do
-          let b : TSyntax `ident := binders[i]!
-          let bty ← argTyTerm indId c i
-          `(bracketedBinder| ($b:ident : $bty))
-      let pat ← ctorPattern stx c
-      let hypTy : Term ←
-        if c.argTys.isEmpty then
-          `($fT $pat = $fieldFn $algT)
+      let bs := argNames c
+      let ihs := ihNames c
+      -- the hypothesis: explicit binders + the commutation row
+      let mut expl : Array String := #[]
+      let mut rhsParts : Array String := #[]
+      for i in [0:c.argTys.size] do
+        let ty ←
+          if c.recArgs.contains i then pure indS
+          else renderTyS c.argTys[i]!
+        expl := expl.push s!"({bs[i]!} : {ty})"
+        if c.recArgs.contains i then
+          -- parenthesized: a multi-token application must ride as ONE
+          -- argument (the same non-atomic rule as renderTyS)
+          rhsParts := rhsParts.push s!"(f {bs[i]!})"
+        else rhsParts := rhsParts.push bs[i]!
+      let pat := ctorPatS c
+      let fieldApp :=
+        if rhsParts.isEmpty then s!"{base}Alg.{c.field} alg"
+        else s!"{base}Alg.{c.field} alg {String.intercalate " " rhsParts.toList}"
+      -- the ctor pattern rides PARENTHESIZED in TERM position: the
+      -- quotation route grouped `.lit a1` as ONE application argument
+      -- (the dot resolves against the expected type as a unit); bare
+      -- source text elaborates `f .lit` alone — `f (.lit a1)` is the
+      -- byte-equivalent hand spelling
+      let hypBody :=
+        if c.argTys.isEmpty then s!"f ({pat}) = {fieldApp}"
         else
-          let rhsParts : Array Term ← (Array.range c.argTys.size).mapM fun i => do
-            let bT : Term := ⟨binders[i]!.raw⟩
-            if c.recArgs.contains i then `($fT $bT)
-            else pure bT
-          `(∀ $[$explicitBinders:bracketedBinder]*, $fT $pat = $fieldFn $algT $rhsParts*)
-      hyps := hyps.push (← `(bracketedBinder| ($hypId : $hypTy)))
+          s!"∀ {String.intercalate " " expl.toList}, f ({pat}) = {fieldApp}"
+      hyps := hyps.push s!"(h_{c.field} : {hypBody})"
       -- THE MINOR: `by rw [h_<ctor> args…, ihs…, fold<Ind>_<ctor>]`.
-      let eqId : Term := mkIdentFrom stx
-        (Name.mkSimple s!"fold{baseStr}_{c.field}")
-      let hypTerms : Array Term ←
-        if c.argTys.isEmpty then pure #[hypT]
-        else do let hApp : Term ← `($hypT $binders*); pure #[hApp]
-      let allRules : Array Term :=
-        hypTerms ++ (ihs.map fun ih => (⟨ih.raw⟩ : Term)) ++ #[eqId]
-      let rwRules : Array (TSyntax `Lean.Parser.Tactic.rwRule) ←
-        allRules.mapM fun r => do `(rwRule| $r:term)
-      let rwTac : Term ← `(by rw [$[$rwRules],*])
-      let minor : Term ←
-        if c.argTys.isEmpty then pure rwTac
-        else `(fun $binders* $ihs* => $rwTac)
+      -- The hyp rides ALWAYS (a nullary ctor's hyp is the bare `h` —
+      -- the original template's shape; dropping it leaves the goal's
+      -- LHS unrewritten and the rw cannot close).
+      let mut rules : Array String := #[]
+      if c.argTys.isEmpty then
+        rules := rules.push s!"h_{c.field}"
+      else
+        rules := rules.push
+          s!"h_{c.field} {String.intercalate " " bs.toList}"
+      for ih in ihs do rules := rules.push ih
+      rules := rules.push s!"fold{base}_{c.field}"
+      -- THE MINOR's source shape: a `by` block elaborates with the
+      -- expected type ONLY inside a parenthesized argument — a bare
+      -- `fun … => (by …)` as an application argument loses it (the
+      -- quotation route grouped the minor as ONE atomic node; the
+      -- source spelling groups it with parens around the WHOLE fun)
+      let rwTac := s!"rw [{String.intercalate ", " rules.toList}]"
+      let minor :=
+        if c.argTys.isEmpty then s!"(by {rwTac})"
+        else
+          s!"(fun {String.intercalate " " (bs.toList ++ ihs.toList)} => by {rwTac})"
       minors := minors.push minor
-    let algBinder ← `(bracketedBinder| {$algRef : $algId $alphaT})
-    let fBinder ← `(bracketedBinder| {$fRef : $indId → $alphaT})
-    let uniqId : TSyntax `ident := mkIdentFrom stx
-      (Name.mkSimple s!"fold{baseStr}_unique")
-    elabCommand (← `(command|
-      /-- GENERATED by `declare_fold` — THE INITIALITY LAW: a function
-          that commutes with the algebra on every constructor IS the
-          fold (one structural induction, generated once here, cited by
-          every migrated consumer — the `foldTy_unique` shape). -/
-      theorem $uniqId:ident $algBinder $fBinder $[$hyps:bracketedBinder]*
-          ($xRef : $indId) : $fT $xT = $foldId $algT $xT :=
-        $recId (motive := fun x => $fT x = $foldId $algT x) $minors* $xT))
+    elabParsed ind <|
+      "/-- GENERATED by `declare_fold` — THE INITIALITY LAW: a function\n" ++
+      "    that commutes with the algebra on every constructor IS the\n" ++
+      "    fold (one structural induction, generated once here, cited by\n" ++
+      "    every migrated consumer — the `foldTy_unique` shape). -/\n" ++
+      ("theorem fold" ++ base ++ "_unique {alg : " ++ base ++ "Alg α} " ++
+        "{f : " ++ indS ++ " → α}\n") ++
+      ((hyps.map (fun h => s!"    {h}\n")).foldl (· ++ ·) "") ++
+      s!"    (x : {indS}) : f x = fold{base} alg x :=\n" ++
+      -- the rec application rides ONE parenthesized block — a bare
+      -- newline-separated application would end the command at the
+      -- first line (the parser's indentation rule)
+      s!"  ({indS}.rec (motive := fun x => f x = fold{base} alg x)\n" ++
+      ((minors.map (fun m => s!"    {m}\n")).foldl (· ++ ·) "") ++
+      "    x)\n"
   | _ => Elab.throwUnsupportedSyntax
 
 end Kit.Derive.Fold

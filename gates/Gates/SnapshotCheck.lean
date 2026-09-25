@@ -55,10 +55,10 @@ def snapshotPath : System.FilePath := "notes/universe.snapshot"
 
 /-- `gates snapshot-check [--write]` — exit 1 on any refusal. -/
 unsafe def run (write : Bool) : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "snapshot-check" pkg fun env => do
     let fresh ←
-      match SchemaCore.snapshotOfEnv env with
+      match ← Kit.Lane.runCoreIO env (SchemaCore.snapshotOfEnv env) with
       | .error e => do
         IO.eprintln s!"snapshot-check: RENDER REFUSED — {e}"
         return 1
@@ -98,6 +98,6 @@ canonical render of the replayed registry (byte-tied)")
             s!"snapshot-check: {snapshotPath} DRIFTED from the fresh canonical \
 render of the replayed registry — run \
 `lake exe gates snapshot-check --write` and commit (never hand-edit the \
-baseline; the parsed file carried {parsed.length} item(s))")
+baseline; the parsed file carried {parsed.items.length} item(s) + {parsed.lanes.length} lane row(s))")
 
 end Gates.SnapshotCheck

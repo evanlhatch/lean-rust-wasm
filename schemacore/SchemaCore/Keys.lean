@@ -87,6 +87,7 @@ table).
 -/
 
 import Kit.Lane
+import Kit.Derive.Cascade
 import SchemaCore.Check
 import SchemaCore.RowVals
 import SchemaCore.Snapshot
@@ -669,25 +670,14 @@ theorem foreignDiags_eq_nil_iff {items : List Item} {decls : List KeyDecl}
             cases hB
             exact ⟨tkd, tf, hC, hD, hE⟩
 
-theorem foreignDiagsAll_eq_nil_iff {items : List Item} {decls : List KeyDecl}
-    {rec : String} {fields : List Field} :
-    ∀ (fks : List ForeignKey),
-      foreignDiagsAll items decls rec fields fks = [] ↔
-        ∀ fk, fk ∈ fks → ForeignOk items decls fields fk := by
-  intro fks
-  induction fks with
-  | nil => simp [foreignDiagsAll]
-  | cons fk fks ih =>
-      rw [foreignDiagsAll, List.append_eq_nil_iff, ih,
-        foreignDiags_eq_nil_iff]
-      constructor
-      · rintro ⟨h1, h2⟩ fk' hmem'
-        rcases List.mem_cons.mp hmem' with e | hmem2
-        · subst e; exact h1
-        · exact h2 fk' hmem2
-      · intro h
-        exact ⟨h fk List.mem_cons_self,
-          fun fk' hmem' => h fk' (List.mem_cons_of_mem _ hmem')⟩
+-- THE WALK RUNG's bridge, GENERATED (Kit.Derive.Cascade's
+-- `declare_cascade_walk` — the `foreignDiagsAll` walk is the
+-- generator's namesake shape; the hand 17-line induction died into the
+-- generated iff, ONE citation below).
+declare_cascade_walk foreignAll (items : List Item) (decls : List KeyDecl)
+    (rec : String) (fields : List Field) :=
+  foreignDiagsAll items decls rec fields, ForeignOk items decls fields
+  via foreignDiags_eq_nil_iff
 
 theorem keyRecordDiags_eq_nil_iff {items : List Item} {decls : List KeyDecl}
     {kd : KeyDecl} {fields : List Field} :
@@ -698,7 +688,7 @@ theorem keyRecordDiags_eq_nil_iff {items : List Item} {decls : List KeyDecl}
   by_cases hfs : fields = kd.fields
   · subst hfs
     rw [if_pos rfl, List.append_eq_nil_iff, keyFieldDiags_eq_nil_iff,
-      foreignDiagsAll_eq_nil_iff]
+      foreignAll_eq_nil_iff]
     exact ⟨fun h => ⟨rfl, h.1, h.2⟩, fun h => ⟨h.2.1, h.2.2⟩⟩
   · rw [if_neg hfs]
     exact ⟨fun h => absurd h (by simp), fun h => absurd h.1 hfs⟩
@@ -737,34 +727,28 @@ theorem dupNames_eq_nil_iff {ns : List String} :
             ⟨fun hmem => hc (List.contains_iff_mem.mpr hmem), h⟩,
           fun h => (List.nodup_cons.mp h).2⟩
 
-theorem flatMap_nil_iff {α β : Type} (f : α → List β) :
-    ∀ (l : List α), l.flatMap f = [] ↔ ∀ a, a ∈ l → f a = [] := by
-  intro l
-  induction l with
-  | nil => simp
-  | cons a l ih =>
-      rw [List.flatMap_cons, List.append_eq_nil_iff, ih]
-      constructor
-      · rintro ⟨h1, h2⟩ a' hmem'
-        rcases List.mem_cons.mp hmem' with e | hmem2
-        · subst e; exact h1
-        · exact h2 a' hmem2
-      · intro h
-        exact ⟨h a List.mem_cons_self,
-          fun a' hmem' => h a' (List.mem_cons_of_mem _ hmem')⟩
+-- THE MASTER (Kit.Derive.Cascade's `declare_cascade` — the EntityMachine
+-- preset is the production precedent): the per-decl chunk law + the dup
+-- scan's law are the ROWS' bridges (the match/if rungs stay hand — the
+-- domain's content, the `declare_bridge` leaf discipline), and the
+-- master iff + the two projections are GENERATED: the hand
+-- flatMap/dup chase (the `Kit.Derive.Cascade.flatMap_nil_iff` helper
+-- died into the generator's fixed set) is ONE citation below.
+declare_cascade keysCascade (items : List Item) (decls : List KeyDecl) :=
+  keyDeclsCheck items decls,
+  (∀ kd, kd ∈ decls → KeyDeclOk items decls kd)
+    ∧ (decls.map (fun kd => kd.record)).Nodup
+  where
+  | perDecl := via keyDeclCheck_eq_nil_iff
+  | dups := via dupNames_eq_nil_iff
 
 /-- MASTER BRIDGE: the executable authority and the relation agree
-    (pattern #1 — the checker never lies in either direction). -/
+    (pattern #1 — the checker never lies in either direction). The
+    proof is the GENERATED iff — one citation (the migration pin: the
+    hand master's flatMap/dup chase died into `keysCascade_eq_nil_iff`). -/
 theorem keyDeclsCheck_eq_nil_iff {items : List Item} {decls : List KeyDecl} :
-    keyDeclsCheck items decls = [] ↔ KeysWellFormed items decls := by
-  unfold keyDeclsCheck KeysWellFormed
-  rw [List.append_eq_nil_iff, flatMap_nil_iff, List.map_eq_nil_iff,
-    dupNames_eq_nil_iff]
-  constructor
-  · rintro ⟨h1, h2⟩
-    exact ⟨fun kd hkd => keyDeclCheck_eq_nil_iff.mp (h1 kd hkd), h2⟩
-  · rintro ⟨h1, h2⟩
-    exact ⟨fun kd hkd => keyDeclCheck_eq_nil_iff.mpr (h1 kd hkd), h2⟩
+    keyDeclsCheck items decls = [] ↔ KeysWellFormed items decls :=
+  keysCascade_eq_nil_iff items decls
 
 /-- The bridge, sound direction: a clean checker run transports INTO
     the relation. -/

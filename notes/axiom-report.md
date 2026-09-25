@@ -8,33 +8,273 @@ from the kernel's CollectAxioms; the allowlist (propext, Classical.choice,
 Quot.sound, disclosed _native.native_decide./_native.bv_decide. trust bases)
 is LintKit.AxiomAllowlist's, consumed via LintKit.runLintersOnDecls.
 
-## LintKit — 601 decls checked
+## Kit — 2378 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## Gates — 462 decls checked
+
+## KitTestsLib — 1240 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
+
+
+## TextKit — 335 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## TestingKit — 274 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## LintKit — 634 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Gates — 1150 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## GatesTestsLib — 67 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## SchemaCore — 5257 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## SchemaTestsLib — 714 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## WasmCore — 2017 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## WasmCoreTestsLib — 195 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
 
 ## Wit — 229 decls checked
 
 axioms used: propext
 violations: none
 
-## SchemaCore — 4237 decls checked
+
+## Machines — 937 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## ZSet — 600 decls checked
+
+## MachinesTestsLib — 416 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## ZSet — 659 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
 
-## Machines — 800 decls checked
+
+## ZSetTestsLib — 104 decls checked
 
 axioms used: Quot.sound, Classical.choice, propext
 violations: none
+
+
+## Datalog — 462 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## DatalogTestsLib — 67 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Cost — 137 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## CostTestsLib — 43 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## Effects — 352 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## EffectsTestsLib — 97 decls checked
+
+axioms used: Quot.sound, sorryAx, propext
+violations: none
+
+
+## Contracts — 235 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## ContractsTestsLib — 146 decls checked
+
+axioms used: Quot.sound, Classical.choice, sorryAx, propext
+violations: none
+
+
+## Analysis — 154 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## AnalysisTestsLib — 49 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## Query — 746 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## QueryTestsLib — 85 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Vortex — 2128 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## VortexTestsLib — 161 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Substrait — 2646 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## SubstraitTestsLib — 66 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Inspector — 615 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## InspectorTestsLib — 74 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Scaffold — 201 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## ScaffoldTestsLib — 26 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Guest — 2382 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## GuestTestsLib — 764 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## ComponentTestsLib — 219 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Repr — 209 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## ReprTestsLib — 33 decls checked
+
+axioms used: Quot.sound, propext
+violations: none
+
+
+## ScaffoldDemo — 45 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## ScaffoldLedger — 55 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## Faults — 109 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
+
+## FaultsTestsLib — 50 decls checked
+
+axioms used: Quot.sound, Classical.choice, propext
+violations: none
+
 

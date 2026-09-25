@@ -174,6 +174,37 @@ example :
 #guard_msgs in
 #print axioms orderMachinePreserves
 
+/-! ## The WF cascade: the generated family (Kit.Derive.Cascade) -/
+
+/-- The preset's WF cascade runs on the GENERATED family
+    (`declare_cascade` — the preset is the generator's first production
+    consumer): the chunk laws are the rows' bridges, and the master iff
+    + the two projections are generated. Soundness, cited at the worked
+    example. -/
+theorem orderWf_of_diags :
+    EntityWf orderMachineDecl orderMachineFields orderMachineKeys :=
+  entityCascade_sound orderMachineDecl orderMachineFields orderMachineKeys
+    (by decide)
+
+/-- Completeness, cited (the WF record built field-wise, decided). -/
+theorem orderDiags_of_wf :
+    entityDiags orderMachineDecl orderMachineFields orderMachineKeys = [] :=
+  entityCascade_complete orderMachineDecl orderMachineFields orderMachineKeys
+    { colU64 := by decide, endpoints := by decide, names := by decide,
+      keyOk := by decide }
+
+/- The generated cascade's trust base (the template's `simp only` —
+    the core triple at most). -/
+/-- info: 'SchemaCore.entityCascade_eq_nil_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.entityCascade_eq_nil_iff
+
+/- The migration pin's trust base (the citation IS the generated
+    lemma's proof object). -/
+/-- info: 'SchemaCore.entityDiags_eq_nil_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.entityDiags_eq_nil_iff
+
 /-! ## The negative controls (15-patterns #5) -/
 
 /-- THE ILLEGAL JOURNAL REFUSES WITH THE NAMED DIAGNOSTIC: the

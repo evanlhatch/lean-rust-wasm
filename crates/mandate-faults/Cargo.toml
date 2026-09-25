@@ -1,0 +1,32 @@
+# mandate-faults — the GENERATED Rust fault surface (the faults lane's
+# artifact crate).
+#
+# Hand-written and minimal (the ONE hand file in this crate): the emitter
+# (Faults.Emit, Lean) owns `src/lib.rs` — GENERATED, byte-tied (`lake exe
+# gates gen-check`; never hand-edit a generated file, `lake exe faultsgen`
+# restores). The declared faults live in `faults/Faults/Spec.lean` (the
+# registry is the SSOT); the E-codes allocate from the persisted registry
+# (notes/code-registry.txt) — 12 §8's discipline: the error surface is
+# declared, not written.
+#
+# Dependency judgment (the dep discipline: minimal, justified):
+# - `fast-observe` (path dep — the honest LOCAL shape: the crate is ours,
+#   unbumped 0.x; the path pin is the semver-drift tooth, design-faults R1;
+#   `default-features = false` — LIBRARIES do not enable fastrace, the
+#   BINARY enables it, fast-observe's library-level-tracing rule): the ONE
+#   runtime dependency — the generated lib.rs is the `error!` MACRO's
+#   output (wave-30 C1), the macro generating the Display/Error wiring +
+#   the Coded impl + the registry ENTRIES + the Fault conversions. A hand
+#   thiserror enum here would be a parallel table over the same display/
+#   category/advice fields (the drift class this landing closed). NIGHTLY:
+#   the generated `Error::provide` needs `error_generic_member_access` —
+#   crates/rust-toolchain.toml pins the lane.
+
+[package]
+name = "mandate-faults"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fast-observe = { path = "../../../fast-observe", default-features = false }

@@ -23,8 +23,8 @@ data, rendering separate.
 - spine reading: none — the run is a pure fold; the driver owns the
 only IO.
 - ladder rung: rung 1 — structural; the vacuity tripwire is a ctor.
-- gate row: none — TestingKit is outside Gates.Packages' gated set; the
-test exes are its consumers.
+- gate row: TestingKit's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); the test exes are its consumers.
 -/
 
 module

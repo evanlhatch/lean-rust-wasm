@@ -62,6 +62,8 @@ import TestingKit.Harness
 import MachinesTests.Axioms
 import MachinesTests.Coalg
 import MachinesTests.Closure
+import MachinesTests.Crash
+import MachinesTests.CrashLog
 import MachinesTests.Session
 
 open Machines TestingKit
@@ -306,7 +308,10 @@ machine! noEvents where
 /-! ## The battery's verdict faces (rung-3 pins) -/
 
 def statesFull : List Nat := [0, 1, 2, 7]
-def statesReachable : List Nat := [0, 1, 2]
+/-- The reachable fragment {0,1,2}: SHARED with `MachinesTests.Closure`'s
+    `states3cl` (the same worked machine's enumerated fragment — one
+    fixture, two consumers; the dupDefBodies discipline). -/
+def statesReachable : List Nat := states3cl
 
 theorem inputsFull_complete : ∀ i, i ∈ inputs3 := by
   intro i; cases i <;> simp [inputs3]
@@ -561,6 +566,27 @@ theorem replay3_eq_run : Fusion.replay gInt m3z insTickI 0
 
 /-! ### THE TRICHOTOMY TRIPWIRE (03 §7 as tests): net-zero ≠ nothing happened -/
 
+/-- THE ADJUNCTION'S TRIANGLE LAWS, cited at the worked machines: the
+    counit closes the unit's round trip on the journal side, and the
+    unit closes the counit's on the replay side — the bridges are the
+    unit/counit's faces, never a parallel story. -/
+theorem dIAdj_triangles :
+    ((Fusion.dIAdj gInt).counit ((Fusion.dIAdj gInt).journalMap
+        ((Fusion.dIAdj gInt).unit sq))
+      = (Fusion.dIAdj gInt).journalMap sq)
+    ∧ ((Fusion.dIAdj gInt).unit ((Fusion.dIAdj gInt).replayMap
+        ((Fusion.dIAdj gInt).counit (Machines.D gInt sq)))
+      = (Fusion.dIAdj gInt).replayMap (Machines.D gInt sq)) :=
+  ⟨Fusion.Adjunction.triangle_left (Fusion.dIAdj gInt) sq,
+   Fusion.Adjunction.triangle_right (Fusion.dIAdj gInt) (Machines.D gInt sq)⟩
+
+/-- The adjunction's UNIT LAW at the machine run: the unit at a
+    machine run is the identity (`Fusion.unit_machine`, cited). -/
+theorem dIAdj_unit_machine :
+    (Fusion.dIAdj gInt).unit (Fusion.stateStream m3z insTickI 0)
+      = Fusion.stateStream m3z insTickI 0 :=
+  Fusion.unit_machine gInt m3z insTickI 0
+
 /-- The alternating inc/dec run's journal: the net change is ZERO
     after every two ticks — pinned. -/
 theorem netZero_journal : List.map (Fusion.journal gInt mZ insZ 0) [0, 1, 2, 3, 4]
@@ -763,7 +789,14 @@ def specFusion : Spec := Spec.ofList "fusion-bridges"
     assert (List.map (Fusion.respStream mod3obs m3z insTickI 0) [0, 1, 2, 3] == [1, 2, 0, 1])
       "respStream wrong"
     assert (List.map (Fusion.respStream mod3obs m3z insTickI 3) [0, 1, 2, 3] == [1, 2, 0, 1])
-      "bisimilar response wrong")
+      "bisimilar response wrong"
+    -- the ADJUNCTION (D ⊣ I, the conjugacy's deep form): the unit at
+    -- the run IS the run (the replay bridge through the object); the
+    -- counit at the machine journal IS the journal
+    assert (List.map ((Fusion.dIAdj gInt).unit (Fusion.stateStream m3z insTickI 0))
+        [0, 1, 2, 3] == [0, 1, 2, 0]) "adjunction unit wrong"
+    assert (List.map (Machines.D gInt (Fusion.replay gInt m3z insTickI 0))
+        [0, 1, 2, 3] == [0, 1, 1, -2]) "adjunction counit face wrong")
   [ ("sabotage-zero-init-convention", fun _ =>
       -- the zero-initial D' breaks the iso: I (Dbad sq5) 0 = 0 ≠ 5
       assert (Machines.I gInt (Dbad sq5) 0 == sq5 0) "control"),
@@ -823,4 +856,4 @@ def specGraduation : Spec := Spec.ofList "exec-graduation"
   1 48
 
 def main : IO UInt32 :=
-  mainOfSuites [("Machines", [specFaces, specTies, specBattery, specFusion, specMachine, specCoalg, specGraduation, specClosure, specSession])]
+  mainOfSuites [("Machines", [specFaces, specTies, specBattery, specFusion, specMachine, specCoalg, specGraduation, specClosure, specSession, specCrash, MachinesTests.CrashLog.specCrashLog])]

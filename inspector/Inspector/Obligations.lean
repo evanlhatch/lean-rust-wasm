@@ -41,9 +41,9 @@ The five questions (notes/v3/01-core.md):
   why-answer and the sweep report are its OUTPUT faces.
 - ladder rung: n/a (the row CARRIES the tier; the rung vocabulary is
   Kit.Obligation's, defined once there).
-- gate row: none yet — the gates' obligation sweep consumes
-  `Inspector.report` (09 §3) in the next order; Inspector is outside
-  Gates.Packages' gated set until then.
+- gate row: Inspector's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); the gates' obligation sweep
+  consumes `Inspector.report` (09 §3) as the next order's row.
 -/
 
 import Kit.Obligation

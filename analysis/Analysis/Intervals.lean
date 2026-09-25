@@ -59,8 +59,9 @@ The five questions (notes/v3/01-core.md):
 - ladder rung: the transfer soundness fields are discharged by small
   hand theorems (01 §7's preferred foundation), cited by the domain
   instance's fields.
-- gate row: none yet — Analysis is outside Gates.Packages' gated set;
-  AnalysisTests.Axioms pins the axiom cones.
+- gate row: Analysis' row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); AnalysisTests.Axioms pins the
+  axiom cones.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/

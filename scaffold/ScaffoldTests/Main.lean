@@ -56,7 +56,11 @@ open Scaffold TestingKit
     Flow seed carries no header, so it is outside the tie by
     construction (the header's PRESENCE marks the generator's
     one-writer surface, the artifact-headers gate's detection-face
-    precedent). -/
+    precedent). The compare is the ONE text tie's ARTIFACT face
+    (`TestingKit.Golden.tie` via the fresh body through the ONE strip
+    `bodyOf`): body byte-equality + the committed header naming the
+    fresh body's `String.hash` — the same face `gates gen-check`
+    adopts through `Kit.Emit.tieText`. -/
 def byteTieFailures (spec : AppSpec) : IO (List String) := do
   match generate spec with
   | .error d => return [s!"generate refused {spec.name}: {d.code.code}: {d.message}"]
@@ -69,9 +73,9 @@ def byteTieFailures (spec : AppSpec) : IO (List String) := do
         fs := s!"{f.path}: the adopted skeleton is ABSENT — regen" :: fs
         continue
       let committed ← IO.FS.readFile p
-      match TestingKit.Golden.cmp f.contents committed with
-      | .ok () => pure ()
-      | .error e => fs := s!"{f.path}: {e}" :: fs
+      match TestingKit.Golden.tie committed (TestingKit.Golden.bodyOf f.contents) with
+      | .tied => pure ()
+      | .drifted why => fs := s!"{f.path}: {why}" :: fs
     return fs
 
 /-- The adopted suites' verdicts must each be `.pass` (property holds,

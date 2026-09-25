@@ -1,571 +1,281 @@
 /-
-# Guest.Lower — the impure-phase LCNF → the ONE wasm AST
+# Guest.Lower — the IR → the ONE wasm AST (the lowering core)
 
 Ported from `legacy/lean/wasm-backend/WasmBackend.lean` (the emitter's
 INTENT; the new tree's substrate differs honestly — index-keyed
 locals, the closed `WasmCore.Instr`, the frame-DEPTH discipline in
 place of the legacy's WAT labels, the op meanings in
-`WasmCore.OpTable`):
+`WasmCore.OpTable`).
 
-- **The scalar type map** (the legacy `wasmTyOf?`): `UInt64 → i64`;
-  `UInt32`/`UInt8`/`Bool`/`Char → i32`; a SCALAR-REPRESENTABLE ENUM
-  (the tag discipline, below) `→ i32`; EVERYTHING ELSE refuses loudly
-  — a type outside the fragment is a named diagnostic, never a silent
-  `i32` pointer guess (the object model is not landed).
-- **The tag discipline (the scalar-representable enums)**: a `cases`
-  whose ctor alts are ALL payload-free (`CtorInfo.isScalar` —
-  size/usize/ssize = 0) with every tag below 256 registers the
-  scrutinee's TYPE NAME as scalar-representable (a prescan over the
-  decl's OWN code — the observed evidence, no env threading): the
-  enum's runtime repr is the unboxed ctor TAG, so the value branches
-  like a `UInt8`. A payload ctor anywhere in the case keeps the type
-  an OBJECT — refused (the boxed-object model).
-- **The op surface** (the legacy `binop?`, grown): the `UInt64`
-  add/sub/mul/decLt/decEq family, the shifts (`shiftRight`), the
-  `UInt32` lane (add/sub/mul/land/xor/decLt/decEq/shiftRight), the
-  `UInt8` lane (the arith rows carry the `and 0xFF` mask — i32
-  arithmetic wraps mod 2^32, a `UInt8` wraps mod 2^8), the width
-  conversions (`toUInt32`/`toUInt64`), all → `WasmCore.Op`'s ctors
-  consumed from `WasmCore.OpTable`'s projections (the ONE table,
-  07-extensibility R6). A fap outside the rows refuses loudly; a fap
-  naming a SIBLING decl of the same module refuses as the CROSS-DECL
-  CALL (the call lane is wasmcore's in-flight work — the named
-  refusal).
-- **The bounded-Nat boundary** (the legacy `emitLet`'s lit arm): a
-  `Nat` literal at/above the pinned cap 2^62 is a DESIGN ERROR
-  (refused with the cap diagnostic); below the cap it refuses with
-  the not-yet-lowered diagnostic (the boxed-Nat lane is a named
-  follow-up — this slice has no allocator).
-- **The control flow** (the legacy `emitStep`'s jp/jmp + `buildAlts`,
-  re-shaped for the frame-depth AST — the ONE AST's `br`/`brif` carry
-  the frame DEPTH, not a label, so the lowering TRACKS the runtime
-  frame depth `d` as its single walk parameter):
-  - **The exit-frame discipline**: every `.return` stores the
-    function's result local and branches `br (d-1)` — the outermost
-    frame (emitted once per function around the whole body) absorbs
-    the branch, and `localget res` after it hands the value to the
-    run convention (the final stack). Values NEVER ride the stack
-    across a branch (wasmcore's frames are no-result; a branch
-    restores the frame-ENTRY stack) — every value crossing control
-    rides a LOCAL.
-  - **`cases`**: the alt chain folds to nested `if_`s keyed on the
-    ctor index over the SCALAR-REPR scrutinee (branch on the VALUE,
-    not a boxed tag); arm i of the chain lowers at depth `d+i` (each
-    chain link is one `if_` frame). The case is TERMINAL in LCNF's
-    impure spine (every arm ends return/jmp/unreach or a nested
-    case) — no join local, no fallthrough value. A scrutinee/ctor
-    outside the scalar discipline refuses loudly.
-  - **`jp`/`jmp` (the join-point discipline)**: WAT has no goto; the
-    legacy's block-and-fallthrough shape, in depths:
-    ```
-    block                    ;; $skip (outer)
-      block                  ;; $jpL  (inner) — the gotos' target
-        <k; a goto = arg stores + br into the jp>
-        br 1                 ;; the fallthrough never reaches the body
-      end
-      <the jp body>          ;; a br to $jpL lands HERE
-    end
-    unreach                  ;; the seal (every k-path branched)
-    ```
-    The jmp's depth: the jp registers the offset `X = d_jp + 2` (the
-    inner block sits two frames below the jp's own walk depth); a jmp
-    at depth `d` emits `br (d - X)` — through any `if_` nesting, out
-    of the inner block, into the body. The body is reached ONLY by a
-    branch; control never falls past the seal.
-  - **The loop shape (the growth beyond the legacy's conservative
-    reject)**: a jp whose body jumps back to ITSELF (`jumpsTo` — the
-    audit's loop-shaped-jp detection) cannot use the block shape (the
-    body sits outside its own label's scope), but IT FITS the `loop`
-    frame: the body inside `block [ loop [body; br 1] ]`, the
-    self-goto = arg stores + `br (d - X)` restarting the loop (the
-    loop frame absorbs `.branch 0` as the restart, carrying the
-    branch-point locals — the stored args ride in). The ENTRY
-    discipline: LCNF runs `k` FIRST, and a `br` cannot ENTER a frame,
-    so `k` must be a straight-line let spine ending in the entry
-    `jmp` (its arg stores fall through into the loop's first
-    iteration); anything else refuses with the named `loopEntry`
-    diagnostic (the entry-duplication transform is the named
-    follow-up).
-  - **The jmp scoping**: a jp's registration lives exactly as long as
-    its structure's emission (deregistered after) — a jmp with no
-    live registration (into a finished structure, or with no jp at
-    all) refuses (`jpUnregistered`); an arity drift between the jmp's
-    args and the jp's params refuses (`jpArityDrift`).
-- **The multi-decl module**: `lowerFuncs` lowers SEVERAL decls into
+THE SPLIT'S DISCIPLINE (this file's contract): the input is
+`Guest.IR` — the frontend-agnostic intermediate — and NOTHING
+language-specific. The LCNF walking (the type map, the tag prescan,
+the fap name dispatch, the honest drops) lives in the FRONTEND
+(`Guest.Lcnf`); a second, toy frontend (hand-written IR) rides the
+same lowering untouched — the proof the IR is the whole contract.
+This file imports `Guest.IR`, `WasmCore`, `Kit.Diag` — no Lean, no
+LCNF.
+
+The lanes (each maps an `IR` constructor's discipline onto the wasm
+AST; the full prose discipline is in the lanes' doc strings):
+
+- **The type rows** (`tyRepr`): the IR's `Ty` rows → the wasm scalar
+  or object-pointer repr — `.u64 → i64`; every other row `→ i32` (the
+  ONE pointer repr for the object rows; the unboxed tag for the
+  scalar-enum rows). The FRONTEND refuses a type outside the rows.
+- **The tag discipline** (the scalar-representable enums): the IR's
+  `cases_` carries the frontend's prescan verdict (`CaseVia.value` —
+  branch on the VALUE; `CaseVia.tag` — read the tag byte @4 of the
+  pointer repr).
+- **The op surface** (`binopSeq`): the IR's `Binop` rows → the
+  `WasmCore.Op` ctors (the ONE table, 07-extensibility R6). The u8
+  arith rows carry the `and 0xFF` mask (i32 arithmetic wraps mod 2^32,
+  a `UInt8` wraps mod 2^8).
+- **The cross-decl call lane**: an `IR.LetValue.call` naming a SIBLING
+  decl lowers to wasm `call` at the callee's FUNCTION-TABLE INDEX
+  (`lowerFuncs`' decl order — a self-recursive decl calls its OWN
+  index; the recursion's bound is the executor's fuel honesty,
+  `outOfFuel`, never a fabricated termination). The marshalling is
+  the EXECUTOR'S calling convention exactly: the args push LEFT TO
+  RIGHT, the callee's exit-frame discipline leaves the result on its
+  final stack, every value crossing the call rides a LOCAL on BOTH
+  sides.
+- **The boxed-Nat lane**: the IR's `litNat`/`NatFap` rows — the bump
+  arena over the module's one memory page (the bump pointer lives IN
+  the memory at cell 0), the `{rc, tag 0, i64 payload @8}` box, the
+  2^62 cap at compile time AND runtime, the 128-bit mul guard, the
+  sub-underflow trap.
+- **The object seed** (the `ctor` object face + `sproj`/`oproj`): the
+  header `{rc @0, tag @4}` + the fields at the PIPELINE'S PACKING-LAW
+  coordinates (refs first, one 8-byte slot each; the scalar region
+  after, packed by size class largest first). The ctor VALUE's two
+  faces are keyed on the RESULT TYPE's row: a scalar-row ctor is the
+  unboxed tag; an object-row ctor is a POINTER even when payload-free.
+- **The closure discipline** (`pap` + `apply`): the closure object
+  `{rc @0, tag 254 @4, fnIdx @8, captured @16 + i*8}`; the known-arity
+  application calls DIRECTLY (the pap provenance in the lowering
+  state); a first-class application lowers to the INDIRECT-CALL lane
+  (the funcref table + `callindirect` + the sig registry).
+- **The RC discipline** (`inc`/`dec`/`del`): the rc cell's REAL arithmetic
+  under the over-dec guard; `dec`'s FIELD CASCADE — the ref fields' refs
+  decrement when the object dies (the count rides the IR's `dec`; the
+  ref slots are `0..count-1`, the packing law's coordinates — the DEEP
+  cascade, a field's own fields, is the named follow-up); `del` — the
+  ownership assertion `rc = 1` checked at runtime (the teeth) + the dead
+  marking (rc = 0; no reuse — the size-class freelist is the named
+  follow-up).
+- **The control flow** (`cases_`/`jp`/`jmp`): the frame-depth AST —
+  the exit-frame discipline for `.ret`, the alt chain folding to
+  nested `if_`s, the join points as the block shape (shared joins) or
+  the loop shape (tail-recursive joins, the entry discipline).
+- **The multi-decl module**: `lowerFuncs` lowers SEVERAL IR decls into
   ONE module (one type + one function + one export each; the entry
-  index = the decl order). The decls stay CALL-DISJOINT: a cross-decl
-  `fap` is the named call-lane refusal until wasmcore's call support
-  lands — never a fabricated index-0 call.
+  index = the decl order).
+- **The in-place writes** (`sset`/`oset`/`setTag`): the mutation
+  family's landed face — the scalar-field write (the SAME coordinates
+  the `sproj` read rides), the ref-field write, the tag byte's write.
+  THE LEGALITY DISCIPLINE: every write guards the rc=1 uniqueness at
+  RUNTIME (a shared cell's in-place write corrupts every other
+  reference's view — the loud unreach trap, never a silent write; the
+  copy-on-shared discipline is the named follow-up). The `uset` face
+  (a USize slot write) is the named refusal (no modeled row).
+- **The extern face** (`extern`): a DECLARED TRUST BOUNDARY — the
+  decl's signature lands (one function + one export, the call lane's
+  index like any sibling), the body is NOT modeled: the emitted
+  function is `unreach` (the host link step is the named follow-up).
 - **The refusal discipline** (05 §4's envelope): every refusal is a
   closed `LowerError` ctor rendered into the ONE `Kit.Diag` (the
-  GC-family E-codes); never a bare string, never a silent wrong
-  lowering.
-- **The recursion is WELL-FOUNDED over explicit total measures** (the
-  `codeSize`/`altSize`/`altSizes` block): the LCNF `Code.size` is
-  `partial` — unusable for a termination proof, and a `partial`
-  lowering is a stub lie. The size measures ride the derived
-  `sizeOf` (the pair measure's lex-order facts `lt_left`/`lt_right`
-  are proven once); the READER folds (the prescan, `jumpsTo`) and
-  the LOWERING itself (`lowerCode`/`chainWalk`) are then well-founded
-  over those measures — the decrease proofs are simp+omega over the
-  measure equations, kernel-checked, core-triple axioms only.
+  GC-family E-codes) — the shared envelope in `Guest.IR`.
 
-THE FRAGMENT'S EXACT COVERAGE (the honest boundary, this slice):
-
-- covered: straight-line `let` chains of scalar literals, scalar
-  copies, the payload-free-ctor tag lets, and the `binop?` faps (both
-  widths + the u8 mask + the shifts + the conversions); `return` of a
-  scalar fvar; `cases` on a Bool/U8-repr OR scalar-repr-enum
-  scrutinee, with NESTED cases in the arms; `jp`/`jmp` — the block
-  shape (shared joins), the loop shape (tail-recursive joins, the
-  entry discipline), multiple jps, jps under cases; the multi-decl
-  module (call-disjoint decls); `unreach`.
-- NOT covered (each lands with its named follow-up): the bounded-Nat
-  boxed lane (alloc + the memory layout), object types/payload ctors/
-  projections, closures (`pap`/closure application), the cross-decl
-  call lane (wasmcore's in-flight work), loop-jp entries that are not
-  a straight-line let spine (the entry-duplication transform),
-  in-place mutation (`oset`/`uset`/`sset`/`setTag`), Perceus RC
-  (`inc`/`dec`/`del`), `extern` decl values.
+THE RECURSION IS STRUCTURAL (the honest split's dividend): the IR's
+spine carries its recursive occurrences as DIRECT constructor
+arguments (the alts ride a LIST; the jp's body is a `jp` ctor arg), so
+every walker here — the lowering, the loop detector, the entry
+splitter — is structurally recursive. The LCNF frontend needs the
+well-founded measure machinery over ITS tree (`Guest.Lcnf`); the
+lowering core needs none of it.
 
 The five questions (notes/v3/01-core.md):
 
-- **Root**: none — a lowering is a CROSSING (the LCNF decl read
-  into the wasm module); its law face lands with the first
-  correctness wave (the template pins are the tests' runtime face).
+- **Root**: none — a lowering is a CROSSING (the IR decl read into
+  the wasm module); its law face lands with the first correctness
+  wave (the template pins are the tests' runtime face).
 - **Carrier grade**: none new — the refusals ride `Kit.Diag` (the
   ONE envelope); the module output rides WasmCore's grades.
-- **Spine reading**: the LCNF `Code` is the spine this module folds
+- **Spine reading**: the IR `Code` is the spine this module folds
   (one traversal, ONE parameter — the runtime frame depth `d`; the
   legacy `foldImpure` consolidation's discipline).
 - **Ladder rung**: rung 1 (total folds over closed data; every
-  non-fragment input refuses).
+  non-fragment input refuses — at the frontend when reading, here
+  when lowering).
 - **Gate row**: `gates kernel-check` + lintkit's gated roots.
 
-Consumer trail: rides `Guest.Lcnf` (the input face), `WasmCore`
-(the ONE AST + the op table + the module model), `Kit.Diag` (the
-ONE envelope). Host-side (imports Lean via Guest.Lcnf).
+Consumer trail: rides `Guest.IR` (the ONE input face), `WasmCore`
+(the ONE AST + the op table + the module model), `Kit.Diag` (the ONE
+envelope). The composed pipeline (LCNF → IR → here) is
+`Guest.Lcnf.compile`; the toy frontend (hand-written IR) calls
+`lowerFunc`/`lowerFuncs` directly — the conformance evidence.
 -/
 
-import Guest.Lcnf
+import Guest.IR
 import Kit.Diag
 import WasmCore
+import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
 
 namespace Guest
 
-open Lean Compiler.LCNF
+/-! ## The scalar type map (the IR's rows → the wasm reprs) -/
 
-/-! ## The refusal vocabulary (the envelope discipline, 05 §4) -/
+/-- The IR type row → the wasm scalar or object-pointer type: the
+    `u64` row is the ONE i64; every other row rides i32 (the machine
+    scalars, the i32-repr source scalars, the prescan's enums — the
+    unboxed tag — and the object rows — the ONE pointer repr). -/
+def tyRepr : IR.Ty → WasmCore.ValType
+  | .u64 => .i64
+  | _ => .i32
 
-/-- THE closed-world refusal vocabulary: the lowering's failure KINDS
-    as ctors with their payload data. Closed on purpose: a new
-    fragment region is a new ctor, and the compiler drives the
-    extension (15-patterns #15). -/
-inductive LowerError where
-  /-- A Lean type outside the scalar fragment (`what` names the
-      position, `ty` the Lean type's rendering). -/
-  | typeOutsideFragment (what : String) (ty : String)
-  /-- THE bounded-Nat cap: a `Nat` literal at/above 2^62 is a DESIGN
-      ERROR (the boxed-Nat model's pinned refusal — the legacy
-      discipline, ported verbatim). -/
-  | natLitCap (v : Nat)
-  /-- A below-cap `Nat` literal: the boxed-Nat lane is the named
-      follow-up — refused, never silently scalarized. -/
-  | natLane (v : Nat)
-  /-- A construct outside the fragment (`what` = the LCNF form,
-      `detail` = the named boundary it sits behind). -/
-  | unsupportedConstruct (what : String) (detail : String)
-  /-- An fvar read with no binding (a lowering-internal
-      inconsistency — LCNF is ANF; this names the bug, never
-      fabricates an index). -/
-  | unboundFVar (name : String)
-  /-- A non-fvar argument where ANF demands an fvar. -/
-  | argShape (what : String)
-  /-- A returned fvar's bound type does not match the result local's
-      type. -/
-  | armTypeMismatch (expected got : String)
-  /-- A `jmp` whose target jp has no live registration (the jp's
-      structure already ended, or there is no jp). -/
-  | jpUnregistered (name : String)
-  /-- A `jmp` whose arg count differs from the jp's param count. -/
-  | jpArityDrift (jp : String) (got want : Nat)
-  /-- The loop-entry discipline: a self-jumping jp whose continuation
-      is not a straight-line let spine ending in the entry `jmp`. -/
-  | loopEntry (detail : String)
-  /-- A fap naming a SIBLING decl of the same module: the cross-decl
-      call lane (wasmcore's in-flight call support). -/
-  | declCall (fn : String)
-  deriving Repr, BEq, DecidableEq, Inhabited
+/-- The sig registry's register-or-lookup: the signature's index in
+    the accumulated list (registered at the tail when new). -/
+def sigRegister : List WasmCore.FuncType → WasmCore.FuncType →
+    Nat × List WasmCore.FuncType
+  | [], ft => (0, [ft])
+  | t :: ts, ft =>
+      if t = ft then (0, t :: ts)
+      else
+        let (k, l) := sigRegister ts ft
+        (k + 1, t :: l)
 
-/-! The E-code CONSTANTS (the GC family): one place, ready for the
-persisted registry (the WV-family precedent — the registry's stable
-allocation is a later integration step; the in-file numbering is
-monotone — a retired ctor's code is never reused). -/
-namespace LowerError
+/-! ## The field-layout law (the pipeline's `CtorLayout` packing) -/
 
-def ecTypeOutsideFragment : Kit.ECode := ⟨"GC2001"⟩
-def ecNatLitCap : Kit.ECode := ⟨"GC2002"⟩
-def ecNatLane : Kit.ECode := ⟨"GC2003"⟩
-def ecUnsupported : Kit.ECode := ⟨"GC2004"⟩
-def ecUnboundFVar : Kit.ECode := ⟨"GC2005"⟩
-def ecArgShape : Kit.ECode := ⟨"GC2006"⟩
-def ecArmTypeMismatch : Kit.ECode := ⟨"GC2007"⟩
-def ecJpUnregistered : Kit.ECode := ⟨"GC2008"⟩
-def ecJpArityDrift : Kit.ECode := ⟨"GC2009"⟩
-def ecLoopEntry : Kit.ECode := ⟨"GC2010"⟩
-def ecDeclCall : Kit.ECode := ⟨"GC2011"⟩
+/-- THE FIELD's size class: a ref field (an object-row type) rides one
+    full 8-byte slot; a scalar rides the scalar region, packed by size
+    class, largest first. An enum/Bool/Char-typed field has NO class
+    here — the pipeline's enum repr (u8/u16/u32) depends on the ctor
+    count, unknowable from the lowering's data — the named
+    `ctorFieldClass` refusal. -/
+inductive FieldClass where
+  | obj | u64 | u32 | u8
+deriving BEq, DecidableEq, Inhabited, Repr
 
-end LowerError
+def fieldClass? : IR.Ty → Option FieldClass
+  | .u64 => some .u64
+  | .u32 => some .u32
+  | .u8 => some .u8
+  | t => if t.isObjRow then some .obj else none
 
-/-- THE diagnostic envelope: every refusal renders into the ONE Diag —
-    the GC-family E-code, the payload data in `got`, the named
-    boundary in the valid-space slot (the did-you-mean engine fills
-    the suggestion face). -/
-def LowerError.toDiag : LowerError → Kit.Diag
-  | .typeOutsideFragment what ty =>
-      Kit.Diag.closedWorld ecTypeOutsideFragment
-        s!"{what} is outside the scalar fragment"
-        .error ty
-        ["UInt64 (i64)", "UInt32/UInt8/Bool/Char (i32)",
-         "a scalar-representable enum (the tag discipline)"]
-  | .natLitCap v =>
-      Kit.Diag.closedWorld ecNatLitCap
-        s!"bounded-Nat: literal {v} at/above the pinned cap 2^62 — a design \
-           error (the boxed-Nat model refuses overflow by construction)"
-        .error (toString v)
-        ["a Nat literal below 2^62"]
-  | .natLane v =>
-      Kit.Diag.closedWorld ecNatLane
-        "bounded-Nat: the boxed-Nat lane (alloc + the memory layout) is not \
-         landed in this slice — a Nat is an OBJECT, never a silent scalar"
-        .error (toString v)
-        ["the scalar fragment: UInt64/UInt32/UInt8/Bool/Char"]
-  | .unsupportedConstruct what detail =>
-      Kit.Diag.closedWorld ecUnsupported
-        s!"unsupported LCNF construct: {what}"
-        .error what
-        [detail]
-  | .unboundFVar name =>
-      { code := ecUnboundFVar
-      , message := s!"unbound fvar {name} — a lowering-internal \
-                      inconsistency (LCNF is ANF; this is a bug)"
-      , got := some name }
-  | .argShape what =>
-      { code := ecArgShape
-      , message := s!"non-fvar argument where ANF demands an fvar: {what}"
-      , got := some what }
-  | .armTypeMismatch expected got =>
-      Kit.Diag.closedWorld ecArmTypeMismatch
-        "returned value's type differs from the function result's type"
-        .error got [expected]
-  | .jpUnregistered name =>
-      Kit.Diag.closedWorld ecJpUnregistered
-        "jmp to a join point with no live registration — the jp's \
-         structure already ended (a br cannot enter a frame)"
-        .error name
-        ["a jmp inside its jp's structure"]
-  | .jpArityDrift _jp got want =>
-      Kit.Diag.closedWorld ecJpArityDrift
-        s!"jmp arity drift: {got} args vs the jp's {want} params"
-        .error (toString got)
-        [s!"{want} args"]
-  | .loopEntry detail =>
-      Kit.Diag.closedWorld ecLoopEntry
-        s!"the loop-entry discipline: {detail}"
-        .error detail
-        ["a straight-line let spine ending in the entry jmp"]
-  | .declCall fn =>
-      Kit.Diag.closedWorld ecDeclCall
-        "cross-decl call: the call lane is wasmcore's in-flight work — \
-         the module's decls stay call-disjoint in this slice"
-        .error fn
-        ["the op-surface faps (binop?) only"]
+/-- The class's byte size (the packing law's weight; a ref field's
+    slot is charged 8 by the slot arithmetic, not here). -/
+def fieldSize : FieldClass → Nat
+  | .u64 => 8 | .u32 => 4 | .u8 => 1 | .obj => 0
 
-/-- The one-line rendering (the envelope's `.toString`). -/
-def LowerError.render (e : LowerError) : String := Kit.Diag.toString e.toDiag
+/-- A scalar field's offset WITHIN the scalar region: the sum of the
+    strictly-larger classes' sizes (each larger class packs first) plus
+    the same-class fields packed before it (arg order) — the pipeline's
+    `adjustScalarsForSize` discipline (the 8/4/2/1 rounds). -/
+def scalarOff (pre : List FieldClass) (cl : FieldClass) : Nat :=
+  (pre.filter (fun c => fieldSize c > fieldSize cl)).foldl
+    (fun n c => n + fieldSize c) 0 +
+  (pre.filter (fun c => c == cl)).length * fieldSize cl
 
-/-! ## The scalar type map (the legacy `wasmTyOf?`) -/
-
-/-- The BASE scalar names (the legacy `wasmTyOf?`'s rows). -/
-def scalarTyOf? (c : Lean.Name) : Option WasmCore.ValType :=
-  if c == `UInt64 then some .i64
-  else if c == `UInt32 || c == `UInt8 || c == `Bool || c == `Char then some .i32
-  else none
-
-/-- The Lean type expression → the wasm scalar type. `enums` = the
-    decl's scalar-representable enum registry (the prescan's observed
-    evidence — `collectScalarEnums`); `none` = outside the fragment
-    (the object model is not landed — the caller refuses with the
-    named diagnostic). -/
-def wasmTyOf? (enums : Std.HashMap Lean.Name Unit) : Lean.Expr → Option WasmCore.ValType
-  | .const c _ =>
-    match scalarTyOf? c with
-    | some t => some t
-    | none => if enums.contains c then some .i32 else none
-  | _ => none
-
-/-! ## The size measures (the well-founded substrate) -/
-
-/-- The pair measure's LEFT fact (the lex order's first component). -/
-theorem lt_left {p q : Nat × Nat} (h : p.1 < q.1) :
-    Prod.Lex (fun a₁ a₂ => a₁ < a₂) (fun a₁ a₂ => a₁ < a₂) p q := by
-  cases p with
-  | mk p₁ p₂ =>
-    cases q with
-    | mk q₁ q₂ =>
-      exact Prod.Lex.left (ra := fun a₁ a₂ => a₁ < a₂) (rb := fun a₁ a₂ => a₁ < a₂) p₂ q₂ h
-
-/-- The pair measure's RIGHT fact (equal heads, decreasing tails). -/
-theorem lt_right {p q : Nat × Nat} (heq : p.1 = q.1) (h : p.2 < q.2) :
-    Prod.Lex (fun a₁ a₂ => a₁ < a₂) (fun a₁ a₂ => a₁ < a₂) p q := by
-  cases p with
-  | mk p₁ p₂ =>
-    cases q with
-    | mk q₁ q₂ =>
-      subst heq
-      exact Prod.Lex.right (ra := fun a₁ a₂ => a₁ < a₂) (rb := fun a₁ a₂ => a₁ < a₂)
-        (b₁ := p₂) (b₂ := q₂) p₁ h
-
--- THE size measure over the LCNF `Code` (total, unlike the
--- toolchain's `partial` `Code.size`). The `FunDecl`/`Cases` hops
--- (the nested structures the derived sizeOf cannot see through on a
--- variable) are the two lemmas below, proven BEFORE the group.
-theorem fd_sizeOf (fd : FunDecl .impure) : sizeOf fd.value < sizeOf fd := by
-  cases fd with
-  | mk _ _ _ _ v => simp [FunDecl.value]; omega
-theorem cases_sizeOf (c : Cases .impure) : sizeOf c.alts < sizeOf c := by
-  cases c with
-  | mk _ _ _ alts => simp [Cases.alts]; omega
-
-mutual
-def codeSize : Code .impure → Nat
-  | .let _ k => 1 + codeSize k
-  | .jp fd k => 1 + codeSize fd.value + codeSize k
-  | .cases c => 1 + altSizes c.alts 0
-  | .return _ | .jmp .. | .unreach _ | .fun .. => 1
-  | .oset _ _ _ k _ | .uset _ _ _ k _ | .sset _ _ _ _ _ k _ | .setTag _ _ k _
-  | .inc _ _ _ _ k _ | .dec _ _ _ _ _ k _ | .del _ k _ => 1 + codeSize k
-  termination_by c => (sizeOf c, 0)
-  decreasing_by
-    all_goals (try have hfd := fd_sizeOf fd)
-    all_goals (try have hcs := cases_sizeOf c)
-    all_goals (first
-      | exact lt_left (by simp <;> omega)
-      | exact lt_right (rfl) (by omega))
-def altSize : Alt .impure → Nat
-  | .ctorAlt _ code => 1 + codeSize code
-  | .default code => 1 + codeSize code
-  | .alt _ _ _ _ => 0
-  termination_by a => (sizeOf a, 0)
-  decreasing_by
-    all_goals exact lt_left (by simp <;> omega)
-/-- The suffix sum of the arm sizes from index `i` (the chain walk's
-    measure: the index step AND the chain→walk cross-call both
-    decrease it). -/
-def altSizes (alts : Array (Alt .impure)) (i : Nat) : Nat :=
-  if h : i < alts.size then altSize alts[i] + altSizes alts (i + 1) else 0
-  termination_by (sizeOf alts, alts.size - i)
-  decreasing_by
-    all_goals (first
-      | exact lt_left (p := (sizeOf alts[i], 0))
-          (q := (sizeOf alts, alts.size - i)) (by simp)
-      | exact lt_right (p := (sizeOf alts, alts.size - (i + 1)))
-          (q := (sizeOf alts, alts.size - i)) (rfl) (by omega))
-end
-
-theorem altSize_pos (a : Alt .impure) : 1 ≤ altSize a := by
-  cases a with
-  | ctorAlt info code => simp [altSize]
-  | default code => simp [altSize]
-  | alt _ _ _ h => exact absurd h (by simp)
-
-/-- The chain walk's index step decreases the suffix measure. -/
-theorem altSizes_suffix (alts : Array (Alt .impure)) (i : Nat) (h : i < alts.size) :
-    altSizes alts (i + 1) < altSizes alts i := by
-  have h1 : altSizes alts i = altSize alts[i] + altSizes alts (i + 1) := by
-    rw [altSizes]; simp [h]
-  have h2 := altSize_pos alts[i]
-  omega
-
-/-- The chain walk's ARM call decreases the suffix measure (the ctor
-    arm's code is a summand). -/
-theorem altSizes_gt_ctor (alts : Array (Alt .impure)) (i : Nat) (h : i < alts.size)
-    (info : CtorInfo) (code : Code .impure) (hget : alts[i] = Alt.ctorAlt info code) :
-    codeSize code < altSizes alts i := by
-  have h1 : altSizes alts i = altSize alts[i] + altSizes alts (i + 1) := by
-    rw [altSizes]; simp [h]
-  rw [h1, hget]
-  have h2 : altSize (Alt.ctorAlt info code) = 1 + codeSize code := by rw [altSize]
-  rw [h2]; omega
-
-/-- The chain walk's DEFAULT-arm call (the same shape). -/
-theorem altSizes_gt_default (alts : Array (Alt .impure)) (i : Nat) (h : i < alts.size)
-    (code : Code .impure) (hget : alts[i] = Alt.default code) :
-    codeSize code < altSizes alts i := by
-  have h1 : altSizes alts i = altSize alts[i] + altSizes alts (i + 1) := by
-    rw [altSizes]; simp [h]
-  rw [h1, hget]
-  have h2 : altSize (Alt.default code) = 1 + codeSize code := by rw [altSize]
-  rw [h2]; omega
-
-/-! ## The tag prescan (the scalar-representable enums) -/
-
-/-- The scalar-enum registration criterion: at least one ctor alt, and
-    EVERY ctor alt is payload-free (`CtorInfo.isScalar`) with its tag
-    below 256 (the unboxed-tag repr boundary). -/
-def altsScalarRepr? (alts : List (Alt .impure)) : Bool :=
-  let ctorAlts := alts.filterMap
-    (fun a => match a with | .ctorAlt info _ => some info | _ => none)
-  ctorAlts.length > 0
-    && ctorAlts.all (fun i => i.isScalar && i.cidx < 256)
-
-/-- The registry union (insertMany over the toList). -/
-def enumUnion (m1 m2 : Std.HashMap Lean.Name Unit) : Std.HashMap Lean.Name Unit :=
-  m1.insertMany m2.toList
-
-/-- The alt-list's size (the list walkers' measure — structural over
-    the list, so it needs no well-founded machinery of its own). -/
-def listAltSize : List (Alt .impure) → Nat
-  | [] => 0
-  | a :: rest => altSize a + listAltSize rest
-
-/-! The prescan: the decl's code → the scalar-representable enum
-registry (the type names whose OBSERVED cases are all payload-free
-ctor alts). Purely structural; the registry feeds `wasmTyOf?` (the
-tag discipline — a scalar enum's repr IS the unboxed ctor tag).
-NOTE the field orders the patterns spell: a `uset` carries
-`y : FVarId` third and a `del` the fvar FIRST — the or-pattern's `k`
-binds the CODE field in every arm. -/
-mutual
-def collectScalarEnums (code : Code .impure) : Std.HashMap Lean.Name Unit :=
-  match code with
-  | .let _ k => collectScalarEnums k
-  | .jp fd k => enumUnion (collectScalarEnums fd.value) (collectScalarEnums k)
-  | .cases c =>
-    let here :=
-      if altsScalarRepr? c.alts.toList
-      then ({} : Std.HashMap Lean.Name Unit).insert c.typeName ()
-      else ({} : Std.HashMap Lean.Name Unit)
-    altScan c.alts 0 here
-  | .return _ | .jmp .. | .unreach _ => ({} : Std.HashMap Lean.Name Unit)
-  | .fun .. => ({} : Std.HashMap Lean.Name Unit)
-  | .oset _ _ _ k _ | .uset _ _ _ k _ | .sset _ _ _ _ _ k _ | .setTag _ _ k _
-  | .inc _ _ _ _ k _ | .dec _ _ _ _ _ k _ | .del _ k _ => collectScalarEnums k
-  termination_by codeSize code
-  decreasing_by all_goals (simp only [codeSize]; omega)
-def altScan (alts : Array (Alt .impure)) (i : Nat) (m : Std.HashMap Lean.Name Unit) :
-    Std.HashMap Lean.Name Unit :=
-  if h : i < alts.size then
-    match hget : alts[i] with
-    | .ctorAlt _ code => altScan alts (i + 1) (enumUnion m (collectScalarEnums code))
-    | .default code => altScan alts (i + 1) (enumUnion m (collectScalarEnums code))
-    | .alt _ _ _ hp => absurd hp (by simp)
-  else
-    m
-  termination_by altSizes alts i
-  decreasing_by
-    all_goals (first
-      | exact altSizes_suffix alts i h
-      | exact altSizes_gt_ctor alts i h _ _ hget
-      | exact altSizes_gt_default alts i h _ hget
-      | omega)
-end
-
-/-! ## The loop-shape detector (the audit's `jumpsTo`) -/
-
--- Does `code` contain a `jmp` to `target`? (The loop-shape
--- detector — the audit's `jumpsTo`, ported as a plain structural
--- fold; the same field-order spell as `collectScalarEnums`.)
-mutual
-def jumpsTo (target : Lean.FVarId) (code : Code .impure) : Bool :=
-  match code with
-  | .jmp f _ => f == target
-  | .jp fd k => jumpsTo target fd.value || jumpsTo target k
-  | .cases c => altJumps target c.alts 0
-  | .let _ k | .oset _ _ _ k _ | .uset _ _ _ k _ | .sset _ _ _ _ _ k _
-  | .setTag _ _ k _ | .inc _ _ _ _ k _ | .dec _ _ _ _ _ k _ | .del _ k _ =>
-    jumpsTo target k
-  | .return _ | .unreach _ => false
-  | .fun .. => false
-  termination_by codeSize code
-  decreasing_by all_goals (simp only [codeSize]; omega)
-def altJumps (target : Lean.FVarId) (alts : Array (Alt .impure)) (i : Nat) : Bool :=
-  if h : i < alts.size then
-    match hget : alts[i] with
-    | .ctorAlt _ code => jumpsTo target code || altJumps target alts (i + 1)
-    | .default code => jumpsTo target code || altJumps target alts (i + 1)
-    | .alt _ _ _ hp => absurd hp (by simp)
-  else
-    false
-  termination_by altSizes alts i
-  decreasing_by
-    all_goals (first
-      | exact altSizes_suffix alts i h
-      | exact altSizes_gt_ctor alts i h _ _ hget
-      | exact altSizes_gt_default alts i h _ hget
-      | omega)
-end
-
-/-! ## The op surface (the legacy `binop?`, grown) -/
-
-/-- The LCNF callee name → (arity, instructions). The closed row set
-    is the legacy's proven surface grown by the probe-mined rows; a
-    fap outside it refuses loudly (the named boundary — never a
-    silent wrong lowering). The u8 arith rows end in the `and 0xFF`
-    mask (i32 arithmetic wraps mod 2^32; a `UInt8` wraps mod 2^8).
-    Ops are consumed from `WasmCore.OpTable`'s projections everywhere
-    downstream (the ONE table, 07-extensibility R6). -/
-def binop? : Lean.Name → Option (Nat × List WasmCore.Instr)
-  | ``UInt64.add => some (2, [.op .i64add])
-  | ``UInt64.sub => some (2, [.op .i64sub])
-  | ``UInt64.mul => some (2, [.op .i64mul])
-  | ``UInt64.decLt => some (2, [.op .i64ltu])
-  | ``UInt64.decEq => some (2, [.op .i64eq])
-  | ``UInt64.shiftRight => some (2, [.op .i64shru])
-  | ``UInt64.toUInt32 => some (1, [.op .i32wrapi64])
-  | ``UInt32.add => some (2, [.op .i32add])
-  | ``UInt32.sub => some (2, [.op .i32sub])
-  | ``UInt32.mul => some (2, [.op .i32mul])
-  | ``UInt32.land => some (2, [.op .i32and])
-  | ``UInt32.xor => some (2, [.op .i32xor])
-  | ``UInt32.decLt => some (2, [.op .i32ltu])
-  | ``UInt32.decEq => some (2, [.op .i32eq])
-  | ``UInt32.shiftRight => some (2, [.op .i32shru])
-  | ``UInt32.toUInt64 => some (1, [.op .i64extendi32u])
-  | ``UInt8.add => some (2, [.op .i32add, .i32const 255, .op .i32and])
-  | ``UInt8.sub => some (2, [.op .i32sub, .i32const 255, .op .i32and])
-  | ``UInt8.mul => some (2, [.op .i32mul, .i32const 255, .op .i32and])
-  | ``UInt8.decLt => some (2, [.op .i32ltu])
-  | ``UInt8.decEq => some (2, [.op .i32eq])
-  | ``UInt8.land => some (2, [.op .i32and])
-  | ``UInt8.xor => some (2, [.op .i32xor])
-  | ``UInt8.shiftRight => some (2, [.op .i32shru])
-  | ``UInt8.toUInt64 => some (1, [.op .i64extendi32u])
-  | _ => none
+/-! ## The boxed-Nat lane's layout constants -/
 
 /-- THE bounded-Nat cap: 2^62 (the legacy's pinned design constant —
     a literal at/above it is a design error, refused before anything
     else is asked about it). -/
 def natCap : Nat := 4611686018427387904
 
+/-- THE BOXED OBJECT's header + payload layout: `{rc @0, tag u8 @4,
+    i64 payload @8}` — the 8-byte header slot + the 8-byte payload
+    slot (the legacy's proved offsets). THE RC SEED: the rc cell is
+    REAL now — every allocation stores rc = 1 (one reference at
+    birth), the `inc`/`dec` forms maintain it; a dec to ZERO marks the
+    object DEAD (rc=0 observable) with the slot never reused (the
+    size-class freelist is the named follow-up). -/
+def boxSize : Nat := 8 + 8
+
+/-- THE heap base: the bump arena's first object address. Cell
+    `0..4` holds the bump pointer ITSELF (the allocator's state lives
+    IN the linear memory — the module model has no globals); a
+    zeroed cell (fresh memory) bumps from here. The arena starts one
+    full box-slot in — the null region `0..boxSize` (the bump cell
+    inside it) is never allocated, so a box's payload (i64, 8-aligned)
+    always clears the cell. -/
+def heapBase : Nat := boxSize
+-- The nolint rows: these are SEMANTICALLY distinct layout rows sharing
+-- numeric values with unrelated constants (a tag VALUE is not an rc
+-- offset; a payload offset is not a closure's fnIdx slot) — the
+-- dup-body linter's opt-out, the named reason.
+@[nolint linter.guestlang.dupDefBodies "the Nat box's tag VALUE is its own boxed-Nat-model row — a shared numeric value with the rc cell's offset is coincidence, not duplication"]
+def boxTag : Nat := 0
+def boxTagOff : Nat := 4
+@[nolint linter.guestlang.dupDefBodies "the box payload's offset is its own layout row — a shared numeric value with the closure object's fnIdx slot is coincidence, not duplication"]
+def boxPayloadOff : Nat := 8
+
+/-- THE RC CELL's facts: the u32 @0, one reference at birth. -/
+-- The nolint rows: these are SEMANTICALLY distinct layout rows sharing
+-- numeric values with unrelated constants (a tag is not an rc offset;
+-- a flat-param cap is not a closure layout offset) — the dup-body
+-- linter's opt-out, the named reason.
+@[nolint linter.guestlang.dupDefBodies "the rc cell's offset is its own layout row — a shared numeric value with unrelated constants is coincidence, not duplication"]
+def rcCellOff : Nat := 0
+@[nolint linter.guestlang.dupDefBodies "the birth reference count is its own RC-discipline row — a shared numeric value with unrelated constants is coincidence, not duplication"]
+def rcInit : Nat := 1
+
+/-- THE CLOSURE OBJECT's layout (the legacy trampoline's proved
+    offsets): `{rc @0, tag 254 @4, fnIdx u32 @8, captured slots
+    @16 + i*8}`. The fnIdx is the pap callee's FUNCTION-TABLE INDEX —
+    the known-arity application calls DIRECTLY (the indirect-call
+    lane is the first-class face), so the stored index is the layout's
+    honest face; the captured slots ride the object discipline's
+    8-byte slots, width by mapped type. -/
+def closureTag : Nat := 254
+@[nolint linter.guestlang.dupDefBodies "the closure object's fnIdx slot is its own layout row (the legacy trampoline's proved offsets) — a shared numeric value is coincidence, not duplication"]
+def closureFnIdxOff : Nat := 8
+@[nolint linter.guestlang.dupDefBodies "the closure object's first captured slot is its own layout row (the legacy trampoline's proved offsets) — a shared numeric value is coincidence, not duplication"]
+def closureCapOff : Nat := 16
+def closureSize (nCap : Nat) : Nat := closureCapOff + nCap * 8
+
 /-! ## The lowering state -/
 
-/-- One lowering's state: the fvar → (local index, type) bindings,
-    the DECLARED locals beyond the params (creation order — the
-    encoder's local groups), the next fresh index, the emitted
+/-- One lowering's state: the IR variable → (local index, type row)
+    bindings, the DECLARED locals beyond the params (creation order —
+    the encoder's local groups), the next fresh index, the emitted
     instructions (accumulated REVERSED; `emitted` reverses at the
     end), the LIVE jp registrations (target → the depth offset `X`
-    with `br (d - X)` + the param locals), the decl's scalar-enum
-    registry (the prescan), and the module's sibling decl names (the
-    cross-decl call refusal's evidence). -/
+    with `br (d - X)` + the param locals), the module's SIBLING
+    registry (the cross-decl call lane's function-index discipline:
+    decl name → (function-table index, param arity) — `lowerFuncs`'s
+    decl order, a self-recursive decl's OWN index included), the
+    CLOSURE PROVENANCE (a pap-bound variable → the pap's callee name +
+    the captured (local, width) slots — function-scoped, closures are
+    read-only), and the SIG REGISTRY (the indirect-call lane's
+    type-index discipline, threaded across the decls). -/
 structure LState where
-  fvars : Std.HashMap Lean.FVarId (Nat × WasmCore.ValType) := {}
+  /-- The IR variable → (local index, the bound TYPE ROW — the
+      field-class law's key at the ctor arm, the closure-row check's
+      key at the first-class application). -/
+  fvars : Std.HashMap IR.Var (Nat × IR.Ty) := {}
   locals : List WasmCore.ValType := []
   next : Nat := 0
   out : List WasmCore.Instr := []
-  jps : Std.HashMap Lean.FVarId (Nat × List Nat) := {}
-  enums : Std.HashMap Lean.Name Unit := {}
-  sibs : List Lean.Name := []
+  jps : Std.HashMap IR.Var (Nat × List Nat) := {}
+  /-- The module's sibling registry (the CALL LANE's function-index
+      discipline): decl name → (the function-table index —
+      `lowerFuncs`'s decl order — and the param arity). -/
+  sibs : List (String × Nat × Nat) := []
+  /-- THE CLOSURE PROVENANCE (the known-arity application's
+      discipline): a pap-bound variable → (the pap's callee name, the
+      captured (local, width) slots in order). Function-scoped like
+      the locals (a second application reuses the same captured
+      locals — closures are read-only under the model). -/
+  paps : Std.HashMap IR.Var (String × List (Nat × WasmCore.ValType)) := {}
+  /-- THE SIG REGISTRY (the indirect-call lane's type-index
+      discipline): the closure signatures the first-class applications
+      need, in registration order — appended to the module's type
+      section AFTER the decl types (the application's type index =
+      the decl count + the registry position). Module-scoped: the
+      fold threads it across the decls (`lowerFuncs`). -/
+  sigs : List WasmCore.FuncType := []
   deriving Inhabited
 
 /-- The lowering monad: state threading over the closed refusal
@@ -582,50 +292,64 @@ def emitI (i : WasmCore.Instr) : M Unit :=
 def emitted : M (List WasmCore.Instr) :=
   return (← get).out.reverse
 
-/-- The type map inside the monad (the state carries the prescan's
-    enum registry). -/
-def tyMap? (e : Lean.Expr) : M (Option WasmCore.ValType) := do
-  return wasmTyOf? (← get).enums e
-
-/-- Bind a fresh local of type `t` to the fvar (the legacy
+/-- Bind a fresh local of type `t` to the IR variable (the legacy
     `bindLocal`). The index is beyond the params (params bind first,
     0..n-1), so it lands in the DECLARED list. -/
-def bindLocal (fvarId : Lean.FVarId) (t : WasmCore.ValType) : M Nat := do
+def bindLocal (v : IR.Var) (t : IR.Ty) : M Nat := do
   let s ← get
   let idx := s.next
   set { s with
-    fvars := s.fvars.insert fvarId (idx, t)
-    locals := s.locals ++ [t]
+    fvars := s.fvars.insert v (idx, t)
+    locals := s.locals ++ [tyRepr t]
     next := s.next + 1 }
   return idx
+
+/-- THE BINDING DISCIPLINE, written once: bind the result local, run
+    the allocation face (`pre` — the box/ctor/pap layouts allocate
+    BEFORE the store rides the bound slot), store. Returns the slot. -/
+private def bindStore (decl : IR.LetDecl) (pre : M Unit := pure ()) : M Nat := do
+  let l ← bindLocal decl.var decl.ty
+  pre
+  emitI (.localset l)
+  return l
 
 /-- Bind PARAM local i (index in order; NOT in the declared-locals
     list — wasmcore's `Func.locals` means locals BEYOND the params,
     and the validator/types read `params ++ locals`). -/
-def bindParam (fvarId : Lean.FVarId) (t : WasmCore.ValType) : M Nat := do
+def bindParam (v : IR.Var) (t : IR.Ty) : M Nat := do
   let s ← get
   let idx := s.next
-  set { s with fvars := s.fvars.insert fvarId (idx, t), next := s.next + 1 }
+  set { s with fvars := s.fvars.insert v (idx, t), next := s.next + 1 }
   return idx
 
-/-- Bind a fresh local of type `t` with NO fvar (the function's
-    result local — the exit-frame discipline's carrier). -/
+/-- Bind a fresh local of wasm type `t` with NO variable (the
+    function's result local — the exit-frame discipline's carrier;
+    the rc/scratch locals of the lanes). -/
 def bindFresh (t : WasmCore.ValType) : M Nat := do
   let s ← get
   let idx := s.next
   set { s with locals := s.locals ++ [t], next := s.next + 1 }
   return idx
 
-/-- The local's INDEX (the legacy `load`; unbound = the loud bug
-    diagnostic, never a fabricated index). -/
-def load (fvarId : Lean.FVarId) : M Nat := do
-  match (← get).fvars[fvarId]? with
+/-- The variable's local INDEX (the legacy `load`; unbound = the loud
+    bug diagnostic, never a fabricated index). -/
+def load (v : IR.Var) : M Nat := do
+  match (← get).fvars[v]? with
   | some (n, _) => return n
-  | none => throw (.unboundFVar fvarId.name.toString)
+  | none => throw (.unboundFVar v)
 
-/-- The fvar's BOUND type (the return-type check's lookup). -/
-def tyOf? (fvarId : Lean.FVarId) : M (Option WasmCore.ValType) := do
-  return (← get).fvars[fvarId]? |>.map (·.2)
+/-- The variable's BOUND TYPE ROW (the repr checks' lookup). -/
+def tyOf? (v : IR.Var) : M (Option IR.Ty) := do
+  return (← get).fvars[v]? |>.map (·.2)
+
+/-- The operand-type guard (the doubled-throw teeth, written once):
+    the operand's type must exist AND satisfy `ok` — else the named
+    refusal (the detail string spelled per site). -/
+private def guardTy (v : IR.Var) (ok : IR.Ty → Bool) (msg : String)
+    (detail : String) : M IR.Ty := do
+  match ← tyOf? v with
+  | some t => if ok t then pure t else throw (.typeOutsideFragment msg detail)
+  | none => throw (.typeOutsideFragment msg detail)
 
 /-- Run `act` with a FRESH output buffer, returning the emitted
     instructions in order while KEEPING the bindings, the
@@ -641,112 +365,694 @@ def scopedOut (act : M Unit) : M (List WasmCore.Instr) := do
 
 /-! ## The argument + let emission -/
 
-/-- Emit one argument's load (LCNF is ANF: a real arg is always an
-    fvar; an erased arg pushes nothing — the legacy `emitArg`). -/
-def emitArg : Arg .impure → M Unit
-  | .fvar fvarId => do emitI (.localget (← load fvarId))
+/-- Emit one argument's load (the IR is ANF: a real arg is always a
+    variable; an erased arg pushes nothing — the legacy `emitArg`). -/
+def emitArg : IR.Arg → M Unit
+  | .var v => do emitI (.localget (← load v))
   | .erased => pure ()
-  | .type .. => throw (.argShape "a type argument")
+  | .typeArg => throw (.argShape "a type argument")
 
-/-- The literal kinds' rendering (LitValue has no Repr — the closed
-    universe's explicit spellings). -/
-def litKind : LitValue → String
-  | .nat _ => "nat" | .str _ => "str" | .uint8 _ => "uint8"
-  | .uint16 _ => "uint16" | .uint32 _ => "uint32" | .uint64 _ => "uint64"
-  | .usize _ => "usize"
+/-! ## The boxed-Nat lane (the object discipline's seed) -/
 
-/-- THE `let` lowering (the legacy `emitLet`'s slice, grown): the
-    scalar literals, the copy, the payload-free-ctor tag, and the
-    `binop?` faps; every other value form refuses with its named
-    boundary. -/
-def emitLet (decl : LetDecl .impure) : M Unit := do
-  let ty? ← tyMap? decl.type
+/-- THE BUMP ALLOCATOR (inlined per allocation site): read the bump
+    pointer from cell 0; the object's ADDRESS is the bump pointer
+    itself (`max p heapBase` — a zeroed cell, fresh memory, allocates
+    at `heapBase`); the bump then advances PAST the object
+    (`addr + sz`) — the next allocation starts at this object's end,
+    never inside it (the allocator's non-overlap law: object k occupies
+    `addr .. addr + sz`, and the next object's base is exactly `addr +
+    sz`). THE RC DISCIPLINE rides the allocation (rc = 1 at birth,
+    the `inc`/`dec`/`del` forms maintain the cell); the memory is
+    never REUSED (the size-class freelist is the named boundary — the
+    leak is bounded by the arena's one page; an exhausted arena is
+    the bounded-memory `memOOB` trap, never corruption).
+    Returns the scratch local holding the address (also left on the
+    stack). -/
+def allocSeq (sz : Nat) : M Nat := do
+  let s ← bindFresh .i32
+  -- addr = max(p, heapBase): stack [p, base, cond] — the executor's
+  -- select keeps the value just under the condition (base) when the
+  -- condition holds (p < base, fresh memory), the deeper one (p) else.
+  emitI (.i32const 0); emitI (.mem .i32load 0 none)              -- p (deepest)
+  emitI (.i32const heapBase)                                     -- base
+  emitI (.i32const 0); emitI (.mem .i32load 0 none)              -- p (top-1)
+  emitI (.i32const heapBase); emitI (.op .i32ltu)                -- p < base
+  emitI .select                                                  -- addr
+  emitI (.localset s)
+  -- bump = addr + sz (the NEXT object's base — the object occupies
+  -- addr .. addr + sz; the bump lands exactly past its last byte)
+  emitI (.i32const 0)                                            -- the address
+  emitI (.localget s); emitI (.i32const sz); emitI (.op .i32add) -- addr + sz
+  emitI (.mem .i32store 0 none)                                  -- bump = addr + sz
+  -- THE RC DISCIPLINE: one reference at birth (the `inc`/`dec`/`del`
+  -- forms maintain the cell); NO REUSE — the size-class freelist is
+  -- the named follow-up (a dead object's slot is never reallocated)
+  emitI (.localget s)
+  emitI (.i32const rcInit)
+  emitI (.mem .i32store rcCellOff none)
+  emitI (.localget s)
+  return s
+
+/-- Store the Nat box's tag (u8 @4). -/
+def storeBoxTag (ptr : Nat) : M Unit := do
+  emitI (.localget ptr); emitI (.i32const boxTag)
+  emitI (.mem .i32store8 boxTagOff none)
+
+/-- Store the Nat box's payload from a local (i64 @8). -/
+def storeBoxPayload (ptr r : Nat) : M Unit := do
+  emitI (.localget ptr); emitI (.localget r)
+  emitI (.mem .i64store boxPayloadOff none)
+
+/-- Store the Nat box's payload from a literal (the literal-box
+    lane). -/
+def storeBoxPayloadLit (ptr : Nat) (v : Nat) : M Unit := do
+  emitI (.localget ptr); emitI (.i64const v)
+  emitI (.mem .i64store boxPayloadOff none)
+
+/-- THE RUNTIME OVERFLOW DISCIPLINE's shape: emit
+    `block [cond, brif 0, unreach]` — the condition TRUE exits the
+    block (the ok path); falling through hits `unreach` (the trap).
+    The 2^62 cap holds at runtime: a breach TRAPS loudly, never wraps
+    silently (the boxed-Nat model's honesty, the runtime face). The
+    `br 0` is frame-relative — the discipline composes under any
+    surrounding nesting. -/
+def trapUnless (cond : List WasmCore.Instr) : M Unit :=
+  emitI (.block (cond ++ [.brif 0, .unreach]))
+
+/-- THE RC OP (the Perceus discipline's seed face): the rc cell's REAL
+    arithmetic — `inc` adds n, `dec` subtracts n under the OVER-DEC
+    GUARD (rc ≥ n or the unreach trap: a dec past zero is a
+    use-after-free bug, never a silent wrap). The target local must
+    hold an OBJECT-repr value (the rc cell lives @0 of the object);
+    the VAR face (`rcOp`) checks the bound row, THIS face is the
+    CASCADE's (a ref field's pointer loaded into a scratch local). NO
+    REUSE: a dec to zero leaves rc=0 — the DEAD object is observable,
+    its slot is never reclaimed (the size-class freelist is the named
+    follow-up; the leak is bounded by the arena's page). -/
+def rcOpLoc (_op : String) (ptr : Nat) (n : Nat) (isInc : Bool) : M Unit := do
+  emitI (.localget ptr); emitI (.mem .i32load rcCellOff none)
+  let rc ← bindFresh .i32
+  emitI (.localset rc)
+  unless isInc do
+    -- the over-dec guard: NOT (rc <u n) — a breach traps loudly
+    trapUnless [.localget rc, .i32const n, .op .i32ltu, .op .i32eqz]
+  emitI (.localget rc); emitI (.i32const n)
+  emitI (.op (if isInc then .i32add else .i32sub))
+  let rc' ← bindFresh .i32
+  emitI (.localset rc')
+  emitI (.localget ptr); emitI (.localget rc')
+  emitI (.mem .i32store rcCellOff none)
+
+/-- The VAR face: the bound row must be OBJECT-repr (the rc cell lives
+    @0 of the object); a u64 scalar is the named `rcOnScalar`
+    inconsistency. -/
+def rcOp (op : String) (v : IR.Var) (n : Nat) (isInc : Bool) : M Unit := do
+  match ← tyOf? v with
+  | some t =>
+      if tyRepr t == .i32 then
+        rcOpLoc op (← load v) n isInc
+      else
+        throw (.rcOnScalar op)
+  | none => throw (.rcOnScalar op)
+
+/-- THE IN-PLACE WRITE's LEGALITY (the mutation family's rc=1
+    discipline): the target object's rc must be exactly ONE at the
+    write — a SHARED cell's in-place write would corrupt every other
+    reference's view (the loud unreach trap, never a silent write).
+    Compile-time uniqueness tracking does not exist in this slice (the
+    Perceus borrow analysis is the named follow-up), so the guard is
+    the RUNTIME teeth; the copy-on-shared discipline is the named
+    follow-up. -/
+def rcUnique (ptr : Nat) : M Unit := do
+  trapUnless [.localget ptr, .mem .i32load rcCellOff none
+             , .i32const 1, .op .i32eq]
+
+/-- Both args' payloads loaded into fresh i64 scratch locals (the
+    boxed-Nat faps' read discipline: ANF variable args, the payload
+    i64 @8). -/
+def loadPayloads (args : Array IR.Arg) : M (Nat × Nat) := do
+  let mut ps : List Nat := []
+  for a in args do
+    match a with
+    | .var _ =>
+        emitArg a
+        emitI (.mem .i64load boxPayloadOff none)
+        let s ← bindFresh .i64
+        emitI (.localset s)
+        ps := ps ++ [s]
+    | _ => throw (.argShape "a boxed-Nat fap argument (ANF demands an fvar)")
+  match ps with
+  | [x, y] => pure (x, y)
+  | _ => throw (.argShape "a boxed-Nat fap argument")
+
+/-- The compare rows' emission: the payloads' UNSIGNED machine
+    compare (a Nat's payload IS its magnitude; the cap keeps
+    signed/unsigned equal) → the raw i32 Bool. -/
+def natCompare (o : WasmCore.Op) (x y : Nat) : M Unit := do
+  emitI (.localget x); emitI (.localget y); emitI (.op o)
+
+/-- The arith rows' box face: bind the result (an object pointer),
+    allocate the fresh box, store tag + payload (Nats are immutable
+    under the model — every arith result is a NEW box). -/
+def boxFromPayload (decl : IR.LetDecl) (r : Nat) : M Unit := do
+  let l ← bindStore decl do let _p ← allocSeq boxSize; pure ()
+  storeBoxTag l
+  storeBoxPayload l r
+
+/-- THE BOXED-NAT FAP LANE (the legacy's fap arms, inline-lowered).
+    All rows arity 2 over the PAYLOADS (the boxes' i64 @8); the
+    compares answer the raw i32 Bool, the arith allocates fresh
+    boxes under the runtime cap discipline. -/
+def emitNatFap (k : IR.NatFap) (decl : IR.LetDecl)
+    (args : Array IR.Arg) : M Unit := do
+  let (x, y) ← loadPayloads args
+  match k with
+  | .decEq | .beq | .decLt | .decLe =>
+      let l ← bindLocal decl.var decl.ty
+      match k with
+      | .decEq | .beq => natCompare .i64eq x y
+      | .decLt => natCompare .i64ltu x y
+      | .decLe => natCompare .i64leu x y
+      | _ => pure ()
+      emitI (.localset l)
+  | .add | .sub | .mul =>
+      match k with
+      | .add =>
+          emitI (.localget x); emitI (.localget y); emitI (.op .i64add)
+          let r ← bindFresh .i64
+          emitI (.localset r)
+          -- both payloads < 2^62 ⇒ the true sum < 2^63 — no u64 wrap,
+          -- the cap check is EXACT
+          trapUnless [.localget r, .i64const natCap, .op .i64ltu]
+          boxFromPayload decl r
+      | .sub =>
+          -- a − b with a < b would wrap (u64) — the trap fires first
+          trapUnless [.localget x, .localget y, .op .i64ltu, .op .i32eqz]
+          emitI (.localget x); emitI (.localget y); emitI (.op .i64sub)
+          let r ← bindFresh .i64
+          emitI (.localset r)
+          -- x < 2^62 ⇒ x − y < 2^62 — no cap check needed (the
+          -- underflow trap above is the only wrap risk)
+          boxFromPayload decl r
+      | .mul =>
+          -- THE 128-BIT GUARD. x = xh·2³² + xl, y = yh·2³² + yl; the
+          -- four quarter products give the full product's high word:
+          -- high = hh + ((ll>>32) + lh + hl)>>32 ≠ 0 ⟺ the true product
+          -- passed 2^64 (the u64 result is a wrap-masquerade —
+          -- e.g. 2⁴¹·2⁴¹ wraps to 0). Bounds: payloads < 2^62 ⇒
+          -- xh,yh < 2^30 ⇒ ll,lh,hl < 2^62 ⇒ t < 2^63 (no wrap),
+          -- hh < 2^60.
+          emitI (.localget x); emitI (.i64const 32); emitI (.op .i64shru)
+          let xh ← bindFresh .i64
+          emitI (.localset xh)
+          emitI (.localget y); emitI (.i64const 32); emitI (.op .i64shru)
+          let yh ← bindFresh .i64
+          emitI (.localset yh)
+          emitI (.localget x); emitI (.localget xh)
+          emitI (.i64const 4294967296); emitI (.op .i64mul); emitI (.op .i64sub)
+          let xl ← bindFresh .i64
+          emitI (.localset xl)
+          emitI (.localget y); emitI (.localget yh)
+          emitI (.i64const 4294967296); emitI (.op .i64mul); emitI (.op .i64sub)
+          let yl ← bindFresh .i64
+          emitI (.localset yl)
+          emitI (.localget xl); emitI (.localget yl); emitI (.op .i64mul)
+          let ll ← bindFresh .i64
+          emitI (.localset ll)
+          emitI (.localget xh); emitI (.localget yl); emitI (.op .i64mul)
+          let lh ← bindFresh .i64
+          emitI (.localset lh)
+          emitI (.localget xl); emitI (.localget yh); emitI (.op .i64mul)
+          let hl ← bindFresh .i64
+          emitI (.localset hl)
+          emitI (.localget xh); emitI (.localget yh); emitI (.op .i64mul)
+          let hh ← bindFresh .i64
+          emitI (.localset hh)
+          emitI (.localget ll); emitI (.i64const 32); emitI (.op .i64shru)
+          emitI (.localget lh); emitI (.op .i64add)
+          emitI (.localget hl); emitI (.op .i64add)
+          let t ← bindFresh .i64
+          emitI (.localset t)
+          emitI (.localget hh); emitI (.localget t)
+          emitI (.i64const 32); emitI (.op .i64shru); emitI (.op .i64add)
+          let hi ← bindFresh .i64
+          emitI (.localset hi)
+          -- r = the u64 product (the true low word when hi = 0)
+          emitI (.localget x); emitI (.localget y); emitI (.op .i64mul)
+          let r ← bindFresh .i64
+          emitI (.localset r)
+          -- the guard: hi = 0 AND the low word under the cap
+          trapUnless [.localget hi, .i64const 0, .op .i64eq
+                     , .localget r, .i64const natCap, .op .i64ltu
+                     , .op .i32and]
+          boxFromPayload decl r
+      | _ => pure ()
+
+/-! ## The op surface (the IR's Binop rows → the wasm instructions) -/
+
+/-- THE OP SURFACE (the legacy `binop?`'s row set, grown): the IR's
+    `Binop` rows → the wasm instruction sequences. The closed row set
+    is the legacy's proven surface grown by the probe-mined rows; the
+    FRONTEND refuses a fap outside it (the named boundary — never a
+    silent wrong lowering). The u8 arith rows end in the `and 0xFF`
+    mask (i32 arithmetic wraps mod 2^32; a `UInt8` wraps mod 2^8).
+    Ops are consumed from `WasmCore.OpTable`'s projections everywhere
+    downstream (the ONE table, 07-extensibility R6). -/
+def binopSeq : IR.Binop → List WasmCore.Instr
+  | .u64add => [.op .i64add]
+  | .u64sub => [.op .i64sub]
+  | .u64mul => [.op .i64mul]
+  | .u64ltu => [.op .i64ltu]
+  | .u64eq => [.op .i64eq]
+  | .u64shru => [.op .i64shru]
+  | .u64wrap => [.op .i32wrapi64]
+  | .u32add => [.op .i32add]
+  | .u32sub => [.op .i32sub]
+  | .u32mul => [.op .i32mul]
+  | .u32and => [.op .i32and]
+  | .u32xor => [.op .i32xor]
+  | .u32ltu => [.op .i32ltu]
+  | .u32eq => [.op .i32eq]
+  | .u32shru => [.op .i32shru]
+  | .u32ext => [.op .i64extendi32u]
+  | .u8add => [.op .i32add, .i32const 255, .op .i32and]
+  | .u8sub => [.op .i32sub, .i32const 255, .op .i32and]
+  | .u8mul => [.op .i32mul, .i32const 255, .op .i32and]
+  | .u8ltu => [.op .i32ltu]
+  | .u8eq => [.op .i32eq]
+  | .u8and => [.op .i32and]
+  | .u8xor => [.op .i32xor]
+  | .u8shru => [.op .i32shru]
+  | .u8ext => [.op .i64extendi32u]
+
+/-! ## The literal rendering + the let emission -/
+
+/-- THE `let` lowering (the legacy `emitLet`'s slice, grown): the IR
+    value forms — the scalar literals, the copy, the boxed-Nat lane,
+    the op surface, the sibling call, the closure application, the
+    ctor faces, the field reads, the scalar-box lane, the RC seed's
+    let-adjacent forms. The FRONTEND already refused what the IR
+    cannot express; every refusal HERE is a wasm-model decision (the
+    cap, the provenance, the arity discipline) or a lowering-internal
+    inconsistency (an unbound variable). -/
+def emitLet (decl : IR.LetDecl) : M Unit := do
   match decl.value with
-  | .lit (.uint64 v) =>
-      let l ← bindLocal decl.fvarId .i64
-      emitI (.i64const v.toNat); emitI (.localset l)
-  | .lit (.uint32 v) | .lit (.uint8 v) =>
-      let l ← bindLocal decl.fvarId .i32
-      emitI (.i32const v.toNat); emitI (.localset l)
-  | .lit (.nat v) =>
-      -- THE BOUNDED-NAT BOUNDARY. The cap check is the model's pinned
+  | .litU64 v =>
+      let l ← bindLocal decl.var .u64
+      emitI (.i64const v); emitI (.localset l)
+  | .litU32 v | .litU8 v =>
+      let _l ← bindStore decl (emitI (.i32const v))
+  | .litNat v =>
+      -- THE BOXED-NAT LANE. The cap check is the model's pinned
       -- behavior (a literal at/above 2^62 is a design error — the
-      -- legacy discipline, ported); below the cap, the boxed-Nat lane
-      -- itself is the named follow-up (no allocator in this slice).
+      -- legacy discipline, ported; the REAL pipeline's constant
+      -- folding delivers statically-overflowing arithmetic as exactly
+      -- such a literal). Below the cap: the runtime repr is a BOX —
+      -- {rc reserved, tag 0, payload i64 @8} — allocated in the bump
+      -- arena (no RC: never freed within a run — the named boundary).
       if v >= natCap then
         throw (.natLitCap v)
-      else
-        throw (.natLane v)
-  | .lit v =>
-      throw (.typeOutsideFragment "literal kind"
-        s!"{litKind v} (only uint64/uint32/uint8 (+ Nat, refused) are modeled)")
-  | .erased =>
-      -- binds nothing; an erased arg pushes nothing (the legacy arm)
-      pure ()
-  | .fvar fvarId args =>
-      if args.isEmpty then
-        match ty? with
-        | some t =>
-            let l ← bindLocal decl.fvarId t
-            emitI (.localget (← load fvarId)); emitI (.localset l)
-        | none =>
-            throw (.typeOutsideFragment "copy type" (toString decl.type))
-      else
-        throw (.unsupportedConstruct "closure application (fvar with args)"
-          "the closure model (pap/trampolines) is the named follow-up")
-  | .fap fn args =>
-      match binop? fn with
-      | some (nargs, instrs) =>
-          -- the legacy's arg order: args emitted left to right, the op
-          -- pops the row's sig — `semOp`'s convention consumes them
-          -- (first popped first)
-          if args.size != nargs then
-            throw (.unsupportedConstruct s!"fap {fn}"
-              s!"arity {args.size} on a row of arity {nargs}")
-          for a in args do emitArg a
-          match ty? with
-          | none =>
-              throw (.typeOutsideFragment "fap result type" (toString decl.type))
-          | some t =>
-              let l ← bindLocal decl.fvarId t
-              instrs.forM emitI
-              emitI (.localset l)
+      else do
+        let l ← bindStore decl do let _p ← allocSeq boxSize; pure ()
+        storeBoxTag l
+        storeBoxPayloadLit l v
+  | .copy v =>
+      let _l ← bindStore decl (emitI (.localget (← load v)))
+  | .apply f args =>
+      -- THE CLOSURE APPLICATION (the known-arity discipline): the
+      -- applied variable must carry pap provenance (the lowering
+      -- state's `paps`); captured + fresh must total the callee's
+      -- arity; the call lowers DIRECTLY to the callee's function-table
+      -- index with the captured locals pushed FIRST, then the fresh
+      -- args (the executor's param-i-to-local-i convention verbatim).
+      match (← get).paps[f]? with
       | none =>
-          if (← get).sibs.contains fn then
-            throw (.declCall fn.toString)
-          else
+          -- THE FIRST-CLASS APPLICATION (the indirect-call lane):
+          -- the applied variable is an OPAQUE CLOSURE VALUE (the
+          -- tobj/obj rows; the fnIdx @8 IS the table index). A
+          -- non-closure applied (a scalar/boxed-scalar variable)
+          -- refuses — never a silent wrong dispatch. The call: the
+          -- fresh args push left to right, then the closure's fnIdx
+          -- loads from @8 (the i32 on top), then `callindirect` at
+          -- the SIGNATURE's type index — the signature (the fresh
+          -- args' reprs → the result repr) registers in the module's
+          -- type section (the sig registry, `sigs`); the EXECUTOR's
+          -- table discipline does the runtime type check (a
+          -- mismatched entry — e.g. a partial pap applied first-class
+          -- — traps `indirectSig`, an out-of-bounds index traps
+          -- `tabOOB`, never a wrong call).
+          match ← tyOf? f with
+          | some fty =>
+              if fty.isClosureRow then
+                let mut argTys : List WasmCore.ValType := []
+                for a in args do
+                  match a with
+                  | .var af =>
+                      match ← tyOf? af with
+                      | some t => argTys := argTys ++ [tyRepr t]
+                      | none =>
+                          throw (.argShape "an untyped closure-application \
+                            arg (the signature would skew)")
+                  | .erased =>
+                      throw (.argShape "an erased closure-application arg \
+                        (the stack would skew)")
+                  | .typeArg => throw (.argShape "a closure-application type argument")
+                let sig : WasmCore.FuncType := ⟨argTys, [tyRepr decl.ty]⟩
+                let s ← get
+                let (k, sigs) := sigRegister s.sigs sig
+                set { s with sigs := sigs }
+                let tyIdx := s.sibs.length + k
+                for a in args do emitArg a
+                emitI (.localget (← load f))
+                emitI (.mem .i32load closureFnIdxOff none)
+                emitI (.callindirect tyIdx)
+                let _l ← bindStore decl
+              else
+                -- the honesty: a non-closure applied refuses (a
+                -- scalar/boxed-scalar variable has no fnIdx @8 — the
+                -- dispatch would be garbage)
+                throw (.closureApplyUnknown f)
+          | none =>
+              throw (.closureApplyUnknown f)
+      | some (fn, caps) =>
+          match (← get).sibs.lookup fn with
+          | none => throw (.papUnknownFn fn)
+          | some (idx, arity) =>
+              if caps.length + args.size != arity then
+                throw (.closureApplyArityDrift fn
+                  (caps.length + args.size) arity)
+              for (loc, _t) in caps do emitI (.localget loc)
+              for a in args do
+                match a with
+                | .erased =>
+                    throw (.argShape "an erased closure-application arg \
+                      (the stack would skew)")
+                | _ => emitArg a
+              emitI (.call idx)
+              let _l ← bindStore decl
+  | .natFap k args =>
+      -- THE BOXED-NAT FAP ROWS first (the legacy's fap dispatch
+      -- order): the sanctioned Nat surface inline-lowers over the
+      -- boxes' payloads. (The name-level dispatch + the arity
+      -- refusal live at the frontend; this defensive check fires
+      -- only on a hand-written IR.)
+      if args.size != 2 then
+        throw (.unsupportedConstruct "natFap"
+          s!"arity {args.size} on a boxed-Nat row of arity 2")
+      emitNatFap k decl args
+  | .binop op args =>
+      -- THE OP SURFACE: the reified row's instructions (the legacy's
+      -- arg order: args emitted left to right, the op pops the row's
+      -- sig — `semOp`'s convention consumes them, first popped
+      -- first). (The name-level dispatch + the arity refusal live at
+      -- the frontend; this defensive check fires only on a
+      -- hand-written IR.)
+      if args.size != IR.Binop.arity op then
+        throw (.unsupportedConstruct "binop"
+          s!"arity {args.size} on a row of arity {IR.Binop.arity op}")
+      for a in args do emitArg a
+      let _l ← bindStore decl ((binopSeq op).forM emitI)
+  | .call fn args =>
+      -- THE CROSS-DECL CALL LANE: a `call` naming a KNOWN sibling
+      -- decl lowers to wasm `call` at the callee's function-table
+      -- index (`lowerFuncs`'s decl order — a SELF-recursive decl
+      -- calls its OWN index; the recursion's bound is the executor's
+      -- fuel honesty, never a fabricated termination). The
+      -- marshalling is the EXECUTOR'S calling convention exactly (the
+      -- validator's `call` row is the shared contract): the args push
+      -- LEFT TO RIGHT (param 0 first), the executor pops against
+      -- `ft.params.reverse` and binds `param i → local i` — the
+      -- legacy `for a in args do emitArg a` discipline verbatim. The
+      -- return: the callee's exit-frame discipline leaves the result
+      -- on the callee's final stack; the call boundary joins it over
+      -- the caller's retained stack, so the `localset` right here
+      -- reads it — every value crossing the call rides a LOCAL on
+      -- BOTH sides. The frontend's fap dispatch delivers a `call`
+      -- ONLY for a known sibling; an unknown name here is the op-
+      -- surface refusal (the hand-written IR's honesty face).
+      match (← get).sibs.lookup fn with
+      | some (idx, arity) =>
+          if args.size != arity then
             throw (.unsupportedConstruct s!"fap {fn}"
-              "the primitive op surface (binop?) — everything else is the \
-               named follow-up")
-  | .ctor info args =>
-      -- THE TAG DISCIPLINE's value face: a payload-free ctor's value
-      -- IS the unboxed tag (the same repr the cases branch on).
-      if info.isScalar && args.isEmpty then
-        match ty? with
-        | some t =>
-            let l ← bindLocal decl.fvarId t
-            emitI (.i32const info.cidx); emitI (.localset l)
-        | none =>
-            throw (.typeOutsideFragment "ctor type" (toString decl.type))
+              s!"arity {args.size} on a decl of arity {arity}")
+          for a in args do
+            match a with
+            | .erased =>
+                throw (.argShape "an erased call argument (the scalar \
+                  fragment's args are fvars — the stack would skew)")
+            | _ => emitArg a
+          emitI (.call idx)
+          let _l ← bindStore decl
+      | none =>
+          throw (.unsupportedConstruct s!"fap {fn}"
+            "the primitive op surface (binop?) — everything else is the \
+             named follow-up")
+  | .ctor cidx args =>
+      -- THE CTOR VALUE's two faces, keyed on the RESULT TYPE's row
+      -- (the pipeline's impure-type law: an ENUM type's ctor value is
+      -- a SCALAR — the u8/u16/u32 repr, the value IS the tag — while
+      -- an OBJECT type's ctor value is a POINTER, even a payload-free
+      -- one: the runtime's `lean_box`, an 8-byte {rc, tag} object,
+      -- because the tag dispatch reads the tag @4 from MEMORY). The
+      -- type row decides.
+      if decl.ty.isObjRow then
+        -- THE OBJECT FACE: allocate the object — header {rc reserved
+        -- @0, tag @4} — then store the fields at the PIPELINE'S
+        -- PACKING-LAW coordinates (refs first, one 8-byte slot each;
+        -- the scalar region after them, packed by size class largest
+        -- first) — the same coordinates the field-binding reads ride
+        -- (the oproj lane's @8+i*8, the sproj lane's 8+n*8+off). Every
+        -- arg must be a variable with a bound type and a FIELD CLASS
+        -- (an unclassifiable field — an enum/Bool/Char repr —
+        -- refuses, `ctorFieldClass`). THE RC SEED: the allocation
+        -- inits rc=1 (one reference at birth) and the `inc`/`dec`
+        -- forms maintain the cell — but no REUSE (the size-class
+        -- freelist is the named follow-up; the object is never
+        -- reclaimed within a run).
+        if args.all (fun a => match a with | .var _ => true | _ => false) then
+          let mut fs : List (Nat × FieldClass) := []
+          let mut ok := true
+          let mut badTy := ""
+          for a in args do
+            match a with
+            | .var v =>
+                match ← tyOf? v with
+                | some t =>
+                    match fieldClass? t with
+                    | some cl => fs := fs ++ [(← load v, cl)]
+                    | none => ok := false; badTy := t.render
+                | none => ok := false
+            | _ => ok := false
+          if !ok then
+            throw (.ctorFieldClass badTy)
+          -- the packing law: the ref fields take the slots 0..nRefs-1
+          -- in order; the scalar region rides base slot nRefs, packed
+          -- by size class (each scalar's within-region offset =
+          -- `scalarOff` over the scalars before it)
+          let nRefs := (fs.filter (fun p => p.2 == FieldClass.obj)).length
+          let mut pre : List FieldClass := []
+          let mut rows : List (Nat × FieldClass × Nat) := []
+          for (argLoc, cl) in fs do
+            match cl with
+            | .obj => rows := rows ++ [(argLoc, cl, 0)]
+            | _ =>
+                rows := rows ++ [(argLoc, cl, scalarOff pre cl)]
+                pre := pre ++ [cl]
+          let ssize := pre.foldl (fun n c => n + fieldSize c) 0
+          let l ← bindStore decl do let _p ← allocSeq (8 + nRefs * 8 + ssize); pure ()
+          emitI (.localget l); emitI (.i32const cidx)
+          emitI (.mem .i32store8 boxTagOff none)
+          let mut refs := 0
+          for (argLoc, cl, off) in rows do
+            emitI (.localget l)
+            emitI (.localget argLoc)
+            let slot := match cl with | .obj => refs | _ => nRefs
+            let addr := 8 + slot * 8 + off
+            match cl with
+            | .obj => emitI (.mem .i32store addr none); refs := refs + 1
+            | .u64 => emitI (.mem .i64store addr none)
+            | .u32 => emitI (.mem .i32store addr none)
+            | .u8 => emitI (.mem .i32store8 addr none)
+        else
+          throw (.unsupportedConstruct "ctor"
+            "the object face (fvar args; erased args are the named follow-up)")
       else
-        throw (.unsupportedConstruct "ctor"
-          "the boxed-object model (allocation + the memory layout)")
-  | .pap .. =>
-      throw (.unsupportedConstruct "pap"
-        "the closure model (partial applications/trampolines)")
-  | .proj .. | .oproj .. | .uproj .. | .sproj .. =>
-      throw (.unsupportedConstruct "projection"
-        "the boxed-object model (the memory layout reads)")
-  | .box .. =>
-      throw (.unsupportedConstruct "box" "the boxed-object model")
-  | .unbox .. =>
-      throw (.unsupportedConstruct "unbox" "the boxed-object model")
-  | .reset .. | .reuse .. | .isShared .. =>
-      throw (.unsupportedConstruct "Perceus reset/reuse/isShared"
-        "the object model (no object enters this fragment)")
-  | .const .. =>
-      throw (.unsupportedConstruct "const"
-        "top-level closure constants (the closure model)")
+        -- THE TAG DISCIPLINE's value face: a payload-free ctor's value
+        -- IS the unboxed tag (the same repr the scalar lane branches
+        -- on).
+        unless args.isEmpty do
+          throw (.unsupportedConstruct "ctor"
+            "a ctor with fields of scalar-row result type — an enum repr \
+             has no fields (the layout law's classification)")
+        let _l ← bindStore decl (emitI (.i32const cidx))
+  | .pap fn args =>
+      -- THE CLOSURE DISCIPLINE's allocation face: the pap allocates
+      -- the closure object — {rc (init 1 by allocSeq), tag 254, fnIdx
+      -- (the callee's function-table index), captured slots @16 + i*8}
+      -- — and records the PROVENANCE (the known-arity application
+      -- reads it back; the closure object is the honest layout riding
+      -- the landed object discipline, the legacy trampoline's proved
+      -- offsets).
+      match (← get).sibs.lookup fn with
+      | none => throw (.papUnknownFn fn)
+      | some (_idx, arity) =>
+          if args.size >= arity then
+            throw (.papArityDrift fn args.size arity)
+          let mut caps : List (Nat × WasmCore.ValType) := []
+          for a in args do
+            match a with
+            | .var v =>
+                match ← tyOf? v with
+                | some t => caps := caps ++ [(← load v, tyRepr t)]
+                | none =>
+                    throw (.typeOutsideFragment "pap captured arg type"
+                      (IR.Ty.render decl.ty))
+            | .erased =>
+                throw (.argShape "a pap captured argument (the stack would skew)")
+            | .typeArg => throw (.argShape "a pap type argument")
+          if tyRepr decl.ty == .i32 then
+            let l ← bindStore decl do let _p ← allocSeq (closureSize args.size); pure ()
+            emitI (.localget l); emitI (.i32const closureTag)
+            emitI (.mem .i32store8 boxTagOff none)
+            emitI (.localget l); emitI (.i32const _idx)
+            emitI (.mem .i32store closureFnIdxOff none)
+            let mut slot := 0
+            for (loc, ft) in caps do
+              emitI (.localget l); emitI (.localget loc)
+              if ft == .i64 then
+                emitI (.mem .i64store (closureCapOff + slot * 8) none)
+              else
+                emitI (.mem .i32store (closureCapOff + slot * 8) none)
+              slot := slot + 1
+            modify fun s =>
+              { s with paps := s.paps.insert decl.var (fn, caps) }
+          else
+            throw (.typeOutsideFragment
+              "pap result type (the closure object's pointer)"
+              (IR.Ty.render decl.ty))
+  | .sproj n offset v =>
+      -- THE OBJECT SEED's read face: the scalar region's coordinates
+      -- — the load at `8 + n*8 + offset` (the pipeline's spelling:
+      -- n = the region's base slot, offset = the packed byte offset;
+      -- the hand-built face spells the slot directly, offset 0 — the
+      -- SAME formula); the load width from the RESULT's row (u64 →
+      -- i64load, a u8 field → i32load8 — the packing law's 1-byte
+      -- class, the rest i32load).
+      let _l ← bindStore decl do
+        emitI (.localget (← load v))
+        let base := 8 + n * 8 + offset
+        match decl.ty with
+        | .u64 => emitI (.mem .i64load base none)
+        | .u8 => emitI (.mem .i32load8u base none)
+        | _ => emitI (.mem .i32load base none)
+  | .oproj i v =>
+      -- THE REF-FIELD READ (the tag dispatch's payload lane): field
+      -- i's 8-byte slot @8 + i*8 — the packing law's ref coordinates,
+      -- the SAME ones the ctor face writes; the pipeline's
+      -- field-binding lets (the cons arm's `head := oproj[0] l`) read
+      -- them. The value is a POINTER (the i32 repr).
+      let vt ← guardTy v (fun t => tyRepr decl.ty == .i32 && tyRepr t == .i32)
+        "oproj operand types (the base's object repr, the field's pointer result)"
+        s!"{IR.Ty.render decl.ty} ← field {i}"
+      let _ := vt
+      let _l ← bindStore decl do
+        emitI (.localget (← load v))
+        emitI (.mem .i32load (8 + i * 8) none)
+  | .box bty v =>
+      -- THE SCALAR-BOX LANE (the `box` value form): a scalar's box IS
+      -- the landed boxed-Nat layout ({rc init 1, tag 0, payload @8})
+      -- — the width from the boxed row. An OBJECT-row boxed type
+      -- (nat/tobj/tagged/obj) is the IDENTITY copy: the value IS the
+      -- box already under the model (the real pipeline's
+      -- `_boxed_const_1` shape boxes a SCALAR — the probe's observed
+      -- `box ty=UInt64`).
+      if bty.isObjRow then
+        let _vt ← guardTy v (fun t => tyRepr t == .i32)
+          "box (object-row) operand types"
+          s!"{IR.Ty.render bty} ← {IR.Ty.render decl.ty}"
+        let l ← bindStore decl (emitI (.localget (← load v)))
+        let _ := l
+      else
+        match ← tyOf? v, tyRepr bty, tyRepr decl.ty with
+        | some vt, .i64, .i32 =>
+            if tyRepr vt == .i64 then
+              let src ← load v
+              let l ← bindStore decl do let _p ← allocSeq boxSize; pure ()
+              storeBoxTag l
+              storeBoxPayload l src
+            else
+              throw (.typeOutsideFragment "box operand types (the boxed \
+                scalar's width, the result's pointer repr, the source \
+                local's bound width)"
+                s!"{IR.Ty.render bty} → {IR.Ty.render decl.ty}")
+        | some vt, .i32, .i32 =>
+            if tyRepr vt == .i32 then
+              let src ← load v
+              let l ← bindLocal decl.var decl.ty
+              let _p ← allocSeq boxSize
+              emitI (.localset l)
+              storeBoxTag l
+              emitI (.localget l); emitI (.localget src)
+              emitI (.mem .i32store boxPayloadOff none)
+            else
+              throw (.typeOutsideFragment "box operand types (the boxed \
+                scalar's width, the result's pointer repr, the source \
+                local's bound width)"
+                s!"{IR.Ty.render bty} → {IR.Ty.render decl.ty}")
+        | _, _, _ =>
+            throw (.typeOutsideFragment "box operand types (the boxed \
+              scalar's width, the result's pointer repr, the source \
+              local's bound width)"
+              s!"{IR.Ty.render bty} → {IR.Ty.render decl.ty}")
+  | .unbox v =>
+      -- THE SCALAR-BOX's read face: the payload @8, the width from
+      -- the RESULT's row (the `_lam._boxed` adapters' unbox shape).
+      -- The operand must be OBJECT-repr (the box pointer).
+      match ← tyOf? v with
+      | some vt =>
+          match tyRepr vt, tyRepr decl.ty with
+          | .i32, .i64 =>
+              let l ← bindLocal decl.var decl.ty
+              emitI (.localget (← load v))
+              emitI (.mem .i64load boxPayloadOff none)
+              emitI (.localset l)
+          | .i32, .i32 =>
+              let l ← bindLocal decl.var decl.ty
+              emitI (.localget (← load v))
+              emitI (.mem .i32load boxPayloadOff none)
+              emitI (.localset l)
+          | _, _ =>
+              throw (.typeOutsideFragment "unbox operand types (the box \
+                pointer's object repr, the result's scalar width)"
+                (IR.Ty.render decl.ty))
+      | none =>
+          throw (.typeOutsideFragment "unbox operand types (the box \
+            pointer's object repr, the result's scalar width)"
+            (IR.Ty.render decl.ty))
+  | .const fn args =>
+      -- THE _CLOSED FIXPOINT's value face (the legacy's "0-ary const:
+      -- a top-level closure constant"): a 0-ary const naming a 0-ary
+      -- SIBLING is the producer's call (the probe's family arrives as
+      -- 0-ary FAPS — the call lane handles those; the const face is
+      -- the honest twin). Anything else refuses with its named
+      -- boundary.
+      if args.isEmpty then
+        match (← get).sibs.lookup fn with
+        | some (idx, arity) =>
+            if arity != 0 then
+              throw (.unsupportedConstruct s!"const {fn}"
+                "a 0-ary const of an arity-{arity} callee — the \
+                 eta-closure face (the pap lane's named follow-up)")
+            let l ← bindLocal decl.var decl.ty
+            emitI (.call idx)
+            emitI (.localset l)
+        | none =>
+            throw (.unsupportedConstruct s!"const {fn}"
+              "the callee is not a sibling decl of the module")
+      else
+        throw (.unsupportedConstruct s!"const {fn}"
+          "a const with arguments (the pure-application face — the \
+           impure pipeline delivers binops as faps)")
 
 /-! ## The join-point discipline (jp/jmp) -/
 
@@ -754,36 +1060,58 @@ def emitLet (decl : LetDecl .impure) : M Unit := do
     be a straight-line let spine ending in the entry `jmp target` —
     a br cannot ENTER a frame, so the entry falls through into the
     loop's first iteration. -/
-def splitEntry (target : Lean.FVarId) : Code .impure →
-    Option (List (LetDecl .impure) × Array (Arg .impure))
-  | .let decl k =>
+def splitEntry (target : IR.Var) : IR.Code →
+    Option (List IR.LetDecl × Array IR.Arg)
+  | .let_ decl k =>
       splitEntry target k |>.map (fun (ls, a) => (decl :: ls, a))
   | .jmp f args => if f == target then some ([], args) else none
   | _ => none
 
+/-! ## The loop-shape detector (the audit's `jumpsTo`) -/
+
+-- Does `code` contain a `jmp` to `target`? (The loop-shape
+-- detector — the audit's `jumpsTo`, ported as a plain structural
+-- fold over the IR's spine.)
+mutual
+def jumpsTo (target : IR.Var) (code : IR.Code) : Bool :=
+  match code with
+  | .jmp f _ => f == target
+  | .jp _ _ value k => jumpsTo target value || jumpsTo target k
+  | .cases_ _ _ _ alts => altJumps target alts
+  | .let_ _ k | .inc _ _ k | .dec _ _ _ k | .del _ k
+  | .sset _ _ _ _ _ k | .oset _ _ _ k | .setTag _ _ k =>
+    jumpsTo target k
+  | .ret _ | .unreach | .extern => false
+def altJumps (target : IR.Var) (alts : List IR.Alt) : Bool :=
+  match alts with
+  | [] => false
+  | .ctorAlt _ code :: rest => jumpsTo target code || altJumps target rest
+  | .default code :: rest => jumpsTo target code || altJumps target rest
+end
+
 /-! ## The ONE code walk (the legacy foldImpure consolidation's
 ##    discipline) -/
 
--- Lower the LCNF `Code`. ONE traversal; the single parameter `d` is
+-- Lower the IR `Code`. ONE traversal; the single parameter `d` is
 -- the RUNTIME FRAME DEPTH at the emission point (how many wasm
 -- frames will enclose the emitted instructions when they run — the
 -- ONE AST's frame-depth discipline). `res`/`resTy` = the function's
--- result local (index + type) — every `.return` stores it and
--- branches out to the function level (the exit-frame discipline).
--- Well-founded over `codeSize`/`altSizes`.
+-- result local (index + repr) — every `.ret` stores it and branches
+-- out to the function level (the exit-frame discipline). Structurally
+-- recursive over the IR's spine.
 mutual
-def lowerCode (code : Code .impure) (d : Nat) (res : Nat)
+def lowerCode (code : IR.Code) (d : Nat) (res : Nat)
     (resTy : WasmCore.ValType) : M Unit :=
   match code with
-  | .let decl k => do
+  | .let_ decl k => do
       emitLet decl
       lowerCode k d res resTy
-  | .return fvarId => do
-      let idx ← load fvarId
-      let fty ← tyOf? fvarId
-      if fty != some resTy then
+  | .ret v => do
+      let idx ← load v
+      let fty ← tyOf? v
+      if fty.map tyRepr != some resTy then
         throw (.armTypeMismatch (WasmCore.renderValType resTy)
-          (WasmCore.renderValType (fty.getD .i64)))
+          (WasmCore.renderValType ((fty.map tyRepr).getD .i64)))
       emitI (.localget idx); emitI (.localset res)
       -- the exit-frame discipline: branch to the OUTERMOST frame
       if d >= 1 then
@@ -791,28 +1119,56 @@ def lowerCode (code : Code .impure) (d : Nat) (res : Nat)
       else
         throw (.loopEntry "a return outside the exit frame (depth 0) — \
           the exit-frame discipline's own inconsistency")
-  | .unreach _ => emitI .unreach
-  | .cases c => do
-      -- THE SCALAR-SCRUTINEE DISCIPLINE (the legacy's scalar cases):
-      -- branch on the VALUE. A Bool match compiles to the U8
-      -- representation (observed: `cases UInt8` carrying Bool ctorAlts
-      -- — the Bool runtime repr is the U8 value); a scalar-repr enum's
-      -- repr IS the ctor tag (the prescan's registry — the tag
-      -- discipline). Any other type needs the boxed-object tag read —
-      -- the named boundary (and the ctor-case-on-Nat throw the
-      -- bounded-Nat model demands).
-      unless c.typeName == `Bool || c.typeName == `UInt8
-        || (← get).enums.contains c.typeName do
-        throw (.unsupportedConstruct s!"cases on {c.typeName}"
-          "the boxed-object model (tag dispatch) — the ctor-case-on-Nat \
-           boundary included")
-      let scrutIdx ← load c.discr
-      -- the alt chain: arm i runs one chain link deeper (i+1 if_s)
-      let altsI ← chainWalk scrutIdx c.alts (d + 1) 0 res resTy
-      altsI.forM emitI
-      -- the case is TERMINAL in LCNF's impure spine: every arm ends
-      -- return/jmp/unreach or a nested case — nothing follows
-  | .jp fd k => do
+  | .unreach => emitI .unreach
+  | .cases_ name via discr alts => do
+      -- THE CTOR-CASE-ON-NAT THROW (the boxed-Nat model's pinned
+      -- loud refusal): the generic tag dispatch would read the box's
+      -- tag 0 and treat the payload as a POINTER — silently wrong.
+      -- The real pipeline never produces one (Nat cases compile to
+      -- decEq fap chains); the hand-built face can, and the model
+      -- refuses.
+      if name == "Nat" then
+        throw .natCtorCase
+      -- THE SCRUTINEE DISPATCH. The SCALAR lane (the frontend's
+      -- prescan verdict, `via = .value`) branches on the VALUE (a
+      -- Bool match compiles to the U8 representation — observed:
+      -- `cases UInt8` carrying Bool ctorAlts — and a scalar-repr
+      -- enum's repr IS the ctor tag). The OBJECT TAG DISPATCH: the
+      -- scrutinee is an object POINTER (the i32 repr) — read the tag
+      -- u8 @4 (the landed layout's proved offset; the runtime's
+      -- `lean_obj_tag` face) into a fresh scratch local and branch on
+      -- IT. The per-alt payload projections ride the object layout
+      -- (the oproj lane's @8+i*8, the sproj lane's region
+      -- coordinates — the SAME coordinates the ctor face writes).
+      -- Anything else refuses loudly.
+      match via with
+      | .value => do
+          let scrutIdx ← load discr
+          -- the alt chain: arm i runs one chain link deeper (i+1 if_s)
+          let altsI ← chainWalk scrutIdx alts (d + 1) res resTy
+          altsI.forM emitI
+      | .tag =>
+          match ← tyOf? discr with
+          | some t =>
+              if tyRepr t == .i32 then
+                let ptr ← load discr
+                emitI (.localget ptr); emitI (.mem .i32load8u boxTagOff none)
+                let tag ← bindFresh .i32
+                emitI (.localset tag)
+                let altsI ← chainWalk tag alts (d + 1) res resTy
+                altsI.forM emitI
+              else
+                throw (.unsupportedConstruct s!"cases on {name}"
+                  "the tag dispatch demands an object-repr (i32) \
+                   scrutinee — the scalar lanes are Bool/UInt8/the \
+                   prescan's enums")
+          | none =>
+              throw (.unsupportedConstruct s!"cases on {name}"
+                "the tag dispatch demands an object-repr (i32) scrutinee — \
+                 the scalar lanes are Bool/UInt8/the prescan's enums")
+      -- the case is TERMINAL in the IR's impure spine: every arm ends
+      -- ret/jmp/unreach or a nested case — nothing follows
+  | .jp name params value k => do
       -- THE JOIN-POINT DISCIPLINE. Shape dispatch on the loop
       -- detector: a body that jumps back to ITSELF lowers to the
       -- loop frame; anything else takes the legacy's
@@ -820,18 +1176,12 @@ def lowerCode (code : Code .impure) (d : Nat) (res : Nat)
       -- to fresh locals and the registration (depth offset X, param
       -- locals) lives exactly as long as the structure's emission.
       let mut ps : List Nat := []
-      for p in fd.params do
-        if p.borrow then
-          throw (.unsupportedConstruct "borrowed jp param"
-            "the object model (borrowed params are objects)")
-        match ← tyMap? p.type with
-        | some t => ps := ps ++ [← bindLocal p.fvarId t]
-        | none =>
-            throw (.typeOutsideFragment "jp param type" (toString p.type))
-      modify fun s => { s with jps := s.jps.insert fd.fvarId (d + 2, ps) }
-      if jumpsTo fd.fvarId fd.value then
+      for (pv, pt) in params do
+        ps := ps ++ [← bindLocal pv pt]
+      modify fun s => { s with jps := s.jps.insert name (d + 2, ps) }
+      if jumpsTo name value then
         -- THE LOOP SHAPE: the entry discipline (k = lets + entry jmp)
-        match splitEntry fd.fvarId k with
+        match splitEntry name k with
         | none =>
             throw (.loopEntry "the loop shape's continuation must be a \
               straight-line let spine ending in the entry jmp (a br \
@@ -840,12 +1190,12 @@ def lowerCode (code : Code .impure) (d : Nat) (res : Nat)
         | some (lets, args) =>
             for l in lets do emitLet l
             if args.size != ps.length then
-              throw (.jpArityDrift fd.fvarId.name.toString args.size ps.length)
+              throw (.jpArityDrift name args.size ps.length)
             -- the entry arg stores: the first iteration's params
             for (a, p) in args.toList.zip ps do
               emitArg a
               emitI (.localset p)
-            let bodyI ← scopedOut (lowerCode fd.value (d + 2) res resTy)
+            let bodyI ← scopedOut (lowerCode value (d + 2) res resTy)
             emitI (.block [.loop (bodyI ++ [.br 1])])
             emitI .unreach
       else
@@ -853,80 +1203,177 @@ def lowerCode (code : Code .impure) (d : Nat) (res : Nat)
         -- depths): k inside the inner block, the body after it, the
         -- fallthrough br skips the body, the seal closes.
         let kI ← scopedOut (lowerCode k (d + 2) res resTy)
-        let bodyI ← scopedOut (lowerCode fd.value (d + 1) res resTy)
+        let bodyI ← scopedOut (lowerCode value (d + 1) res resTy)
         emitI (.block ([.block (kI ++ [.br 1])] ++ bodyI))
         emitI .unreach
       -- the registration's scope ends with the structure
-      modify fun s => { s with jps := s.jps.erase fd.fvarId }
-  | .jmp fvarId args => do
+      modify fun s => { s with jps := s.jps.erase name }
+  | .jmp target args => do
       -- the goto: store the args into the jp's param locals, branch
       -- out to the jp's structure (br (d - X) — through any if_
       -- nesting)
-      match (← get).jps[fvarId]? with
+      match (← get).jps[target]? with
       | none =>
-          throw (.jpUnregistered fvarId.name.toString)
+          throw (.jpUnregistered target)
       | some (x, ps) =>
           if args.size != ps.length then
-            throw (.jpArityDrift fvarId.name.toString args.size ps.length)
+            throw (.jpArityDrift target args.size ps.length)
           for (a, p) in args.toList.zip ps do
             emitArg a
             emitI (.localset p)
           if d >= x then
             emitI (.br (d - x))
           else
-            throw (.jpUnregistered fvarId.name.toString)
-  | .fun .. =>
-      throw (.unsupportedConstruct "fun"
-        "local function values (the closure model)")
-  | .oset .. =>
-      throw (.unsupportedConstruct "in-place mutation (oset)"
-        "the object model (oset/uset/sset/setTag)")
-  | .uset .. =>
-      throw (.unsupportedConstruct "in-place mutation (uset)"
-        "the object model (oset/uset/sset/setTag)")
-  | .sset .. =>
-      throw (.unsupportedConstruct "in-place mutation (sset)"
-        "the object model (oset/uset/sset/setTag)")
-  | .setTag .. =>
-      throw (.unsupportedConstruct "in-place mutation (setTag)"
-        "the object model (oset/uset/sset/setTag)")
-  | .inc .. =>
-      throw (.unsupportedConstruct "Perceus RC (inc)"
-        "the object model (no object enters this fragment)")
-  | .dec .. =>
-      throw (.unsupportedConstruct "Perceus RC (dec)"
-        "the object model (no object enters this fragment)")
-  | .del .. =>
-      throw (.unsupportedConstruct "Perceus RC (del)"
-        "the object model (no object enters this fragment)")
-  termination_by codeSize code
-  decreasing_by all_goals (simp only [codeSize]; omega)
-def chainWalk (scrutIdx : Nat) (alts : Array (Alt .impure)) (d : Nat) (i : Nat)
+            throw (.jpUnregistered target)
+  | .inc v n k => do
+      -- THE RC DISCIPLINE: the rc cell's REAL arithmetic (the `check`
+      -- and `persistent` flags ride recorded-and-ignored — the
+      -- frontend dropped them). The over-dec guard and the
+      -- dead-marking live at `rcOp`.
+      rcOp "inc" v n true
+      lowerCode k d res resTy
+  | .dec v n cascade k => do
+      -- THE RC DISCIPLINE: the object's own rc drops first, then THE
+      -- FIELD CASCADE — `cascade = some nRefs` means the dying object
+      -- had nRefs REF fields (the frontend's `objs?` count, riding the
+      -- landed layout: the ref slots are `0..nRefs-1`); each field's
+      -- pointer is loaded (@8 + i*8, the packing law's ref
+      -- coordinates) and its rc decremented by 1 under the SAME
+      -- over-dec guard (the counts stay honest — a cascaded field
+      -- over-dec is the same use-after-free bug, the same loud trap).
+      -- The DEEP cascade (a field's own fields) is the named
+      -- follow-up: this slice's discipline is the immediate fields,
+      -- exactly the count the LCNF frontend carries.
+      rcOp "dec" v n false
+      match cascade with
+      | none => pure ()
+      | some nRefs => do
+          let ptr ← load v
+          for i in List.range nRefs do
+            emitI (.localget ptr)
+            emitI (.mem .i32load (8 + i * 8) none)
+            let fp ← bindFresh .i32
+            emitI (.localset fp)
+            rcOpLoc "dec" fp 1 false
+      lowerCode k d res resTy
+  | .del v k => do
+      -- THE DEL (the honest deallocation within the arena's model):
+      -- the OWNERSHIP ASSERTION checked at runtime — del fires only
+      -- when the target's rc is exactly 1 (the statically-owned face;
+      -- a del on a shared or dead object is a compiler bug, the loud
+      -- trap) — then the DEAD MARKING: rc = 0, the slot observable
+      -- and never reused (the size-class freelist is the named
+      -- follow-up; the leak is bounded by the arena's page). The
+      -- FIELD cascade is dec's discipline (del carries no objs?
+      -- count in the LCNF — the fields' decs were emitted before it).
+      let ptr ← load v
+      rcUnique ptr
+      emitI (.localget ptr); emitI (.i32const 0)
+      emitI (.mem .i32store rcCellOff none)
+      lowerCode k d res resTy
+  | .sset v i offset val ty k => do
+      -- THE IN-PLACE WRITE (the scalar field): the rc=1 legality
+      -- guard, then the store at the SAME coordinates the `sproj`
+      -- read rides (`8 + i*8 + offset`), the width from the field's
+      -- row (u64 → i64store, a u8 field → i32store8 — the packing
+      -- law's 1-byte class, the rest i32store). Both operands must
+      -- carry the bound rows (the target object-repr; the value's
+      -- width checked against the field row's repr — a u64 field
+      -- needs an i64 local).
+      match ← tyOf? v, ← tyOf? val with
+      | some vt, some valTy =>
+        if tyRepr vt == .i32 && tyRepr valTy == tyRepr ty then do
+          let ptr ← load v
+          rcUnique ptr
+          emitI (.localget ptr)
+          emitI (.localget (← load val))
+          match ty with
+          | .u64 => emitI (.mem .i64store (8 + i * 8 + offset) none)
+          | .u8 => emitI (.mem .i32store8 (8 + i * 8 + offset) none)
+          | _ => emitI (.mem .i32store (8 + i * 8 + offset) none)
+        else
+          throw (.typeOutsideFragment "sset operand types (the target's \
+            object repr, the value's field width)"
+            s!"{IR.Ty.render ty} ← {IR.Ty.render valTy}")
+      | _, _ =>
+          throw (.typeOutsideFragment "sset operand types (the target's \
+            object repr, the value's field width)"
+            (IR.Ty.render ty))
+      lowerCode k d res resTy
+  | .oset v i val k => do
+      -- THE IN-PLACE WRITE (the ref field): the rc=1 legality guard,
+      -- then the POINTER store at the packing law's ref coordinates
+      -- (`8 + i*8` — the SAME slots the ctor face writes and the
+      -- `oproj` read rides). Both operands object-repr (pointers).
+      -- NOTE the RC HONESTY: the displaced reference's dec is the
+      -- CALLEE's obligation (the Perceus stream decs the old value
+      -- before the oset); the lowering stores exactly what the IR
+      -- names, nothing else.
+      match ← tyOf? v, ← tyOf? val with
+      | some vt, some valTy =>
+        if tyRepr vt == .i32 && tyRepr valTy == .i32 then do
+          let ptr ← load v
+          rcUnique ptr
+          emitI (.localget ptr)
+          emitI (.localget (← load val))
+          emitI (.mem .i32store (8 + i * 8) none)
+        else
+          throw (.typeOutsideFragment "oset operand types (both \
+            object-repr pointers)"
+            s!"{IR.Ty.render valTy} ← field {i}")
+      | _, _ =>
+          throw (.typeOutsideFragment "oset operand types (both \
+            object-repr pointers)" "unbound")
+      lowerCode k d res resTy
+  | .setTag v cidx k => do
+      -- THE IN-PLACE WRITE (the tag byte): the rc=1 legality guard,
+      -- then the u8 store @4 (the SAME tag cell the dispatch reads;
+      -- a writable tag is the model's enum-in-object face). The
+      -- target must be object-repr.
+      match ← tyOf? v with
+      | some vt =>
+        if tyRepr vt == .i32 then do
+          let ptr ← load v
+          rcUnique ptr
+          emitI (.localget ptr); emitI (.i32const cidx)
+          emitI (.mem .i32store8 boxTagOff none)
+        else
+          throw (.typeOutsideFragment "setTag target type (the object \
+            repr)" (IR.Ty.render vt))
+      | none =>
+          throw (.typeOutsideFragment "setTag target type (the object \
+            repr)" "unbound")
+      lowerCode k d res resTy
+  | .extern =>
+      -- THE EXTERN FACE (the declared trust boundary): the signature
+      -- landed (the decl's function + export, the call lane's
+      -- index); the body is NOT modeled — `unreach` is the honest
+      -- placeholder (the host link step is the named follow-up; a
+      -- call reaching it traps loudly, never a wrong answer).
+      emitI .unreach
+def chainWalk (scrutIdx : Nat) (alts : List IR.Alt) (d : Nat)
     (res : Nat) (resTy : WasmCore.ValType) : M (List WasmCore.Instr) := do
   -- The alt-chain fold (the legacy `buildAlts`): nested `if_`s keyed
   -- on the ctor index, a `default` alt as the final else, an
   -- uncovered ctor set as `[unreach]` (the alt chain is exhaustive at
-  -- runtime). LCNF impure alts carry NO `.alt` (the pure ctor's
-  -- proof discharges like the legacy's `absurd`). Arm i of the chain
-  -- lowers at depth `d` (each chain link is one `if_` frame).
-  if h : i < alts.size then
-    match hget : alts[i] with
-    | .ctorAlt info code => do
-        let thenI ← scopedOut (lowerCode code d res resTy)
-        let elseI ← chainWalk scrutIdx alts (d + 1) (i + 1) res resTy
-        return ([.localget scrutIdx, .i32const info.cidx, .op .i32eq]
-          ++ [.if_ thenI elseI])
-    | .default code => scopedOut (lowerCode code d res resTy)
-    | .alt _ _ _ hp => absurd hp (by simp)
-  else
-    return [.unreach]
-  termination_by altSizes alts i
-  decreasing_by
-    all_goals (first
-      | exact altSizes_suffix alts i h
-      | exact altSizes_gt_ctor alts i h _ _ hget
-      | exact altSizes_gt_default alts i h _ hget
-      | omega)
+  -- runtime). Arm i of the chain lowers at depth `d` (each chain
+  -- link is one `if_` frame). Structurally recursive over the list.
+  match alts with
+  | [] => return [.unreach]
+  | .ctorAlt cidx code :: rest => do
+      let thenI ← scopedOut (lowerCode code d res resTy)
+      let elseI ← chainWalk scrutIdx rest (d + 1) res resTy
+      return ([.localget scrutIdx, .i32const cidx, .op .i32eq]
+        ++ [.if_ thenI elseI])
+  | .default code :: _ =>
+      -- THE DEFAULT's depth (the order-preserving chain's honesty):
+      -- the default runs in the LAST if_'s ELSE — the SAME depth as
+      -- that link's then-arm, NOT one frame deeper (a default arm is
+      -- not a chain LINK; it opens no if_). Lowering it at `d` would
+      -- emit the exit-frame `br` one frame too shallow... one too
+      -- DEEP — the executor answers `branch` past the function (the
+      -- setTag control's teeth caught exactly that).
+      scopedOut (lowerCode code (d - 1) res resTy)
 end
 
 /-! ## The decl lowering -/
@@ -935,68 +1382,80 @@ end
     executor driver's binding discipline: param i lands in local i),
     bind the result local, walk the body at depth 1 (inside the exit
     frame), collect the emitted instructions + the result index. -/
-def declWalk (code : Code .impure) (params : Array (Param .impure))
+def declWalk (code : IR.Code) (params : List (IR.Var × IR.Ty))
     (resTy : WasmCore.ValType) : M (List WasmCore.Instr × Nat) := do
-  for p in params do
-    if p.borrow then
-      throw (.unsupportedConstruct "borrowed param"
-        "the object model (borrowed params are objects)")
-    match ← tyMap? p.type with
-    | some t => discard <| bindParam p.fvarId t
-    | none =>
-        throw (.typeOutsideFragment "param type" (toString p.type))
+  for (v, t) in params do
+    discard <| bindParam v t
   let res ← bindFresh resTy
   lowerCode code 1 res resTy
   let body ← emitted
   pure (body, res)
 
-/-- Lower SEVERAL impure-phase LCNF decls into ONE module: one type +
-    one function + one export per decl (the entry index = the decl
-    order). The decls stay CALL-DISJOINT: a fap naming a sibling decl
-    refuses as the cross-decl call (the call lane is wasmcore's
-    in-flight work) — never a fabricated call. -/
-def lowerFuncs (ds : List (Decl .impure)) : Except LowerError WasmCore.Module :=
-  let sibs := ds.map (·.name)
-  let one (i : Nat) (d : Decl .impure) :
-      Except LowerError (WasmCore.FuncType × WasmCore.Func × String) :=
-    match d.value with
-    | .extern .. =>
-        throw (.unsupportedConstruct "extern decl"
-          "a decl with a body (a plain `def`)")
-    | .code code =>
-      let enums := collectScalarEnums code
-      match wasmTyOf? enums d.type with
-      | none => throw (.typeOutsideFragment "result type" (toString d.type))
-      | some resTy =>
-        match StateT.run (declWalk code d.params resTy)
-            ({ fvars := {}, locals := [], next := 0, out := []
-             , jps := {}, enums := enums, sibs := sibs } : LState) with
-        | .error e => .error e
-        | .ok ((bodyI, res), st) =>
-            let ft : WasmCore.FuncType :=
-              ⟨d.params.toList.filterMap (fun p => wasmTyOf? enums p.type), [resTy]⟩
-            let f : WasmCore.Func :=
-              { tyIdx := i, locals := st.locals
-              , body := [.block bodyI, .localget res] }
-            .ok (ft, f, d.name.toString)
-  match (ds.zipIdx.mapM (fun p => one p.2 p.1)) with
+/-- Lower SEVERAL IR decls into ONE module: one type + one function +
+    one export per decl (the entry index = the decl order). The decls
+    see each other through the CALL LANE: the sibling registry
+    (`name → (function-table index, param arity)` — the index IS the
+    decl order, a self-recursive decl's OWN index included) feeds
+    every `call` to wasm `call` under the executor's calling
+    convention; a call naming a NON-sibling refuses (never a
+    fabricated index-0 call). THE INDIRECT-CALL LANE: a decl's
+    first-class applications register their signatures in the SIG
+    REGISTRY (threaded across the fold — dedup at registration); the
+    module's type section grows the sig types AFTER the decl types,
+    and the ONE funcref table gets the IDENTITY entries (table i =
+    function i — the closures' fnIdx discipline), present exactly when
+    the lane fired (the validator's table-index discipline refuses a
+    `callindirect` over an absent table). -/
+def lowerFuncs (ds : List IR.Decl) : Except LowerError WasmCore.Module :=
+  let sibs := ds.zipIdx.map (fun p => (p.1.name, p.2, p.1.params.length))
+  let one (i : Nat) (d : IR.Decl) (sigs0 : List WasmCore.FuncType) :
+      Except LowerError
+        (WasmCore.FuncType × WasmCore.Func × String × List WasmCore.FuncType) :=
+    match StateT.run (declWalk d.value d.params (tyRepr d.resultTy))
+        ({ fvars := {}, locals := [], next := 0, out := []
+         , jps := {}, sibs := sibs, sigs := sigs0 } : LState) with
+    | .error e => .error e
+    | .ok ((bodyI, res), st) =>
+        let ft : WasmCore.FuncType :=
+          ⟨d.params.map (fun p => tyRepr p.2), [tyRepr d.resultTy]⟩
+        let f : WasmCore.Func :=
+          { tyIdx := i, locals := st.locals
+          , body := [.block bodyI, .localget res] }
+        .ok (ft, f, d.name, st.sigs)
+  let accTy :=
+    Except LowerError
+      (List (WasmCore.FuncType × WasmCore.Func × String) × List WasmCore.FuncType)
+  let step : accTy → (IR.Decl × Nat) → accTy := fun acc p =>
+      match acc with
+      | .error e => .error e
+      | .ok (rows, sigs) =>
+          match one p.2 p.1 sigs with
+          | .error e => .error e
+          | .ok (ft, f, nm, sigs') => .ok (rows ++ [(ft, f, nm)], sigs')
+  match ds.zipIdx.foldl step (.ok ([], [])) with
   | .error e => .error e
-  | .ok rows =>
+  | .ok (rows, sigs) =>
     .ok
-      { types := rows.map (·.1)
+      { types := rows.map (·.1) ++ sigs
         funcs := rows.zipIdx.map (fun p => { p.1.2.1 with tyIdx := p.2 })
         exports := rows.zipIdx.map
           (fun p => { name := p.1.2.2, desc := WasmCore.ExportDesc.func p.2 })
-        memMin := 0 }
+        -- THE BUMP ARENA's page: the boxed-Nat lane allocates in the
+        -- linear memory (the bump pointer lives at cell 0), so every
+        -- module carries ONE wasm page (64KiB ≈ 4000 live 16-byte
+        -- boxes; an exhausted arena is the bounded-memory memOOB
+        -- trap — the honest ceiling, never corruption).
+        memMin := 1
+        -- THE INDIRECT-CALL LANE's table: the identity entries (table
+        -- i = function i — the closures' fnIdx discipline), present
+        -- exactly when a first-class application fired.
+        tables := if sigs.isEmpty then [] else [{ init := List.range ds.length }] }
 
-/-- Lower ONE impure-phase LCNF decl to a one-function module: one
-    type (the params → the mapped scalars, the result → its mapped
-    scalar), one function (the exit-frame discipline: the body inside
-    the outermost frame, `localget res` after), exported under the
-    decl's own name. The decl's `type` in the impure phase IS the
-    return type (LCNF's erasure — the Basic.lean note); `extern`
-    decls refuse (no body). -/
-def lowerFunc (d : Decl .impure) : Except LowerError WasmCore.Module :=
+/-- Lower ONE IR decl to a one-function module: one type (the params →
+    the mapped reprs, the result → its repr), one function (the
+    exit-frame discipline: the body inside the outermost frame,
+    `localget res` after), exported under the decl's own name. -/
+def lowerFunc (d : IR.Decl) : Except LowerError WasmCore.Module :=
   lowerFuncs [d]
 
 end Guest

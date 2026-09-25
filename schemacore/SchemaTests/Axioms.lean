@@ -16,6 +16,7 @@ import SchemaCore
 import SchemaCore.Pred
 import SchemaCore.Check
 import SchemaCore.Keys
+import SchemaCore.Witness
 
 open SchemaCore
 
@@ -50,6 +51,18 @@ open SchemaCore
 /-- info: 'SchemaCore.kebabName' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms SchemaCore.kebabName
+
+/-- info: 'SchemaCore.foldValue_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.foldValue_unique
+
+/-- info: 'SchemaCore.foldVList_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.foldVList_unique
+
+/-- info: 'SchemaCore.foldVMap_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms SchemaCore.foldVMap_unique
 
 /-- info: 'SchemaCore.Value.eval' does not depend on any axioms -/
 #guard_msgs in
@@ -301,3 +314,47 @@ open SchemaCore
 /-- info: 'SchemaCore.Fixed.val_codecLegal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms SchemaCore.Fixed.val_codecLegal
+
+/-! ## The writable-views lane (SchemaCore.View — the lens laws' cone:
+     core-triple at most; the determinacy consumption rides the Keys
+     lane's own cone) -/
+
+/-- info: 'SchemaCore.viewPut_get' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.viewPut_get
+
+/-- info: 'SchemaCore.viewPut_preserves' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.viewPut_preserves
+
+/-- info: 'SchemaCore.KeyDecl.filter_matches_le_one' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.KeyDecl.filter_matches_le_one
+
+/-- info: 'SchemaCore.keyedViewLens' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.keyedViewLens
+
+/-! ## The witness lane (SchemaCore.Witness — the checker's cone:
+     core-triple at most; the soundness rides Pred's bridge, the codec
+     rides the string/varint atoms' Classical.choice cones) -/
+
+/-- info: 'SchemaCore.checkWitness' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.checkWitness
+
+/-- info: 'SchemaCore.checkWitness_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.checkWitness_sound
+
+/-- info: 'SchemaCore.checkWitness_mono' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SchemaCore.checkWitness_mono
+
+/-- info: 'SchemaCore.Witness.discharge_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.Witness.discharge_sound
+
+/-- info: 'SchemaCore.decWitness?_encWitness' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms SchemaCore.decWitness?_encWitness

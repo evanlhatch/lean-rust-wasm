@@ -200,20 +200,44 @@ theorem run_refuses_negation_shape : (match Program.run [rNegated] chainFacts wi
   | .error _ => true | .ok _ => false) = true := by decide
 
 -- ... and LOUDLY: the rendered message names the rule index + the variable
--- (checked at runtime — string ops are not kernel-reducible)
-def checkRunMessage : IO CheckResult := do
+-- (checked at runtime — string ops are not kernel-reducible — but the
+-- checks are PURE `CheckResult` rows: no IO of their own). They ride the
+-- TestingKit discipline as a second Spec (pattern #5's controls included),
+-- so `main` is ONE `mainOfSuites` call — no hand-rolled tail.
+def checkRunMessage : CheckResult :=
   match Program.run [rUnbound] chainFacts with
   | .error m =>
-    pure (assert ("unsafe rule #0".isPrefixOf m && m.contains 'Y')
-      "the refusal message does not name the rule and the variable")
-  | .ok _ => pure (.error "run did not refuse an unsafe program")
+      assert ("unsafe rule #0".isPrefixOf m && m.contains 'Y')
+        "the refusal message does not name the rule and the variable"
+  | .ok _ => .error "run did not refuse an unsafe program"
 
-def checkRunMessageNegation : IO CheckResult := do
+def checkRunMessageNegation : CheckResult :=
   match Program.run [rNegated] chainFacts with
-  | .error m =>
-    pure (assert (m.contains "NEGATED")
-      "the negation refusal does not name the exclusion")
-  | .ok _ => pure (.error "run did not refuse a negation-laden program")
+  | .error m => assert (m.contains "NEGATED")
+      "the negation refusal does not name the exclusion"
+  | .ok _ => .error "run did not refuse a negation-laden program"
+
+def propRefusalMessages (_ : Tape) : CheckResult := do
+  checkRunMessage
+  checkRunMessageNegation
+
+def propRefusalSabotageAccepted (_ : Tape) : CheckResult :=
+  -- SABOTAGE: claims the unsafe program is accepted. Caught — run refuses.
+  assert (match Program.run [rUnbound] chainFacts with
+    | .ok _ => true | .error _ => false) "unsafe-acceptance sabotage not caught"
+
+def propRefusalSabotageSilent (_ : Tape) : CheckResult :=
+  -- SABOTAGE: claims the negation refusal's message is silent. Caught —
+  -- the message names the exclusion.
+  match Program.run [rNegated] chainFacts with
+  | .error m => assert (!m.contains "NEGATED") "silent-refusal sabotage not caught"
+  | .ok _ => .error "run did not refuse a negation-laden program"
+
+def specRefusals : Spec := Spec.ofList "datalog-refusal-messages"
+  propRefusalMessages
+  [ ("unsafe-accepted", propRefusalSabotageAccepted),
+    ("negation-silent", propRefusalSabotageSilent) ]
+  1 20250714
 
 /-! ## Suite 4: the LCG-seeded sweep + the mandatory negative controls -/
 
@@ -249,22 +273,7 @@ def specClosures : Spec := Spec.ofList "datalog-closures"
   12 20250714
 
 -- the refusal MESSAGES run at runtime (string ops are not kernel-decidable);
--- their verdicts ride main's exit code, next to the pure sweep.
+-- their verdicts ride the same `mainOfSuites` fold as the pure sweep.
 
-def main : IO UInt32 := do
-  let rc ← checkRunMessage
-  let rcN ← checkRunMessageNegation
-  match rc, rcN with
-  | .ok (), .ok () => pure ()
-  | _, _ =>
-    IO.println "run-refusal-message checks FAILED"
-    match rc with
-    | .ok () => pure ()
-    | .error e => IO.println s!"  {e}"
-    match rcN with
-    | .ok () => pure ()
-    | .error e => IO.println s!"  {e}"
-  let code ← mainOfSuites [("Datalog", [specClosures])]
-  let extra := (match rc with | .ok () => 0 | .error _ => 1) +
-    (match rcN with | .ok () => 0 | .error _ => 1)
-  return if extra == 0 then code else 1
+def main : IO UInt32 :=
+  mainOfSuites [("Datalog", [specClosures, specRefusals])]

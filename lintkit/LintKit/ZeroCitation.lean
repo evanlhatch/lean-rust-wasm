@@ -52,8 +52,7 @@ meta def zeroCitationTest (decl : Name) : MetaM (Option MessageData) := do
   if ← skipDecl decl then return none
   let env ← getEnv
   let some (.thmInfo _) := env.find? decl | return none
-  let some idx := env.getModuleIdxFor? decl | return none
-  let mod := env.header.moduleNames[idx]!
+  let some mod := modOfDecl env decl | return none
   if isTestModule mod then return none
   let census ← citationCensus env
   if citedOutsideModule? env census decl then return none

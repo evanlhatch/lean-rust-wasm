@@ -30,15 +30,28 @@ the same one-writer nodup, the same law field, the same driver fold.
 HEADER-IN-BINARY DECISION: NO inline text header, ever — the magic
 number must lead the bytes (wasm's `\0asm`, the vortex magic); the
 same 2-line GENERATED header rides a committed `.hdr` SIDECAR next to
-each binary artifact. The byte-tie compare for binaries (`tieBytes`)
-lives HERE (kit-side) so the gen-check gate ADOPTS it rather than
-re-encoding it — the gate's text `tieOf` is untouched; wiring the
-sidecar check into Gates.GenCheck is the named follow-up for when the
-first binary artifact is committed through `just gen`.
+each binary artifact. The BYTE-TIE — the consolidation (notes/v3/09-gates-ops.md §2): ONE
+text tie, ONE binary twin, ONE verdict. The TEXT tie's law lives at
+`TestingKit.Golden.tie` (the byte-tie helper below every consumer —
+the TextKit.Diag/Laws module-form precedent; Kit imports TestingKit,
+never the reverse): the leading 2-line GENERATED header is the volatile
+region, the body ties byte-exact against the fresh body, and the
+header's content-hash line must name the fresh body's `String.hash` —
+THE ONE TEXT HASH (the `GenMeta.contentHash` contract every driver
+embeds; a migration to the LCG would rewrite every driver and every
+committed artifact for no gain). The kit names the artifact face
+(`tieText`) so the gen-check gate ADOPTS it rather than re-encoding it
+— the gate's local `tieOf` spelling is gone. The BINARY twin
+(`tieBytes` over `bytesHash`) lives HERE (kit-side) for the same
+adopt-don't-encode reason: a binary has no volatile region (the header
+rides the `.hdr` sidecar), so the bytes tie exactly and the sidecar
+must name the bytes' hash — the LCG fold, the ONE recurrence
+(`TestingKit.lcg`), never a hand-copied constant table.
 
-The hash is core's `String.hash` (deterministic, 64-bit, zero code) —
-NOT a crypto digest (the store's job); this one is the artifact's
-self-description ("which spec state am I").
+The hashes, named once each: the text tie's is core's `String.hash`
+(deterministic, 64-bit, zero code — NOT a crypto digest, the store's
+job; the artifact's self-description, "which spec state am I"); the
+binary tie's is the LCG fold over the bytes (`bytesHash`).
 
 THE LEDGER (provenance, notes/v3/09-gates-ops.md §4 — the write-path
 extension): every artifact a driver writes gets a `Kit.Ledger.LedgerRow`
@@ -80,6 +93,7 @@ The five questions (notes/v3/01-core.md):
 
 import Lean
 import TestingKit.Lcg
+import TestingKit.Golden
 import Kit.Ledger
 
 namespace Kit.Emit
@@ -143,10 +157,26 @@ structure BinaryFile where
   path : String
   contents : ByteArray
 
+/-- The ONE byte-tie verdict — the shape lives at
+    `TestingKit.Golden.ByteTie` (the text tie's home, this file's doc);
+    re-exported here beside both adoption faces (`tieText`,
+    `tieBytes`). -/
+abbrev ByteTie := TestingKit.Golden.ByteTie
+
+/-- The TEXT byte-tie — the kit's adoption face over the ONE text tie
+    (`TestingKit.Golden.tie`; the gate's former local `tieOf` spelling
+    adopted, not re-encoded). The committed artifact's leading 2-line
+    GENERATED header is the volatile region; the body ties byte-exact
+    against the fresh body; the header's content-hash line must name
+    `String.hash` of the fresh body (the `GenMeta.contentHash`
+    contract). -/
+def tieText (committed fresh : String) : ByteTie :=
+  TestingKit.Golden.tie committed fresh
+
 /-- The binary content hash: the bytes folded through the LCG — the
-    byte-valued twin of TestingKit.Golden's digest discipline (the ONE
-    recurrence, `TestingKit.lcg`'s; never a hand-copied constant table).
-    Same bytes → same hash, always. -/
+    byte-valued twin of the text tie's `String.hash` (the ONE
+    recurrence, `TestingKit.lcg`'s; never a hand-copied constant
+    table). Same bytes → same hash, always. -/
 def bytesHash (bs : ByteArray) : UInt64 :=
   bs.toList.foldl (fun h b => TestingKit.lcg (h + b.toUInt64))
     1442695040888963407
@@ -156,13 +186,6 @@ def bytesHash (bs : ByteArray) : UInt64 :=
     the bytes, so the 2-line GENERATED header rides `<path>.hdr` — a
     committed TEXT artifact under the same byte-tie discipline. -/
 def sidecarPath (path : String) : String := path ++ ".hdr"
-
-/-- The binary lane's byte-tie verdict (ctors, never strings — 04 §6).
-    `tied` = the committed bytes ARE the fresh bytes and the sidecar
-    names them; `drifted` carries the why. -/
-inductive ByteTie where
-  | tied
-  | drifted (why : String)
 
 /-- The binary stripped compare — the gen-check gate's adoption path
     for the binary lane (the gate calls this; it never re-encodes it).

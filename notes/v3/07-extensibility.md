@@ -85,3 +85,27 @@ None fits → the catalog is incomplete — extend it WITH the first
 consumer, never before. The leftover rule: every new module/capability
 sits in this file's recipe table with its consumer; unreachable rows are
 wired or deleted at phase boundaries (P8).
+
+## The parked-module table (the leftover rule's rows)
+
+The consumerless-but-doctrinal substrate, adjudicated (the close-out
+audit's D33 wave; each header carries the same status inline). A trigger
+firing lands or deletes in the same commit — a parked row that outlives
+its second phase boundary without firing is a finding.
+
+| module | status | consumer / trigger |
+|---|---|---|
+| `Kit.Hyper` | KEPT | 16 §4.3's ranked program (the doctrine commits to the power jump); consumer = the first security-facing lane claim (noninterference, 08 §35's safety rows at the power); the worked instances + the KitTests pins are the evidence until then. DEADLINE (named, wave-30 A6): the NAMED candidate consumer is the asyncband models' schedule-independence claim — a KEPT row outliving its SECOND phase boundary without that consumer (or a named successor) is a finding; the header carries the discipline inline |
+
+DELETED (wave-30 A6, the table's own rule — each PARKED row outlived its
+second phase boundary without its trigger firing; grep-verified zero
+non-test consumers at deletion):
+- `Kit.Validation` (trigger would have been the first check surface
+  needing structural ALL-failures accumulation — the lanes still fold
+  plain `List Diag`);
+- `Kit.Json` (trigger would have been the first JSON manifest emitter —
+  the tree's one manifest stays tab-delimited by design);
+- `Kit.FreshName` (trigger would have been the first emitter minting
+  names against a growing taken space — minting is still single-spec,
+  Scaffold.Generate derives every name from the ONE AppSpec name).
+| `Analysis` | KEPT | the engine's first instance lives there (Intervals); consumer = the analysis lanes (04 §3's certificate pattern: the untrusted analyzer + the γ-certificate); the AnalysisTests pins are the evidence until a lane consumes a domain beyond the worked one |

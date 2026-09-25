@@ -16,7 +16,6 @@ import Kit.Hyper
 import Kit.Obligation
 import Kit.CheckedProp
 import Kit.Registry
-import Kit.FreshName
 import Kit.Change
 import Kit.Observer
 import Kit.CodeRegistry
@@ -24,8 +23,6 @@ import Kit.Varint
 import Kit.Text
 import Kit.Duel
 import Kit.Mangle
-import Kit.Json
-import Kit.Validation
 
 /-- info: 'Kit.Obligation.decideEvidence_sound' depends on axioms: [propext] -/
 #guard_msgs in
@@ -51,14 +48,6 @@ import Kit.Validation
 #guard_msgs in
 #print axioms Kit.DataRegistry.nameOf_injective
 
-/-- info: 'Kit.CodedRegistry.idxOf_getElem_inj' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in
-#print axioms Kit.CodedRegistry.idxOf_getElem_inj
-
-/-- info: 'Kit.freshNameVerdict_none_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in
-#print axioms Kit.freshNameVerdict_none_iff
-
 /-- info: 'Kit.CodeRegistry.sortedCodes_iff' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms Kit.CodeRegistry.sortedCodes_iff
@@ -66,6 +55,29 @@ import Kit.Validation
 /-- info: 'Kit.codeRegistryWf' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms Kit.codeRegistryWf
+
+-- The ledger's grammar migration: the file format's law is the generic
+-- theorems' instance — the footprints stay in the core triple (the
+-- derived parse/print + the certificate's decide, no new trust).
+/-- info: 'Kit.Ledger.parse_print' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Kit.Ledger.parse_print
+
+/-- info: 'Kit.Ledger.print_parse_raw' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Kit.Ledger.print_parse_raw
+
+/-- info: 'Kit.Ledger.toRow_rowEncode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Kit.Ledger.toRow_rowEncode
+
+/-- info: 'Kit.Ledger.ledgerCert' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Kit.Ledger.ledgerCert
+
+/-- info: 'Kit.Ledger.parse_print_selfStable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Kit.Ledger.parse_print_selfStable
 
 /-- info: 'Kit.CodeRegistry.maxCode_ge' depends on axioms: [propext] -/
 #guard_msgs in
@@ -106,6 +118,24 @@ import Kit.Validation
 /-- info: 'Kit.Observer.Below.trans' does not depend on any axioms -/
 #guard_msgs in
 #print axioms Kit.Observer.Below.trans
+
+-- The Galois connection (A3): the tie to the Abstraction grade + the
+-- coarsening-preserves-claims corollaries — the core triple only.
+/-- info: 'Kit.Observer.Below.toAbstraction' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Observer.Below.toAbstraction
+
+/-- info: 'Kit.Observer.Below.conc_iff' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Observer.Below.conc_iff
+
+/-- info: 'Kit.Observer.refines_below' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Observer.refines_below
+
+/-- info: 'Kit.Observer.equiv_below' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Observer.equiv_below
 
 /-- info: 'Kit.Observer.refines_trans' does not depend on any axioms -/
 #guard_msgs in
@@ -192,24 +222,6 @@ import Kit.Validation
 #guard_msgs in
 #print axioms Kit.nodupNamesIso
 
--- The Validation restoration: the accumulation laws (the anti-early-exit
--- pins; the count law's propext is the core machinery).
-/-- info: 'Kit.Validation.foldlM_ok' does not depend on any axioms -/
-#guard_msgs in
-#print axioms Kit.Validation.foldlM_ok
-
-/-- info: 'Kit.Validation.foldlM_errs' does not depend on any axioms -/
-#guard_msgs in
-#print axioms Kit.Validation.foldlM_errs
-
-/-- info: 'Kit.Validation.foldlM_errs_length' depends on axioms: [propext] -/
-#guard_msgs in
-#print axioms Kit.Validation.foldlM_errs_length
-
-/-- info: 'Kit.Validation.traverse_ok' does not depend on any axioms -/
-#guard_msgs in
-#print axioms Kit.Validation.traverse_ok
-
 -- The relational engine's substrate: THE generic theorem + the §1
 -- relation-family laws (pure structural induction + pure logic — zero
 -- axioms; a sorry in any of them fails the build).
@@ -267,6 +279,62 @@ import Kit.Validation
 /-- info: 'Kit.Codec.toRel_refl' does not depend on any axioms -/
 #guard_msgs in
 #print axioms Kit.Codec.toRel_refl
+
+-- The bridge's remaining grades (16 §4.1): the per-grade rows are
+-- axiom-free — the Simulation/Abstraction merges are definitional
+-- (`Iff.rfl`), the Normalization collapse spends its own idempotence
+-- law and nothing else.
+/-- info: 'Kit.Normalization.toRel_sound' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Normalization.toRel_sound
+
+/-- info: 'Kit.Normalization.toRel_comp_self' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Normalization.toRel_comp_self
+
+/-- info: 'Kit.Normalization.toRel_refl' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Normalization.toRel_refl
+
+/-- info: 'Kit.Simulation.toRel_step' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Simulation.toRel_step
+
+/-- info: 'Kit.Simulation.toRel_trans' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Simulation.toRel_trans
+
+/-- info: 'Kit.Simulation.toRel_refl' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Simulation.toRel_refl
+
+/-- info: 'Kit.Abstraction.toRel_sound' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Abstraction.toRel_sound
+
+/-- info: 'Kit.Abstraction.toRel_trans' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Abstraction.toRel_trans
+
+/-- info: 'Kit.Abstraction.toRel_refl' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Abstraction.toRel_refl
+
+/-- info: 'Kit.Iso.toRel_det' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Iso.toRel_det
+
+/-- info: 'Kit.Retraction.toRel_det' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Retraction.toRel_det
+
+/-- info: 'Kit.Codec.toRel_det' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Codec.toRel_det
+
+/-- info: 'Kit.Normalization.toRel_det' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Kit.Normalization.toRel_det
 
 -- The hyperproperty substrate (16 §4.3): the power jump + the flagship
 -- hyperproperty + the worked instances (the simp-refutation nets ride

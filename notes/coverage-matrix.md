@@ -10,18 +10,18 @@ a probe item carrying the ctor is added to the replayed registry and the emitter
 retraction-with-note rows surface here). `registry` = the ctor's tag occurs in the
 committed registry's field types.
 
-| Ty ctor | schema-wit | schema-rust | registry |
-| --- | --- | --- | --- |
-| `bool` | x | x | x |
-| `u64` | . | x | x |
-| `i64` | x | x | x |
-| `string` | x | x | x |
-| `option` | x | x | x |
-| `list` | x | x | x |
-| `result` | x | x | x |
-| `map` | x | x | x |
-| `set` | x | x | . |
-| `bounded` | . | x | x |
+| Ty ctor | schema-wit | schema-rust | schema-ts | registry |
+| --- | --- | --- | --- | --- |
+| `bool` | x | x | x | x |
+| `u64` | . | x | x | x |
+| `i64` | x | x | x | x |
+| `string` | x | x | x | x |
+| `option` | x | x | x | x |
+| `list` | x | x | x | x |
+| `result` | x | x | x | x |
+| `map` | x | x | x | x |
+| `set` | x | x | x | . |
+| `bounded` | . | x | x | x |
 
 ## Registry-quiet ctors (absent from the committed registry —
 unexercised members of the closed universe; findings, not failures;

@@ -6,8 +6,9 @@
    compare). Module headers state ownership + exclusions per module.
 
    The five questions (notes/v3/01-core.md): answered per submodule;
-   the umbrella answers none — import point. Gate row: none — TestingKit
-   is not in Gates.Packages' gated set; TestingKitTests is its evidence. -/
+   the umbrella answers none — import point. Gate row: TestingKit's
+   row in Gates.Packages' gated set (the per-library axiom sweep
+   covers it); TestingKitTests is its evidence. -/
 
 module
 

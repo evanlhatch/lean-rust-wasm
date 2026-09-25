@@ -531,7 +531,7 @@ theorem insertKeyW_nonzero [wk : WKind K] [ck : CanonKey α] [DecidableEq α] (k
         exact hr q hq
       · rw [if_neg hw0] at hq
         rcases List.mem_cons.mp hq with rfl | hq
-        · exact false_of_not_eq_true hw0
+        · exact (Bool.eq_false_iff).mpr hw0
         · exact hr q hq
     · rw [if_neg hkk] at hq
       by_cases hlt : ck.lt k k'
@@ -544,7 +544,7 @@ theorem insertKeyW_nonzero [wk : WKind K] [ck : CanonKey α] [DecidableEq α] (k
           · exact hr q hq
         · rw [if_neg hw] at hq
           rcases List.mem_cons.mp hq with rfl | hq
-          · exact false_of_not_eq_true hw
+          · exact (Bool.eq_false_iff).mpr hw
           · rcases List.mem_cons.mp hq with hq1 | hq
             · subst hq1
               exact hhead
@@ -1125,41 +1125,19 @@ theorem add_self_eq_zero (d : ZSet α) (h : add d d = zero) : d = zero := by
 instance : Add (ZSet α) := ⟨add⟩
 instance : Neg (ZSet α) := ⟨neg⟩
 
-/-- Rep-level Bool equality (decides rep equality through the
-    `DecidableEq`-routed decidables). -/
-def repBEq [DecidableEq α] : List (α × Int) → List (α × Int) → Bool
-  | [], [] => true
-  | (k, w) :: r, (k', w') :: r' =>
-      decide (k = k') && (decide (w = w') && repBEq r r')
-  | _, _ => false
-
-omit [ck : CanonKey α] [DecidableEq α] in
-theorem repBEq_refl [DecidableEq α] : ∀ l : List (α × Int), repBEq l l = true
-  | [] => rfl
-  | (k, w) :: r => by simp [repBEq, repBEq_refl r]
-
-omit [ck : CanonKey α] [DecidableEq α] in
-theorem repBEq_eq [DecidableEq α] : ∀ {l l' : List (α × Int)}, repBEq l l' = true → l = l'
-  | [], [], _ => rfl
-  | [], _ :: _, h => by simp [repBEq] at h
-  | _ :: _, [], h => by simp [repBEq] at h
-  | (k, w) :: r, (k', w') :: r', h => by
-      obtain ⟨h1, h23⟩ := Bool.and_eq_true_iff.mp h
-      obtain ⟨h2, h3⟩ := Bool.and_eq_true_iff.mp h23
-      have hk : k = k' := of_decide_eq_true h1
-      have hw : w = w' := of_decide_eq_true h2
-      subst hk
-      subst hw
-      exact congrArg (List.cons (k, w)) (repBEq_eq h3)
-
-instance : BEq (ZSet α) := ⟨fun m n => repBEq m.rep n.rep⟩
+-- Rep-level Bool equality: the core `DecidableEq (List (α × Int))`
+-- instance (DecidableEq α + Int's) already decides rep equality —
+-- the hand-rolled `repBEq`/`repBEq_refl`/`repBEq_eq` re-derived list
+-- equality the instance gives free (the consolidation: the instance
+-- IS the decidable shadow of rep equality, faithful by `of_decide_eq_true`).
+instance : BEq (ZSet α) := ⟨fun m n => decide (m.rep = n.rep)⟩
 
 /-- BEq is faithful: BEq-equal ZSets are equal (hence same weights). -/
 theorem eq_of_beq {m n : ZSet α} (h : m == n) : m = n := by
   apply ext
   intro a
   show weightOfW m.rep a = weightOfW n.rep a
-  rw [repBEq_eq h]
+  rw [of_decide_eq_true h]
 
 /-! ## The Kit.Change.Additive instance (the ladder's top rung) -/
 

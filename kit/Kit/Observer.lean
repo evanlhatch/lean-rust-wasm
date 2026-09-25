@@ -35,6 +35,8 @@ deliberately per 01-core §3, never silently.
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
+import Kit.Correspondence
+
 namespace Kit
 
 /-! ## The observer -/
@@ -155,5 +157,78 @@ theorem Observer.refines_trans (o : Observer E O) (a b c : List E)
   obtain ⟨y, hy, hxy⟩ := h₁ x hx
   obtain ⟨z, hz, hyz⟩ := h₂ y hy
   exact ⟨z, hz, hyz.trans hxy⟩
+
+/-! ## The Galois connection: coarsen ⊣ refine (04-verification §4 + 16-surface §5.4) -/
+
+/- **THE GALOIS CONNECTION** on the observer lattice. `Below` IS the
+    connection's data: with `o₁` the COARSE observer and `o₂` the FINE
+    one, the extract is the COARSEN map (a fine observation read as
+    the coarse one — the left-adjoint action), and the fine observation
+    map `o₂.see` is the REFINE map (the right-adjoint action on the
+    execution). The connection's law — the adjunction's closing
+    triangle — is the field `seen`: `coarsen (refine e) = o₁.see e`
+    (the coarse observation IS the coarsened fine observation). The
+    forgetful triangle closes; the reflecting one needs the extract
+    invertible — the ISO case (16 §5.1's graduation), not claimed at
+    the connection's grade. The carrier-form tie is `toAbstraction`
+    (ONE theorem); the coarsening-preserves-claims family
+    (`refines_below`, `equiv_below`) hangs off it as corollaries. -/
+
+/-- **THE TIE** (16 §5.4's one theorem): the observer lattice's
+    coarsening IS the correspondence kit's `Abstraction` grade — the
+    Galois-connection data as a carrier value. The abstraction sends
+    the execution to its FINE observation; the concretization fiber of
+    `b` names the executions whose COARSE observation the extract
+    reproduces; soundness is `seen` itself. Every
+    coarsening-preserves-claims statement is now a corollary of the
+    `Abstraction` surface (`Kit.Correspondence`), never a fresh
+    proof. -/
+def Observer.Below.toAbstraction {E O₁ O₂ : Type}
+    {o₁ : Observer E O₁} {o₂ : Observer E O₂} (h : Below o₁ o₂) :
+    Kit.Abstraction E O₂ where
+  abst e := o₂.see e
+  conc b e := o₁.see e = h.extract b
+  sound e := h.seen e
+
+/-- The Galois law, element form: `e` lies in the concretization fiber
+    of `b` iff the refined-then-coarsened observation matches — the
+    fiber identity unfolds to `seen`'s law. -/
+theorem Observer.Below.conc_iff {E O₁ O₂ : Type} {o₁ : Observer E O₁}
+    {o₂ : Observer E O₂} (h : Below o₁ o₂) (b : O₂) (e : E) :
+    h.toAbstraction.conc b e ↔ h.extract (o₂.see e) = h.extract b := by
+  constructor
+  · intro hs
+    show h.extract (o₂.see e) = h.extract b
+    rw [← h.seen e]
+    exact hs
+  · intro hs
+    show o₁.see e = h.extract b
+    rw [h.seen e]
+    exact hs
+
+/-- COROLLARY (the coarsening-preserves-claims family, 16 §5.4):
+    forgetting observations preserves refinement claims — a claim
+    visible under the FINE observer is visible under the COARSE one.
+    Instrumentation-preservation instances (`Kit.Hyper`'s output
+    row at the power; the machines' observer theorems) ride this,
+    never re-prove it. -/
+theorem Observer.refines_below {E O₁ O₂ : Type} {o₁ : Observer E O₁}
+    {o₂ : Observer E O₂} (h : Below o₁ o₂) {impl spec : List E}
+    (hr : o₂.refines impl spec) : o₁.refines impl spec := by
+  intro x hx
+  obtain ⟨y, hy, hxy⟩ := hr x hx
+  refine ⟨y, hy, ?_⟩
+  rw [h.seen y, h.seen x]
+  exact congrArg h.extract hxy
+
+/-- COROLLARY: coarser observers distinguish less — fine-observational
+    equality implies coarse-observational equality (the `Below`
+    discipline's kernel inclusion). -/
+theorem Observer.equiv_below {E O₁ O₂ : Type} {o₁ : Observer E O₁}
+    {o₂ : Observer E O₂} (h : Below o₁ o₂) {x y : E}
+    (hxy : o₂.equiv x y) : o₁.equiv x y := by
+  show o₁.see x = o₁.see y
+  rw [h.seen x, h.seen y]
+  exact congrArg h.extract hxy
 
 end Kit

@@ -83,11 +83,25 @@ private def defLineName? (code : String) : Option String :=
 
 /-- Deliberate exceptions: (file-suffix, reason) — the ratchet only
 tightens. The first row is the lint's own source: this module DEFINES
-the enc*/dec* vocabulary tables, the name-shape the lint hunts. -/
+the enc*/dec* vocabulary tables, the name-shape the lint hunts. The
+second is the enforcement wave's adjudication: the TS wire face's two
+TyAlg folds have NO Lean-level round-trip to prove — the encode rows
+ARE the identity (JSON carries the value shapes natively) and the
+decode rows are the emitted runtime's validating refusals; the
+correspondence is enforced at the ARTIFACT level (the byte-tie's
+golden bytes + the duel's differential vectors), not by a law over
+generated JS helper semantics. -/
 def roundtripAllowance : List (String × String) :=
   [("LintKit/CodecLints.lean",
    "this module DEFINES the lint's enc*/dec* vocabulary tables — the \
-     name-shape the lint hunts is its own source")]
+     name-shape the lint hunts is its own source"),
+  ("SchemaCore/Emit/Ts.lean",
+   "the TS wire face's two TyAlg folds: the encode rows ARE the identity \
+     (JSON carries the shapes natively), the decode rows are the emitted \
+     runtime's validating refusals — the correspondence is enforced at \
+     the artifact level (the byte-tie + the duel), not by a Lean law over \
+     generated JS semantics")]
+
 
 /-- The kit's codec vocabulary (Kit.Correspondence): a code-channel token
 registers the correspondence. -/
@@ -103,13 +117,11 @@ def hasCorrespondenceLaw (thms : Array String) (encs decs : Array String) : Bool
 
 /-- `unregisteredRoundtrip`: both directions defined, no registration. -/
 def checkUnregisteredRoundtrip (file : String) (content : String) : Array TextFinding := Id.run do
-  if isTestsFile file then return #[]
-  if (roundtripAllowance.find? fun (s, _) => (file.splitOn s).length > 1).isSome then
-    return #[]
+  let some lines := scannedLines file content roundtripAllowance | return #[]
   let mut encs : Array (Nat × String) := #[]
   let mut decs : Array (Nat × String) := #[]
   let mut thms : Array String := #[]
-  for (i, code, _comment) in splitCodeComments content do
+  for (i, code, _comment) in lines do
     let toks := code.trimAscii.toString.splitOn.filter (!·.isEmpty)
     match toks with
     | "def" :: nm :: _ | _ :: "def" :: nm :: _ =>
@@ -161,13 +173,11 @@ code channel and is skipped. Documented approximation: a code line with a
 trailing comment containing an `unknown …` + backtick payload false-positives
 (accepted — heuristic gates, not a parser). -/
 def checkDidyoumeanDiscipline (file : String) (content : String) : Array TextFinding := Id.run do
-  if isTestsFile file then return #[]
-  if (dymAllowance.find? fun (s, _) => (file.splitOn s).length > 1).isSome then
-    return #[]
+  let some lines := scannedLines file content dymAllowance | return #[]
   -- file-level exemption: the discipline is already in use here
   if dymTokens.any (fun k => (content.splitOn k).length > 1) then return #[]
   let mut out := #[]
-  for (i, code, _comment) in splitCodeComments content do
+  for (i, code, _comment) in lines do
     let raw := (content.splitOn "\n").toArray[i - 1]!
     if code.trimAscii.toString.isEmpty then continue  -- comment-only line
     unless (raw.splitOn "unknown").length > 1 do continue

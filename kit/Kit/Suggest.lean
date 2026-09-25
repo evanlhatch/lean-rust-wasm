@@ -9,8 +9,8 @@ at the lowest point both diagnostic sides import; a `module` file
 cannot import a pre-`module` file, so textkit→kit is build-impossible
 and the engine lives down, where Kit already imports TextKit). These
 `Kit`-namespaced definitions DELEGATE to it — kept so every Kit-side
-consumer (`Kit.Diag.closedWorld`'s shim, FreshName, the KitTests pins)
-is interface-preserved.
+consumer (`Kit.Diag.closedWorld`'s shim, the KitTests pins) is
+interface-preserved.
 
 Provenance: mined from
 `legacy/lean/codegen-core/CodegenCore/DidYouMean.lean` (the ranked

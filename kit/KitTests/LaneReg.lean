@@ -9,9 +9,11 @@ failures) lives in the NEXT module, `KitTests.LaneDemo` (a module's
 own initializers do not run during its own elaboration).
 
 Name convention (Kit.Lane's header): base `demoLaneItem` (the item
-type's last component decapitalized) → `demoLaneItemExt`, the
-`@[demoLaneItem]` attribute, `getDemoLaneItems`, `demoLaneItemRegistry`,
-`demoLaneItemNameOf`, `demoLaneItemAttrReg`.
+type's last component decapitalized) → `demoLaneItemLaneId` (the
+lane's identity, data in the ONE log `Kit.Lane.laneLogExt`), the
+`@[demoLaneItem]` attribute, `getDemoLaneItems` (the reader — the
+routed replay), `demoLaneItemRegistry`, `demoLaneItemNameOf`,
+`demoLaneItemAttrReg`.
 
 Provenance: fresh (the fixture IS the substrate's first consumer; no
 legacy content).

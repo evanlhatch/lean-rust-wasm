@@ -145,6 +145,15 @@ structure Lexeme (R : Type) where
     scan ⟨k, (print r).toList ++ sfx⟩ = .ok (r, ⟨k + (print r).length, sfx⟩)
   consumes : ∀ cur r cur', scan cur = .ok (r, cur') →
     cur'.cs.length < cur.cs.length
+  /-- The head fails the empty text (the tailOk-nil lemma's content —
+      design v2 §2.5): every effective-first head must fail `[]`, so
+      the `optE none`/`repE` stop conjuncts hold at the empty suffix.
+      For `cls` heads `rfl`; for `lit s` it is `s ≠ ""` — an
+      empty-literal lexeme is useless anyway (it matches every
+      continuation, so no WF row would ever pass it against a
+      sibling). The failure belongs at lexeme construction, not
+      grammar check. Consumer: `Grammar.tailOk_nil` (Laws.lean). -/
+  head_ne : head.matches [] = false
 
 /-! ## the open family (the fix body) + the self-value relation -/
 

@@ -125,7 +125,8 @@ structure Matrix where
     (ctor × emitter). -/
 def computeMatrix (items : List Item) : Except String Matrix := do
   let es : List (Kit.Emit.Emitter (DataRegistry Item)) :=
-    [SchemaCore.witEmitter, SchemaCore.Emit.Rust.rustEmitter]
+    [SchemaCore.witEmitter, SchemaCore.Emit.Rust.rustEmitter,
+     SchemaCore.Emit.Ts.tsEmitter]
   let mut probeOuts : Array (Array (List (String × String))) := #[]
   for (_, sample) in tyUniverse do
     match withProbe items sample with
@@ -203,9 +204,9 @@ def baselinePath : System.FilePath := "notes/coverage-matrix.md"
     write-or-diff baseline tail. Exit 1 on drift/absent baseline, a
     regen failure, or (with `--strict`) any registry-quiet ctor. -/
 unsafe def run (write acceptDrift strict : Bool) : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "coverage" pkg fun env => do
-    match SchemaCore.regen env with
+    match ← Kit.Lane.runCoreIO env (SchemaCore.regen env) with
     | .error e =>
       IO.eprintln s!"coverage: REGEN FAILED — {e}"
       return 1
@@ -223,8 +224,9 @@ unsafe def run (write acceptDrift strict : Bool) : IO UInt32 := do
             unexercised members of the closed universe (findings, not \
             failures; `--strict` promotes): {String.intercalate ", " quiet}"
         if strict && !quiet.isEmpty then failed := true
-        Driver.reportGate "coverage" "matrix" "the coverage surface changed"
-          baselinePath text write acceptDrift failed
+        Driver.reportGate "coverage" baselinePath text write acceptDrift failed
           "coverage: matrix in sync with the committed baseline"
+          (Driver.diffCheck "coverage" "matrix" "the coverage surface changed"
+            baselinePath text)
 
 end Gates.Coverage

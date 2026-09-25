@@ -87,6 +87,23 @@ def hasNolint (env : Environment) (decl optName : Name) : Bool :=
   | some p => p.linters.contains optName
   | none   => false
 
+/-- The defining module of a constant, as a name (`none` for a constant
+with no module index — the anonymous module, which no module-level
+exemption can match). The per-linter decl→module prelude's ONE copy:
+every env-linter that names or exempts the defining module resolves it
+through here, never by re-rolling the `getModuleIdxFor?`/`moduleNames`
+lookup. -/
+def modOfDecl (env : Environment) (decl : Name) : Option Name :=
+  env.getModuleIdxFor? decl |>.bind fun idx => env.header.moduleNames[idx]?
+
+/-- A module name counts as a test module when it has a name component
+ENDING in `Tests` (`LintKitTests`, `KitTests`, `SchemaTests`, … — the
+verdictCtors intent; a plain `.contains "Tests"` never matches, since
+`Tests` is not itself a component). The Tests-exemption's ONE spelling
+(the drifting per-linter `.splitOn "."` twins are gone). -/
+def isTestModule (m : Name) : Bool :=
+  m.components.any fun c => c.toString.endsWith "Tests"
+
 /-! ## `register_guestlang_linter` — the env-linter registration one-liner
 
 Every env-linter carries the same three-part ritual: a `register_option`
@@ -136,8 +153,15 @@ helpers — see `Lean.isAutoDeclOrPrivate_Internal`), plus
 equation-lemma-shaped names (`foo.eq_1`, `foo.eq_def`) whose findings
 would duplicate the report on their parent definition, plus constructors
 and eliminators of inductive types (kernel-generated; their names follow
-the inductive's — the inductive decl itself is the report site). -/
+the inductive's — the inductive decl itself is the report site), plus the
+`Lean.Parser`-rooted machinery the SYNTAX commands generate (a
+`declare_syntax_cat qcol` lands `Lean.Parser.Category.qcol` in the
+declaring package's env — the enforcement wave's adjudication: the
+category defs' bodies are command-generated boilerplate, not concept
+copies; observed as Query's qcol/qpred/qlangItem dupDefBodies
+false-positive triple). -/
 def skipDecl (decl : Name) : CoreM Bool := do
+  if (`Lean.Parser).isPrefixOf decl then return true
   if ← Lean.isAutoDeclOrPrivate_Internal decl then return true
   let env ← getEnv
   if env.isConstructor decl then return true

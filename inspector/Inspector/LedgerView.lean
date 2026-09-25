@@ -16,11 +16,10 @@ HONEST about that: the absent file renders the DORMANT state, never a
 fabricated green, and the emitter-declared side of the orphan check is
 named as Gates.Ownership's row (the two faces, kept distinct).
 
-The on-disk artifact scan is MIRRORED from Gates.Ownership (scanRoots +
-the explicit-stack walk), not imported: the inspector stays a leaf so
-the gates can consume its sweep without a cycle (Inspector.Replay's
-header note). One writer per artifact path: when the gates consume the
-inspector, the mirror swaps to the shared surface.
+The on-disk artifact scan is Inspector.ArtifactScan's (the shared leaf
+the ownership gate consumes too — the anti-cycle mirror is retired:
+gates→inspector is the sanctioned direction, and the mirror's cost
+already arrived, its scanRoots list missing the faults lane's row).
 
 The five questions (notes/v3/01-core.md):
 - root: none — the ledger reading's rendering face over Kit.Ledger's
@@ -35,59 +34,26 @@ The five questions (notes/v3/01-core.md):
 -/
 
 import Kit.Ledger
+import Kit.ListExtras
+import Inspector.ArtifactScan
+import Inspector.Tables
 
 namespace Inspector.LedgerView
 
 open Kit.Ledger
+open SchemaCore (Field RowVals)
+open Inspector.Tables (ledgerFields ledgerRowOf ledgerRowsOf selectRows projectRows
+  readStr readU64 qLedgerAll qLedgerDemands)
 
-/-! ## The host face (the committed file + the mirrored artifact scan) -/
+/-! ## The host face (the committed file + the shared artifact scan) -/
 
 /-- The committed ledger file's path (Kit.Ledger's named shape; the
     ONE writer is Kit.Emit's driver layer — this module only reads). -/
 def ledgerPath : System.FilePath := "notes/artifact-ledger.tsv"
 
-/-- One generated-artifact scan root (MIRRORED from Gates.Ownership —
-    see the header; a directory + a required extension, `""` = all). -/
-structure ScanRoot where
-  dir : String
-  ext : String
-
-/-- The scan roots, mirrored verbatim from Gates.Ownership's (the
-    tree's layout: all of `gen/` + the generated crate's Rust dirs). -/
-def scanRoots : List ScanRoot :=
-  [ { dir := "gen", ext := "" }
-  , { dir := "crates/schema-generated/src", ext := "rs" }
-  , { dir := "crates/schema-generated/tests", ext := "rs" } ]
-
-/-- The recursive directory walk, as an explicit worklist loop (the
-    noNewPartial rule — structurally terminating on the stack's own
-    consumption). MIRRORED from Gates.Ownership.walk. -/
-def walk (root : System.FilePath) : IO (List String) := do
-  let mut acc : List String := []
-  let mut stack : List System.FilePath := [root]
-  repeat
-    match stack with
-    | [] => break
-    | dir :: rest =>
-      stack := rest
-      unless ← dir.pathExists do continue
-      let entries ← dir.readDir
-      for e in entries do
-        if ← e.path.isDir then
-          stack := e.path :: stack
-        else
-          acc := e.path.toString :: acc
-  pure acc.reverse
-
-/-- The on-disk artifact set: every scan root's files (extension-
-    filtered), sorted for a deterministic report. -/
-def scanGenerated : IO (List String) := do
-  let mut out : List String := []
-  for r in scanRoots do
-    let all ← walk r.dir
-    out := out ++ (if r.ext.isEmpty then all
-                   else all.filter (·.endsWith ("." ++ r.ext)))
-  pure (out.toArray.qsort (fun a b => a <= b) |>.toList)
+/-- The on-disk artifact set — Inspector.ArtifactScan's (the ONE
+    enumeration; the ownership gate rides the same surface). -/
+def scanGenerated : IO (List String) := Inspector.ArtifactScan.scanGenerated
 
 /-- The committed ledger's state at read time: ABSENT (the honest
     dormant state — the file lands with the first driver wiring), the
@@ -109,10 +75,8 @@ def readLedger : IO LedgerState := do
 /-! ## The pure renders (the tests' pins; no IO past this line) -/
 
 /-- String-list dedup, order-preserving (the forward table's name
-    universe). -/
-def dedupStr : List String → List String
-  | [] => []
-  | x :: xs => if xs.contains x then dedupStr xs else x :: dedupStr xs
+    universe) — Kit.ListExtras.dedup's String face (the ONE dedup). -/
+def dedupStr : List String → List String := Kit.ListExtras.dedup
 
 /-- One artifact's backward line: the demand's full spec surface (rows
     PLUS collections — the rows-only shape is the pre-correction query
@@ -123,21 +87,52 @@ def renderBackwardLine (a : LedgerRow) : String :=
   s!"    collections: {if a.demand.collections.isEmpty then "(none)" else Kit.Ledger.namesCsv a.demand.collections}\n" ++
   s!"    obligations: {if a.obligations.isEmpty then "(none)" else Kit.Ledger.strsCsv a.obligations}"
 
+/-- THE RENDER FACE over the table row: the qlang! scan's result rows
+    → the SAME bytes. The list columns are the ledger file's own csv
+    spellings (`namesCsv`/`strsCsv` — the persisted format's list
+    faces), so the line is byte-identical to `renderBackwardLine`'s
+    (the tests pin the equality, row by row). -/
+def renderBackwardRowT (row : RowVals ledgerFields) : String :=
+  s!"  {readStr row "path"} ← {readStr row "emitter"} (rev {readStr row "emitterRev"}, hash {readU64 row "hash"})\n" ++
+  s!"    spec rows: {if readStr row "specRows" == "" then "(none)" else readStr row "specRows"}\n" ++
+  s!"    collections: {if readStr row "collections" == "" then "(none)" else readStr row "collections"}\n" ++
+  s!"    obligations: {if readStr row "obligations" == "" then "(none)" else readStr row "obligations"}"
+
 /-- The BACKWARD table: every ledger row's demand surface ("what made
-    this?"). Empty ledger → the honest no-rows line. -/
+    this?") — THE MIGRATED SHAPE (C5): the qlang! scan `qLedgerAll`
+    decides the table face; the render walks the table's order
+    (`selectRows` — the engine's answer is a canonical set, the render
+    keeps the table's order), so the bytes are the hand fold's. Empty
+    ledger → the honest no-rows line. -/
 def backwardTable (rows : List LedgerRow) : String :=
-  if rows.isEmpty then "backward: no ledger rows\n"
+  let trows := selectRows qLedgerAll (ledgerRowsOf rows)
+  if trows.isEmpty then "backward: no ledger rows\n"
   else "backward (artifact → its demand surface):\n" ++
-    String.intercalate "" (rows.map renderBackwardLine)
+    String.intercalate "" (trows.map renderBackwardRowT)
+
+/-- The csv field's members (the EMPTY field is NO members — the
+    ledger file's own list spelling; `splitOn` on the empty field would invent
+    one empty member). -/
+def csvMembers (s : String) : List String :=
+  s.splitOn "," |>.filter (· != "")
 
 /-- The FORWARD table: every demanded name (row or collection) → the
-    affected artifacts. `forward r [r]` — the changed name is either
-    the row itself or a collection whose contents changed; the query is
-    CONSERVATIVE (Kit.Ledger's proved face: it may over-report on the
-    collection face, never under). -/
+    affected artifacts. THE MIGRATED SHAPE (C5): the name universe is
+    the qlang! PROJECTION `qLedgerDemands` (the demand columns, the
+    drop projection's order-preserving narrowing), read back through
+    the csv spellings; the affected filter stays `Kit.Ledger.forward`
+    — the proved conservatism is consumed, never re-derived (a
+    csv-membership predicate over a RUNTIME name is outside the
+    qlang! fragment — the named friction). The universe's order is the
+    engine's canonical order (sorted) — no pin distinguishes it.
+    `forward r [r]` — the changed name is either the row itself or a
+    collection whose contents changed; the query is CONSERVATIVE
+    (Kit.Ledger's proved face: it may over-report on the collection
+    face, never under). -/
 def forwardTable (rows : List LedgerRow) : String :=
   let names := dedupStr
-    (rows.flatMap fun a => (a.demand.rows.map toString) ++ (a.demand.collections.map toString))
+    ((projectRows qLedgerDemands (ledgerRowsOf rows)).flatMap fun r =>
+      csvMembers (readStr r "specRows") ++ csvMembers (readStr r "collections"))
   if names.isEmpty then "forward: no demanded names\n"
   else "forward (spec name → affected artifacts):\n" ++
     String.intercalate "\n" (names.map fun n =>

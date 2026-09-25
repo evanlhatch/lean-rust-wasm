@@ -361,10 +361,13 @@ def vListToList : {t : Ty} → VList t → List (Value t)
   | _, .nil => []
   | _, .cons v vl => v :: vListToList vl
 
-/-- Rebuild a `VList` from a plain list. -/
-def listToVList : {t : Ty} → List (Value t) → VList t
-  | _, [] => .nil
-  | _, v :: vs => .cons v (listToVList vs)
+/-- Rebuild a `VList` from a plain list (the match column is the LIST
+    alone — putting the type in a match column forces the GADT matcher
+    (the `@[irreducible]` `_unary` compilation), which blocks the
+    consumers' `rfl`/simp discipline). -/
+def listToVList {t : Ty} : List (Value t) → VList t
+  | [] => .nil
+  | v :: vs => .cons v (listToVList vs)
 
 /-- The erase/rebuild round trip (rebuild side). -/
 theorem listToVList_vListToList :
@@ -388,11 +391,12 @@ def vMapToList : {k : KeyTy} → {v : Ty} → VMap k v → List (Value k.toTy ×
   | _, _, .cons kv vv m => (kv, vv) :: vMapToList m
 
 /-- Rebuild a `VMap` from a plain association list (no nested pair
-    pattern — the equation lemma must fire under simp). -/
-def listToVMap : {k : KeyTy} → {v : Ty} →
+    pattern — the equation lemma must fire under simp; single match
+    column, same GADT-matcher ban as `listToVList`). -/
+def listToVMap {k : KeyTy} {v : Ty} :
     List (Value k.toTy × Value v) → VMap k v
-  | _, _, [] => .nil
-  | _, _, p :: kvs => .cons p.1 p.2 (listToVMap kvs)
+  | [] => .nil
+  | p :: kvs => .cons p.1 p.2 (listToVMap kvs)
 
 /-- The erase/rebuild round trip (rebuild side). -/
 theorem listToVMap_vMapToList :

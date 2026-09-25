@@ -36,8 +36,9 @@ open SchemaCore TestingKit
     check against). -/
 example : fixtureSnap.version = 1 := rfl
 
-/-- The duel carries four proposals — one per face of the slice. -/
-example : duelProposals.length = 4 := rfl
+/-- The duel carries five proposals — one per face of the slice, the
+    same-key face included (p12 = `selfP`). -/
+example : duelProposals.length = 5 := rfl
 
 /-- The legal transfer (the duel's p8). -/
 def okP : Proposal := { base := 1, tid := 8, src := 1, dst := 2, amount := 30 }
@@ -64,6 +65,39 @@ example : proposalBytes overdraftP = [1, 9, 2, 1, 244, 3] := rfl
     violation lane's bridge (kernel-checked, both citations live). -/
 example : Valid (postDb fixtureSnap.db okP) :=
   check_sound fixtureSnap.db okP rfl
+
+/-! ## The self-transfer face (the honesty pin) -/
+
+/-- The self-transfer (src = dst = alice, amount 10): the duel's p12
+    IS this proposal (the coverage gap closed this wave), so the pins
+    below are the Lean-side truth BOTH the generated mirror and the
+    duel's consumer must match — the semantics cannot drift from
+    SchemaCore.Commit's header again. -/
+def selfP : Proposal := { base := 1, tid := 12, src := 1, dst := 1, amount := 10 }
+
+/-- The self-transfer's bytes: five single-byte varints (the duel's
+    p12 rides THESE bytes; the Rust consumer re-proposes them). -/
+example : proposalBytes selfP = [1, 12, 1, 1, 10] := rfl
+
+/-- THE SELF-TRANSFER'S TRUE SEMANTICS, kernel-pinned: both account
+    updates are computed from the SNAPSHOT row and the keyed fold
+    applies them src-then-dst, each update REPLACING the row sharing
+    the key image with its full row (no arithmetic composes) — the
+    LAST (dst) row wins wholesale, so the balance reads bal + amt
+    (the amount added ONCE): `[110, 50]`, NOT net zero and NOT
+    unchanged. SchemaCore.Commit's header states exactly this; the
+    host's live.rs pin observes the same value. -/
+example : (postDb fixtureSnap.db selfP).accounts.map accBal = [110, 50] := rfl
+
+/-- The self-transfer's ledger row still records the command (the
+    audit face — the insert ALWAYS fires, whatever the accounts do). -/
+example : (postDb fixtureSnap.db selfP).transfers.map trAmount = [10] := rfl
+
+/-- The self-transfer's post-state is VALID (bal + amt keeps alice
+    positive here) — the commit ACCEPTS a face whose balance arithmetic
+    is last-wins, not net zero. -/
+example : Valid (postDb fixtureSnap.db selfP) :=
+  check_sound fixtureSnap.db selfP rfl
 
 /-! ## The three faces -/
 
@@ -166,13 +200,14 @@ def staleFaceSpec : Spec :=
 
 /-! ## The duel (the differential's Lean side) -/
 
-/-- The duel's wiring: four vectors, the expectations cover them, and
-    every expectation agrees with the CHECKER's own verdict (the
-    golden IS the commit — a hand-flipped expectation fails here). -/
+/-- The duel's wiring: five vectors — the same-key face IN the set —
+    the expectations cover them, and every expectation agrees with the
+    CHECKER's own verdict (the golden IS the commit — a hand-flipped
+    expectation fails here). -/
 def duelSpec : Spec :=
   Spec.ofList "the commit duel's vectors + checker-computed expectations"
     (fun _ => assert ((
-      (commitDuel.vectors.length == 4)
+      (commitDuel.vectors.length == 5)
       && (Kit.Duel.expectsCovered commitDuel)
       && (commitDuel.expects.all fun (path, expect) =>
             match duelProposals.find? (fun np => commitDuelPath np.1 == path),
@@ -194,6 +229,11 @@ def duelSpec : Spec :=
           | .decode "accept" => true | _ => false)
       && (match expectOf overdraftP with
           | .refuse => true | _ => false)
+      -- the same-key face is IN the set (the self-transfer's live
+      -- face: the checker computes ACCEPT — the dst row wins, bal +
+      -- amt keeps the fixture valid)
+      && (match expectOf selfP with
+          | .decode note => note == "accept" | _ => false)
       -- the dangling face is IN the set (the foreign key's live face)
       && (match checkVerdict fixtureSnap.db danglingP with
           | .refuse vs =>
@@ -209,6 +249,15 @@ def duelSpec : Spec :=
             expects_nodup := by decide })
           "control fired: a manifest row over an ABSENT vector is a \
             generator bug — the shape check must fire")
+    , ("the self-transfer's expectation drifted",
+        fun _ =>
+          assert (match expectOf selfP with
+                  | .decode note => note != "accept"
+                  | .refuse => true | .run _ | .trap => true)
+            "control fired: the same-key face's expectation is the
+              checker's ACCEPT — the dst row wins wholesale (bal + amt
+              keeps the fixture valid); a drift here is the golden
+              moving under the duel's feet")
     , ("an accept row is expect-refused",
         fun _ =>
           match expectOf okP with

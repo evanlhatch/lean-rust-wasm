@@ -118,10 +118,6 @@ def Dir.flip : Dir → Dir
 /-- Directions flip twice back to the same one. -/
 theorem Dir.flip_flip (d : Dir) : d.flip.flip = d := by cases d <;> rfl
 
-/-- A direction differs from its flip (ctor distinctness). -/
-theorem Dir.flip_ne (d : Dir) : d ≠ d.flip := by
-  cases d <;> intro h <;> cases h
-
 namespace Session
 
 variable {P : Type}
@@ -445,52 +441,36 @@ theorem observeHold [DecidableEq P] (s : Session P) (i : Move P) :
   rw [impl_holds]
   rfl
 
-/-- The IMPL coalgebra's observe at a FRESH state that refuses. -/
+/-- The FRESH observe faces, written ONCE (flag + engine generic):
+    the impl and spec engines' maps at a fresh state differ only in the
+    flag the map colors — the builder takes that map (`hM`), so the
+    refusal face and the firing face are one lemma each, not two
+    engines × two faces. -/
 @[nolint linter.guestlang.zeroCitation "load-bearing: consumed by this module's proofs of the test-pinned theorems (follow_runs/bounded_refines/taken_of_run/bisim_iff_respStreams)"]
-theorem observeFresh_none [DecidableEq P] (k : Session P) (i : Move P)
-    (h : sessionStep? k i = none) :
-    (⟨boundedImpl, nodeObs⟩ :
+theorem observe_fresh_none [DecidableEq P] {M : Machine (Bool × Session P) (Move P)}
+    (b : Bool) (hM : ∀ k i, M.step? (false, k) i
+      = (sessionStep? k i).map fun k' => (b, k'))
+    (k : Session P) (i : Move P) (h : sessionStep? k i = none) :
+    (⟨M, nodeObs⟩ :
         Coalgebra (Bool × Session P) (Move P) (Option (Dir × P))).observe
       (false, k) i = none := by
-  show (((sessionStep? k i).map fun k' => (true, k')).map
-      fun s' => (nodeObs.see s', s')) = none
-  rw [h]
+  show ((M.step? (false, k) i).map fun s' => (nodeObs.see s', s')) = none
+  rw [hM, h]
   rfl
 
-/-- The SPEC coalgebra's observe at a FRESH state that refuses. -/
 @[nolint linter.guestlang.zeroCitation "load-bearing: consumed by this module's proofs of the test-pinned theorems (follow_runs/bounded_refines/taken_of_run/bisim_iff_respStreams)"]
-theorem observeSpec_none [DecidableEq P] (k : Session P) (i : Move P)
-    (h : sessionStep? k i = none) :
-    (⟨mSpec, nodeObs⟩ :
+theorem observe_fresh_some [DecidableEq P] {M : Machine (Bool × Session P) (Move P)}
+    (b : Bool) (hM : ∀ k i, M.step? (false, k) i
+      = (sessionStep? k i).map fun k' => (b, k'))
+    (k : Session P) (i : Move P) (k' : Session P)
+    (h : sessionStep? k i = some k') :
+    (⟨M, nodeObs⟩ :
         Coalgebra (Bool × Session P) (Move P) (Option (Dir × P))).observe
-      (false, k) i = none := by
-  show (((sessionStep? k i).map fun k' => (false, k')).map
-      fun s' => (nodeObs.see s', s')) = none
-  rw [h]
+      (false, k) i = some (nodeSee k', (b, k')) := by
+  show ((M.step? (false, k) i).map fun s' => (nodeObs.see s', s'))
+    = some (nodeSee k', (b, k'))
+  rw [hM, h]
   rfl
-
-/-- Both observes at a FRESH state that fires — the same observation,
-    the impl flagged holding, the spec flagged fresh. -/
-@[nolint linter.guestlang.zeroCitation "load-bearing: consumed by this module's proofs of the test-pinned theorems (follow_runs/bounded_refines/taken_of_run/bisim_iff_respStreams)"]
-theorem observeFresh_some [DecidableEq P] (k : Session P) (i : Move P)
-    (k' : Session P) (h : sessionStep? k i = some k') :
-    (⟨boundedImpl, nodeObs⟩ :
-        Coalgebra (Bool × Session P) (Move P) (Option (Dir × P))).observe
-        (false, k) i
-      = some (nodeSee k', (true, k'))
-    ∧ (⟨mSpec, nodeObs⟩ :
-        Coalgebra (Bool × Session P) (Move P) (Option (Dir × P))).observe
-        (false, k) i
-      = some (nodeSee k', (false, k')) := by
-  refine ⟨?_, ?_⟩
-  · show (((sessionStep? k i).map fun j => (true, j)).map
-      fun s' => (nodeObs.see s', s')) = some (nodeSee k', (true, k'))
-    rw [h]
-    rfl
-  · show (((sessionStep? k i).map fun j => (false, j)).map
-      fun s' => (nodeObs.see s', s')) = some (nodeSee k', (false, k'))
-    rw [h]
-    rfl
 
 /-- THE REFINEMENT (the honest minimal of impl ≤ spec, riding the
     landed `Coalg.Refines`): an implementation that performs the first
@@ -526,13 +506,14 @@ theorem bounded_refines [DecidableEq P] :
     | false =>
         cases hs : sessionStep? k₁ i with
         | none =>
-            refine Or.inl ⟨observeFresh_none k₁ i hs, ?_⟩
+            refine Or.inl ⟨observe_fresh_none true (fun k i => rfl) k₁ i hs, ?_⟩
             intro o₂ s₂' hsSpec
-            rw [observeSpec_none k₁ i hs] at hsSpec
+            rw [observe_fresh_none false (fun k i => rfl) k₁ i hs] at hsSpec
             exact absurd hsSpec (by simp)
         | some k' =>
             exact Or.inr ⟨nodeSee k', (true, k'), (false, k'),
-              (observeFresh_some k₁ i k' hs).1, (observeFresh_some k₁ i k' hs).2,
+              observe_fresh_some true (fun k i => rfl) k₁ i k' hs,
+              observe_fresh_some false (fun k i => rfl) k₁ i k' hs,
               Or.inl rfl⟩
 
 end Session

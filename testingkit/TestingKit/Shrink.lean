@@ -67,8 +67,9 @@ The five questions (notes/v3/01-core.md):
 - ladder rung: rung 1 + one rung-4 proof — structural defs; the removals
   size lemma is one structural induction; the loop's termination is the
   WF recursion the `smaller` field discharges.
-- gate row: none — TestingKit is outside Gates.Packages' gated set;
-  TestingKitTests self-tests the discipline.
+- gate row: TestingKit's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); TestingKitTests self-tests the
+  discipline.
 -/
 
 module

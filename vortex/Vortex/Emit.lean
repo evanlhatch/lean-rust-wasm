@@ -62,6 +62,7 @@ def renderEncoding : EncodingSpec → String
   | .dict => "dict"
   | .sequence => "sequence"
   | .constant => "constant"
+  | .sparse child => s!"sparse<{renderEncoding child}"
 
 /-- The column layout's spelling: the validity layer (when the field
     is nullable) OUTER of the encoding — kernels peel layers, so the

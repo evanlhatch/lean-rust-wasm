@@ -12,8 +12,8 @@ FORWARD consumer:
    refusal (exit 1), never a silent zero (an empty old universe would
    read as all-additions — the dishonest clean).
 2. THE CURRENT — the replayed registry (the integral of the event log,
-   15 #7) through the ONE reader (`registryOfItems ∘ schemaExt.getState`
-   — the same replay gen-check runs).
+   15 #7) through the ONE reader (`getSchemas` — the routed replay of
+   the ONE log, wave-30 A2; the same replay gen-check runs).
 3. THE DIFF + VERDICT — `SchemaCore.diff` (the net change over the name
    key) + `SchemaCore.verdictOf` over the remedy registry below. The
    change list prints as data; a delete+add pair with agreeing field
@@ -65,7 +65,7 @@ def registeredMigrations : List SchemaCore.Migration := []
 
 /-- `gates breaking` — the diff + verdict + the exit-code discipline. -/
 unsafe def run : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "breaking" pkg fun env => do
     -- 1. the baseline: the committed snapshot, through the ONE parser
     unless ← snapshotPath.pathExists do
@@ -80,18 +80,24 @@ baseline is NEVER the empty universe — that would read as all-additions)"
         IO.eprintln s!"breaking: FAIL — baseline {snapshotPath} is corrupt: {e}"
         return 1
       | .ok items => pure items
-    -- 2. the current: the replayed registry, through the ONE reader
+    -- 2. the current: the routed replay of the ONE log (wave-30 A2),
+    -- through the ONE reader
     let current ←
-      match registryOfItems (schemaExt.getState env) with
+      match ← Kit.Lane.runCoreIO env (SchemaCore.getSchemas env) with
       | .error e => do
         IO.eprintln s!"breaking: FAIL — the replayed registry refused: {e}"
         return 1
-      | .ok reg => pure reg.items
+      | .ok items =>
+        match SchemaCore.registryOfItems items with
+        | .error e => do
+          IO.eprintln s!"breaking: FAIL — the replayed registry refused: {e}"
+          return 1
+        | .ok reg => pure reg.items
     -- 3. the diff + the verdict
-    let changes := SchemaCore.diff baseline current
+    let changes := SchemaCore.diff baseline.items current
     let verdict := SchemaCore.verdictOf changes registeredMigrations
     let breaking := SchemaCore.breakingOf changes
-    let renames := SchemaCore.renameCandidates baseline current
+    let renames := SchemaCore.renameCandidates baseline.items current
     for c in changes do
       IO.println s!"  {c}"
     for (o, n) in renames do

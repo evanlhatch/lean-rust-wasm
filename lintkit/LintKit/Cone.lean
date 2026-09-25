@@ -98,61 +98,97 @@ def Cone.render : Cone → String
   | .c2theory    => "C2 (theory)"
   | .c3app       => "C3 (app)"
 
+/-- One cone's rows (the table's group face — the per-cone blocks read
+as the cone's membership, the helper is the pairing). -/
+def coneRows (c : Cone) (roots : List Name) : List (Name × Cone) :=
+  roots.map (·, c)
+
 /-- THE cone table: project root → cone. DATA (06 §8) — the lakefile
 records build shape, this records discipline. A new root lands here
 deliberately with the cone its content earns; an unknown root is
-table-extension debt (the linter never guesses). -/
-def coneOfRoot? : Name → Option Cone
+table-extension debt (the linter never guesses).
+
+DATA, as a list (not a pattern match) so the registry gates can
+ENUMERATE it: packages-check's cone direction checks the table against
+the build shape both ways (a gated root with no row is the loud gap; a
+row naming no source is the deleted-direction drift) — a `match`
+hidden the domain, and a hand-copied domain would be the exact drift
+the gate exists to kill (one writer per artifact path: this list). -/
+
+def coneTable : List (Name × Cone) :=
   -- C0 machinery: the core-only substrate any package may import.
-  | `Kit | `TextKit | `TestingKit | `LintKit => some .c0machinery
-  -- Gates: host-side, core-only (the gate spine consumes C0 findings).
-  | `Gates | `LintKitTests => some .c0machinery
-  -- LintKit's fixture roots: the planted teeth modules (C0 machinery —
-  -- they import LintKit and nothing else) + the LOUD-GAP tooth, whose
-  -- project root is deliberately LEFT OUT of the table (see
-  -- LintKitFixturesUntabled in LintKitTests.Main).
-  | `LintKitFixtures => some .c0machinery
+  -- LintKit's fixture note: the LOUD-GAP tooth's project root
+  -- (LintKitFixturesUntabled) is deliberately LEFT OUT of the table
+  -- (see LintKitTests.Main).
+  coneRows .c0machinery
+    [`Kit, `TextKit, `TestingKit, `LintKit]  -- the substrate any package may sit on
+  ++ coneRows .c0machinery [`Gates, `LintKitTests]  -- host-side, core-only (the gate spine consumes C0 findings)
+  ++ coneRows .c0machinery [`LintKitFixtures]  -- the planted teeth modules (import LintKit and nothing else)
   -- C0 tests + exe drivers (verified imports: their C0 lib + TestingKit
   -- + Lean — nothing cone-high).
-  | `KitTests | `TestingKitTests | `TextKitTests => some .c0machinery
-  | `LintMain | `GatesMain => some .c0machinery
+  ++ coneRows .c0machinery
+    [`KitTests, `TestingKitTests, `TextKitTests, `LintMain, `GatesMain,
+     `GatesTests]
   -- C1 domain cores + their tests + the schema package's own regen
   -- driver (verified imports: Kit/TextKit + each other; SchemaCore.Emit
   -- ← Wit/Wit.Render, same cone; SchemaMain ← SchemaCore + Lean).
-  | `SchemaCore | `SchemaTests | `SchemaMain => some .c1domain
-  | `WasmCore | `WasmCoreTests => some .c1domain
-  | `Wit | `WitTests => some .c1domain
-  | `Machines | `MachinesTests => some .c1domain
-  | `ZSet | `ZSetTests => some .c1domain
-  | `Datalog | `DatalogTests => some .c1domain
-  | `Cost | `CostTests => some .c1domain
-  -- Effects: the C1-ADJACENT machinery (the closed effect lattice + the
-  -- resources split + the footprint laws — notes/v3/08-capabilities.md
-  -- §8): annotation/accounting substrate for the domain lanes'
-  -- composition joins, imports Kit only (the cone rule) — the
-  -- ZSet/Cost precedent.
-  | `Effects | `EffectsTests => some .c1domain
-  | `Analysis | `AnalysisTests => some .c1domain
-  | `Query | `QueryTests => some .c1domain
-  | `Vortex | `VortexTests => some .c1domain
-  -- C2: the host-side tooling lanes — read the domain cores' public
-  -- surfaces without being domain cores: Inspector ← SchemaCore.Check
-  -- (+ Kit.Obligation, Lean); Scaffold ← Kit + TestingKit (the AppSpec →
-  -- generated-skeleton engine). InspectorTests rides Inspector's cone;
-  -- InspectorMain is its driver.
-  | `Inspector | `InspectorTests | `InspectorMain => some .c2theory
-  | `Scaffold => some .c2theory
-  -- Guest: the LCNF→wasm compilation lane's host side (Guest.Lcnf ←
-  -- Lean + Lean.Compiler.LCNF; Guest.Lower ← WasmCore's ONE AST +
-  -- Kit.Diag — the domain core read-only; the EMITTED code is the
-  -- guest). Its tests ride the lane's cone.
-  | `Guest | `GuestTests => some .c2theory
+  ++ coneRows .c1domain
+    [`SchemaCore, `SchemaTests, `SchemaMain, `WasmCore, `WasmCoreTests,
+     `Wit, `WitTests, `Machines, `MachinesTests, `ZSet, `ZSetTests,
+      `Datalog, `DatalogTests, `Cost, `CostTests,
+      -- Effects: the C1-ADJACENT machinery (the closed effect lattice +
+      -- the resources split + the footprint laws —
+      -- notes/v3/08-capabilities.md §8): annotation/accounting substrate
+      -- for the domain lanes' composition joins, imports Kit only (the
+      -- cone rule) — the ZSet/Cost precedent.
+      `Effects, `EffectsTests,
+      -- Contracts: the contract lanes' wp engine
+      -- (notes/v3/08-capabilities.md §36): requires/ensures + the wp
+      -- transformer over the honest minimal imperative fragment
+      -- (skip/assign/seq/cond), over the effects lane's State model —
+      -- ONE state model, two lanes. The obligations ride Kit.Obligation
+      -- read-only (imports Kit.Obligation + Effects.Footprint only — the
+      -- cone rule; the ZSet/Cost precedent).
+      `Contracts, `ContractsTests,
+     `Analysis, `AnalysisTests, `Query, `QueryTests, `Vortex, `VortexTests,
+      -- Repr: the representation-independence lane (the reviews' §2
+      -- discipline — the relation + the preservation construction gate +
+      -- the generic client theorem; the zset canonical-rep discipline
+      -- generalized). C1 domain-core machinery (imports Kit + ZSet.Basic
+      -- — both C1, the cone rule holds; the key class landed once in
+      -- ZSet.CanonKey, MapKey extends it).
+      `Repr, `ReprTests,
+      -- Substrait: the substrait port's seed (notes/v3/14-build-map.md's
+      -- substrait row): the wire Proto types + the typed layer RETARGETED
+      -- onto SchemaCore's closed Ty + the text tables. Imports SchemaCore
+      -- (the Ty/Value surface) + TextKit — C1 (the cone rule).
+      `Substrait, `SubstraitTests,
+      -- Faults: the faults lane (the E-code discipline's consumer —
+      -- 05 §4): the failure-mode registry over the lane substrate + the
+      -- allocation from the persisted registry + the Rust face. Imports
+      -- Kit + SchemaCore (READ-ONLY — the cone rule; the Substrait
+      -- precedent); the tests ride the lane's cone, FaultGenMain is the
+      -- regen driver (the SchemaMain precedent).
+     `Faults, `FaultsTests, `FaultGenMain]
+  -- C2: the host-side tooling lanes
+  ++ coneRows .c2theory
+    [`Inspector, `InspectorTests, `InspectorMain, `Scaffold,
+     `Guest, `GuestTests,
+     -- ComponentTests: the component lane's battery + fixtures (the
+     -- GuestTests discipline: the tests ride the lane's cone).
+     `ComponentTests]
   -- C3: the app rows — the adopted generated app (DemoApp.Reg/App/
-  -- Tests: the generator's own output, imports Kit/TestingKit/Lean but its
-  -- content IS the app rung) + Scaffold's test root, which consumes
+  -- Tests: the generator's own output, imports Kit/TestingKit/Lean but
+  -- its content IS the app rung) + Scaffold's test root, which consumes
   -- DemoApp.Tests (C3) for the byte-tie and so sits at C3 honestly.
-  | `DemoApp | `ScaffoldTests => some .c3app
-  | _ => none
+  -- LedgerApp: the dogfood skeleton's generated + hand-owned modules
+  -- (ScaffoldLedger lib, same discipline as DemoApp).
+  ++ coneRows .c3app [`DemoApp, `ScaffoldTests, `LedgerApp]
+
+/-- The table's lookup face (the linter's; the packages-check gate
+consumes `coneTable` directly — the enumeration note above). -/
+def coneOfRoot? (n : Name) : Option Cone :=
+  (coneTable.find? fun (r, _) => r == n).map (·.2)
 
 /-- The per-importer-cone EXTERNAL ban (06 §8): the kernel cones C0/C1
 stay mathlib-free — `Mathlib` and `Batteries` may not be imported by

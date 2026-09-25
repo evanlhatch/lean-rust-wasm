@@ -59,13 +59,15 @@ Five questions (notes/v3/01-core.md):
 import Lean
 import Kit.Diag
 import Kit.CheckedProp
+import Kit.Derive.Common
 import Kit.Derive.Fold
 
 namespace Kit.Derive.Bridge
 
 open Lean Elab Command Meta
 open Kit.Derive.Fold
-open Kit.Derive.Fold (baseNameOf checkCtor throwDiag tyToSyntax argIdents ihIdents ctorPattern argTyTerm)
+open Kit.Derive.Fold (baseNameOf checkCtor tyToSyntax argIdents ihIdents ctorPattern argTyTerm)
+open Kit.Derive.Common (throwDiag logRefusal gateCmd checkScope)
 
 /-! ## The KB family — the bridge generator's E-codes -/
 
@@ -83,6 +85,7 @@ def eKB0005 : Kit.ECode := ⟨"KB0005"⟩
 def eKB0006 : Kit.ECode := ⟨"KB0006"⟩
 def eKB0007 : Kit.ECode := ⟨"KB0007"⟩
 def eKB0008 : Kit.ECode := ⟨"KB0008"⟩
+def eKB0009 : Kit.ECode := ⟨"KB0009"⟩
 
 /-! ## The row shapes -/
 
@@ -143,26 +146,28 @@ def elabDeclareBridge : CommandElab
       throwDiag eKB0001
         s!"declare_bridge {name.getId}: the checker's domain `{indName}` \
           is not an inductive"
-    -- the shared scope checks (the fold's fragment)
-    if ii.numIndices != 0 then
-      throwDiag eKB0002
-        s!"declare_bridge {name.getId}: `{indName}` is index (GADT)-indexed — \
-          the generator's scope is the SIMPLE closed inductives; the \
-          dependent bridge (the motive riding the index) is the named \
-          extension — write it by hand (the `check_iff` shape) and cite \
-          this refusal"
-    if ii.numParams != 0 then
-      throwDiag eKB0003
-        s!"declare_bridge {name.getId}: `{indName}` has type parameters — \
-          the parameter-threaded fragment is the named extension"
-    if ii.ctors.isEmpty then
-      throwDiag eKB0004
-        s!"declare_bridge {name.getId}: `{indName}` has no constructors — \
-          the empty universe's bridge is `nomatch`-vacuous; refuse"
-    if ii.all.length > 1 then
-      throwDiag eKB0005
-        s!"declare_bridge {name.getId}: `{indName}` is part of a MUTUAL \
-          block — the mutual-sibling fragment is the named extension"
+    -- the shared scope checks (the fold's fragment; the quadruple is
+    -- Kit.Derive.Common's ONE copy — the codes + the message spellings
+    -- are THIS driver's, byte-identical to the KitTests pins)
+    checkScope ii
+      { code := eKB0002
+        message := s!"declare_bridge {name.getId}: `{indName}` is index \
+          (GADT)-indexed — the generator's scope is the SIMPLE closed \
+          inductives; the dependent bridge (the motive riding the index) \
+          is the named extension — write it by hand (the `check_iff` \
+          shape) and cite this refusal" }
+      { code := eKB0003
+        message := s!"declare_bridge {name.getId}: `{indName}` has type \
+          parameters — the parameter-threaded fragment is the named \
+          extension" }
+      { code := eKB0004
+        message := s!"declare_bridge {name.getId}: `{indName}` has no \
+          constructors — the empty universe's bridge is `nomatch`-vacuous; \
+          refuse" }
+      { code := eKB0005
+        message := s!"declare_bridge {name.getId}: `{indName}` is part of \
+          a MUTUAL block — the mutual-sibling fragment is the named \
+          extension" }
     -- THE RELATION'S SHAPE: same `Ind`, same `Row`, codomain `Prop`.
     let relTy ← liftTermElabM do
       let e ← Lean.Elab.Term.elabTerm rel none
@@ -262,6 +267,31 @@ def elabDeclareBridge : CommandElab
     let chkT : Term := chk
     let relT : Term := rel
     let iffApp : Term := mkIdentFrom stx (Name.mkSimple s!"{baseStr}_iff")
+    -- THE PROOF GATE: elaborate one generated command; if its
+    -- elaboration LOGGED an error, Lean's recovery would commit the
+    -- declaration with `sorryAx` — so the gate rolls the state back and
+    -- refuses: a refused bridge commits NOTHING, sorry never lands
+    -- (zero-sorry is non-negotiable even in the test fixtures; the
+    -- axiom sweep's `bt5` lesson — the guard captured the errors, the
+    -- env kept the sorries). The refusal is LOGGED, not thrown (a
+    -- thrown exception never reaches the caller's message log — the
+    -- #guard_msgs teeth would miss it), and the remaining generated
+    -- commands are skipped.
+    let refuseMsg : String :=
+      s!"declare_bridge {name.getId}: the generated theorem failed to \
+        elaborate — wrongness does not elaborate (a refused bridge \
+        commits nothing; Lean's sorry recovery never lands)"
+    -- THE PROOF GATE: elaborate one generated command; if its
+    -- elaboration LOGGED an error, Lean's recovery would commit the
+    -- declaration with `sorryAx` — so the gate rolls the state back and
+    -- refuses: a refused bridge commits NOTHING, sorry never lands
+    -- (zero-sorry is non-negotiable even in the test fixtures; the
+    -- axiom sweep's `bt5` lesson — the guard captured the errors, the
+    -- env kept the sorries). The refusal is LOGGED, not thrown (a
+    -- thrown exception never reaches the caller's message log — the
+    -- #guard_msgs teeth would miss it), and the remaining generated
+    -- commands are skipped. The gate is Kit.Derive.Common's ONE copy
+    -- (the DRY sweep finding; byte-identical to the pre-common local).
     -- The per-ctor leaf hypotheses (the leaf rows' caller-supplied iff).
     let mut leafHyps : Array (TSyntax `Lean.Parser.Term.bracketedBinder) := #[]
     let mut leafHypTerms : Array Term := #[]
@@ -316,8 +346,9 @@ def elabDeclareBridge : CommandElab
         leafHyps := leafHyps.push (← `(bracketedBinder| ($hypId : $hypTy)))
         leafHypTerms := leafHypTerms.push hypT
       minors := minors.push minor
-    -- THE IFF (one induction carries both directions).
-    elabCommand (← `(command|
+    -- THE IFF (one induction carries both directions); a refusal
+    -- short-circuits the remaining generated commands.
+    let iffCmd ← `(command|
       /-- GENERATED by `declare_bridge` — THE BRIDGE (15-patterns #1):
           the iff-shaped induction; under `not` the two directions need
           EACH OTHER, and one induction carries both. The leaf rows' iff
@@ -327,26 +358,25 @@ def elabDeclareBridge : CommandElab
           ($pRef : $indT) ($rowRef : $rowTyT) :
           $chkT $pT $rowT = true ↔ $relT $pT $rowT :=
         $recId (motive := fun p => ∀ ($rowRef : $rowTyT), $chkT p $rowT = true ↔ $relT p $rowT)
-          $minors* $pT $rowT))
-    -- THE TWO PROJECTIONS.
-    elabCommand (← `(command|
+          $minors* $pT $rowT)
+    let sndCmd ← `(command|
       /-- GENERATED by `declare_bridge` — SOUNDNESS: a `true` verdict is
           a proof of the relation (the checker never fabricates a
           satisfaction). -/
       theorem $soundId:ident $[$leafHyps:bracketedBinder]*
           ($pRef : $indT) ($rowRef : $rowTyT) ($hRef : $chkT $pT $rowT = true) :
           $relT $pT $rowT :=
-        ($iffApp $leafHypTerms* $pT $rowT).mp $hT))
-    elabCommand (← `(command|
+        ($iffApp $leafHypTerms* $pT $rowT).mp $hT)
+    let cmpCmd ← `(command|
       /-- GENERATED by `declare_bridge` — COMPLETENESS: every satisfying
           row's verdict is `true` (the fragment decidable both ways, so
           the CheckedProp assembly takes `.proved`). -/
       theorem $completeId:ident $[$leafHyps:bracketedBinder]*
           ($pRef : $indT) ($rowRef : $rowTyT) ($hRef : $relT $pT $rowT) :
           $chkT $pT $rowT = true :=
-        ($iffApp $leafHypTerms* $pT $rowT).mpr $hT))
+        ($iffApp $leafHypTerms* $pT $rowT).mpr $hT)
     -- THE CHECKEDPROP ASSEMBLY.
-    elabCommand (← `(command|
+    let chkCmd ← `(command|
       /-- GENERATED by `declare_bridge` — the statement-as-instance
           (soundness mandatory; completeness `.proved` from the bridge —
           the loud two-constructor choice honored). -/
@@ -355,7 +385,17 @@ def elabDeclareBridge : CommandElab
         P := fun r => $relT $pT r
         check := fun r => $chkT $pT r
         sound := fun r h => $soundId $leafHypTerms* $pT r h
-        complete? := .proved (fun r h => $completeId $leafHypTerms* $pT r h)))
+        complete? := .proved (fun r h => $completeId $leafHypTerms* $pT r h))
+    let refusedIff ← gateCmd iffCmd
+    let refusedSnd ← if refusedIff then pure true else gateCmd sndCmd
+    let refusedCmp ← if refusedSnd then pure true else gateCmd cmpCmd
+    let refusedChk ← if refusedCmp then pure true else gateCmd chkCmd
+    -- THE REFUSAL, named at the command's own level (a refusal logged
+    -- inside the gate's closure never reaches the caller's message
+    -- log — the #guard_msgs teeth would miss it); the logger is
+    -- Kit.Derive.Common's ONE copy.
+    if refusedIff || refusedSnd || refusedCmp || refusedChk then
+      logRefusal eKB0009 refuseMsg
   | _ => Elab.throwUnsupportedSyntax
 
 end Kit.Derive.Bridge

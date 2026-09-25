@@ -36,9 +36,10 @@ ported fresh at slice size):
   loud gap (a false claim or a mis-set tier; the backend refuses, it
   does not fabricate evidence).
 - The mount — `register_lane CheckItem` (Kit.Lane: the recipe's steps
-  1-2 in one kit call): `checkExt` (the append-only compile-time event
-  log), `@[check]` (the attribute; the entry is a `def` of the item
-  type, evaluated at elaboration), `getChecks` / `checkRegistry` /
+  1-2 in one kit call): the rows of the ONE log (`Kit.Lane.laneLogExt` — the
+  `check`-tagged family), `@[check]` (the attribute; the entry is a
+  `def` of the item type, evaluated at elaboration),
+  `getChecks` / `checkRegistry` /
   `checkNameOf` / `checkAttrReg`.
 
 Honest gap (named, per the recipe's step 3): the MOUNT does not gate
@@ -327,10 +328,10 @@ theorem CheckItem.dischargeOn_complete (ci : CheckItem)
 /-! ## The mount — `@[check]`, by `Kit.Lane.register_lane` -/
 
 /- The check lane's registration (the lane recipe's steps 1-2 in one
-    kit call). Generates: `checkExt` (the append-only compile-time
-    event log), `@[check]` (the attribute mount — the entry is a `def`
-    of the item type, evaluated at elaboration), `getChecks` (the
-    replay accessor), `checkRegistry` (the fold hook — the replay
+    kit call). Appends to the ONE log (`Kit.Lane.laneLogExt` — the
+    `check`-tagged row family), generates `@[check]` (the attribute
+    mount — the entry is a `def` of the item type, evaluated at
+    elaboration), `getChecks` (the routed replay reader), `checkRegistry` (the fold hook — the replay
     materialized into a `Kit.DataRegistry`), `checkNameOf` (the
     registry's lookup key), `checkAttrReg` (the attribute's
     initializer). The entries live in the NEXT module (a module's own

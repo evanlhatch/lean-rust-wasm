@@ -43,13 +43,6 @@ open Lean
 
 namespace LintKit
 
-/-- A module name counts as a test module when it has a name component
-ENDING in `Tests` (`LintKitTests`, `KitTests`, `SchemaTests`, … — the
-verdictCtors intent; a plain `.contains "Tests"` never matches, since
-`Tests` is not itself a component). -/
-def isTestModule (m : Name) : Bool :=
-  m.components.any fun c => c.toString.endsWith "Tests"
-
 /-- The constants a declaration's type and value cite (deduplicated). -/
 def declRefs (env : Environment) (decl : Name) : Array Name :=
   match env.find? decl with
@@ -125,13 +118,12 @@ def citationCensus (env : Environment) : CoreM (NameMap (Array Name)) := do
 /-- Is `decl` cited by any constant of a module OTHER than its own? -/
 def citedOutsideModule? (env : Environment) (census : NameMap (Array Name))
     (decl : Name) : Bool :=
-  match env.getModuleIdxFor? decl with
+  match modOfDecl env decl with
   | none => false
-  | some idx =>
-    let mod := env.header.moduleNames[idx]!
+  | some mod =>
     ((census.find? decl).getD #[]).any fun c =>
-      match env.getModuleIdxFor? c with
-      | some ci => env.header.moduleNames[ci]! != mod
+      match modOfDecl env c with
+      | some cm => cm != mod
       | none => false
 
 /-! ## the test-source corpus (the #print-axioms pins) -/

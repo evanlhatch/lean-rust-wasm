@@ -426,4 +426,68 @@ def Grammar.run (g : Grammar R) (s : String) : Except ParseError R :=
       | [] => .ok x
       | _ => .error (ParseError.base cur.off ["<end of input>"])
 
+/-! ## the head-fail kit (the token-led orElse-chains' shared miss)
+
+Format-independent: an alternation of TOKEN-LED parsers (arms that
+refuse whenever their leading token refuses) misses on any input
+whose head fails the token's head class — the orElse-chain's spine
+and the token's miss direction, proved ONCE here; the format-side
+head-fail kits (the hand-recursion zones) become citations. -/
+
+/-- A token whose head passes the ident class misses any input whose
+    head fails it (the token miss direction's head-fail face). -/
+theorem tok_miss_of_headFail (s : String) (cur : Cursor)
+    (hs : s.toList.head?.any TextKit.isIdentChar = true)
+    (hh : cur.cs.head?.all (fun c => !TextKit.isIdentChar c) = true) :
+    ∃ e, TextKit.tok s cur = .error e := by
+  have hne : s.toList ≠ [] := by
+    intro hcon
+    rw [hcon] at hs
+    simp at hs
+  cases sL : s.toList with
+  | nil => rw [sL] at hs; simp at hs
+  | cons c0 w =>
+      have hs0 : TextKit.isIdentChar c0 = true := by
+        rw [sL, List.head?_cons] at hs
+        simpa using hs
+      cases cs : cur.cs with
+      | nil =>
+          refine ⟨ParseError.base cur.off [s!"'{s}'"], ?_⟩
+          unfold TextKit.tok
+          rw [cs]
+          simp [sL]
+      | cons c rest =>
+          have hc : TextKit.isIdentChar c = false := by
+            have h2 := hh
+            rw [cs, List.head?_cons] at h2
+            simpa using h2
+          have hc0 : c0 ≠ c := by
+            intro hcon
+            rw [hcon] at hs0
+            simp [hc] at hs0
+          refine ⟨ParseError.base cur.off [s!"'{s}'"], ?_⟩
+          unfold TextKit.tok
+          rw [cs]
+          simp [List.isPrefixOf, sL, hc0]
+
+/-- An orElse-chain refuses when every arm and the fallback refuse
+    (the chain's induction — the head-fail kits' spine). -/
+theorem orElseChain_err {A : Type} :
+    ∀ (ps : List (GParser A)) (last : GParser A) (cur : Cursor),
+    (∀ p ∈ ps, ∃ e, p cur = .error e) → (∃ e, last cur = .error e) →
+    ∃ e, ps.foldr TextKit.orElse last cur = .error e := by
+  intro ps
+  induction ps with
+  | nil => intro last cur _ h; exact h
+  | cons p ps ih =>
+      intro last cur hfail hlast
+      have hp := hfail p (List.Mem.head _)
+      have hrest : ∀ q ∈ ps, ∃ e, q cur = .error e :=
+        fun q hq => hfail q (List.Mem.tail _ hq)
+      obtain ⟨e1, h1⟩ := hp
+      obtain ⟨e2, h2'⟩ := ih last cur hrest hlast
+      refine ⟨ParseError.farther e1 e2, ?_⟩
+      show TextKit.orElse p (ps.foldr TextKit.orElse last) cur = _
+      simp only [TextKit.orElse, h1, h2']
+
 end TextKit

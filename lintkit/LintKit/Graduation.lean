@@ -6,7 +6,8 @@ table is a finding).
 
 The finding: a declared `Kit.Retraction`/`Kit.Codec` VALUE whose image
 predicate is decidable, with NO graduation call site in the tree — no
-`Kit.Retraction.toImageIso` (or equivalent iso-assembly) consuming it.
+`Kit.Retraction.toImageIso` / `Kit.Codec.toIsoOfExact` (or equivalent
+iso-assembly) consuming it.
 
 The honest minimal detection (and its limits — the census exists because
 this is a heuristic):
@@ -24,15 +25,16 @@ this is a heuristic):
   exists — none is generated in the tree today, so the Retraction
   branch is currently quiet-by-construction; it is kept for the day
   the tree grows the instance).
-* GRADUATION side: quiet iff the value itself mentions
-  `Kit.Retraction.toImageIso` (a graduated derivative) or some OTHER
-  constant's type/value mentions BOTH this decl and
-  `Kit.Retraction.toImageIso` (the iso-assembly call site). Codec-side
-  graduation has no kit constructor yet — a decidable-policy codec with
-  no graduated consumer is a finding telling you the upgrade is free.
+* GRADUATION side: quiet iff the value itself mentions a graduation
+  constructor (`Kit.Retraction.toImageIso` — the retraction's
+  image-iso upgrade — or `Kit.Codec.toIsoOfExact` — the codec's
+  total-decode+exactness upgrade, landed with the first codec
+  graduations) or some OTHER constant's type/value mentions BOTH this
+  decl and one of those constructors (the iso-assembly call site).
 
-Default-OFF (the `default_false` token below — census mode, the
-detection is fuzzy): promote to a gate after the false-positive review.
+GATED (promoted from the census after the codec→iso constructor
+(`Kit.Codec.toIsoOfExact`) landed and the false-positive review cleared
+the tree — every census finding was graduated, none was honest-gap).
 
 Opt out per site: `@[nolint linter.guestlang.graduation "reason"]`.
 
@@ -119,19 +121,21 @@ def retractionImageDecidable? (emb : Expr) (A B : Expr) : MetaM Bool := do
     let ex := mkAppN (mkConst ``Exists [Level.one]) #[A, pred]
     decidableSynth? ex
 
-/-- Is `decl` already graduated: its value mentions `toImageIso`, or
-some other constant's type/value mentions BOTH `decl` and
-`Kit.Retraction.toImageIso` (the iso-assembly call site). -/
-def graduatedViaToImageIso? (env : Environment)
+/-- Is `decl` already graduated: its value mentions a graduation
+    constructor (`Retraction.toImageIso` / `Codec.toIsoOfExact`), or
+    some other constant's type/value mentions BOTH `decl` and one of
+    them (the iso-assembly call site). -/
+def graduatedViaIso? (env : Environment)
     (census : NameMap (Array Name)) (decl : Name) : Bool :=
-  let upgrade := `Kit.Retraction.toImageIso
+  let upgrades : Array Name :=
+    #[`Kit.Retraction.toImageIso, `Kit.Codec.toIsoOfExact]
   match env.find? decl with
   | some info =>
       let own := info.type.getUsedConstants ++
         (info.value? (allowOpaque := true) |>.map (·.getUsedConstants) |>.getD #[])
-      if own.contains upgrade then true
+      if upgrades.any own.contains then true
       else ((census.find? decl).getD #[]).any fun c =>
-        (declRefs env c).contains upgrade
+        upgrades.any fun u => (declRefs env c).contains u
   | none => false
 
 meta def graduationTest (decl : Name) : MetaM (Option MessageData) := do
@@ -139,15 +143,14 @@ meta def graduationTest (decl : Name) : MetaM (Option MessageData) := do
   let env ← getEnv
   let some (.defnInfo di) := env.find? decl | return none
   if ← isReducible decl then return none
-  let some idx := env.getModuleIdxFor? decl | return none
-  let mod := env.header.moduleNames[idx]!
+  let some mod := modOfDecl env decl | return none
   if isTestModule mod then return none
   let some (grade, tyArgs) ← carrierGrade? di.type | return none
   -- generic carrier combinators (open type args) cannot carry an instance
   if tyArgs.any fun e => e.hasFVar || e.hasMVar then return none
   -- already graduated?
   let census ← citationCensus env
-  if graduatedViaToImageIso? env census decl then return none
+  if graduatedViaIso? env census decl then return none
   -- decidability gate: the image/policy predicate
   let some A := tyArgs[0]? | return none
   let some B := tyArgs[1]? | return none
@@ -179,10 +182,15 @@ meta def graduationLinter : EnvLinter where
 
 end LintKit
 
--- the census linter: registered default-OFF via the `default_false` token
--- (LintKit.Basic — the one-liner registration).
+-- THE PROMOTION: the `default_false` token is GONE — the linter's
+-- default is ON (LintKit.Basic's registration macro: no token ⇒ the
+-- gate). The tree is clean post-graduation: the constructor
+-- (`Kit.Codec.toIsoOfExact`) landed, and every census finding
+-- (`registryCodec`, `itemsCodec`, `rowCodec`, `tsvCodec`) shipped its
+-- iso — none was an honest gap.
 register_guestlang_linter linter.guestlang.graduation
-  LintKit.graduationLinter default_false
+  LintKit.graduationLinter
   "flag Kit.Retraction/Kit.Codec values whose image is decidable with no \
-    toImageIso call site (15-patterns #11 — census: default OFF, promote \
-    to gate after the false-positive review)"
+    toImageIso/toIsoOfExact call site (15-patterns #11 — every \
+    decidable-image carrier ships its iso upgrade; promoted from the \
+    census after the codec→iso constructor landed)"

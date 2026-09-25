@@ -7,10 +7,10 @@ Replays the registration module's olean (`SchemaCore.Slice`, with
 extensions loaded — without the replay the registry comes back empty),
 discharges the slice's obligation row (the item's field names are
 nodup, at the `decidableNow` tier via Kit's backend — the run REFUSES
-loudly if the discharge does not fire), then emits through the
-CERTIFIED lane (the law: the registry's closed-world naming invariant;
-`runCertified` is uncallable without the discharged certificate) and
-writes the artifact with the kit's standard header. The gate
+loudly if the discharge does not fire), then emits (the naming
+invariant is the registry's own nodup-in-the-type — the
+inherited-correctness audit retired the vacuous certified-lane
+literal) and writes the artifact with the kit's standard header. The gate
 (`gates gen-check`) re-runs the SAME `SchemaCore.regen` and byte-ties
 the committed artifact against it.
 
@@ -25,6 +25,7 @@ half), not a gate.
 -/
 import Lean
 import SchemaCore
+import SchemaCore.Emit.Witness
 
 open SchemaCore
 
@@ -37,7 +38,7 @@ unsafe def loadReplayEnv : IO Lean.Environment := do
 
 unsafe def main : IO UInt32 := do
   let env ← loadReplayEnv
-  match SchemaCore.regen env with
+  match ← Kit.Lane.runCoreIO env (SchemaCore.regen env) with
   | .error e =>
     IO.eprintln s!"schema: regen failed — {e}"
     return 1
@@ -53,15 +54,25 @@ unsafe def main : IO UInt32 := do
         IO.eprintln s!"schema: obligation NOT discharged: \
           {item.name}/fields-nodup — the backend refused (loud gap)"
         return 1
-    -- The certified write path: regen routed BOTH emitters through
-    -- runCertified (the law's discharge rode regen — it ran loud on a
-    -- failed one); the driver owns the IO via the kit's shared loop —
+    -- The write path: regen's files ride the kit's shared loop —
     -- each artifact under ITS emitter's style/specSource, the same
     -- hand-rolled `header ++ contents` shape runEmitters encapsulates.
     -- (The returned ledger rows have NO file consumer yet — the
     -- leftover rule: the ledger lane lands when its reader does.)
     let _rows ← Kit.Emit.runEmitters "schema"
-      [(SchemaCore.witEmitter, r.reg), (SchemaCore.Emit.Rust.rustEmitter, r.reg)]
+      [(SchemaCore.witEmitter, r.reg), (SchemaCore.Emit.Rust.rustEmitter, r.reg),
+       -- the TYPESCRIPT lane (the SECOND CodeTarget row — the JSON
+       -- interop face's artifact rides the same regen + byte-tie)
+       (SchemaCore.Emit.Ts.tsEmitter, r.reg),
+       (SchemaCore.Emit.Rust.commitSliceEmitter, r.reg)]
+      (fun _ f =>
+        pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    -- The WITNESS REGISTRY's write (the producer face's table — the
+    -- self-check rides the emitter's run path; the spec is Unit — a
+    -- pinned-constant seed registry). Its ledger rows ride the same
+    -- recorded-row discipline as the certified loop's.
+    let _witnessRows ← Kit.Emit.runEmitters "schema"
+      [(SchemaCore.Emit.Witness.witnessRegistryEmitter, ())]
       (fun _ f =>
         pure { items := r.reg.items.length, contentHash := f.contents.hash })
     -- The DUEL vector-set's write (Kit.Duel's convention — the duel
@@ -86,6 +97,30 @@ unsafe def main : IO UInt32 := do
         pure { items := r.reg.items.length, contentHash := f.contents.hash })
     let _commitDuelBinRows ← Kit.Emit.runBinaryEmitters "schema"
       [(commitDuelEmitter, r.reg)]
+      (fun _ f =>
+        pure { items := r.reg.items.length
+             , contentHash := Kit.Emit.bytesHash f.contents })
+    -- The JOURNAL DUEL's write (the Event lane's duel — the
+    -- mandate-delta crate's vectors: the manifest rides the text
+    -- lane, the vectors the binary loop; the SAME loop shape; the
+    -- spec is Unit — a pinned-constant vector set).
+    let _journalDuelRows ← Kit.Emit.runEmitters "schema"
+      [(SchemaCore.Emit.Journal.journalDuelEmitter, ())]
+      (fun _ f =>
+        pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    let _journalDuelBinRows ← Kit.Emit.runBinaryEmitters "schema"
+      [(SchemaCore.Emit.Journal.journalDuelEmitter, ())]
+      (fun _ f =>
+        pure { items := r.reg.items.length
+             , contentHash := Kit.Emit.bytesHash f.contents })
+    -- The WITNESS DUEL's write (the producer face's vectors + manifest:
+    -- the SAME loop shape; the registry table rode the text loop above).
+    let _witnessDuelRows ← Kit.Emit.runEmitters "schema"
+      [(SchemaCore.Emit.Witness.witnessDuelEmitter, ())]
+      (fun _ f =>
+        pure { items := r.reg.items.length, contentHash := f.contents.hash })
+    let _witnessDuelBinRows ← Kit.Emit.runBinaryEmitters "schema"
+      [(SchemaCore.Emit.Witness.witnessDuelEmitter, ())]
       (fun _ f =>
         pure { items := r.reg.items.length
              , contentHash := Kit.Emit.bytesHash f.contents })

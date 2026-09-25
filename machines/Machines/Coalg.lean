@@ -328,12 +328,6 @@ theorem beh_le {c₁ c₂ : Coalgebra S I O} {R : Kit.Rel S S}
       rw [c₂.beh_shift ins s₂ t]
       exact hbt o h₀
 
-/-- The state-tracking face, at a friendly argument order. -/
-theorem states_related {c₁ c₂ : Coalgebra S I O} {R : Kit.Rel S S}
-    (h : Refines c₁ c₂ R) (s₁ s₂ : S) (ins : Stream I) (hs : R s₁ s₂) (t : Nat) :
-    R (c₁.states ins s₁ t) (c₂.states ins s₂ t) :=
-  (h.beh_le t s₁ s₂ ins hs).1
-
 /-- The behavior-inclusion face, at a friendly argument order. -/
 theorem beh_le_at {c₁ c₂ : Coalgebra S I O} {R : Kit.Rel S S}
     (h : Refines c₁ c₂ R) (s₁ s₂ : S) (ins : Stream I) (hs : R s₁ s₂) (t : Nat)

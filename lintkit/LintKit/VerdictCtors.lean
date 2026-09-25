@@ -74,9 +74,8 @@ meta def verdictCtorsTest (decl : Name) : MetaM (Option MessageData) := do
   let env ← getEnv
   let some (.defnInfo di) := env.find? decl | return none
   if ← isReducible decl then return none
-  let some idx := env.getModuleIdxFor? decl | return none
-  let mod := env.header.moduleNames[idx]!
-  if (mod.toString.splitOn ".").contains "Tests" then return none
+  let some mod := modOfDecl env decl | return none
+  if isTestModule mod then return none
   unless isVerdictShapedName decl do return none
   unless stringOrBoolResult di.type do return none
   return some m!"collapsed verdict: `{decl}` is named like a verdict but \

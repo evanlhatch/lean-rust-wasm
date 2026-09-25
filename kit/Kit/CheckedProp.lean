@@ -26,8 +26,8 @@ The five questions (notes/v3/01-core.md):
 - spine reading: none — the checkers that mount it are the consumers.
 - ladder rung: the bridge theorem is the small hand kind (01 §7); the
   discipline lives in the SHAPE (no default completeness).
-- gate row: none yet — Kit is outside Gates.Packages' gated set;
-  KitTests.Axioms pins the bridge's cone.
+- gate row: Kit's row in Gates.Packages' gated set (the per-library
+  axiom sweep covers it); KitTests.Axioms pins the bridge's cone.
 -/
 
 import Kit.Correspondence
@@ -39,7 +39,8 @@ namespace Kit
     checker may reject valid inputs". (An `Option (complete proof)`
     cannot carry a Prop without a `PLift` wrapper — the noise at every
     construction site is worse than a two-constructor inductive.) -/
-inductive CheckedProp.Completeness {α : Type} (P : α → Prop) (check : α → Bool) : Type where
+inductive CheckedProp.Completeness.{u} {α : Type u} (P : α → Prop)
+    (check : α → Bool) : Type where
   | missing : Completeness P check
   | proved : (∀ a, P a → check a = true) → Completeness P check
 
@@ -47,7 +48,7 @@ inductive CheckedProp.Completeness {α : Type} (P : α → Prop) (check : α →
     a `true` verdict is a proof. Completeness is a constructor choice
     with NO default: every construction must write `.proved h` or
     `.missing`, so a one-directional gate is declared, never implied. -/
-structure CheckedProp (α : Type) where
+structure CheckedProp.{u} (α : Type u) where
   P : α → Prop
   check : α → Bool
   sound : ∀ a, check a = true → P a

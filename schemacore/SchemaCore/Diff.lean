@@ -20,7 +20,7 @@ verdict/exit contract).
 
 ## The shapes
 
-- `Diff.diff old new : List Change` — the item-level NET change between
+- `Diff.diff old new : List CompatChange` — the item-level NET change between
   two snapshots over the name key: removals, then changes (with the
   field-level evidence), then additions. A name in both trees
   contributes at most one finding; a name changed twice within a batch
@@ -59,7 +59,7 @@ CERTAINTY, not candidacy).
 Core-only (imports Kit-riding SchemaCore only — the cone rule).
 
 The five questions (notes/v3/01-core.md):
-- root: Change — the net state change between two universe snapshots
+- root: CompatChange — the net state change between two universe snapshots
   (03 §7's delta face, at the universe level).
 - carrier grade: first-order data over the closed `Ty`/`Item` universe;
   the laws are PROVED over concrete lists (pattern #1's bridge).
@@ -114,14 +114,17 @@ def fieldDiffsOf (prev it : Item) : List FieldDiff :=
 
 /-! ## The change set (the Z-set discipline: the NET change) -/
 
-/-- One compatibility finding between two universe versions. -/
-inductive Change where
+/-- One compatibility finding between two universe versions. NAMED
+    `CompatChange` — not `Change` — so it does not shadow `Kit.Change`'s
+    capability-ladder name (a different concept: the delta ladder's
+    graded structures, not the diff's finding row). -/
+inductive CompatChange where
   | removed (name : String)            -- was referenceable, is gone: BREAKING
   | added (name : String)              -- new item: safe
   | changed (name : String) (fieldDiffs : List FieldDiff)  -- same name, different shape: BREAKING, with field evidence
 deriving Repr, BEq, DecidableEq, Inhabited
 
-instance : ToString Change where
+instance : ToString CompatChange where
   toString
     | .removed n => s!"removed {n}"
     | .added n => s!"added {n}"
@@ -132,13 +135,13 @@ instance : ToString Change where
     the legacy order: removals, changes, additions (input order within
     each). A same-name pair with identical fields contributes NOTHING —
     the net discipline's zero. -/
-def diff (old new : List Item) : List Change :=
+def diff (old new : List Item) : List CompatChange :=
   let newNames := new.map (·.name)
   let oldNames := old.map (·.name)
   let removed := old.filter (fun it => !newNames.contains it.name)
-    |>.map (fun it => Change.removed it.name)
+    |>.map (fun it => CompatChange.removed it.name)
   let added := new.filter (fun it => !oldNames.contains it.name)
-    |>.map (fun it => Change.added it.name)
+    |>.map (fun it => CompatChange.added it.name)
   let changed := new.filterMap fun it =>
     match old.find? (fun o => o.name == it.name) with
     | some prev =>
@@ -171,7 +174,7 @@ def backwardCompatible (old new : List Item) : Bool :=
   d.all fun c => match c with | .added _ => true | _ => false
 
 /-- The pointwise reading of `backwardCompatible`'s fold. -/
-theorem Change.added_of_true {c : Change} :
+theorem CompatChange.added_of_true {c : CompatChange} :
     (match c with | .added _ => true | _ => false) = true ↔ ∃ n, c = .added n := by
   cases c <;> simp
 
@@ -184,8 +187,8 @@ theorem backwardCompatible_iff {old new : List Item} :
       ∀ c ∈ diff old new, ∃ n, c = .added n := by
   simp only [backwardCompatible, List.all_eq_true]
   constructor
-  · intro h c hc; exact Change.added_of_true.mp (h c hc)
-  · intro h c hc; exact Change.added_of_true.mpr (h c hc)
+  · intro h c hc; exact CompatChange.added_of_true.mp (h c hc)
+  · intro h c hc; exact CompatChange.added_of_true.mpr (h c hc)
 
 /-! ## The remedy half (the migration carries its soundness obligation) -/
 
@@ -206,7 +209,7 @@ structure FieldMigration where
 /-- Remedy evidence for ONE breaking-changed item: per retyped field,
     the total old→new value map. -/
 structure Migration where
-  /-- the item name (matches `Change.changed n _`) -/
+  /-- the item name (matches `CompatChange.changed n _`) -/
   item : String
   /-- per-field remedies, keyed by the CHANGED field's name -/
   fields : List FieldMigration
@@ -216,7 +219,7 @@ structure Migration where
     field, with exactly the found old/new types). Additions are safe
     (no old data exists to map); REMOVALS ARE HONESTLY UNREMEDIED (no
     value-map target for gone data). -/
-def Migration.remedies (m : Migration) (c : Change) : Bool :=
+def Migration.remedies (m : Migration) (c : CompatChange) : Bool :=
   match c with
   | .added _ => true
   | .removed _ => false
@@ -272,19 +275,19 @@ instance : ToString CompatVerdict where
 /-- The breaking subset of a diff: anything but `.added`. One
     definition — `verdictOf` and the gate consume the same filter
     (never a second notion of "breaking" at a call site). -/
-def breakingOf (changes : List Change) : List Change :=
+def breakingOf (changes : List CompatChange) : List CompatChange :=
   changes.filter fun c => match c with | .added _ => false | _ => true
 
 /-- The verdict over a diff plus the available remedy evidence.
     Breaking = anything but `.added`; remedied requires EVERY breaking
     change covered by some migration. -/
-def verdictOf (changes : List Change) (migrations : List Migration) : CompatVerdict :=
+def verdictOf (changes : List CompatChange) (migrations : List Migration) : CompatVerdict :=
   if breakingOf changes = [] then .clean
   else if (breakingOf changes).all fun c => migrations.any (·.remedies c) then .remedied
   else .unremedied
 
 /-- The breaking filter's cons equation (the bridge proof's step). -/
-theorem breakingOf_cons (c : Change) (cs : List Change) :
+theorem breakingOf_cons (c : CompatChange) (cs : List CompatChange) :
     breakingOf (c :: cs)
       = match c with
         | .added _ => breakingOf cs
@@ -294,7 +297,7 @@ theorem breakingOf_cons (c : Change) (cs : List Change) :
 /-- The breaking subset is empty iff every finding is an addition —
     the two faces of ONE fact (the legacy `backwardCompatible_iff`'s
     filter-side twin). -/
-theorem breakingOf_nil_iff {changes : List Change} :
+theorem breakingOf_nil_iff {changes : List CompatChange} :
     breakingOf changes = [] ↔ ∀ c ∈ changes, ∃ n, c = .added n := by
   induction changes with
   | nil => simp [breakingOf]
@@ -314,7 +317,7 @@ theorem breakingOf_nil_iff {changes : List Change} :
             rw [breakingOf_cons] at h
             exact absurd h (by simp)
           · intro h
-            have hcon := h (Change.removed n) (List.Mem.head _)
+            have hcon := h (CompatChange.removed n) (List.Mem.head _)
             exact absurd hcon (by simp)
       | changed n fd =>
           constructor
@@ -322,14 +325,14 @@ theorem breakingOf_nil_iff {changes : List Change} :
             rw [breakingOf_cons] at h
             exact absurd h (by simp)
           · intro h
-            have hcon := h (Change.changed n fd) (List.Mem.head _)
+            have hcon := h (CompatChange.changed n fd) (List.Mem.head _)
             exact absurd hcon (by simp)
 
 /-- THE VERDICT BRIDGE: `verdictOf = .clean` iff the breaking subset is
     empty — the verdict's clean face is exactly the compatibility
     relation's decision (composed with `backwardCompatible_iff` in
     `verdictOf_diff_clean_iff` below). -/
-theorem verdictOf_eq_clean_iff {changes : List Change} {ms : List Migration} :
+theorem verdictOf_eq_clean_iff {changes : List CompatChange} {ms : List Migration} :
     verdictOf changes ms = .clean ↔ breakingOf changes = [] := by
   by_cases h : breakingOf changes = []
   · simp [verdictOf, h]
@@ -367,7 +370,7 @@ end SchemaCore
 
 /-! ## the module's law-summary (the honest ledger)
 
-PROVED: `Change.added_of_true`, `backwardCompatible_iff` (the relation
+PROVED: `CompatChange.added_of_true`, `backwardCompatible_iff` (the relation
 bridges the diff), `breakingOf_cons`, `breakingOf_nil_iff`,
 `verdictOf_eq_clean_iff`, `verdictOf_diff_clean_iff` (the verdict's
 clean face IS the relation's decision), `widenBounded_sound` (the

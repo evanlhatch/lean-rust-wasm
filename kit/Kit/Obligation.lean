@@ -39,8 +39,9 @@ The five questions (notes/v3/01-core.md):
   guestVerified); the backends' soundness/completeness are hand
   theorems, ported verbatim, restated at the indexed strength (a
   discharge PROVES the indexed claim — the type says it).
-- gate row: none yet — Kit is outside Gates.Packages' gated set;
-  KitTests.Axioms pins the backends' axiom cones.
+- gate row: Kit's row in Gates.Packages' gated set (the per-library
+  axiom sweep covers it); KitTests.Axioms pins the backends' axiom
+  cones.
 
 -/
 

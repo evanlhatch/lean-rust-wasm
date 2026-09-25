@@ -175,3 +175,25 @@ import Machines
 /-- info: 'Machines.Closure.inv_of_eval' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Machines.Closure.inv_of_eval
+
+-- The adjunction (A3): D ⊣ I — the triangles' discharge + the bridges
+-- as the unit/counit faces — the core triple only.
+/-- info: 'Machines.Fusion.Adjunction.triangle_left' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Machines.Fusion.Adjunction.triangle_left
+
+/-- info: 'Machines.Fusion.Adjunction.triangle_right' does not depend on any axioms -/
+#guard_msgs in
+#print axioms Machines.Fusion.Adjunction.triangle_right
+
+/-- info: 'Machines.Fusion.dIAdj' depends on axioms: [Quot.sound] -/
+#guard_msgs in
+#print axioms Machines.Fusion.dIAdj
+
+/-- info: 'Machines.Fusion.unit_machine' depends on axioms: [Quot.sound] -/
+#guard_msgs in
+#print axioms Machines.Fusion.unit_machine
+
+/-- info: 'Machines.Fusion.journal_of_replay' depends on axioms: [Quot.sound] -/
+#guard_msgs in
+#print axioms Machines.Fusion.journal_of_replay

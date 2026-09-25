@@ -221,6 +221,74 @@ theorem invRoundTrip (g : Additive S Δ) (s : S) (d : Δ) (s' : S)
 
 end Additive
 
+/-! ## The poison-fold (the fallible composition's fold face) -/
+
+/-- THE POISON-FOLD: fold the fallible steps left-to-right, the FIRST
+    `none` poisons the whole fold. This is `apply : S → Δ → Option S`'s
+    list face — the compose-with-failure discipline is the ladder's own
+    operation (`Composable.applyCompose` binds two; this binds a
+    list), so the helper lives HERE, never re-rolled. Three lanes
+    instantiate it: the incremental checker's maintained folds
+    (`SchemaCore.IncViolate`'s `accFold?`/`dangFold1?`) and the
+    witnessed journal's application (`SchemaCore.Delta`'s
+    `witnessedApply`). -/
+def optionFoldl {α β : Type} (f : β → α → Option β) :
+    List α → β → Option β
+  | [], b => some b
+  | a :: as, b => (f b a).bind (optionFoldl f as ·)
+
+theorem optionFoldl_nil {α β : Type} (f : β → α → Option β) (b : β) :
+    optionFoldl f [] b = some b := rfl
+
+theorem optionFoldl_cons {α β : Type} (f : β → α → Option β)
+    (a : α) (as : List α) (b : β) :
+    optionFoldl f (a :: as) b = (f b a).bind (optionFoldl f as ·) := rfl
+
+/-- THE POISON-FOLD'S COMPOSITION: the fold over a concatenation is
+    the bind of the two folds (the `Composable.applyCompose` face, at
+    the fold's granularity). -/
+theorem optionFoldl_append {α β : Type} (f : β → α → Option β)
+    (as bs : List α) (b : β) :
+    optionFoldl f (as ++ bs) b
+      = (optionFoldl f as b).bind (fun b' => optionFoldl f bs b') := by
+  induction as generalizing b with
+  | nil => simp [optionFoldl]
+  | cons a rest ih =>
+      rw [List.cons_append, optionFoldl_cons, optionFoldl_cons,
+        Option.bind_assoc]
+      simp only [ih]
+
+/-- THE ONE AGREEMENT LEMMA (the lanes' parallel inductions, folded
+    once): when each `some` step's image is related by `R` to the
+    plain fold's step image, a `some` poison-fold output IS the plain
+    fold's output, `R`-related. The lanes instantiate `R` with their
+    maintained-vs-recomputed face (the table identity + the negative
+    face's perm; the dangle filter's equality) and their step
+    agreements discharge `hstep` — the induction happens ONCE here. -/
+theorem optionFoldl_agree {α σ τ : Type}
+    (f : σ → α → Option σ) (plain : τ → α → τ) (R : σ → τ → Prop)
+    (hstep : ∀ a s t s', f s a = some s' → R s t → R s' (plain t a))
+    (as : List α) (s : σ) (t : τ) (hR : R s t) :
+    ∀ s', optionFoldl f as s = some s' →
+      R s' (List.foldl plain t as) := by
+  induction as generalizing s t with
+  | nil =>
+      intro s' h
+      simp only [optionFoldl, Option.some.injEq] at h
+      subst h
+      exact hR
+  | cons a rest ih =>
+      intro s' h
+      simp only [optionFoldl] at h
+      cases hs : f s a with
+      | none => simp [hs] at h
+      | some s₁ =>
+          simp only [hs, Option.bind_some] at h
+          -- `List.foldl plain t (a :: rest)` whnf-reduces to
+          -- `List.foldl plain (plain t a) rest` — the goal IS the
+          -- induction's face (defeq, `List.foldl_cons`).
+          exact ih s₁ (plain t a) (hstep a s t s₁ hs hR) s' h
+
 /-! ## The two doctrine laws, stated at this generality -/
 
 /-- THE LOCAL MIGRATION EQUATION (01-core §2):

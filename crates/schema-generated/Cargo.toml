@@ -3,10 +3,25 @@
 # Hand-written and minimal (the ONE hand file in this crate): the emitter
 # owns `src/lib.rs` and `tests/differential.rs` — both GENERATED, both
 # byte-tied (`lake exe gates gen-check`; never hand-edit a generated file,
-# `just gen` restores). No workspace root yet (single crate, no siblings);
-# no dependencies beyond std (the Rust host discipline: no unsafe, no
-# external crates — the wire runtime is generated inline, so there is no
-# schema-codec crate to share).
+# `just gen` restores). The tests/ files BELOW (api.rs, serde_rt.rs,
+# migrate.rs) are HAND-WRITTEN consumers of the generated API — the
+# behavior pins + the serde round trips + the migration face's evidence
+# (they consume, never re-spec; a drift fails them loudly).
+#
+# No workspace root yet (single crate, no siblings). The dependency
+# judgment (the dep discipline: minimal, justified):
+# - `serde` (std feature, NO derive): the interop runtime dependency —
+#   the generated Serialize/Deserialize impls are the schema's ECOSYSTEM
+#   INTEROP face (JSON). The canonical codec is SchemaCore.Codec's wire
+#   (the duel vectors); serde is interop, never the spec. No
+#   proc-macro lane: the impls are hand-templated by the emitter.
+# - `fast-observe` (path dep, default-features = false — the
+#   library-level-tracing rule: the BINARY enables fastrace): the
+#   observability face (wave-30 C1) — the generated codecs open ONE
+#   dotted-static `scope!` per schema operation (the schema's namespace
+#   path as the name source). NIGHTLY: fast-observe is nightly-only —
+#   crates/rust-toolchain.toml pins the lane.
+# - `serde_json` (dev-only): the round-trip tests' JSON reader.
 #
 # The wire is SchemaCore.Codec's (Lean) — the differential over that wire
 # lives in tests/differential.rs.
@@ -16,3 +31,26 @@ name = "schema-generated"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["std"] }
+fast-observe = { path = "../../../fast-observe", default-features = false }
+# The closed enums' faces (EnumIter/EnumCount/Display/EnumString): the
+# iteration + the string discipline over the model's tag spelling.
+# The ONE dependency the derives' lawfulness needs — a hand iterator
+# + parser per enum would be a parallel table (the drift class). The
+# newtypes stay MANUAL (no nutype/bon: a proc-macro lane to buy what
+# a five-line generated newtype/typestate gives — the honest
+# judgment; see the emitter's notes).
+strum = { version = "0.27", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+# The duel manifest's ONE parser (mandate-delta's pub face): the
+# manifest walk is Kit.Duel's shared consumer contract — the journal
+# duel's home crate owns it, every duel lane consumes it (a second
+# byte-shaped walk here would be the drift class the dedup wave
+# closed). The dev-dep cycle (mandate-delta consumes THIS crate's
+# codec) is the dependency graph's honest shape: the tests consume
+# the contract, the codec stays the generated one.
+mandate-delta = { path = "../mandate-delta" }

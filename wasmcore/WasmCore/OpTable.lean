@@ -43,8 +43,9 @@ The five questions (notes/v3/01-core.md):
 - **Spine reading**: the registry-content every op consumer folds
   (Validate's checker, Encode's emitter, the later orders).
 - **Ladder rung**: rung 1 (closed data); laws live at the consumers.
-- **Gate row**: none at the gates yet (WasmCore is not in
-  Gates.Packages' gated set) + WasmCoreTests' sig/opcode pins.
+- **Gate row**: WasmCore's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it) + WasmCoreTests'
+  sig/opcode pins.
 
 Imports: `WasmCore.Types`, `WasmCore.Instr` only (cone-ordered).
 -/
@@ -85,6 +86,11 @@ structure MemRow where
   /-- pops × pushes (the value sits on top of the address for
       stores; loads only push). -/
   sig : List ValType × List ValType
+  /-- The access WIDTH in bytes (the executor's facet): the bounds
+      check couples `ea + width`, the loads readLE `width` bytes, the
+      stores writeLE `width` bytes (`i32.load8_u`/`*store8` = 1,
+      the 32-bit forms = 4, the 64-bit forms = 8). -/
+  width : Nat
   /-- The execution-semantics note (the Sem order's slot). -/
   sem : Option String
 
@@ -116,19 +122,19 @@ def opRow : Op → OpRow
 
 /-- THE mem-op table (same discipline). -/
 def memRow : MemOp → MemRow
-  | .i32load8u => ⟨"i32.load8_u", 0x2D, 0, ([.i32], [.i32]),
+  | .i32load8u => ⟨"i32.load8_u", 0x2D, 0, ([.i32], [.i32]), 1,
       some "pop a; push the zero-extended byte at ea = a + offset (trap if out of bounds)"⟩
-  | .i32load => ⟨"i32.load", 0x28, 2, ([.i32], [.i32]),
+  | .i32load => ⟨"i32.load", 0x28, 2, ([.i32], [.i32]), 4,
       some "pop a; push the 32-bit value at ea = a + offset (trap if out of bounds)"⟩
-  | .i64load => ⟨"i64.load", 0x29, 3, ([.i32], [.i64]),
+  | .i64load => ⟨"i64.load", 0x29, 3, ([.i32], [.i64]), 8,
       some "pop a; push the 64-bit value at ea = a + offset (trap if out of bounds)"⟩
-  | .i32store => ⟨"i32.store", 0x36, 2, ([.i32, .i32], []),
+  | .i32store => ⟨"i32.store", 0x36, 2, ([.i32, .i32], []), 4,
       some "pop a (address), v (value); store v's 32 bits at ea = a + offset (trap if out of bounds)"⟩
-  | .i64store => ⟨"i64.store", 0x37, 3, ([.i64, .i32], []),
+  | .i64store => ⟨"i64.store", 0x37, 3, ([.i64, .i32], []), 8,
       some "pop a (address), v (value); store v's 64 bits at ea = a + offset (trap if out of bounds)"⟩
-  | .i32store8 => ⟨"i32.store8", 0x3A, 0, ([.i32, .i32], []),
+  | .i32store8 => ⟨"i32.store8", 0x3A, 0, ([.i32, .i32], []), 1,
       some "pop a (address), v (value); store v's low 8 bits at ea = a + offset (trap if out of bounds)"⟩
-  | .i64store8 => ⟨"i64.store8", 0x3B, 0, ([.i64, .i32], []),
+  | .i64store8 => ⟨"i64.store8", 0x3B, 0, ([.i64, .i32], []), 1,
       some "pop a (address), v (value); store v's low 8 bits at ea = a + offset (trap if out of bounds)"⟩
 
 /-! ## The R6 pins (decide over the closed universe) -/
@@ -175,6 +181,11 @@ def memOpcode (m : MemOp) : UInt8 := (memRow m).opcode
 
 /-- The memarg's elided-default alignment (the encoder facet). -/
 def memAlignDefault (m : MemOp) : Nat := (memRow m).alignDefault
+
+/-- The access width in bytes (the executor's facet — the bounds
+    check's constant and the LE fold's length; rfl-eliminable per
+    ctor: `memBytes .i32load = 4` by `rfl`). -/
+def memBytes (m : MemOp) : Nat := (memRow m).width
 
 /-- The stack signature (the validator facet, mem ops). -/
 def memSig (m : MemOp) : List ValType × List ValType := (memRow m).sig

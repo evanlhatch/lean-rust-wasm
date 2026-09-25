@@ -1,5 +1,5 @@
-/- 
-# Wit.Parse — the total WIT parser: text → the typed AST
+/-
+# Wit.Parse — the total WIT parser: text → the typed AST (the grammar layer's instance)
 
 Owner: the Wit agent (the mandate tree, `wit/`).
 Driving decisions: notes/v3/05-codegen.md §1 (the two honest laws:
@@ -10,6 +10,44 @@ notes/v3/13-interfaces.md (the WIT worlds row: the host skew check
 READS component types — this parser is that reading's foundation, and
 `Wit.Render` is its writing half).
 
+## Riding the grammar layer (05 §1; the CodeRegistry/Snapshot template)
+
+The PACKAGE level IS a `TextKit.Grammar` value (`pkgGrammar` below):
+the nested seq/rep spine over the lexemes — keyword literals (the
+shared `constStrLex`), the name/id atoms (the shared `identAtom`), the
+ty token (the guarded leaf below) — under the ONE `rel` codec
+(`packageCodec`). The derived parser/printer own every loop and every
+dispatch; the hand per-level climb (`tyP_ok` … `packageP_ok`, ~800
+lines) and the miss lemmas are GONE except the ty token's own. THE
+ROUND TRIP IS THE GENERIC THEOREM'S INSTANCE:
+
+- `parse_print` — a `WitOk` package's rendering parses back to exactly
+  it: `Grammar.run_print_fixFree` (+ the comment-strip wrapper).
+- `render_parse` — accepted text IS the rendering of its result (the
+  canonicalization direction): `Grammar.print_parse` (law 2) + the
+  derived print's bytes ARE `Render.package`'s (`print_eq_render`) +
+  `run`'s full-consumption check. LANDED HERE — the pre-grammar file
+  carried it as a named follow-up; the grammar layer's law 2 pays it.
+- `print_parse` (the exactness face, generic form) — the
+  `Grammar.print_parse` instance at `pkgGrammar`.
+
+## THE RECURSION'S HONEST STATE (the layered composition — notes/v3/15-patterns.md #17)
+
+The WIT type grammar is RECURSIVE (`option`/`list`/`result`/`tuple`
+nest `Ty`s). The fix-topped face (`Grammar.parse_print_fix`) covers a
+fix-TOPPED grammar only, and the wall against making the Ty recursion
+the fix is structural, not effort: the ctor-armed recursion wall is
+pattern #17's three-point statement (verified against this format's
+shapes). The LAYERED composition, per the pattern: the Ty recursion
+stays the hand-riding-TextKit zone (`tyP` + its `tyP_ok`
+climb — the ONE fuel-bounded induction this format keeps), presented
+to the grammar as the `tyAtom` lexeme: `print = Render.ty`, `scan =
+tyP` GUARDED to the canonical spelling (the consumed prefix must BE
+`Render.ty` of its result — the guard makes `scan_exact` hold by pure
+take/drop algebra, no canonicality theorem over `tyP` needed). The
+package/interface/record/field levels ride the engine; the accepted
+language is UNCHANGED (the guard never fires on `Render`'s image).
+
 ## The accepted language — the renderer's image, plus comments
 
 The parser accepts EXACTLY the text `Wit.Render` produces (the
@@ -18,58 +56,13 @@ committed artifact of record `gen/schema-slice.wit` carries two. The
 strictness is the canonicalization law's honesty: accepted text
 normalizes to its comment-stripped bytes, and those bytes are the
 rendering of the parse result (`render_parse` below). Whitespace
-tolerance would break normalization — it is deliberately not accepted
-(the accepted-byte-policy discipline: the policy rides the Codec row).
+tolerance would break normalization — it is deliberately not accepted.
 
-## The shape
-
-TextKit combinators all the way (`tok`/`satisfy`/`many`/`orElse` over
-`GParser`); errors are the converged `ParseError` (the Diag envelope
-with position — never `none`, never a bare string). The closed-world
-rejections enumerate the valid space + fill the did-you-mean from the
-ONE engine (`TextKit.suggestFor`) — `curated` is this module's ONE
-construction route for them.
-
-TOTALITY: every definition is a plain structural match — the ty
-recursion and the list loops ride a fuel `Nat` (one unit per nesting
-step; the invariant `fuel ≥ remaining characters` holds at every entry
-with the top-level fuel = the input length, because every level
-consumes at least one character before recursing). This is 05 §1's
-rep-progress discipline at the carrier TextKit fixes: `many` (used
-inside the name scanner) already stops at zero progress; the block
-loops use the explicit fuel because their bodies consume
-variable-length words (the SchemaCore.Snapshot precedent: the loop
-fuel is the genuine recursion measure, not hand-rolled plumbing).
-
-## The laws
-
-PROVED (below): the full per-level climb — `tyP_ok`, `fieldsGo_ok`,
-`fieldsP_ok`, `recordCore_ok`, `recordsP_ok`, `interfaceP_ok`,
-`interfacesP_ok`, `packageP_ok` — each level inverting the renderer's
-join exactly, cursor included, under the `WitOk` side condition (the
-AST carries names as plain strings; a name the scanner cannot rescan
-has no parse — `WitOk` gates exactly that).
-
-ASSEMBLED (landed after the per-level climb):
-
-- `parse_print` (line ~1568) — the top assembly over `packageP_ok`.
-- `witCodec` / `witRetraction` / `witImageIso` — the correspondence
-  chain: the Codec row, the retraction (`inv_emb` = `parse_print`),
-  and the image-iso upgrade (the renderer's image texts ≅ the
-  well-named packages).
-
-NAMED, NOT PROVED (the follow-up):
-
-- `render_parse` : accepted text normalizes — `∀ s p, parse s = .ok p
-  → Render.package p = stripComments s`. This is the inversion
-  (soundness) direction: it needs the scanners' maximality + the loops'
-  predictive-dispatch completeness — a full second proof effort, not
-  begun. The artifact pin (WitTests reads `gen/schema-slice.wit`, parses,
-  re-renders byte-identical) re-derives the bytes at the value level
-  instead, as the snapshot lane did for its own canonicalization half.
-- `witRetraction` / the image-iso upgrade (`toImageIso`): gated on
-  `render_parse` — the retraction's `inv`-leg is exactly the
-  canonicalization direction.
+The parse-time refusals keep their teeth: trailing bytes (the run
+entry's full-consumption check), the maximal-munch atom refusal and
+the curated ty errors (inside `tyP`), and the duplicate-field /
+duplicate-record refusals (the codec's decode — the nodup checks are
+decided `none`s, never silent acceptance).
 
 Core-only (imports `Wit`, `Wit.Render`, TextKit, Kit.Correspondence —
 the cone rule: Kit/TextKit are the C0 substrate).
@@ -79,11 +72,12 @@ The five questions (notes/v3/01-core.md):
   (the skew check's reading half).
 - carrier grade: the correspondence row `witCodec` — the round-trip
   law in the type, the accepted-byte policy a field; the retraction /
-  image-iso upgrade land with `render_parse`.
+  image-iso landed (the graduation); `render_parse` pays the
+  canonicalization direction as of this migration.
 - spine reading: the artifact stage's inverse — the ONE parser every
   WIT-reading lane calls; `Wit.Render` is the ONE writer.
-- ladder rung: rung 1-2 — total fuel-structural folds + small
-  inductions (the inversion kit).
+- ladder rung: rung 1-2 — the package level is the engine's; the ty
+  token's law is a small fuel-bounded induction (the hand zone).
 - gate row: WitTests' round-trip pins + the artifact integration pin
   (parse the committed gen/schema-slice.wit, re-render byte-identical);
   the axiom gate sweeps the Wit root.
@@ -91,8 +85,10 @@ The five questions (notes/v3/01-core.md):
 
 import Wit
 import Wit.Render
-import TextKit.Combinators
-import TextKit.Lemmas
+import TextKit.Grammar
+import TextKit.Grammar.Lexemes
+import TextKit.Grammar.Check
+import TextKit.Grammar.Laws
 import Kit.Correspondence
 
 namespace Wit.Parse
@@ -110,14 +106,15 @@ def idChar (c : Char) : Bool :=
   nameChar c || c == ':'
 
 /-- The name discipline: an ASCII-alpha head, then charset characters.
-    `WitOk` below gates the AST side; `identP` enforces the byte side —
-    the round-trip laws ride their agreement. -/
+    `WitOk` below gates the AST side; the name lexemes enforce the byte
+    side — the round-trip laws ride their agreement (the bridge lemmas
+    at the lexemes section). -/
 def identOk (q : Char → Bool) (s : String) : Bool :=
   match s.toList with
   | c :: w => c.isAlpha && w.all q
   | [] => false
 
-/-! ## the curated errors (the ONE construction route) -/
+/-! ## the curated errors (the ONE construction route — the ty zone's) -/
 
 /-- The rejected token's text: the maximal ident-ish run at the cursor
     (the `got` slot's content for token-level rejections). -/
@@ -126,7 +123,7 @@ def gotToken (cs : List Char) : String :=
 
 /-- THE curated parse error: the expected set enumerated, the rejected
     token named, the did-you-mean filled by the ONE engine (05 §4's
-    closed-world rule — this module's rejections all route here). -/
+    closed-world rule). -/
 def curated (cur : Cursor) (message : String) (valid : List String) : ParseError :=
   { ParseError.base cur.off valid with
     message := message
@@ -141,20 +138,77 @@ def tokErr (off : Nat) (s : String) : ParseError :=
 def tyValid : List String :=
   ["bool", "u64", "i64", "string", "option", "list", "result", "tuple"]
 
-/-! ## the name scanner (TextKit's satisfy + many) -/
+/-! ## the ty zone — THE HAND RECURSION (the layered composition's
+     honest boundary; see the module header) -/
 
-/-- An identifier: alpha head, then a maximal run of `q` characters
-    (the `many` zero-progress stop ends the run — the delimiter's
-    refusal). Total; never silent. -/
-def identP (q : Char → Bool) : GParser String := fun cur =>
-  match TextKit.satisfy "an identifier start" Char.isAlpha cur with
-  | .error e => .error e
-  | .ok (c, c1) =>
-      match TextKit.many (TextKit.satisfy "an identifier character" q) c1 with
-      | .ok (w, c2) => .ok (String.ofList (c :: w), c2)
-      | .error e => .error e
+/-! ### the token scanner (the kit's inversions, consumed) -/
 
-/-! ## the type grammar (predictive: the eight heads are prefix-free) -/
+/-- A literal is recognized after itself (the cursor bookkeeping is
+    `tok`'s own). -/
+theorem tok_self (s : String) (off : Nat) (rest : List Char) :
+    TextKit.tok s ⟨off, s.toList ++ rest⟩ = .ok (s, ⟨off + s.length, rest⟩) := by
+  unfold TextKit.tok
+  have hp : s.toList.isPrefixOf (s.toList ++ rest) = true := by
+    rw [List.isPrefixOf_iff_prefix]
+    exact ⟨rest, rfl⟩
+  rw [if_pos hp]
+  have hd : (s.toList ++ rest).drop s.length = rest := by
+    have hl : s.length = s.toList.length := String.length_toList.symm
+    rw [hl]
+    exact List.drop_left
+  simp [Cursor.advBy, hd]
+
+/-- The token refusal, cursor-head face (the miss direction's shared
+    base for the arm lemmas): a nonempty literal whose head differs
+    from the cursor's head is refused, cursor offset carried. -/
+theorem tok_miss (s : String) (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ s.toList.head?) (hk : s ≠ "") :
+    TextKit.tok s ⟨off, cs⟩ = .error (ParseError.base off [s!"'{s}'"]) := by
+  have hne' : s.toList ≠ [] := by
+    intro h
+    exact hk (String.toList_inj.mp h)
+  unfold TextKit.tok
+  cases hs : s.toList with
+  | nil => rw [hs] at hne'; exact absurd rfl hne'
+  | cons c0 w =>
+      rw [hs] at hne
+      cases cs with
+      | nil => simp [List.isPrefixOf]
+      | cons c rest =>
+          have hc : c0 ≠ c := by
+            intro hcon
+            rw [hcon] at hne
+            simp at hne
+          simp [List.isPrefixOf, hc]
+
+/-! ### the orElse kit -/
+
+theorem orElse_ok_left {α : Type} {p q : GParser α} {cur : Cursor} {r : α × Cursor}
+    (h : p cur = .ok r) : TextKit.orElse p q cur = .ok r := by
+  simp [TextKit.orElse, h]
+
+theorem orElse_ok_right {α : Type} {p q : GParser α} {cur : Cursor} {e : ParseError}
+    {r : α × Cursor} (h1 : p cur = .error e) (h2 : q cur = .ok r) :
+    TextKit.orElse p q cur = .ok r := by
+  simp [TextKit.orElse, h1, h2]
+
+theorem orElse_err_r {α : Type} {p q : GParser α} {cur : Cursor}
+    (h1 : ∃ e, p cur = .error e) (h2 : ∃ e, q cur = .error e) :
+    ∃ e, TextKit.orElse p q cur = .error e := by
+  obtain ⟨e1, h1⟩ := h1
+  obtain ⟨e2, h2⟩ := h2
+  exact ⟨ParseError.farther e1 e2, by simp [TextKit.orElse, h1, h2]⟩
+
+/-! ### the arms (generic success + refusal) -/
+
+/-- The maximal-munch gate's positive face: a head char passing the
+    name charset is refused as an atom continuation. -/
+theorem head_not_name_of_all {rest : List Char}
+    (hr : rest.head?.all (fun c => !(TextKit.isIdentChar c || c == '-')) = true) :
+    ∀ c, rest.head? = some c → (TextKit.isIdentChar c || c == '-') = false := by
+  intro c hc
+  rw [hc] at hr
+  simpa using hr
 
 /-- One scalar atom: the keyword PLUS the maximal-munch check — the
     following character must be off the name charset (WIT spells types
@@ -229,451 +283,6 @@ def tyP : Nat → GParser Ty
           if e.pos > cur.off then .error e
           else .error (curated cur "expected a WIT type" tyValid)
 
-/-! ## the record fields -/
-
-/-- A field line's text (the renderer's `Render.field` — proved equal
-    below). -/
-def fieldText (f : Field) : String :=
-  "    " ++ f.name ++ ": " ++ Render.ty f.ty ++ ","
-
-/-- A field's core: `name: ty,` (the indent consumed by the caller). -/
-def fieldCore (fuel : Nat) : GParser Field := fun cur =>
-  match identP nameChar cur with
-  | .error e => .error e
-  | .ok (n, c1) =>
-      match TextKit.tok ": " c1 with
-      | .error e => .error e
-      | .ok (_, c2) =>
-          match tyP fuel c2 with
-          | .error e => .error e
-          | .ok (t, c3) =>
-              match TextKit.tok "," c3 with
-              | .error e => .error e
-              | .ok (_, c4) => .ok (({ name := n, ty := t } : Field), c4)
-
-/-- The rendered continuation block: each further field rides its
-    preceding newline (the renderer's join). -/
-def fieldsSepText : List Field → String := Render.fieldsTailJoin
-
-/-- The rendered field block (the renderer's join). -/
-def fieldsText : List Field → String := Render.fieldsJoin
-
-/-- The fields' continuation loop: `("\n    " core)*`, dispatched
-    predictively (the doctrine's FIRST-dispatch certificate, explicit):
-    a continuation line starts `\n` + four spaces; the closing form
-    `\n  }` shares the first three characters, so the dispatch looks
-    four deep. The committed choice never swallows a deep failure —
-    a typo inside a field surfaces at its own position. Total (fuel
-    structural; each iteration consumes ≥ 5 characters). -/
-def fieldsGo : Nat → GParser (List Field)
-  | 0, cur => .error (curated cur "expected a field line or the record's closing brace"
-    ["a field line (\"    <name>: <type>,\")", "the record's closing brace (\"  }\")"])
-  | fuel + 1, cur =>
-      match cur.cs with
-      | '\n' :: ' ' :: ' ' :: ' ' :: _ =>
-          match TextKit.tok "\n    " cur with
-          | .error e => .error e
-          | .ok (_, c1) =>
-              match fieldCore fuel c1 with
-              | .error e => .error e
-              | .ok (f, c2) =>
-                  match fieldsGo fuel c2 with
-                  | .error e => .error e
-                  | .ok (fs, c3) => .ok (f :: fs, c3)
-      | _ => .ok ([], cur)
-
-/-- The fields block: `"    " core` then the continuation loop,
-    dispatched predictively on the head character (a field starts four
-    spaces; a blank line / the closer starts `\n`). The committed
-    choice never swallows a deep failure. -/
-def fieldsP : Nat → GParser (List Field)
-  | 0, cur => .error (curated cur "expected a field line or the record's closing brace"
-    ["a field line (\"    <name>: <type>,\")", "the record's closing brace (\"  }\")"])
-  | fuel + 1, cur =>
-      match cur.cs.head? with
-      | some ' ' =>
-          match TextKit.tok "    " cur with
-          | .error e => .error e
-          | .ok (_, c1) =>
-              match fieldCore fuel c1 with
-              | .error e => .error e
-              | .ok (f, c2) =>
-                  match fieldsGo fuel c2 with
-                  | .error e => .error e
-                  | .ok (fs, c3) => .ok (f :: fs, c3)
-      | _ => .ok ([], cur)
-
-/-! ## the records + the interface -/
-
-/-- A record block's text (the renderer's `Render.record`). -/
-def recordText (r : Record) : String :=
-  "  record " ++ r.name ++ " {\n" ++ fieldsText r.fields ++ "\n  }\n"
-
-/-- The rendered record-block concatenation (the renderer's join). -/
-def recordsText : List Record → String := Render.recordsJoin
-
-/-- A record block: name, the field block, the closing brace. The
-    record's nodup-in-type is DECIDED at construction: a duplicate
-    field name is the loud refusal (the runtime route of the
-    elaboration-level `by decide` default), never a silent
-    acceptance. -/
-def recordCore (fuel : Nat) : GParser Record := fun cur =>
-  match identP nameChar cur with
-  | .error e => .error e
-  | .ok (n, c1) =>
-      match TextKit.tok " {\n" c1 with
-      | .error e => .error e
-      | .ok (_, c2) =>
-          match fieldsP fuel c2 with
-          | .error e => .error e
-          | .ok (fs, c3) =>
-              match TextKit.tok "\n  }\n" c3 with
-              | .error e => .error e
-              | .ok (_, c4) =>
-                  if hnd : (fs.map Field.name).Nodup then
-                    .ok (({ name := n, fields := fs, fields_nodup := hnd } : Record), c4)
-                  else
-                    .error (curated cur
-                      "duplicate field names — WIT rejects a record with a repeated field name"
-                      ["distinct field names"])
-
-/-- The record-block concatenation loop, dispatched predictively on
-    the head character (a block starts `"  record "`; the interface's
-    closing brace starts `}`). Total (fuel structural; each block
-    consumes ≥ 12 characters). -/
-def recordsP : Nat → GParser (List Record)
-  | 0, cur => .error (curated cur "expected a record block or the interface's closing brace"
-    ["a record block (\"  record <name> { ... }\")", "the interface's closing brace (\"}\")"])
-  | fuel + 1, cur =>
-      match cur.cs.head? with
-      | some ' ' =>
-          match TextKit.tok "  record " cur with
-          | .error e => .error e
-          | .ok (_, c1) =>
-              match recordCore fuel c1 with
-              | .error e => .error e
-              | .ok (r, c2) =>
-                  match recordsP fuel c2 with
-                  | .error e => .error e
-                  | .ok (rs, c3) => .ok (r :: rs, c3)
-      | _ => .ok ([], cur)
-
-/-- An interface block's text (the renderer's `Render.interface`). -/
-def interfaceText (i : Interface) : String :=
-  "interface " ++ i.name ++ " {\n" ++ recordsText i.records ++ "}\n"
-
-/-- The rendered interface-block concatenation (the renderer's join). -/
-def interfacesText : List Interface → String := Render.interfacesJoin
-
-/-- An interface block: name, the record blocks, the closing brace.
-    The interface's nodup-in-type is DECIDED at construction (the
-    record-level route, one level up). -/
-def interfaceP (fuel : Nat) : GParser Interface := fun cur =>
-  match identP nameChar cur with
-  | .error e => .error e
-  | .ok (n, c1) =>
-      match TextKit.tok " {\n" c1 with
-      | .error e => .error e
-      | .ok (_, c2) =>
-          match recordsP fuel c2 with
-          | .error e => .error e
-          | .ok (rs, c3) =>
-              match TextKit.tok "}\n" c3 with
-              | .error e => .error e
-              | .ok (_, c4) =>
-                  if hnd : (rs.map Record.name).Nodup then
-                    .ok (({ name := n, records := rs, records_nodup := hnd } : Interface), c4)
-                  else
-                    .error (curated cur
-                      "duplicate record names — WIT rejects an interface with a repeated record name"
-                      ["distinct record names"])
-
-/-- The interface-block concatenation loop, dispatched predictively on
-    the head character (a block starts `interface `; the package ends
-    at the cursor otherwise). Total (fuel structural). -/
-def interfacesP : Nat → GParser (List Interface)
-  | 0, cur => .error (curated cur "expected an interface block"
-    ["an interface block (\"interface <name> { ... }\")"])
-  | fuel + 1, cur =>
-      match cur.cs.head? with
-      | some 'i' =>
-          match TextKit.tok "interface " cur with
-          | .error e => .error e
-          | .ok (_, c1) =>
-              match interfaceP fuel c1 with
-              | .error e => .error e
-              | .ok (i, c2) =>
-                  match interfacesP fuel c2 with
-                  | .error e => .error e
-                  | .ok (is, c3) => .ok (i :: is, c3)
-      | _ => .ok ([], cur)
-
-/-! ## the package -/
-
-/-- The whole-package text (the renderer's `Render.package`). -/
-def packageText (p : Package) : String :=
-  "package " ++ p.id ++ ";\n\n" ++ interfacesText p.interfaces
-
-/-- A package block: the id line, then the interface blocks. -/
-def packageP (fuel : Nat) : GParser Package := fun cur =>
-  match TextKit.tok "package " cur with
-  | .error e => .error e
-  | .ok (_, c1) =>
-      match identP idChar c1 with
-      | .error e => .error e
-      | .ok (i, c2) =>
-          match TextKit.tok ";\n\n" c2 with
-          | .error e => .error e
-          | .ok (_, c3) =>
-              match interfacesP fuel c3 with
-              | .error e => .error e
-              | .ok (is, c4) => .ok (({ id := i, interfaces := is } : Package), c4)
-
-/-! ## comments (the artifact of record's two header lines) -/
-
-/-- Consume through the next newline (an unterminated tail consumes
-    everything — the bytes are then refused downstream as a malformed
-    package). Structural on the list. -/
-def skipToNewline : List Char → List Char
-  | '\n' :: rest => rest
-  | _ :: rest => skipToNewline rest
-  | [] => []
-
-/-- Drop the leading `//` comment lines (ALL of them — the artifact
-    of record carries two). Fuel-structural (the house's no-wf-opacity
-    discipline): each strip consumes at least the four bytes
-    `//` + a line's first char + the newline, so `fuel = length` is
-    always sufficient. -/
-def skipCommentsGo : Nat → List Char → List Char
-  | 0, cs => cs
-  | fuel + 1, '/' :: '/' :: rest => skipCommentsGo fuel (skipToNewline rest)
-  | _ + 1, cs => cs
-
-/-- Drop the leading `//` comment lines. -/
-def skipComments (cs : List Char) : List Char :=
-  skipCommentsGo cs.length cs
-
-/-- The go-loop's refusal face: a head off `/` is a comment-free tail
-    (the package text's own head). -/
-theorem skipCommentsGo_ne (fuel : Nat) (c : Char) (cs : List Char)
-    (h : (c == '/') = false) :
-    skipCommentsGo (fuel + 1) (c :: cs) = c :: cs := by
-  refine skipCommentsGo.eq_3 _ _ ?_
-  intro rest heq
-  simp only [List.cons.injEq] at heq
-  exact absurd heq.1 (fun hc => by rw [hc] at h; simp at h)
-
-/-- The comment-stripped bytes of a text (the canonicalization law's
-    byte-side function). -/
-def stripComments (s : String) : String :=
-  String.ofList (skipComments s.toList)
-
-/-! ## the entry -/
-
-/-- The total parser: text → the typed WIT package. Every failure is a
-    curated `ParseError` (position + expected-set + did-you-mean);
-    trailing garbage after the last `}` is a loud refusal, never a
-    silent prefix acceptance. -/
-def parse (s : String) : Except ParseError Package :=
-  match packageP s.length ⟨0, skipComments s.toList⟩ with
-  | .ok (p, cur) =>
-      match cur.cs with
-      | [] => .ok p
-      | _ => .error (curated cur
-          "trailing bytes after the package's last interface"
-          ["the end of the package text"])
-  | .error e => .error e
-
-/-! ## the AST-side wellformedness (the round trip's side condition) -/
-
-/-- A WIT name is identifier-shaped (the scanner's byte-side gate). -/
-def witNameOk (s : String) : Bool := identOk nameChar s
-
-/-- The package-id discipline. -/
-def witIdOk (s : String) : Bool := identOk idChar s
-
-/-- The AST-side wellformedness the round-trip laws ride: every name —
-    the id, interface names, record names, field names — is
-    identifier-shaped. The closed `Ty` grammar needs no gate (a
-    malformed type shape is unconstructible). -/
-def WitOk (p : Package) : Bool :=
-  witIdOk p.id
-    && p.interfaces.all (fun i =>
-      witNameOk i.name
-        && i.records.all (fun r =>
-          witNameOk r.name && r.fields.all (fun f => witNameOk f.name)))
-
-/-! ## the laws — the two honest directions (05 §1) -/
-
-/-! ### the renderer's spelling, as equations -/
-
-theorem scalar_bool : Render.scalar .bool = "bool" := rfl
-theorem scalar_u64 : Render.scalar .u64 = "u64" := rfl
-theorem scalar_i64 : Render.scalar .i64 = "i64" := rfl
-theorem scalar_string : Render.scalar .string = "string" := rfl
-
-theorem ty_atom (s : Scalar) : Render.ty (.atom s) = Render.scalar s := rfl
-theorem ty_option (a : Ty) : Render.ty (.option a) = "option<" ++ Render.ty a ++ ">" := rfl
-theorem ty_list (a : Ty) : Render.ty (.list a) = "list<" ++ Render.ty a ++ ">" := rfl
-theorem ty_result (a b : Ty) :
-    Render.ty (.result a b) = "result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">" := rfl
-theorem ty_tuple (a b : Ty) :
-    Render.ty (.tuple a b) = "tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">" := rfl
-
-theorem field_eq (f : Field) : Render.field f = fieldText f := rfl
-
-/-- The render face: the renderer's texts ARE the parse-side texts
-    (the folds are shared — `rfl` bridges every level). -/
-theorem record_eq (r : Record) : Render.record r = recordText r := rfl
-theorem interface_eq (i : Interface) : Render.interface i = interfaceText i := rfl
-theorem package_eq (p : Package) : Render.package p = packageText p := rfl
-
-/-! ### the token + name scanners (the kit's inversions, consumed) -/
-
-/-- A literal is recognized after itself (the cursor bookkeeping is
-    `tok`'s own). -/
-theorem tok_self (s : String) (off : Nat) (rest : List Char) :
-    TextKit.tok s ⟨off, s.toList ++ rest⟩ = .ok (s, ⟨off + s.length, rest⟩) := by
-  unfold TextKit.tok
-  have hp : s.toList.isPrefixOf (s.toList ++ rest) = true := by
-    rw [List.isPrefixOf_iff_prefix]
-    exact ⟨rest, rfl⟩
-  rw [if_pos hp]
-  have hd : (s.toList ++ rest).drop s.length = rest := by
-    have hl : s.length = s.toList.length := String.length_toList.symm
-    rw [hl]
-    exact List.drop_left
-  simp [Cursor.advBy, hd]
-
-/-- A literal whose head differs from the input's head is refused (the
-    error value is `tok`'s own). -/
-theorem tok_ne (s : String) (off : Nat) (c0 : Char) (w : List Char) (c : Char)
-    (rest : List Char) (hc : s.toList = c0 :: w) (hne : c0 ≠ c) :
-    TextKit.tok s ⟨off, c :: rest⟩ = .error (ParseError.base off [s!"'{s}'"]) := by
-  unfold TextKit.tok
-  rw [hc]
-  simp [hne]
-
-/-! ### the name scanner (TextKit's satisfy + many, exactly) -/
-
-/-- The maximal `satisfy`-run's exactness on the accept side: a run of
-    `q` characters followed by a non-`q` character scans back exactly
-    (the round-trip face). -/
-theorem manySatisfy_self (nm : String) (q : Char → Bool) :
-    ∀ (off : Nat) (w rest : List Char), w.all q = true →
-      rest.head?.all (fun c => !q c) = true →
-      TextKit.many (TextKit.satisfy nm q) ⟨off, w ++ rest⟩
-        = .ok (w, ⟨off + w.length, rest⟩) := by
-  intro off w
-  induction w generalizing off with
-  | nil =>
-      intro rest _ hr
-      show TextKit.manyGo (TextKit.satisfy nm q) (rest.length + 1) ⟨off, rest⟩ = _
-      cases rest with
-      | nil => simp [TextKit.manyGo, TextKit.satisfy]
-      | cons c cs =>
-          have hqc : q c = false := by simpa using hr
-          simp [TextKit.manyGo, TextKit.satisfy, hqc]
-  | cons c w ih =>
-      intro rest hw hr
-      have hcq : q c = true := List.all_eq_true.mp hw c (by simp)
-      have hsucc : TextKit.satisfy nm q ⟨off, (c :: w) ++ rest⟩
-          = .ok (c, ⟨off + 1, w ++ rest⟩) := by
-        simp [TextKit.satisfy, hcq, Cursor.adv]
-      have hw' : w.all q = true := by
-        refine List.all_eq_true.mpr fun x hx => ?_
-        exact List.all_eq_true.mp hw x (by simp [hx])
-      have hlen : ((c :: w) ++ rest).length = (w ++ rest).length + 1 := by simp
-      rw [show TextKit.many (TextKit.satisfy nm q) ⟨off, (c :: w) ++ rest⟩
-            = TextKit.manyGo (TextKit.satisfy nm q)
-                (((c :: w) ++ rest).length + 1) ⟨off, (c :: w) ++ rest⟩ from rfl,
-        hlen]
-      rw [TextKit.manyGo.eq_2]
-      simp only [hsucc]
-      rw [if_pos (by simp)]
-      rw [← show TextKit.many (TextKit.satisfy nm q) ⟨off + 1, w ++ rest⟩
-            = TextKit.manyGo (TextKit.satisfy nm q)
-                ((w ++ rest).length + 1) ⟨off + 1, w ++ rest⟩ from rfl]
-      simp only [ih (off + 1) rest hw' hr]
-      simp only [List.length_cons]
-      simp only [Except.ok.injEq, Prod.mk.injEq, Cursor.mk.injEq]
-      simp only [true_and, and_true]
-      omega
-
-/-- The name scanner recognizes a well-formed identifier followed by a
-    non-identifier character (or end of input): exactly, cursor
-    included. -/
-theorem identP_self (q : Char → Bool) (s : String) (off : Nat) (rest : List Char)
-    (hok : identOk q s = true)
-    (hr : rest.head?.all (fun c => !q c) = true) :
-    identP q ⟨off, s.toList ++ rest⟩ = .ok (s, ⟨off + s.length, rest⟩) := by
-  unfold identOk at hok
-  cases hs : s.toList with
-  | nil => rw [hs] at hok; simp at hok
-  | cons c w =>
-      simp only [hs] at hok
-      simp only [Bool.and_eq_true] at hok
-      obtain ⟨hc, hw⟩ := hok
-      have hscan : TextKit.satisfy "an identifier start" Char.isAlpha
-          ⟨off, (c :: w) ++ rest⟩ = .ok (c, ⟨off + 1, w ++ rest⟩) := by
-        simp [TextKit.satisfy, hc, Cursor.adv]
-      have hmany := manySatisfy_self "an identifier character" q (off + 1) w rest hw hr
-      have hval : String.ofList (c :: w) = s := by rw [← hs]; exact String.ofList_toList
-      have hlen : s.length = w.length + 1 := by
-        rw [← String.length_toList, hs]
-        rfl
-      unfold identP
-      simp only [hscan]
-      simp only [hmany]
-      rw [hval, hlen]
-      simp only [Except.ok.injEq, Prod.mk.injEq, Cursor.mk.injEq]
-      simp only [true_and, and_true]
-      omega
-
-/-! ### the orElse kit -/
-
-theorem orElse_ok_left {α : Type} {p q : GParser α} {cur : Cursor} {r : α × Cursor}
-    (h : p cur = .ok r) : TextKit.orElse p q cur = .ok r := by
-  simp [TextKit.orElse, h]
-
-theorem orElse_ok_right {α : Type} {p q : GParser α} {cur : Cursor} {e : ParseError}
-    {r : α × Cursor} (h1 : p cur = .error e) (h2 : q cur = .ok r) :
-    TextKit.orElse p q cur = .ok r := by
-  simp [TextKit.orElse, h1, h2]
-
-theorem orElse_inv {α : Type} {p q : GParser α} {cur : Cursor} {r : α × Cursor}
-    (h : TextKit.orElse p q cur = .ok r) :
-    p cur = .ok r ∨ ∃ e, p cur = .error e ∧ q cur = .ok r := by
-  unfold TextKit.orElse at h
-  generalize hp : p cur = pv at h
-  cases pv with
-  | ok x =>
-      left
-      have h2 : Except.ok x = .ok r := h
-      have hx : x = r := by injection h2
-      exact by rw [hx]
-  | error e =>
-      right
-      generalize hq : q cur = qv at h
-      cases qv with
-      | ok x =>
-          have h2 : Except.ok x = .ok r := h
-          exact ⟨e, rfl, h2⟩
-      | error e' =>
-          have h2 : Except.error (ParseError.farther e e') = .ok r := h
-          exact absurd h2 (by simp)
-
-/-! ### the arms (generic success + refusal) -/
-
-/-- The maximal-munch gate's positive face: a head char passing the
-    name charset is refused as an atom continuation. -/
-theorem head_not_name_of_all {rest : List Char}
-    (hr : rest.head?.all (fun c => !(TextKit.isIdentChar c || c == '-')) = true) :
-    ∀ c, rest.head? = some c → (TextKit.isIdentChar c || c == '-') = false := by
-  intro c hc
-  rw [hc] at hr
-  simpa using hr
-
 /-- An atom arm succeeds on its own keyword (maximal munch: the
     following character must be off the name charset). -/
 theorem atomArm_self (kw : String) (s : Scalar) (off : Nat) (rest : List Char)
@@ -700,29 +309,6 @@ theorem tok_gt (off : Nat) (rest : List Char) :
 theorem tok_comma (off : Nat) (rest : List Char) :
     TextKit.tok ", " ⟨off, ',' :: ' ' :: rest⟩ = .ok (", ", ⟨off + 2, rest⟩) :=
   tok_self ", " off rest
-
-/-- The dispatch-adjacent literals, cons-form (the dispatch's char-normalized face). -/
-theorem tok_nlsp4 (off : Nat) (rest : List Char) :
-    TextKit.tok "\n    " ⟨off, '\n' :: ' ' :: ' ' :: ' ' :: ' ' :: rest⟩
-      = .ok ("\n    ", ⟨off + "\n    ".length, rest⟩) :=
-  tok_self "\n    " off rest
-
-theorem tok_sp4 (off : Nat) (rest : List Char) :
-    TextKit.tok "    " ⟨off, ' ' :: ' ' :: ' ' :: ' ' :: rest⟩
-      = .ok ("    ", ⟨off + "    ".length, rest⟩) :=
-  tok_self "    " off rest
-
-theorem tok_rec2 (off : Nat) (rest : List Char) :
-    TextKit.tok "  record "
-        ⟨off, ' ' :: ' ' :: 'r' :: 'e' :: 'c' :: 'o' :: 'r' :: 'd' :: ' ' :: rest⟩
-      = .ok ("  record ", ⟨off + "  record ".length, rest⟩) :=
-  tok_self "  record " off rest
-
-theorem tok_iface (off : Nat) (rest : List Char) :
-    TextKit.tok "interface "
-        ⟨off, 'i' :: 'n' :: 't' :: 'e' :: 'r' :: 'f' :: 'a' :: 'c' :: 'e' :: ' ' :: rest⟩
-      = .ok ("interface ", ⟨off + "interface ".length, rest⟩) :=
-  tok_self "interface " off rest
 
 /-- A unary arm succeeds when the inner parser is correct (the bundled
     IH: the inner reads its type's rendering off any well-fueled
@@ -818,9 +404,46 @@ theorem binaryArm_self (openS : String) (k : Ty → Ty → Ty) (a b : Ty)
     rw [h1]; omega
   rw [hoff]
 
+/-- An atom arm misses when the input's head differs from its
+    keyword's head (the token refusal, the curated set untouched). -/
+theorem atomArm_miss (kw : String) (s : Scalar) (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ kw.toList.head?) (hk : kw ≠ "") :
+    atomArm kw s ⟨off, cs⟩ = .error (tokErr off kw) := by
+  unfold atomArm tokErr
+  rw [tok_miss kw off cs hne hk]
 
-theorem ty_i64_list : (Render.ty (.atom .i64)).toList = ['i', '6', '4'] := rfl
-theorem ty_string_list : (Render.ty (.atom .string)).toList = ['s', 't', 'r', 'i', 'n', 'g'] := rfl
+/-- A unary arm misses when the input's head differs from its
+    opener's head (the inner parser is never reached). -/
+theorem unaryArm_miss (openS : String) (k : Ty → Ty) (inner : GParser Ty)
+    (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ openS.toList.head?) (hk : openS ≠ "") :
+    unaryArm openS k inner ⟨off, cs⟩ = .error (tokErr off openS) := by
+  unfold unaryArm tokErr
+  rw [tok_miss openS off cs hne hk]
+
+/-- A binary arm misses when the input's head differs from its
+    opener's head (the inner parser is never reached). -/
+theorem binaryArm_miss (openS : String) (k : Ty → Ty → Ty) (inner : GParser Ty)
+    (off : Nat) (cs : List Char)
+    (hne : cs.head? ≠ openS.toList.head?) (hk : openS ≠ "") :
+    binaryArm openS k inner ⟨off, cs⟩ = .error (tokErr off openS) := by
+  unfold binaryArm tokErr
+  rw [tok_miss openS off cs hne hk]
+
+/-! ### the ty zone's ok law (the lexeme's print_scan base) -/
+
+theorem scalar_bool : Render.scalar .bool = "bool" := rfl
+theorem scalar_u64 : Render.scalar .u64 = "u64" := rfl
+theorem scalar_i64 : Render.scalar .i64 = "i64" := rfl
+theorem scalar_string : Render.scalar .string = "string" := rfl
+
+theorem ty_atom (s : Scalar) : Render.ty (.atom s) = Render.scalar s := rfl
+theorem ty_option (a : Ty) : Render.ty (.option a) = "option<" ++ Render.ty a ++ ">" := rfl
+theorem ty_list (a : Ty) : Render.ty (.list a) = "list<" ++ Render.ty a ++ ">" := rfl
+theorem ty_result (a b : Ty) :
+    Render.ty (.result a b) = "result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">" := rfl
+theorem ty_tuple (a b : Ty) :
+    Render.ty (.tuple a b) = "tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">" := rfl
 
 /-- The ok direction for the ty parser: the rendering of any `Ty`
     parses back to exactly it, consuming exactly its bytes (the fuel
@@ -851,39 +474,33 @@ theorem tyP_ok (t : Ty) :
               rw [ty_atom, scalar_u64]
               simp only [tyP, tyArms]
               have hf1 : atomArm "bool" .bool ⟨off, "u64".toList ++ rest⟩
-                  = .error (tokErr off "bool") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "bool") :=
+                atomArm_miss "bool" .bool off _ (by simp) (by decide)
               rw [orElse_ok_right hf1
                 (orElse_ok_left (atomArm_self "u64" .u64 off rest hr))]
           | i64 =>
               rw [ty_atom, scalar_i64]
               simp only [tyP, tyArms]
               have hf1 : atomArm "bool" .bool ⟨off, "i64".toList ++ rest⟩
-                  = .error (tokErr off "bool") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "bool") :=
+                atomArm_miss "bool" .bool off _ (by simp) (by decide)
               have hf2 : atomArm "u64" .u64 ⟨off, "i64".toList ++ rest⟩
-                  = .error (tokErr off "u64") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "u64") :=
+                atomArm_miss "u64" .u64 off _ (by simp) (by decide)
               rw [orElse_ok_right hf1 (orElse_ok_right hf2
                 (orElse_ok_left (atomArm_self "i64" .i64 off rest hr)))]
           | string =>
               rw [ty_atom, scalar_string]
               simp only [tyP, tyArms]
               have hf1 : atomArm "bool" .bool ⟨off, "string".toList ++ rest⟩
-                  = .error (tokErr off "bool") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "bool") :=
+                atomArm_miss "bool" .bool off _ (by simp) (by decide)
               have hf2 : atomArm "u64" .u64 ⟨off, "string".toList ++ rest⟩
-                  = .error (tokErr off "u64") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "u64") :=
+                atomArm_miss "u64" .u64 off _ (by simp) (by decide)
               have hf3 : atomArm "i64" .i64 ⟨off, "string".toList ++ rest⟩
-                  = .error (tokErr off "i64") := by
-                  unfold atomArm tokErr
-                  simp [TextKit.tok]
+                  = .error (tokErr off "i64") :=
+                atomArm_miss "i64" .i64 off _ (by simp) (by decide)
               rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
                 (orElse_ok_left (atomArm_self "string" .string off rest hr))))]
   | option a ih =>
@@ -893,26 +510,18 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("option<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_left
               (unaryArm_self "option<" Ty.option a tyP f off rest hlen (by decide) ih)))))]
@@ -923,31 +532,21 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf5 : unaryArm "option<" Ty.option (tyP f)
-              ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
-              = .error (tokErr off "option<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
+          have hf5 : unaryArm "option<" Ty.option (tyP f) ⟨off, ("list<" ++ Render.ty a ++ ">").toList ++ rest⟩
+              = .error (tokErr off "option<") :=
+            unaryArm_miss "option<" Ty.option (tyP f) off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_right hf5 (orElse_ok_left
               (unaryArm_self "list<" Ty.list a tyP f off rest hlen (by decide) ih))))))]
@@ -958,36 +557,24 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf5 : unaryArm "option<" Ty.option (tyP f)
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "option<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
-          have hf6 : unaryArm "list<" Ty.list (tyP f)
-              ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "list<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
+          have hf5 : unaryArm "option<" Ty.option (tyP f) ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "option<") :=
+            unaryArm_miss "option<" Ty.option (tyP f) off _ (by simp) (by decide)
+          have hf6 : unaryArm "list<" Ty.list (tyP f) ⟨off, ("result<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "list<") :=
+            unaryArm_miss "list<" Ty.list (tyP f) off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_right hf5 (orElse_ok_right hf6
               (orElse_ok_left (binaryArm_self "result<" Ty.result a b tyP f off rest hlen
@@ -999,542 +586,104 @@ theorem tyP_ok (t : Ty) :
       | zero => simp at hlen
       | succ f =>
           simp only [tyP, tyArms]
-          have hf1 : atomArm "bool" .bool
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "bool") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf2 : atomArm "u64" .u64
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "u64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf3 : atomArm "i64" .i64
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "i64") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf4 : atomArm "string" .string
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "string") := by
-              unfold atomArm tokErr
-              simp [TextKit.tok]
-          have hf5 : unaryArm "option<" Ty.option (tyP f)
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "option<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
-          have hf6 : unaryArm "list<" Ty.list (tyP f)
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "list<") := by
-              unfold unaryArm tokErr
-              simp [TextKit.tok]
-          have hf7 : binaryArm "result<" Ty.result (tyP f)
-              ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
-              = .error (tokErr off "result<") := by
-              unfold binaryArm tokErr
-              simp [TextKit.tok]
+          have hf1 : atomArm "bool" .bool ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "bool") :=
+            atomArm_miss "bool" .bool off _ (by simp) (by decide)
+          have hf2 : atomArm "u64" .u64 ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "u64") :=
+            atomArm_miss "u64" .u64 off _ (by simp) (by decide)
+          have hf3 : atomArm "i64" .i64 ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "i64") :=
+            atomArm_miss "i64" .i64 off _ (by simp) (by decide)
+          have hf4 : atomArm "string" .string ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "string") :=
+            atomArm_miss "string" .string off _ (by simp) (by decide)
+          have hf5 : unaryArm "option<" Ty.option (tyP f) ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "option<") :=
+            unaryArm_miss "option<" Ty.option (tyP f) off _ (by simp) (by decide)
+          have hf6 : unaryArm "list<" Ty.list (tyP f) ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "list<") :=
+            unaryArm_miss "list<" Ty.list (tyP f) off _ (by simp) (by decide)
+          have hf7 : binaryArm "result<" Ty.result (tyP f) ⟨off, ("tuple<" ++ Render.ty a ++ ", " ++ Render.ty b ++ ">").toList ++ rest⟩
+              = .error (tokErr off "result<") :=
+            binaryArm_miss "result<" Ty.result (tyP f) off _ (by simp) (by decide)
           rw [orElse_ok_right hf1 (orElse_ok_right hf2 (orElse_ok_right hf3
             (orElse_ok_right hf4 (orElse_ok_right hf5 (orElse_ok_right hf6
               (orElse_ok_right hf7 (orElse_ok_left
                 (binaryArm_self "tuple<" Ty.tuple a b tyP f off rest hlen (by decide) iha ihb))))))))]
 
+/-! ## comments (the artifact of record's two header lines) -/
 
+/-- Consume through the next newline (an unterminated tail consumes
+    everything — the bytes are then refused downstream as a malformed
+    package). Structural on the list. -/
+def skipToNewline : List Char → List Char
+  | '\n' :: rest => rest
+  | _ :: rest => skipToNewline rest
+  | [] => []
 
+/-- Drop the leading `//` comment lines (ALL of them — the artifact
+    of record carries two). Fuel-structural: each strip consumes at
+    least the four bytes `//` + a line's first char + the newline, so
+    `fuel = length` is always sufficient. -/
+def skipCommentsGo : Nat → List Char → List Char
+  | 0, cs => cs
+  | fuel + 1, '/' :: '/' :: rest => skipCommentsGo fuel (skipToNewline rest)
+  | _ + 1, cs => cs
 
-/-! ## the round-trip kit — the render→parse direction (05 §1's first law) -/
+/-- Drop the leading `//` comment lines. -/
+def skipComments (cs : List Char) : List Char :=
+  skipCommentsGo cs.length cs
 
-/-! ### the literal charlists (the tiny local rfl family: one per
-    literal, the snapshot lane's `lparen` precedent) -/
+/-- The go-loop's refusal face: a head off `/` is a comment-free tail
+    (the package text's own head). -/
+theorem skipCommentsGo_ne (fuel : Nat) (c : Char) (cs : List Char)
+    (h : (c == '/') = false) :
+    skipCommentsGo (fuel + 1) (c :: cs) = c :: cs := by
+  refine skipCommentsGo.eq_3 _ _ ?_
+  intro rest heq
+  simp only [List.cons.injEq] at heq
+  exact absurd heq.1 (fun hc => by rw [hc] at h; simp at h)
 
-theorem L_nl : "\n".toList = ['\n'] := rfl
-theorem L_nlsp4 : "\n    ".toList = '\n' :: "    ".toList := rfl
-theorem L_sp : " ".toList = [' '] := rfl
-theorem L_sp4 : "    ".toList = [' ', ' ', ' ', ' '] := rfl
-theorem L_colsp : ": ".toList = ':' :: " ".toList := rfl
-theorem L_comma : ",".toList = [','] := rfl
-theorem L_ob : " {\n".toList = ' ' :: '{' :: '\n' :: [] := rfl
-theorem L_cb : "\n  }\n".toList = '\n' :: ' ' :: ' ' :: '}' :: '\n' :: [] := rfl
-theorem L_rbnl : "}\n".toList = '}' :: '\n' :: [] := rfl
-theorem L_semi2 : ";\n\n".toList = ';' :: '\n' :: '\n' :: [] := rfl
+/-- The comment-stripped bytes of a text (the canonicalization law's
+    byte-side function). -/
+def stripComments (s : String) : String :=
+  String.ofList (skipComments s.toList)
+
 theorem L_pkg : "package ".toList
     = 'p' :: 'a' :: 'c' :: 'k' :: 'a' :: 'g' :: 'e' :: ' ' :: [] := rfl
-theorem L_iface : "interface ".toList
-    = 'i' :: 'n' :: 't' :: 'e' :: 'r' :: 'f' :: 'a' :: 'c' :: 'e' :: ' ' :: [] := rfl
-theorem L_rec : "  record ".toList
-    = ' ' :: ' ' :: 'r' :: 'e' :: 'c' :: 'o' :: 'r' :: 'd' :: ' ' :: [] := rfl
 
-/-! ### the literal lengths (the fuel arithmetic's decided facts) -/
+/-- The package text is comment-free (its head is `package `, never
+    `//` — the strip is the identity on the renderer's image). -/
+theorem skipComments_package_sfx (sfx : List Char) :
+    skipComments ("package ".toList ++ sfx) = "package ".toList ++ sfx := by
+  show skipCommentsGo ("package ".toList ++ sfx).length
+    ("package ".toList ++ sfx) = _
+  have hl : ("package ".toList ++ sfx).length = (sfx.length + 7) + 1 := by
+    rw [List.length_append, L_pkg]
+    simp only [List.length_cons, List.length_nil]
+    omega
+  rw [hl, L_pkg, List.cons_append]
+  exact skipCommentsGo_ne (sfx.length + 7) 'p' _ rfl
 
-theorem lenNl : "\n".length = 1 := by decide
-theorem lenSp4 : "    ".length = 4 := by decide
-theorem lenNlSp4 : "\n    ".length = 5 := by decide
-theorem lenColSp : ": ".length = 2 := by decide
-theorem lenComma : ",".length = 1 := by decide
-theorem lenOb : " {\n".length = 3 := by decide
-theorem lenCb : "\n  }\n".length = 5 := by decide
-theorem lenRbnl : "}\n".length = 2 := by decide
-theorem lenSemi2 : ";\n\n".length = 3 := by decide
-theorem lenPkg : "package ".length = 8 := by decide
-theorem lenIface : "interface ".length = 10 := by decide
-theorem lenRec : "  record ".length = 9 := by decide
+/-! ## the AST-side wellformedness (the round trip's side condition) -/
 
-/-! ### the tail discipline — what may follow a rendered fragment at a
-    loop's stop position: not a field continuation (`\n` + three
-    spaces), not a record block's leading space, not an interface's
-    leading `i`. Every delimiter the renderer emits after a block
-    (`}`, EOF, `\n  }`) satisfies it. -/
+/-- A WIT name is identifier-shaped (the name lexeme's byte-side gate). -/
+def witNameOk (s : String) : Bool := identOk nameChar s
 
-def tailOk : List Char → Bool
-  | [] => true
-  | '\n' :: ' ' :: ' ' :: ' ' :: _ => false
-  | ' ' :: _ => false
-  | 'i' :: _ => false
-  | _ => true
+/-- The package-id discipline. -/
+def witIdOk (s : String) : Bool := identOk idChar s
 
-theorem tailOk_cons (c : Char) (cs : List Char) (h : tailOk (c :: cs) = true) :
-    c ≠ ' ' ∧ c ≠ 'i' := by
-  unfold tailOk at h
-  split at h
-  · rename_i heq; exact absurd heq (by simp)
-  · simp at h
-  · simp at h
-  · simp at h
-  · rename_i e0 e1 e2 e3 e4
-    exact ⟨fun hc => e3 cs (by simp [hc]), fun hc => e4 cs (by simp [hc])⟩
-
-theorem tailOk_ne_space (sfx : List Char) (h : tailOk sfx = true) :
-    sfx.head? ≠ some ' ' := by
-  cases sfx with
-  | nil => intro hc; simp at hc
-  | cons c cs =>
-      obtain ⟨h1, _⟩ := tailOk_cons c cs h
-      intro hc
-      simp only [List.head?_cons, Option.some.injEq] at hc
-      exact h1 hc
-
-theorem tailOk_ne_i (sfx : List Char) (h : tailOk sfx = true) :
-    sfx.head? ≠ some 'i' := by
-  cases sfx with
-  | nil => intro hc; simp at hc
-  | cons c cs =>
-      obtain ⟨_, h2⟩ := tailOk_cons c cs h
-      intro hc
-      simp only [List.head?_cons, Option.some.injEq] at hc
-      exact h2 hc
-
-/-! ### the renderer's lengths (the fuel arithmetic's spine) -/
-
-theorem field_len (f : Field) :
-    (Render.field f).length = 7 + f.name.length + (Render.ty f.ty).length := by
-  simp [Render.field, String.length_append, lenSp4, lenColSp, lenComma]
-  omega
-
-theorem fieldsTailJoin_len (f : Field) (fs : List Field) :
-    (Render.fieldsTailJoin (f :: fs)).length
-      = 1 + (Render.field f).length + (Render.fieldsTailJoin fs).length := by
-  simp [Render.fieldsTailJoin, String.length_append, lenNl]
-
-theorem fieldsJoin_len (f : Field) (fs : List Field) :
-    (Render.fieldsJoin (f :: fs)).length
-      = (Render.field f).length + (Render.fieldsTailJoin fs).length := by
-  simp [Render.fieldsJoin, String.length_append]
-
-theorem record_len (r : Record) :
-    (Render.record r).length
-      = 17 + r.name.length + (Render.fieldsJoin r.fields).length := by
-  simp [Render.record, String.length_append, lenRec, lenOb, lenCb]
-  omega
-
-theorem recordsJoin_len (r : Record) (rs : List Record) :
-    (Render.recordsJoin (r :: rs)).length
-      = (Render.record r).length + (Render.recordsJoin rs).length := by
-  simp [Render.recordsJoin, String.length_append]
-
-theorem interface_len (i : Interface) :
-    (Render.interface i).length
-      = 15 + i.name.length + (Render.recordsJoin i.records).length := by
-  simp [Render.interface, String.length_append, lenIface, lenOb, lenRbnl]
-  omega
-
-theorem interfacesJoin_len (i : Interface) (is : List Interface) :
-    (Render.interfacesJoin (i :: is)).length
-      = (Render.interface i).length + (Render.interfacesJoin is).length := by
-  simp [Render.interfacesJoin, String.length_append]
-
-theorem package_len (p : Package) :
-    (Render.package p).length
-      = 11 + p.id.length + (Render.interfacesJoin p.interfaces).length := by
-  simp [Render.package, String.length_append, lenPkg, lenSemi2]
-  omega
-
-/-! ### the loops + the blocks (each level inverts the renderer's join) -/
-
-theorem tailOk_after_fields (sfx : List Char) :
-    tailOk ("\n  }\n".toList ++ sfx) = true := by
-  simp [tailOk, L_cb]
-
-theorem tailOk_after_records (sfx : List Char) :
-    tailOk ("}\n".toList ++ sfx) = true := by
-  simp [tailOk, L_rbnl]
-
-/-- THE FIELDS' CONTINUATION LAW: the renderer's continuation join
-    scans back to exactly the fields, consuming exactly its bytes. -/
-theorem fieldsGo_ok (fs : List Field) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → tailOk sfx = true →
-      (∀ f ∈ fs, witNameOk f.name) →
-      (Render.fieldsTailJoin fs).length + sfx.length ≤ fuel + 1 →
-      fieldsGo fuel ⟨off, (Render.fieldsTailJoin fs).toList ++ sfx⟩
-        = .ok (fs, ⟨off + (Render.fieldsTailJoin fs).length, sfx⟩) := by
-  induction fs with
-  | nil =>
-      intro fuel off sfx hguard ht _ _
-      cases fuel with
-      | zero => omega
-      | succ fuel =>
-          rw [Render.fieldsTailJoin]
-          simp only [String.toList_empty, List.nil_append, fieldsGo]
-          split
-          · exfalso
-            simp [tailOk] at ht
-          · rfl
-  | cons f fs ih =>
-      intro fuel off sfx hguard ht hn hlen
-      cases fuel with
-      | zero =>
-          exfalso
-          have h2 := field_len f
-          rw [fieldsTailJoin_len] at hlen
-          omega
-      | succ fuel =>
-          have hfl : (Render.field f).length + (Render.fieldsTailJoin fs).length
-              + sfx.length ≤ fuel + 1 := by
-            rw [fieldsTailJoin_len] at hlen
-            have h2 := field_len f
-            omega
-          simp only [Render.fieldsTailJoin, Render.field, String.toList_append,
-            List.cons_append, List.nil_append, List.append_assoc,
-            L_nl, L_sp4, fieldsGo, tok_nlsp4, fieldCore]
-          rw [identP_self nameChar f.name (off + "\n    ".length)
-              (": ".toList ++ ((Render.ty f.ty).toList
-                ++ (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))))
-              (hn f (List.mem_cons_self))
-              (by simp [nameChar, L_colsp, TextKit.isIdentChar])]
-          simp only [tok_self]
-          have hr' : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).head?.all
-              (fun c => !(TextKit.isIdentChar c || c == '-')) = true := by
-            simp [L_comma, TextKit.isIdentChar]
-          rw [tyP_ok f.ty fuel
-              (off + "\n    ".length + f.name.length + ": ".length)
-              (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))
-              (by
-                have h3 := field_len f
-                have h4 : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).length
-                    = 1 + (Render.fieldsTailJoin fs).length + sfx.length := by
-                  rw [List.length_append, L_comma, List.length_append,
-                    String.length_toList, List.length_cons, List.length_nil]
-                  omega
-                omega)
-              hr']
-          simp only [tok_self]
-          have hihr := ih fuel
-              (off + "\n    ".length + f.name.length + ": ".length
-                + (Render.ty f.ty).length + ",".length) sfx
-              (by have h2 := field_len f; omega)
-              ht (fun g hg => hn g (List.mem_cons_of_mem _ hg))
-                (by have h2 := field_len f; omega)
-          rw [hihr]
-          simp only [Except.ok.injEq, Prod.mk.injEq, Cursor.mk.injEq,
-            String.length_append,
-            lenSp4, lenNlSp4, lenColSp, lenComma, lenNl]
-          try simp only [true_and, and_true]
-          omega
-
-/-- THE FIELDS LAW: the renderer's field block scans back to exactly
-    the fields (the first line rides `"    "`, the rest the
-    continuation law). -/
-theorem fieldsP_ok (fs : List Field) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → tailOk sfx = true →
-      (∀ f ∈ fs, witNameOk f.name) →
-      (Render.fieldsJoin fs).length + sfx.length ≤ fuel →
-      fieldsP fuel ⟨off, (Render.fieldsJoin fs).toList ++ sfx⟩
-        = .ok (fs, ⟨off + (Render.fieldsJoin fs).length, sfx⟩) := by
-  induction fs with
-  | nil =>
-      intro fuel off sfx hguard ht _ _
-      cases fuel with
-      | zero => omega
-      | succ fuel =>
-          rw [Render.fieldsJoin]
-          simp only [String.toList_empty, List.nil_append, fieldsP]
-          have hne := tailOk_ne_space sfx ht
-          split
-          · rename_i heq; exact absurd heq hne
-          · rfl
-  | cons f fs ih =>
-      intro fuel off sfx hguard ht hn hlen
-      cases fuel with
-      | zero =>
-          exfalso
-          have h2 := field_len f
-          rw [fieldsJoin_len] at hlen
-          omega
-      | succ fuel =>
-          have hfg : (Render.fieldsTailJoin fs).length + sfx.length ≤ fuel + 1 := by
-            rw [fieldsJoin_len] at hlen
-            omega
-          simp only [Render.fieldsJoin, Render.field, String.toList_append,
-            List.cons_append, List.nil_append, List.append_assoc,
-            L_sp4, fieldsP, tok_sp4, fieldCore, List.head?_cons]
-          rw [identP_self nameChar f.name (off + "    ".length)
-              (": ".toList ++ ((Render.ty f.ty).toList
-                ++ (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))))
-              (hn f (List.mem_cons_self))
-              (by simp [nameChar, L_colsp, TextKit.isIdentChar])]
-          simp only [tok_self]
-          have hr' : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).head?.all
-              (fun c => !(TextKit.isIdentChar c || c == '-')) = true := by
-            simp [L_comma, TextKit.isIdentChar]
-          rw [tyP_ok f.ty fuel
-              (off + "    ".length + f.name.length + ": ".length)
-              (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx))
-              (by
-                have h3 := field_len f
-                have h5 := fieldsJoin_len f fs
-                have h4 : (",".toList ++ ((Render.fieldsTailJoin fs).toList ++ sfx)).length
-                    = 1 + (Render.fieldsTailJoin fs).length + sfx.length := by
-                  rw [List.length_append, L_comma, List.length_append,
-                    String.length_toList, List.length_cons, List.length_nil]
-                  omega
-                omega)
-              hr']
-          simp only [tok_self]
-          have hihr := fieldsGo_ok fs fuel
-              (off + "    ".length + f.name.length + ": ".length
-                + (Render.ty f.ty).length + ",".length) sfx
-              (by have h1 := fieldsJoin_len f fs; have h2 := field_len f; omega)
-              ht (fun g hg => hn g (List.mem_cons_of_mem _ hg)) hfg
-          rw [hihr]
-          simp only [Except.ok.injEq, Prod.mk.injEq, Cursor.mk.injEq,
-            String.length_append,
-            lenSp4, lenColSp, lenComma]
-          try simp only [true_and, and_true]
-          omega
-
-
-/-! ### the blocks: records, interfaces, the package -/
-
-/-- THE RECORD-BLOCK LAW: the record block's body (post
-    `"  record "`) scans back to exactly the record. The nodup gate is
-    decided at construction (`dif_pos` with the AST's own proof). -/
-theorem recordCore_ok (r : Record) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → witNameOk r.name = true → (∀ f ∈ r.fields, witNameOk f.name) →
-      (Render.fieldsJoin r.fields).length + ("\n  }\n".toList ++ sfx).length ≤ fuel →
-      recordCore fuel ⟨off, r.name.toList ++ (" {\n".toList
-          ++ ((Render.fieldsJoin r.fields).toList ++ ("\n  }\n".toList ++ sfx)))⟩
-        = .ok (r, ⟨off + r.name.length + 3 + (Render.fieldsJoin r.fields).length + 5, sfx⟩) := by
-  obtain ⟨rn, rfs, rhnd⟩ := r
-  intro fuel off sfx hguard hnm hnf hlen
-  unfold recordCore
-  rw [identP_self nameChar rn off
-    (" {\n".toList ++ ((Render.fieldsJoin rfs).toList ++ ("\n  }\n".toList ++ sfx)))
-    hnm (by simp [nameChar, L_ob, TextKit.isIdentChar])]
-  simp only [tok_self]
-  rw [fieldsP_ok rfs fuel (off + rn.length + " {\n".length) ("\n  }\n".toList ++ sfx)
-    hguard (tailOk_after_fields sfx) hnf hlen]
-  simp only [tok_self]
-  rw [dif_pos rhnd]
-  simp only [
-    lenOb, lenCb]
-
-/-- THE RECORDS LAW: the renderer's record-block concatenation scans
-    back to exactly the records. -/
-theorem recordsP_ok (rs : List Record) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → tailOk sfx = true →
-      (∀ r ∈ rs, witNameOk r.name ∧ (∀ f ∈ r.fields, witNameOk f.name)) →
-      (Render.recordsJoin rs).length + sfx.length ≤ fuel →
-      recordsP fuel ⟨off, (Render.recordsJoin rs).toList ++ sfx⟩
-        = .ok (rs, ⟨off + (Render.recordsJoin rs).length, sfx⟩) := by
-  induction rs with
-  | nil =>
-      intro fuel off sfx hguard ht _ _
-      cases fuel with
-      | zero => omega
-      | succ fuel =>
-          rw [Render.recordsJoin]
-          simp only [String.toList_empty, List.nil_append, recordsP]
-          have hne := tailOk_ne_space sfx ht
-          split
-          · rename_i heq; exact absurd heq hne
-          · rfl
-  | cons r rs ih =>
-      obtain ⟨rn, rfs, rhnd⟩ := r
-      intro fuel off sfx hguard ht hn hlen
-      cases fuel with
-      | zero =>
-          exfalso
-          have h1 := recordsJoin_len ⟨rn, rfs, rhnd⟩ rs
-          have h2 := record_len ⟨rn, rfs, rhnd⟩
-          rw [recordsJoin_len ⟨rn, rfs, rhnd⟩ rs] at hlen
-          omega
-      | succ fuel =>
-          have hguard2 : 1 ≤ fuel := by
-            have h1 := recordsJoin_len ⟨rn, rfs, rhnd⟩ rs
-            have h2 := record_len ⟨rn, rfs, rhnd⟩
-            omega
-          simp only [Render.recordsJoin, Render.record, String.toList_append,
-            List.cons_append, List.nil_append, List.append_assoc,
-            L_rec, recordsP, tok_rec2, List.head?_cons]
-          rw [recordCore_ok ⟨rn, rfs, rhnd⟩ fuel (off + "  record ".length)
-            ((Render.recordsJoin rs).toList ++ sfx)
-            hguard2 (hn ⟨rn, rfs, rhnd⟩ (List.mem_cons_self)).1
-            (hn ⟨rn, rfs, rhnd⟩ (List.mem_cons_self)).2
-            (by
-              have h1 := recordsJoin_len ⟨rn, rfs, rhnd⟩ rs
-              have h2 := record_len ⟨rn, rfs, rhnd⟩
-              have h3 : ("\n  }\n".toList ++ ((Render.recordsJoin rs).toList ++ sfx)).length
-                  = 5 + (Render.recordsJoin rs).length + sfx.length := by
-                simp [L_cb, String.length_toList, List.length_append]
-                omega
-              omega)]
-          simp only []
-          rw [ih fuel (off + "  record ".length
-            + (Record.mk rn rfs rhnd).name.length + 3
-            + (Render.fieldsJoin (Record.mk rn rfs rhnd).fields).length
-            + 5) sfx
-            hguard2 ht (fun g hg => hn g (List.mem_cons_of_mem _ hg))
-            (by
-              have h1 := recordsJoin_len ⟨rn, rfs, rhnd⟩ rs
-              have h2 := record_len ⟨rn, rfs, rhnd⟩
-              omega)]
-          simp only [Except.ok.injEq, Prod.mk.injEq, Cursor.mk.injEq,
-            
-            String.length_append, lenRec, lenOb, lenCb,
-            ]
-          try simp only [true_and, and_true]
-          omega
-
-theorem interfaceP_ok (i : Interface) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → witNameOk i.name = true →
-      (∀ r ∈ i.records, witNameOk r.name ∧ (∀ f ∈ r.fields, witNameOk f.name)) →
-      (Render.recordsJoin i.records).length + ("}\n".toList ++ sfx).length ≤ fuel →
-      interfaceP fuel ⟨off, i.name.toList ++ (" {\n".toList
-          ++ ((Render.recordsJoin i.records).toList ++ ("}\n".toList ++ sfx)))⟩
-        = .ok (i, ⟨off + i.name.length + 3 + (Render.recordsJoin i.records).length + 2, sfx⟩) := by
-  obtain ⟨nm, rs, rhnd⟩ := i
-  intro fuel off sfx hguard hnm hn hlen
-  unfold interfaceP
-  rw [identP_self nameChar nm off
-    (" {\n".toList ++ ((Render.recordsJoin rs).toList ++ ("}\n".toList ++ sfx)))
-    hnm (by simp [nameChar, L_ob, TextKit.isIdentChar])]
-  simp only [tok_self]
-  rw [recordsP_ok rs fuel (off + nm.length + " {\n".length) ("}\n".toList ++ sfx)
-    hguard (tailOk_after_records sfx) hn hlen]
-  simp only [tok_self]
-  rw [dif_pos rhnd]
-  simp only [
-    lenOb, lenRbnl]
-
-/-- THE INTERFACES LAW: the renderer's interface-block concatenation
-    scans back to exactly the interfaces. -/
-theorem interfacesP_ok (is : List Interface) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → tailOk sfx = true →
-      (∀ i ∈ is, witNameOk i.name
-        ∧ (∀ r ∈ i.records, witNameOk r.name ∧ (∀ f ∈ r.fields, witNameOk f.name))) →
-      (Render.interfacesJoin is).length + sfx.length ≤ fuel →
-      interfacesP fuel ⟨off, (Render.interfacesJoin is).toList ++ sfx⟩
-        = .ok (is, ⟨off + (Render.interfacesJoin is).length, sfx⟩) := by
-  induction is with
-  | nil =>
-      intro fuel off sfx hguard ht _ _
-      cases fuel with
-      | zero => omega
-      | succ fuel =>
-          rw [Render.interfacesJoin]
-          simp only [String.toList_empty, List.nil_append, interfacesP]
-          have hne := tailOk_ne_i sfx ht
-          split
-          · rename_i heq; exact absurd heq hne
-          · rfl
-  | cons i is ih =>
-      obtain ⟨nm, rs, rhnd⟩ := i
-      intro fuel off sfx hguard ht hn hlen
-      cases fuel with
-      | zero =>
-          exfalso
-          have h1 := interfacesJoin_len (Interface.mk nm rs rhnd) is
-          have h2 := interface_len (Interface.mk nm rs rhnd)
-          rw [interfacesJoin_len (Interface.mk nm rs rhnd) is] at hlen
-          omega
-      | succ fuel =>
-          have hguard2 : 1 ≤ fuel := by
-            have h1 := interfacesJoin_len (Interface.mk nm rs rhnd) is
-            have h2 := interface_len (Interface.mk nm rs rhnd)
-            omega
-          have hifp : (Render.recordsJoin (Interface.mk nm rs rhnd).records).length
-              + ("}\n".toList ++ ((Render.interfacesJoin is).toList ++ sfx)).length ≤ fuel := by
-            have h1 := interfacesJoin_len (Interface.mk nm rs rhnd) is
-            have h2 := interface_len (Interface.mk nm rs rhnd)
-            have h3 : ("}\n".toList ++ ((Render.interfacesJoin is).toList ++ sfx)).length
-                = 2 + (Render.interfacesJoin is).length + sfx.length := by
-              simp [L_rbnl, String.length_toList, List.length_append]
-              omega
-            rw [interfacesJoin_len (Interface.mk nm rs rhnd) is] at hlen
-            omega
-          simp only [Render.interfacesJoin, Render.interface, String.toList_append,
-            List.cons_append, List.nil_append, List.append_assoc,
-            L_iface, interfacesP, tok_iface, List.head?_cons]
-          rw [interfaceP_ok (Interface.mk nm rs rhnd) fuel
-            (off + "interface ".length)
-            ((Render.interfacesJoin is).toList ++ sfx)
-            hguard2 (hn (Interface.mk nm rs rhnd) (List.mem_cons_self)).1
-            (hn (Interface.mk nm rs rhnd) (List.mem_cons_self)).2 hifp]
-          simp only []
-          rw [ih fuel (off + "interface ".length
-            + (Interface.mk nm rs rhnd).name.length + 3
-            + (Render.recordsJoin (Interface.mk nm rs rhnd).records).length
-            + 2) sfx
-            hguard2 ht (fun g hg => hn g (List.mem_cons_of_mem _ hg))
-            (by
-              have h1 := interfacesJoin_len (Interface.mk nm rs rhnd) is
-              have h2 := interface_len (Interface.mk nm rs rhnd)
-              omega)]
-          simp only [Except.ok.injEq, Prod.mk.injEq, Cursor.mk.injEq,
-            
-            String.length_append, lenIface, lenOb, lenRbnl,
-            ]
-          try simp only [true_and, and_true]
-          omega
-
-theorem packageP_ok (p : Package) :
-    ∀ (fuel off : Nat) (sfx : List Char),
-      1 ≤ fuel → tailOk sfx = true → witIdOk p.id = true →
-      (∀ i ∈ p.interfaces, witNameOk i.name
-        ∧ (∀ r ∈ i.records, witNameOk r.name ∧ (∀ f ∈ r.fields, witNameOk f.name))) →
-      (Render.interfacesJoin p.interfaces).length + sfx.length ≤ fuel →
-      packageP fuel ⟨off, "package ".toList ++ (p.id.toList ++ (";\n\n".toList
-          ++ ((Render.interfacesJoin p.interfaces).toList ++ sfx)))⟩
-        = .ok (p, ⟨off + "package ".length + p.id.length + 3 + (Render.interfacesJoin p.interfaces).length, sfx⟩) := by
-  intro fuel off sfx hguard ht hid hn hlen
-  unfold packageP
-  simp only [tok_self]
-  rw [identP_self idChar p.id (off + "package ".length)
-    (";\n\n".toList ++ ((Render.interfacesJoin p.interfaces).toList ++ sfx))
-    hid (by simp [idChar, nameChar, L_semi2, TextKit.isIdentChar])]
-  simp only [tok_self]
-  rw [interfacesP_ok p.interfaces fuel (off + "package ".length + p.id.length + ";\n\n".length) sfx
-    hguard ht hn hlen]
-  simp only []
-  simp only [
-    lenPkg, lenSemi2]
-
-/-! ### the two honest laws (05 §1) -/
+/-- The AST-side wellformedness the round-trip laws ride: every name —
+    the id, interface names, record names, field names — is
+    identifier-shaped. The closed `Ty` grammar needs no gate (a
+    malformed type shape is unconstructible). -/
+def WitOk (p : Package) : Bool :=
+  witIdOk p.id
+    && p.interfaces.all (fun i =>
+      witNameOk i.name
+        && i.records.all (fun r =>
+          witNameOk r.name && r.fields.all (fun f => witNameOk f.name)))
 
 /-- The AST-side gate's membership form (the round-trip's side
     condition, unpacked). -/
@@ -1556,36 +705,951 @@ theorem WitOk_spec (p : Package) (h : WitOk p = true) :
   obtain ⟨h5, h6⟩ := h4
   exact ⟨h5, fun f hf => List.all_eq_true.mp h6 f hf⟩
 
+/-! ## the lexemes (the shared constructors + the bridges) -/
+
+/-- The head class rides the run class (the ident-atom's chain
+    premise): WIT's names are alpha-led. -/
+theorem nameChar_chain (c : Char) (h : c.isAlpha = true) : nameChar c = true := by
+  simp [nameChar, TextKit.isIdentChar, h]
+
+theorem idChar_chain (c : Char) (h : c.isAlpha = true) : idChar c = true := by
+  simp [idChar, nameChar, TextKit.isIdentChar, h]
+
+open TextKit in
+/-- The keyword/separator literals (the format's hard delimiters): the
+    shared const-string lexeme (TextKit.Grammar.Lexemes' `constStrLex`)
+    at the format's concrete spellings — nonempty by `decide`. -/
+def litAtom (s : String) (hs : s.toList ≠ []) : TextKit.Lexeme Unit :=
+  TextKit.constStrLex s hs
+
+/-- The name lexeme: the shared ident-atom over WIT's charset (the
+    kebab `-` rides the run class). -/
+def nameAtom : TextKit.Lexeme String :=
+  TextKit.identAtom "<name>" Char.isAlpha nameChar nameChar_chain
+
+/-- The package-id lexeme: the same atom over the id charset (`:`
+    rides the run class). -/
+def idAtom : TextKit.Lexeme String :=
+  TextKit.identAtom "<package-id>" Char.isAlpha idChar idChar_chain
+
+/-- The bridge: the AST-side name gate IS the name lexeme's write-side
+    gate (the valueOk discipline and `WitOk` are ONE function). -/
+theorem witNameOk_eq (s : String) : witNameOk s = nameAtom.pre s := by
+  unfold witNameOk identOk nameAtom TextKit.identAtom TextKit.identOk
+  cases hs : s.toList with
+  | nil => simp [hs]
+  | cons c w =>
+      simp only [hs, List.isEmpty_cons, List.head?_cons, Option.all_some]
+      cases hca : c.isAlpha with
+      | true => simp [nameChar, TextKit.isIdentChar, hca]
+      | false => simp [hca]
+
+/-- The bridge: the id gate IS the id lexeme's write-side gate. -/
+theorem witIdOk_eq (s : String) : witIdOk s = idAtom.pre s := by
+  unfold witIdOk identOk idAtom TextKit.identAtom TextKit.identOk
+  cases hs : s.toList with
+  | nil => simp [hs]
+  | cons c w =>
+      simp only [hs, List.isEmpty_cons, List.head?_cons, Option.all_some]
+      cases hca : c.isAlpha with
+      | true => simp [idChar, nameChar, TextKit.isIdentChar, hca]
+      | false => simp [hca]
+
+/-! ## the ty-zone's head-fail kit (the ty lexeme's head_fail base) -/
+
+/-- A token whose keyword's head passes the ident class misses any
+    input whose head fails it (the eight ty arms' shared miss — THE
+    CITATION: the generic kit's `TextKit.tok_miss_of_headFail`, the
+    format-independent miss direction proved once in TextKit.Grammar). -/
+theorem tok_miss_of_head_fail (kw : String) (off : Nat) (cs : List Char)
+    (hk : kw.toList.head?.any TextKit.isIdentChar = true)
+    (hh : cs.head?.all (fun c => !TextKit.isIdentChar c) = true) :
+    ∃ e, TextKit.tok kw ⟨off, cs⟩ = .error e :=
+  TextKit.tok_miss_of_headFail kw ⟨off, cs⟩ hk hh
+
+/-- The ty-arms chain's failure: every arm's leading token misses, so
+    the whole chain refuses (THE CITATION: the chain's spine is the
+    generic kit's `TextKit.orElseChain_err` — the per-arm refusal is
+    the token miss above; the nested-orElse chain IS the fold). -/
+theorem tyArms_fail (inner : GParser Ty) (cur : Cursor)
+    (hh : cur.cs.head?.all (fun c => !TextKit.isIdentChar c) = true) :
+    ∃ e, tyArms inner cur = .error e := by
+  have hkw : ∀ kw : String, kw.toList.head?.any TextKit.isIdentChar = true →
+      ∃ e, TextKit.tok kw cur = .error e :=
+    fun kw hk => tok_miss_of_head_fail kw cur.off cur.cs hk hh
+  have harm : ∀ p ∈ [atomArm "bool" .bool, atomArm "u64" .u64,
+        atomArm "i64" .i64, atomArm "string" .string,
+        unaryArm "option<" .option inner, unaryArm "list<" .list inner,
+        binaryArm "result<" .result inner, binaryArm "tuple<" .tuple inner],
+      ∃ e, p cur = .error e := by
+    intro p hp
+    simp only [List.mem_cons] at hp
+    obtain rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl|hp := hp
+    · obtain ⟨e, he⟩ := hkw "bool" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [atomArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "u64" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [atomArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "i64" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [atomArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "string" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [atomArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "option<" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [unaryArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "list<" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [unaryArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "result<" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [binaryArm, he]⟩
+    · obtain ⟨e, he⟩ := hkw "tuple<" (by simp [TextKit.isIdentChar])
+      exact ⟨e, by simp only [binaryArm, he]⟩
+    · exact absurd hp (by simp)
+  exact TextKit.orElseChain_err _ _ cur harm
+    ⟨curated cur "expected a WIT type" tyValid, rfl⟩
+
+/-- The ty parser's head-fail face: an input whose head fails the
+    ident class never parses (the tyAtom's `head_fail` base). -/
+theorem tyP_head_fail (fuel : Nat) (cur : Cursor)
+    (hh : cur.cs.head?.all (fun c => !TextKit.isIdentChar c) = true) :
+    ∃ e, tyP fuel cur = .error e := by
+  cases fuel with
+  | zero => exact ⟨_, rfl⟩
+  | succ f =>
+      cases hb : tyArms (tyP f) cur with
+      | error e =>
+          by_cases hcmp : e.pos > cur.off
+          · exact ⟨e, by simp only [tyP, hb, if_pos hcmp]⟩
+          · exact ⟨curated cur "expected a WIT type" tyValid, by
+              simp only [tyP, hb, if_neg hcmp]⟩
+      | ok r =>
+          exfalso
+          obtain ⟨e2, he2⟩ := tyArms_fail (tyP f) cur hh
+          rw [hb] at he2
+          simp at he2
+
+/-! ## the ty token — the guarded leaf (the hand recursion's grammar face) -/
+
+/-- The ty token's rendering starts with an identifier character (the
+    keyword's head letter). -/
+theorem tyText_head_isIdent (t : Ty) :
+    (Render.ty t).toList.head?.any TextKit.isIdentChar = true := by
+  cases t with
+  | atom s => cases s <;> simp [Render.ty, Render.scalar, TextKit.isIdentChar]
+  | option a => simp [Render.ty, TextKit.isIdentChar]
+  | list a => simp [Render.ty, TextKit.isIdentChar]
+  | result a b => simp [Render.ty, TextKit.isIdentChar]
+  | tuple a b => simp [Render.ty, TextKit.isIdentChar]
+
+/-- The ty token's rendering is nonempty (every spelling is
+    keyword-led). -/
+theorem tyText_ne_nil (t : Ty) : (Render.ty t).toList ≠ [] := by
+  intro hcon
+  have hh := tyText_head_isIdent t
+  rw [hcon] at hh
+  simp at hh
+
+/-- A take of a cons-list equaling a list identifies the heads (the
+    scan-head's extraction). -/
+theorem take_eq_head {n : Nat} {c : Char} {cs l : List Char}
+    (heq : (c :: cs).take n = l) (hl : l ≠ []) :
+    (c :: cs).head? = l.head? := by
+  cases hn : n with
+  | zero =>
+      rw [hn] at heq
+      have h0 : List.take 0 (c :: cs) = ([] : List Char) := rfl
+      rw [h0] at heq
+      exact absurd heq.symm hl
+  | succ m =>
+      rw [hn] at heq
+      rw [show (c :: cs).take (m + 1) = c :: cs.take m from rfl] at heq
+      rw [← heq]
+      simp
+
+/-- The ty token's scan: the hand `tyP` over the FULL remaining input,
+    GUARDED to the canonical spelling (the consumed prefix must BE
+    `Render.ty` of its result — Snapshot.lean's guarded-wrap pattern;
+    the guard makes `scan_exact` hold by pure take/drop algebra, no
+    canonicality theorem over `tyP` needed). The guard never fires on
+    the renderer's image — the accepted language is unchanged. -/
+def tyScan : GParser Ty := fun cur =>
+  match tyP cur.cs.length cur with
+  | .error e => .error e
+  | .ok (t, _) =>
+      if cur.cs.take (Render.ty t).length = (Render.ty t).toList then
+        .ok (t, ⟨cur.off + (Render.ty t).length, cur.cs.drop (Render.ty t).length⟩)
+      else
+        .error { ParseError.base cur.off [] with
+                 message := s!"non-canonical WIT type spelling — the token is not \
+the canonical text of `{Render.ty t}`" }
+
+/-- The scan's success shape (the guard's extraction): the cursor
+    splits at the CANONICAL spelling's boundary. -/
+theorem tyScan_ok {cur : Cursor} {t : Ty} {cur' : Cursor}
+    (h : tyScan cur = .ok (t, cur')) :
+    cur.cs.take (Render.ty t).length = (Render.ty t).toList ∧
+    cur'.cs = cur.cs.drop (Render.ty t).length ∧
+    cur'.off = cur.off + (Render.ty t).length := by
+  simp only [tyScan] at h
+  cases hp : tyP cur.cs.length cur with
+  | error e => rw [hp] at h; simp at h
+  | ok r =>
+      obtain ⟨a, b⟩ := r
+      simp only [hp] at h
+      by_cases hguard : cur.cs.take (Render.ty a).length = (Render.ty a).toList
+      · rw [if_pos hguard] at h
+        obtain ⟨hab, hcc⟩ := Prod.mk.inj (Except.ok.inj h)
+        cases hab
+        exact ⟨hguard, (Cursor.mk.inj hcc).2.symm, (Cursor.mk.inj hcc).1.symm⟩
+      · rw [if_neg hguard] at h
+        simp at h
+
+/-- THE ty lexeme: the hand recursion as a leaf — `print` is
+    `Render.ty`, the scan is the guarded `tyP`, `head` the ident-char
+    class (every spelling is keyword-led), `munch` the name-char class
+    (the maximal-munch boundary — a `u64` followed by `x` refuses,
+    `tyP`'s own atom gate). -/
+def tyAtom : TextKit.Lexeme Ty where
+  scan := tyScan
+  print := Render.ty
+  pre := fun _ => true
+  head := .cls TextKit.isIdentChar
+  munch := Option.some nameChar
+  scan_post := fun _ _ _ _ => rfl
+  scan_exact := by
+    intro cur t cur' h
+    obtain ⟨h1, h2, -⟩ := tyScan_ok h
+    show cur.cs = (Render.ty t).toList ++ cur'.cs
+    rw [h2, ← h1, List.take_append_drop]
+  scan_off := by
+    intro cur t cur' h
+    obtain ⟨-, -, h3⟩ := tyScan_ok h
+    exact h3
+  scan_head := by
+    intro cur t cur' h
+    obtain ⟨h1, -, -⟩ := tyScan_ok h
+    show cur.cs.head?.any TextKit.isIdentChar = true
+    cases hcs : cur.cs with
+    | nil =>
+        have h2 : (Render.ty t).toList = [] := by
+          rw [← h1, hcs]
+          simp
+        exact absurd h2 (tyText_ne_nil t)
+    | cons c cs =>
+        rw [hcs] at h1
+        have hhd := take_eq_head h1 (tyText_ne_nil t)
+        show (c :: cs).head?.any TextKit.isIdentChar = true
+        rw [hhd]
+        exact tyText_head_isIdent t
+  head_fail := by
+    intro cur h
+    have h3 : cur.cs.head?.all (fun c => !TextKit.isIdentChar c) = true := by
+      cases hcs : cur.cs with
+      | nil => simp
+      | cons c cs =>
+          have hc : TextKit.isIdentChar c = false := by
+            have h4 : cur.cs.head?.any TextKit.isIdentChar = false := h
+            rw [hcs] at h4
+            simpa using h4
+          simp [hc]
+    obtain ⟨e, he⟩ := tyP_head_fail cur.cs.length cur h3
+    refine ⟨e, ?_⟩
+    show tyScan cur = _
+    simp only [tyScan, he]
+  print_scan := by
+    intro k t sfx _ hmunch
+    have h1 : ((Render.ty t).toList ++ sfx).length
+        = (Render.ty t).length + sfx.length := by
+      rw [List.length_append, String.length_toList]
+    show tyScan ⟨k, (Render.ty t).toList ++ sfx⟩
+      = .ok (t, ⟨k + (Render.ty t).length, sfx⟩)
+    simp only [tyScan, h1,
+      tyP_ok t ((Render.ty t).length + sfx.length) k sfx (by omega) hmunch]
+    rw [if_pos (by rw [String.length_toList.symm]; exact List.take_left),
+      String.length_toList.symm, List.drop_left]
+  consumes := by
+    intro cur t cur' h
+    obtain ⟨h1, h2, -⟩ := tyScan_ok h
+    have hsplit : cur.cs
+        = cur.cs.take (Render.ty t).length ++ cur.cs.drop (Render.ty t).length :=
+      (List.take_append_drop _ _).symm
+    rw [h1, ← h2] at hsplit
+    rw [hsplit, List.length_append, String.length_toList]
+    have hl : 0 < (Render.ty t).toList.length := by
+      cases hr : (Render.ty t).toList with
+      | nil => exact absurd hr (tyText_ne_nil t)
+      | cons c cs => simp
+    have hl2 : 0 < (Render.ty t).length := by rw [String.length_toList.symm]; exact hl
+    omega
+  head_ne := rfl
+
+/-! ## the raws + the codec (the ONE rel node's semantic mapping) -/
+
+/-- A field's raw parse shape: the indent, the name, the `: `, the ty
+    token, the comma (the seq-spine tuple). -/
+abbrev FieldRaw := Unit × (String × (Unit × (Ty × Unit)))
+
+/-- The fields' raw: the blank-line dam (the empty record's `\n` —
+    `some` iff the record has NO fields) + the field LINES, each the
+    field's bytes PLUS its trailing newline (the renderer's byte-stream:
+    `fieldsJoin` separates the fields by a LEADING `\n` on the
+    continuations and the record appends `"\n  }\n"` — the SAME stream
+    read as trailing newlines + a `"  }\n"` closer; the trailing-
+    delimiter discipline is what the engine's head-disjoint FIRST rows
+    demand — the leading-`\n` reading fails WF-SEQ-1 at the fields/
+    closer junction: the continuation's `\n` head collides with the
+    closer's `\n` head, and the engine's `HeadSpec` FIRST sets are
+    head-only). -/
+abbrev FieldsRaw := Option Unit × List (FieldRaw × Unit)
+
+/-- A record's raw: the `  record ` marker, the name, ` {\n`, the
+    field block, `  }\n`. -/
+abbrev RecordRaw := Unit × (String × (Unit × (FieldsRaw × Unit)))
+
+/-- An interface's raw: the `interface ` marker, the name, ` {\n`, the
+    record blocks, `}\n`. -/
+abbrev InterfaceRaw := Unit × (String × (Unit × (List RecordRaw × Unit)))
+
+/-- The package's raw: `package `, the id, `;\n\n`, the interface
+    blocks. -/
+abbrev PkgRaw := Unit × (String × (Unit × List InterfaceRaw))
+
+def fieldToRaw (f : Field) : FieldRaw := ((), (f.name, ((), (f.ty, ()))))
+
+def fieldOfRaw : FieldRaw → Field
+  | (_, (n, (_, (t, _)))) => ⟨n, t⟩
+
+def fieldsToRaw : List Field → FieldsRaw
+  | [] => (Option.some (), [])
+  | f :: fs => (Option.none, (fieldToRaw f, ()) :: fs.map (fun g => (fieldToRaw g, ())))
+
+/-- The field lines' decode (every line's shape is fixed; no bits). -/
+def linesOfRaws : List (FieldRaw × Unit) → Option (List Field)
+  | [] => Option.some []
+  | (fr, ()) :: rest => (linesOfRaws rest).map (fun l => fieldOfRaw fr :: l)
+
+/-- The fields' decode: the dam's bit is CHECKED (the `some` dam with
+    nonempty lines — the blank-line-then-field text — is refused; that
+    text's `none`-dam reading is what the pre-grammar parser refused
+    too, so the accepted language is unchanged). The bits carry no
+    value information beyond the empty/nonempty discipline — the check
+    is the `exact` law's honesty, dead at the renderer's image. -/
+def fieldsOfRaws : FieldsRaw → Option (List Field)
+  | (Option.none, []) => Option.none
+  | (Option.none, lines) => linesOfRaws lines
+  | (Option.some (), []) => Option.some []
+  | (Option.some (), _ :: _) => Option.none
+
+def recordToRaw (r : Record) : RecordRaw :=
+  ((), (r.name, ((), (fieldsToRaw r.fields, ()))))
+
+/-- A record's decode: the field names' nodup is DECIDED here — a
+    duplicate field name is the loud refusal (the runtime route of the
+    elaboration-level `by decide` default), never a silent
+    acceptance. -/
+def recordOfRaw : RecordRaw → Option Record
+  | (_, (n, (_, (fr, _)))) =>
+      match fieldsOfRaws fr with
+      | Option.some fs =>
+          if hnd : (fs.map Field.name).Nodup then
+            Option.some { name := n, fields := fs, fields_nodup := hnd }
+          else Option.none
+      | Option.none => Option.none
+
+def recordsToRaw (rs : List Record) : List RecordRaw := rs.map recordToRaw
+
+def recordsOfRaws : List RecordRaw → Option (List Record)
+  | [] => Option.some []
+  | rr :: rest =>
+      match recordOfRaw rr with
+      | Option.some r => (recordsOfRaws rest).map (fun l => r :: l)
+      | Option.none => Option.none
+
+def ifaceToRaw (i : Interface) : InterfaceRaw :=
+  ((), (i.name, ((), (List.map recordToRaw i.records, ()))))
+
+/-- An interface's decode: the record names' nodup is DECIDED here
+    (the record-level route, one level up). -/
+def ifaceOfRaw : InterfaceRaw → Option Interface
+  | (_, (n, (_, (rs, _)))) =>
+      match recordsOfRaws rs with
+      | Option.some rcds =>
+          if hnd : (rcds.map Record.name).Nodup then
+            Option.some { name := n, records := rcds, records_nodup := hnd }
+          else Option.none
+      | Option.none => Option.none
+
+def ifacesToRaw (is : List Interface) : List InterfaceRaw := List.map ifaceToRaw is
+
+def ifacesOfRaws : List InterfaceRaw → Option (List Interface)
+  | [] => Option.some []
+  | ir :: rest =>
+      match ifaceOfRaw ir with
+      | Option.some i => (ifacesOfRaws rest).map (fun l => i :: l)
+      | Option.none => Option.none
+
+def packageToRaw (p : Package) : PkgRaw :=
+  ((), (p.id, ((), List.map ifaceToRaw p.interfaces)))
+
+/-- The package's decode: the interface list has no nodup gate (the
+    carrier's honest gap — `Wit`'s header), so this is a pure map. -/
+def packageOfRaw : PkgRaw → Option Package
+  | (_, (id, ((), is))) => (ifacesOfRaws is).map (fun l => { id := id, interfaces := l })
+
+/-! ### the codec's laws (the rel node's decode_encode + exact fields) -/
+
+theorem fieldOfRaw_toRaw (f : Field) : fieldOfRaw (fieldToRaw f) = f := rfl
+
+theorem fieldToRaw_fieldOfRaw : ∀ (fr : FieldRaw), fieldToRaw (fieldOfRaw fr) = fr
+  | ((), (n, ((), (t, ())))) => rfl
+
+theorem linesOfRaws_map : ∀ (fs : List Field),
+    linesOfRaws (fs.map (fun g => (fieldToRaw g, ()))) = Option.some fs
+  | [] => rfl
+  | g :: gs => by
+      simp only [List.map_cons, linesOfRaws]
+      rw [linesOfRaws_map gs, Option.map_some, fieldOfRaw_toRaw]
+
+theorem linesOfRaws_exact : ∀ (raws : List (FieldRaw × Unit)) (fs : List Field),
+    linesOfRaws raws = Option.some fs →
+    fs.map (fun g => (fieldToRaw g, ())) = raws
+  | [], fs, h => by
+      simp only [linesOfRaws, Option.some.injEq] at h
+      subst h
+      rfl
+  | (fr, ()) :: rest, fs, h => by
+      simp only [linesOfRaws, Option.map_some, Option.some.injEq] at h
+      cases hrc : linesOfRaws rest with
+      | none => rw [hrc] at h; simp at h
+      | some fs' =>
+          rw [hrc] at h
+          simp only [Option.map_some, Option.some.injEq] at h
+          rw [← h, List.map_cons, fieldToRaw_fieldOfRaw,
+            linesOfRaws_exact rest fs' hrc]
+
+theorem fieldsOfRaws_toRaw : ∀ (fs : List Field),
+    fieldsOfRaws (fieldsToRaw fs) = Option.some fs
+  | [] => rfl
+  | f :: fs => by
+      show fieldsOfRaws (Option.none, (fieldToRaw f, ()) :: List.map (fun g => (fieldToRaw g, ())) fs)
+        = Option.some (f :: fs)
+      simp only [fieldsOfRaws, List.map_cons, linesOfRaws, Option.map_some,
+        fieldOfRaw_toRaw, linesOfRaws_map]
+
+theorem fieldsOfRaws_exact : ∀ (fr : FieldsRaw) (fs : List Field),
+    fieldsOfRaws fr = Option.some fs → fieldsToRaw fs = fr := by
+  intro fr
+  obtain ⟨dam, lines⟩ := fr
+  cases dam with
+  | none =>
+      intro fs h
+      simp only [fieldsOfRaws] at h
+      cases lines with
+      | nil => exact absurd h (by simp)
+      | cons l ls =>
+          obtain ⟨fr, u⟩ := l
+          cases u
+          simp only [fieldsOfRaws, linesOfRaws, Option.map_some, Option.some.injEq] at h
+          cases hlc : linesOfRaws ls with
+          | none => rw [hlc] at h; simp at h
+          | some fs' =>
+              rw [hlc] at h
+              simp only [Option.map_some, Option.some.injEq] at h
+              subst h
+              show (Option.none, (fieldToRaw (fieldOfRaw fr), ())
+                    :: List.map (fun g => (fieldToRaw g, ())) fs')
+                  = (Option.none, (fr, ()) :: ls)
+              rw [linesOfRaws_exact ls fs' hlc, fieldToRaw_fieldOfRaw]
+  | some u =>
+      cases u
+      intro fs h
+      simp only [fieldsOfRaws] at h
+      cases lines with
+      | nil =>
+          simp only [Option.some.injEq] at h
+          subst h
+          rfl
+      | cons l ls => simp at h
+
+theorem recordOfRaw_toRaw : ∀ (r : Record), recordOfRaw (recordToRaw r) = Option.some r := by
+  intro r
+  obtain ⟨n, fs, hnd⟩ := r
+  simp only [recordToRaw, recordOfRaw, fieldsOfRaws_toRaw]
+  exact dif_pos hnd
+
+theorem recordOfRaw_exact : ∀ (rr : RecordRaw) (r : Record),
+    recordOfRaw rr = Option.some r → recordToRaw r = rr := by
+  intro rr
+  cases rr with
+  | mk u pair =>
+      obtain ⟨n, pair2⟩ := pair
+      obtain ⟨u2, fr, _⟩ := pair2
+      cases u; cases u2
+      intro r h
+      simp only [recordOfRaw, Option.some.injEq] at h
+      cases hf : fieldsOfRaws fr with
+      | none => rw [hf] at h; simp at h
+      | some fs =>
+          rw [hf] at h
+          simp only [Option.map_some, Option.some.injEq] at h
+          by_cases hnd : (fs.map Field.name).Nodup
+          · rw [dif_pos hnd] at h
+            cases h
+            show ((), (n, ((), (fieldsToRaw fs, ())))) = _
+            rw [fieldsOfRaws_exact fr fs hf]
+          · rw [dif_neg hnd] at h
+            cases h
+
+theorem recordsOfRaws_exact : ∀ (raws : List RecordRaw) (rs : List Record),
+    recordsOfRaws raws = Option.some rs → rs.map recordToRaw = raws
+  | [], rs, h => by
+      simp only [recordsOfRaws, Option.some.injEq] at h
+      subst h
+      rfl
+  | rr :: rest, rs, h => by
+      simp only [recordsOfRaws, Option.map_some, Option.some.injEq] at h
+      cases hrr : recordOfRaw rr with
+      | none => rw [hrr] at h; simp at h
+      | some r =>
+          rw [hrr] at h
+          cases hrs : recordsOfRaws rest with
+          | none => rw [hrs] at h; simp at h
+          | some rs' =>
+              rw [hrs] at h
+              simp only [Option.map_some, Option.some.injEq] at h
+              rw [← h, List.map_cons, recordOfRaw_exact rr r hrr,
+                recordsOfRaws_exact rest rs' hrs]
+
+theorem recordsOfRaws_map : ∀ (rs : List Record),
+    recordsOfRaws (List.map recordToRaw rs) = Option.some rs
+  | [] => rfl
+  | r :: rs => by
+      show recordsOfRaws (recordToRaw r :: List.map recordToRaw rs) = _
+      simp only [recordsOfRaws, recordOfRaw_toRaw]
+      rw [recordsOfRaws_map rs, Option.map_some]
+
+theorem ifaceOfRaw_exact : ∀ (ir : InterfaceRaw) (i : Interface),
+    ifaceOfRaw ir = Option.some i → ifaceToRaw i = ir := by
+  intro ir
+  cases ir with
+  | mk u pair =>
+      obtain ⟨n, pair2⟩ := pair
+      obtain ⟨u2, rs, _⟩ := pair2
+      cases u; cases u2
+      intro i h
+      simp only [ifaceOfRaw, Option.some.injEq] at h
+      cases hrs : recordsOfRaws rs with
+      | none => rw [hrs] at h; simp at h
+      | some rcds =>
+          rw [hrs] at h
+          simp only [Option.map_some, Option.some.injEq] at h
+          by_cases hnd : (rcds.map Record.name).Nodup
+          · rw [dif_pos hnd] at h
+            cases h
+            show ((), (n, ((), (List.map recordToRaw rcds, ())))) = _
+            rw [recordsOfRaws_exact rs rcds hrs]
+          · rw [dif_neg hnd] at h
+            cases h
+
+theorem ifaceOfRaw_toRaw (i : Interface) : ifaceOfRaw (ifaceToRaw i) = Option.some i := by
+  obtain ⟨n, rs, hnd⟩ := i
+  simp only [ifaceToRaw, ifaceOfRaw, recordsOfRaws_map]
+  exact dif_pos hnd
+
+theorem ifacesOfRaws_exact : ∀ (raws : List InterfaceRaw) (is : List Interface),
+    ifacesOfRaws raws = Option.some is → is.map ifaceToRaw = raws
+  | [], is, h => by
+      simp only [ifacesOfRaws, Option.some.injEq] at h
+      subst h
+      rfl
+  | ir :: rest, is, h => by
+      simp only [ifacesOfRaws, Option.some.injEq] at h
+      cases hir : ifaceOfRaw ir with
+      | none => rw [hir] at h; simp at h
+      | some i =>
+          rw [hir] at h
+          cases hrest : ifacesOfRaws rest with
+          | none => rw [hrest] at h; simp at h
+          | some is' =>
+              rw [hrest] at h
+              simp only [Option.map_some, Option.some.injEq] at h
+              rw [← h, List.map_cons, ifaceOfRaw_exact ir i hir,
+                ifacesOfRaws_exact rest is' hrest]
+
+theorem ifacesOfRaws_map : ∀ (is : List Interface),
+    ifacesOfRaws (List.map ifaceToRaw is) = Option.some is
+  | [] => rfl
+  | i :: is => by
+      show ifacesOfRaws (ifaceToRaw i :: List.map ifaceToRaw is) = _
+      simp only [ifacesOfRaws, ifaceOfRaw_toRaw]
+      rw [ifacesOfRaws_map is, Option.map_some]
+
+theorem packageCodec_decode_encode (p : Package) :
+    packageOfRaw (packageToRaw p) = Option.some p := by
+  obtain ⟨id, is⟩ := p
+  show Option.map
+      (fun l => ({ id := id, interfaces := l } : Package))
+      (ifacesOfRaws (List.map ifaceToRaw is)) = Option.some ⟨id, is⟩
+  simp only [ifacesOfRaws_map, Option.map_some]
+
+theorem packageToRaw_of : ∀ (raw : PkgRaw) (p : Package),
+    packageOfRaw raw = Option.some p → packageToRaw p = raw := by
+  intro raw
+  cases raw with
+  | mk u pair =>
+      obtain ⟨id, pair2⟩ := pair
+      obtain ⟨u2, is⟩ := pair2
+      cases u; cases u2
+      intro p h
+      simp only [packageOfRaw, Option.map_some, Option.some.injEq] at h
+      cases his : ifacesOfRaws is with
+      | none => rw [his] at h; simp at h
+      | some isl =>
+          rw [his] at h
+          simp only [Option.map_some, Option.some.injEq] at h
+          cases h
+          show ((), (id, ((), List.map ifaceToRaw isl))) = _
+          rw [ifacesOfRaws_exact is isl his]
+
+/-! ## the grammar + the certificate -/
+
+open TextKit in
+/-- One field's bytes: the indent, the name, `: `, the ty token, the
+    comma (the renderer's `Render.field`). -/
+def fieldG : TextKit.Grammar FieldRaw :=
+  .seq (.atom (litAtom "    " (by decide)))
+    (.seq (.atom nameAtom)
+      (.seq (.atom (litAtom ": " (by decide)))
+        (.seq (.atom tyAtom)
+          (.atom (litAtom "," (by decide))))))
+
+open TextKit in
+/-- One field LINE: the field's bytes PLUS its trailing newline (the
+    trailing-delimiter discipline — the fields' separator read at the
+    line's end; see `FieldsRaw`'s note). -/
+def fieldLineG : TextKit.Grammar (FieldRaw × Unit) :=
+  .seq fieldG (.atom (litAtom "\n" (by decide)))
+
+/-- The field block: the blank-line dam (the empty record's `\n`) +
+    the field lines. -/
+def fieldsG : TextKit.Grammar FieldsRaw :=
+  .seq (.opt (.atom (litAtom "\n" (by decide))))
+    (.rep fieldLineG)
+
+open TextKit in
+/-- One record block: the marker, the name, ` {\n`, the field block,
+    the closer `  }\n` (the last field line's trailing newline IS the
+    `\n` the renderer's `"\n  }\n"` shows — the same bytes). -/
+def recordG : TextKit.Grammar RecordRaw :=
+  .seq (.atom (litAtom "  record " (by decide)))
+    (.seq (.atom nameAtom)
+      (.seq (.atom (litAtom " {\n" (by decide)))
+        (.seq fieldsG
+          (.atom (litAtom "  }\n" (by decide))))))
+
+open TextKit in
+/-- One interface block: the marker, the name, ` {\n`, the record
+    blocks, `}\n`. -/
+def ifaceG : TextKit.Grammar InterfaceRaw :=
+  .seq (.atom (litAtom "interface " (by decide)))
+    (.seq (.atom nameAtom)
+      (.seq (.atom (litAtom " {\n" (by decide)))
+        (.seq (.rep recordG)
+          (.atom (litAtom "}\n" (by decide))))))
+
+open TextKit in
+/-- The package's raw grammar: `package `, the id, `;\n\n`, the
+    interface blocks. -/
+def pkgRawG : TextKit.Grammar PkgRaw :=
+  .seq (.atom (litAtom "package " (by decide)))
+    (.seq (.atom idAtom)
+      (.seq (.atom (litAtom ";\n\n" (by decide)))
+        (.rep ifaceG)))
+
+/-- THE package codec: the raw IS the seq-spine tuple; decode unmaps
+    it (the nodup checks at the record/interface levels). The policy is
+    HONEST: the decode really refuses (a duplicate record/interface
+    name decodes to `none`), so the accepted-byte policy says so —
+    `∃ q, packageOfRaw raw = some q` (the `witCodec` template below;
+    never a stub `True` over a refusing decode). -/
+abbrev packageCodec : Kit.Codec PkgRaw Package where
+  encode := packageToRaw
+  decode := packageOfRaw
+  policy raw := ∃ q, packageOfRaw raw = some q
+  decode_encode := packageCodec_decode_encode
+  decode_some_policy := fun _ _ hq => ⟨_, hq⟩
+
+/-- THE WIT package grammar: the nested seq/rep spine under the ONE
+    `rel` codec — no `fix`, no `self` anywhere (the ty recursion is the
+    guarded leaf; the module header's honest-state note). -/
+def pkgGrammar : TextKit.Grammar Package :=
+  .rel packageCodec (fun _ => true) (fun _ _ _ => rfl) packageToRaw_of
+    "package" [] pkgRawG
+
+/-- THE certificate discharge (06 §7's build-time check): the WF rows
+    compute green (WF-REP: the line/block bodies are non-nullable and
+    the ty token's name-char munch is broken by the `,`/newline
+    followers; WF-SEQ: the name munches are broken by `: `, the dam's
+    `\n` is disjoint from the field lines' `    `, and the trailing-
+    delimiter discipline keeps every stop-position's firsts disjoint
+    from the closers). -/
+theorem pkgCert : TextKit.Grammar.Predictive pkgGrammar :=
+  TextKit.Grammar.wfCheck_sound pkgGrammar (by decide)
+
+/-- The fix-free fold (no `fix` node anywhere — the ty token is a
+    leaf). -/
+theorem pkgFixFree : TextKit.Grammar.FixFree pkgGrammar := by
+  repeat constructor
+
+/-- Law 2's coherence premise: NO `alt` node anywhere (ALL the type
+    dispatch hides inside the ty leaf's scan) — the fold's branches are
+    all trivial. -/
+theorem pkgCoherent : TextKit.Grammar.altCoherent pkgGrammar := by
+  repeat constructor
+
+/-! ## the valueOk discipline (the WitOk bridge) -/
+
+/-- The field's valueOk IS the name gate + the `&& true` residue (the
+    spine's `&&`-chain keeps the right-`true`s definitionally — the
+    `Bool.and_true` simp-lemma closes them, never defeq). -/
+theorem valueOk_fieldG (f : Field) :
+    TextKit.Grammar.valueOk fieldG (fieldToRaw f) = nameAtom.pre f.name := by
+  simp only [fieldG, TextKit.Grammar.valueOk_seq, TextKit.Grammar.valueOk_atom,
+    fieldToRaw, litAtom, TextKit.constStrLex, tyAtom]
+  simp [← witNameOk_eq]
+
+theorem valueOk_fieldLineG (g : Field) (h : witNameOk g.name = true) :
+    TextKit.Grammar.valueOk fieldLineG (fieldToRaw g, ()) = true := by
+  show TextKit.Grammar.valueOk fieldLineG (((), (g.name, ((), (g.ty, ())))), ()) = true
+  simp only [fieldLineG, fieldG, TextKit.Grammar.valueOk_seq, TextKit.Grammar.valueOk_atom,
+    litAtom, TextKit.constStrLex, fieldToRaw, tyAtom, ← witNameOk_eq]
+  simp [h]
+
+theorem valueOk_fields : ∀ (fs : List Field),
+    (∀ f ∈ fs, witNameOk f.name = true) →
+    TextKit.Grammar.valueOk fieldsG (fieldsToRaw fs) = true
+  | [], _ => rfl
+  | f :: fs, h => by
+      have hf : witNameOk f.name = true := h f (List.mem_cons_self ..)
+      have hrep : (fs.map (fun g => (fieldToRaw g, ()))).all
+          (fun z => TextKit.Grammar.valueOk fieldLineG z) = true := by
+        rw [List.all_eq_true]
+        intro z hz
+        obtain ⟨g, hg, rfl⟩ := List.mem_map.mp hz
+        show TextKit.Grammar.valueOk fieldLineG (((), (g.name, ((), (g.ty, ())))), ()) = true
+        exact valueOk_fieldLineG g (h g (List.mem_cons_of_mem _ hg))
+      simp only [fieldsToRaw, fieldsG, TextKit.Grammar.valueOk_seq,
+        TextKit.Grammar.valueOk_opt_none, TextKit.Grammar.valueOk_rep,
+        Bool.true_and, List.all_cons]
+      simp [valueOk_fieldLineG f hf, hrep]
+
+theorem valueOk_record : ∀ (r : Record),
+    witNameOk r.name = true → (∀ f ∈ r.fields, witNameOk f.name = true) →
+    TextKit.Grammar.valueOk recordG (recordToRaw r) = true := by
+  intro r hnm hf
+  simp only [recordToRaw, recordG, TextKit.Grammar.valueOk_seq,
+    TextKit.Grammar.valueOk_atom, litAtom, TextKit.constStrLex]
+  simp [valueOk_fields r.fields hf, ← witNameOk_eq, hnm]
+
+theorem valueOk_iface : ∀ (i : Interface),
+    witNameOk i.name = true →
+    (∀ r ∈ i.records, witNameOk r.name = true ∧ (∀ f ∈ r.fields, witNameOk f.name = true)) →
+    TextKit.Grammar.valueOk ifaceG (ifaceToRaw i) = true := by
+  intro i hnm hr
+  have hrep : (List.map recordToRaw i.records).all
+      (fun z => TextKit.Grammar.valueOk recordG z) = true := by
+    rw [List.all_eq_true]
+    intro z hz
+    obtain ⟨r, hr2, rfl⟩ := List.mem_map.mp hz
+    exact valueOk_record r (hr r hr2).1 (hr r hr2).2
+  simp only [ifaceToRaw, ifaceG, TextKit.Grammar.valueOk_seq, TextKit.Grammar.valueOk_atom,
+    TextKit.Grammar.valueOk_rep, litAtom, TextKit.constStrLex]
+  simp [hrep, ← witNameOk_eq, hnm]
+
+theorem valueOk_package (p : Package) (hok : WitOk p = true) :
+    TextKit.Grammar.valueOk pkgGrammar p = true := by
+  obtain ⟨hid, hn⟩ := WitOk_spec p hok
+  have hrep : (List.map ifaceToRaw p.interfaces).all
+      (fun z => TextKit.Grammar.valueOk ifaceG z) = true := by
+    rw [List.all_eq_true]
+    intro z hz
+    obtain ⟨i, hi, rfl⟩ := List.mem_map.mp hz
+    exact valueOk_iface i (hn i hi).1 (fun r hr => (hn i hi).2 r hr)
+  simp only [pkgGrammar, TextKit.Grammar.valueOk_rel, packageCodec,
+    packageToRaw, pkgRawG, TextKit.Grammar.valueOk_seq,
+    TextKit.Grammar.valueOk_atom, TextKit.Grammar.valueOk_rep, litAtom,
+    TextKit.constStrLex]
+  simp [hrep, ← witIdOk_eq, hid]
+
+/-! ## the print faces (the derived print's bytes ARE the renderer's) -/
+
+/-- The `",\n"` literal vs its append-spelling (the joins' byte tie —
+    the kernel reduces the adjacent literals; simp needs the named
+    face, right-associated forms never expose the merge). -/
+theorem append_comma_nl (x : String) : ",\n" ++ x = "," ++ ("\n" ++ x) := by
+  rw [← String.append_assoc]
+  rfl
+
+theorem nameAtom_print (s : String) : nameAtom.print s = s := rfl
+theorem idAtom_print (s : String) : idAtom.print s = s := rfl
+
+theorem printG_field (f : Field) :
+    TextKit.Grammar.printG fieldG (fieldToRaw f) = Render.field f := by
+  simp [fieldG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+    fieldToRaw, litAtom, TextKit.constStrLex, nameAtom_print, tyAtom,
+    Render.field, String.append_assoc]
+
+theorem printG_line (g : Field) :
+    TextKit.Grammar.printG fieldLineG (fieldToRaw g, ()) = Render.field g ++ "\n" := by
+  simp [fieldLineG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+    litAtom, TextKit.constStrLex, printG_field]
+
+theorem printG_lines : (f : Field) → (fs : List Field) →
+    TextKit.Grammar.printG (.rep fieldLineG)
+        ((fieldToRaw f, ()) :: fs.map (fun g => (fieldToRaw g, ())))
+      = Render.fieldsJoin (f :: fs) ++ "\n"
+  | f, [] => by
+      show TextKit.Grammar.printG fieldLineG (fieldToRaw f, ()) ++ "" = _
+      rw [printG_line]
+      simp [Render.fieldsJoin, Render.fieldsTailJoin, Render.field, String.append_assoc]
+  | f, g :: gs => by
+      show TextKit.Grammar.printG fieldLineG (fieldToRaw f, ()) ++
+        TextKit.Grammar.printG (.rep fieldLineG)
+          ((fieldToRaw g, ()) :: gs.map (fun h => (fieldToRaw h, ()))) = _
+      rw [printG_line, printG_lines g gs]
+      simp only [Render.fieldsJoin, Render.fieldsTailJoin, Render.field,
+        String.append_assoc, append_comma_nl]
+
+theorem printG_record (r : Record) :
+    TextKit.Grammar.printG recordG (recordToRaw r) = Render.record r := by
+  obtain ⟨n, fs, hnd⟩ := r
+  simp only [recordToRaw, recordG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+    litAtom, TextKit.constStrLex, nameAtom_print]
+  cases fs with
+  | nil =>
+      have hft : fieldsToRaw [] = (Option.some (), []) := rfl
+      rw [hft]
+      simp only [fieldsG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+        TextKit.Grammar.printG_opt_some, TextKit.Grammar.printG_rep, litAtom,
+        TextKit.constStrLex, Render.record, Render.fieldsJoin,
+        String.append_assoc, List.foldr]
+      rfl
+  | cons f fs' =>
+      have hft : fieldsToRaw (f :: fs')
+        = (Option.none, (fieldToRaw f, ()) :: List.map (fun g => (fieldToRaw g, ())) fs') := rfl
+      rw [hft]
+      simp only [fieldsG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+        TextKit.Grammar.printG_opt_none, litAtom, TextKit.constStrLex]
+      rw [printG_lines f fs']
+      simp [Render.record, Render.fieldsJoin, String.append_assoc]
+
+theorem printG_records : ∀ (rs : List Record),
+    TextKit.Grammar.printG (.rep recordG) (List.map recordToRaw rs) = Render.recordsJoin rs
+  | [] => rfl
+  | r :: rs => by
+      show TextKit.Grammar.printG recordG (recordToRaw r) ++
+        TextKit.Grammar.printG (.rep recordG) (List.map recordToRaw rs) = _
+      rw [printG_record, printG_records rs]
+      simp [Render.recordsJoin, String.append_assoc]
+
+theorem printG_iface (i : Interface) :
+    TextKit.Grammar.printG ifaceG (ifaceToRaw i) = Render.interface i := by
+  obtain ⟨n, rs, hnd⟩ := i
+  show TextKit.Grammar.printG ifaceG
+    ((), (n, ((), (List.map recordToRaw rs, ())))) = _
+  simp only [ifaceG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+    litAtom, TextKit.constStrLex, nameAtom_print]
+  rw [printG_records]
+  simp [Render.interface, String.append_assoc]
+
+theorem printG_ifaces : ∀ (is : List Interface),
+    TextKit.Grammar.printG (.rep ifaceG) (List.map ifaceToRaw is) = Render.interfacesJoin is
+  | [] => rfl
+  | i :: is => by
+      show TextKit.Grammar.printG ifaceG (ifaceToRaw i) ++
+        TextKit.Grammar.printG (.rep ifaceG) (List.map ifaceToRaw is) = _
+      rw [printG_iface, printG_ifaces is]
+      simp [Render.interfacesJoin, String.append_assoc]
+
+/-- The derived printer's bytes ARE the renderer's (the byte-tie's
+    value face — `print_eq_render` is what makes the generic law's
+    `run (print g x) = ok x` speak the RENDERER's spellings). -/
+theorem print_eq_render (p : Package) :
+    TextKit.Grammar.print pkgGrammar p = Render.package p := by
+  obtain ⟨id, is⟩ := p
+  show TextKit.Grammar.printG pkgRawG ((), (id, ((), List.map ifaceToRaw is))) = _
+  simp only [pkgRawG, TextKit.Grammar.printG_seq, TextKit.Grammar.printG_atom,
+    litAtom, TextKit.constStrLex, idAtom_print]
+  rw [printG_ifaces]
+  simp [Render.package, Render.interfacesJoin, String.append_assoc]
+
+/-! ## the entry + the laws (the generic theorems' instances) -/
+
+/-- The total parser: text → the typed WIT package (the grammar's run
+    entry over the comment-stripped bytes; every failure is a
+    `ParseError` — position + expected-set — and trailing garbage is a
+    loud refusal, never a silent prefix acceptance). -/
+def parse (s : String) : Except ParseError Package :=
+  TextKit.Grammar.run pkgGrammar (stripComments s)
+
 /-- THE PARSE LAW (05 §1's first honest law): every well-named
-    package's rendering parses back to exactly it — `parse (print x) =
-    ok x` on the `WitOk` fragment. -/
+    package's rendering parses back to exactly it — the
+    `Grammar.run_print_fixFree` INSTANCE (the hand per-level climb of
+    the pre-grammar file died here). -/
 theorem parse_print (p : Package) (hok : WitOk p = true) :
     parse (Render.package p) = .ok p := by
-  obtain ⟨hid, hn⟩ := WitOk_spec p hok
-  have hcursor : (Render.package p).toList
-      = "package ".toList ++ (p.id.toList ++ (";\n\n".toList
-        ++ ((Render.interfacesJoin p.interfaces).toList ++ []))) := by
-    simp [Render.package, String.toList_append, List.append_assoc]
-  have hstrip : ∀ (sfx : List Char),
-      skipComments ("package ".toList ++ sfx) = "package ".toList ++ sfx := by
-    intro sfx
-    show skipCommentsGo ("package ".toList ++ sfx).length
-      ("package ".toList ++ sfx) = _
-    have hl : ("package ".toList ++ sfx).length = (sfx.length + 7) + 1 := by
-      rw [List.length_append, L_pkg]
-      simp only [List.length_cons, List.length_nil]
-      omega
-    rw [hl, L_pkg, List.cons_append]
-    exact skipCommentsGo_ne (sfx.length + 7) 'p' _ rfl
-  simp only [parse, hcursor]
-  rw [hstrip (p.id.toList ++ (";\n\n".toList ++ ((Render.interfacesJoin p.interfaces).toList ++ [])))]
-  rw [packageP_ok p (Render.package p).length 0 []
-    (by have h1 := package_len p; omega)
-    (by simp [tailOk])
-    hid hn
-    (by have h1 := package_len p; simp only [List.length_nil]; omega)]
+  have hstrip : stripComments (Render.package p) = Render.package p := by
+    apply String.toList_inj.mp
+    show String.toList (String.ofList (skipComments (Render.package p).toList)) = _
+    have h1 : (Render.package p).toList
+        = "package ".toList ++ ((p.id.toList ++ ";\n\n".toList)
+          ++ (Render.interfacesJoin p.interfaces).toList) := by
+      simp [Render.package, String.toList_append]
+    rw [String.toList_ofList, h1, skipComments_package_sfx]
+  have hr : TextKit.Grammar.run pkgGrammar (TextKit.Grammar.print pkgGrammar p) = .ok p :=
+    TextKit.Grammar.run_print_fixFree pkgGrammar pkgFixFree pkgCert p (valueOk_package p hok)
+  rw [print_eq_render] at hr
+  show TextKit.Grammar.run pkgGrammar (stripComments (Render.package p)) = _
+  rw [hstrip]
+  exact hr
 
-/-! ### the correspondence row -/
+/-- THE CANONICALIZATION LAW (05 §1's second honest law — LANDED at
+    this migration, the pre-grammar file's named follow-up): accepted
+    text IS the rendering of its result — `Grammar.print_parse` (law 2)
+    + `print_eq_render` + the run entry's full-consumption check. -/
+theorem render_parse (s : String) (p : Package) (h : parse s = .ok p) :
+    Render.package p = stripComments s := by
+  unfold parse at h
+  simp only [TextKit.Grammar.run] at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i x cur hrun
+    split at h
+    · rename_i hnil
+      have hxp : x = p := Except.ok.inj h
+      cases hxp
+      have hpp := TextKit.Grammar.print_parse pkgGrammar
+        ((stripComments s).length + 1) pkgCoherent hrun
+      have h1 : (stripComments s).toList
+          = (TextKit.Grammar.printG pkgGrammar p).toList := by
+        rw [hnil] at hpp
+        rw [List.append_nil] at hpp
+        exact hpp.1
+      have h2 : stripComments s = TextKit.Grammar.printG pkgGrammar p :=
+        String.toList_inj.mp h1
+      rw [h2]
+      exact (print_eq_render p).symm
+    · exact absurd h (by simp)
+
+/-- Law 2 (the exactness direction, generic form) at the package's
+    grammar: a successful derived parse consumed EXACTLY the print of
+    its result (+ the parsed value is value-owned — the WitOk
+    discipline). -/
+theorem print_parse (fuel : Nat) (ys : Package) (cur cur' : Cursor)
+    (h : TextKit.Grammar.parseG pkgGrammar fuel cur = .ok (ys, cur')) :
+    cur.cs = (TextKit.Grammar.printG pkgGrammar ys).toList ++ cur'.cs ∧
+    cur'.off = cur.off + (TextKit.Grammar.printG pkgGrammar ys).length ∧
+    TextKit.Grammar.valueOk pkgGrammar ys = true :=
+  TextKit.Grammar.print_parse pkgGrammar fuel pkgCoherent h
+
+/-! ## the correspondence row -/
 
 /-- The WIT codec (Kit.Correspondence's decode∘encode grade): the
     texts are the carrier, the WELL-NAMED packages the payload. The
@@ -1594,9 +1658,8 @@ theorem parse_print (p : Package) (hok : WitOk p = true) :
     text decodes to `none`). `decode_encode` IS `parse_print`;
     `decode_some_policy` says a successful decode certifies acceptance.
     The image-iso upgrade (`Kit.Retraction.toImageIso`: the canonical
-    texts a true `Kit.Iso` with the well-named ASTs) is the
-    canonicalization direction — `render_parse` — the named follow-up
-    (see the module header). -/
+    texts a true `Kit.Iso` with the well-named ASTs) rides the
+    retraction below. -/
 def witDecode (s : String) : Option { p : Package // WitOk p } :=
   match parse s with
   | .ok p => if h : WitOk p = true then some ⟨p, h⟩ else none
@@ -1642,7 +1705,7 @@ def witRetraction : Kit.Retraction { p : Package // WitOk p } String where
     `Retraction.toImageIso`. The image's property is the honest
     «∃ a well-named package whose rendering is exactly this text» —
     the byte-level losslessness of the fragment, both round trips
-    landed. -/
+    landed (`render_parse` as of this migration). -/
 def witImageIso :
     Kit.Iso (Kit.Retraction.image witRetraction) { p : Package // WitOk p } :=
   witRetraction.toImageIso

@@ -111,6 +111,66 @@ def Text.sepBy (sep : String) : List Text → Text
   | [t] => t
   | t :: ts => .app t (.app (.str sep) (Text.sepBy sep ts))
 
+/-! ## the escaper (the byte-policy's generic face) -/
+
+/-- THE generic string escaper: `policy` is the PER-CHARACTER ESCAPE
+    TABLE — `some spelling` escapes, `none` passes the char through as
+    itself. The result is ALWAYS the quoted spelling.
+
+    THE POLICY-TABLE SHAPE (the byte-policy discipline): a policy is a
+    FINITE table — `some` spellings for the target literal syntax's
+    metacharacters (the quote, the backslash, the newline, …), `none`
+    (byte identity) everywhere else. A consumer's bytes are REPRODUCIBLE
+    because escaping fires ONLY on table hits: every other char passes
+    through untouched (`escapeWith_none` — the reproducibility root),
+    and a table hit's spelling is a fixed string, never computed. The
+    consumers (the string-literal faces of the three emitters) instantiate
+    the table; the kit owns the ONE walk.
+
+    Core-only; the walk is `toList.map` + core `String.join` — the rope
+    rule's sanctioned leaf op (06 §7b). -/
+def escapeWith (policy : Char → Option String) (s : String) : String :=
+  "\"" ++ String.join (s.toList.map fun c =>
+    match policy c with
+    | some esc => esc
+    | none => String.singleton c) ++ "\""
+
+/-- The empty string's escape is the bare quote pair — no table can
+    change it (there are no chars to hit). -/
+theorem escapeWith_nil (policy : Char → Option String) :
+    escapeWith policy "" = "\"\"" := rfl
+
+/-- The leaf-level identity: joining the per-char singletons IS the
+    original string (the pass-through law's engine). -/
+theorem join_singleton_self (s : String) :
+    String.join (s.toList.map String.singleton) = s := by
+  have h : ∀ (l : List Char), String.join (l.map String.singleton)
+      = String.ofList l := by
+    intro l
+    induction l with
+    | nil => rfl
+    | cons c l ih => simp [String.join_cons, ih, String.ofList_cons]
+  rw [h, String.ofList_toList]
+
+/-- THE pass-through law (the byte-policy's reproducibility root): an
+    all-`none` table (no hit on ANY char) escapes NOTHING — the result
+    is the quoted original, byte-for-byte. -/
+theorem escapeWith_none {policy : Char → Option String}
+    (h : ∀ c, policy c = none) (s : String) :
+    escapeWith policy s = "\"" ++ s ++ "\"" := by
+  show "\"" ++ String.join
+      (s.toList.map fun c =>
+        match policy c with
+        | some esc => esc
+        | none => String.singleton c) ++ "\"" = _
+  have hmap : s.toList.map (fun c =>
+      match policy c with
+      | some esc => esc
+      | none => String.singleton c)
+    = s.toList.map String.singleton :=
+    List.map_congr_left fun c => by simp [h c]
+  rw [hmap, join_singleton_self]
+
 /-! ## the laws — the byte-tie's theorem face -/
 
 /-- Core's join distributes over list append (the bridge lemma the

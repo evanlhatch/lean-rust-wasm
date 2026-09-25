@@ -13,13 +13,19 @@ yields collections, never invented uniqueness).
 
 What lands here:
 
-- `Cols` — the projection's column DATA: positions in the source
-  schema, in result order. The result row type `c.fields fs` is
-  COMPUTED from the column data — the projection's shape is in the
-  type, by construction (total: the reader `Row.field` is total).
+- `Cols` — the projection's column DATA: KEEP or SKIP per source
+  position, in source order (the order-preserving drop). The result row
+  type `c.fields fs` is COMPUTED from the column data — the projection's
+  shape is in the type, by construction (total: `pick` reads the row
+  directly, no positional reader). NAMED NARROWING (the v2 redesign,
+  `Query.TypedBridge`'s keep lowering is the consumer): the drop
+  projection is order-preserving and duplicate-free — reordering/
+  duplicates need the emit lane's spelling (the wire's project node
+  APPENDS).
 - `Q fs gs` — the typed fragment: `table` / `select` (a `SchemaCore.Pred`
   over the row — the schema's OWN predicate fragment, consumed
-  read-only) / `project` (the column subsets) / `union` (disjunction:
+  read-only) / `project` (the order-preserving column drop) / `union`
+  (disjunction:
   over Bool weights the add is OR — set semantics; over bags/deltas it
   counts) / `join` (conjunction: the equijoin on named columns; the
   result row is the left schema ++ the right schema — computed).
@@ -71,27 +77,32 @@ open SchemaCore
 
 /-! ## The projection's column data -/
 
-/-- The projection's columns: positions in the source schema, in
-    result order — the RESULT row type is computed from it
-    (`Cols.fields`). Duplicates are allowed (the bag reading keeps the
-    count; the set reading collapses). -/
+/-- The projection's columns: KEEP or SKIP per source position, in
+    source order — the order-preserving drop (02 §2's projection). The
+    RESULT row type is computed from it (`Cols.fields`). The tail of
+    `keep`/`skip` is over the TAIL schema (the recursion consumes the
+    source positionally), which is what makes `Query.TypedBridge`'s
+    keep lowering + its agreement lemma definitional. -/
 inductive Cols : List Field → Type where
-  | nil : Cols fs
-  | cons : {fs : List Field} → (i : Fin fs.length) → Cols fs → Cols fs
+  | nil : Cols []
+  | keep : {f : Field} → {fs : List Field} → Cols fs → Cols (f :: fs)
+  | skip : {f : Field} → {fs : List Field} → Cols fs → Cols (f :: fs)
 
-/-- The projected schema: the selected source fields, in column order. -/
-def Cols.fields (fs : List Field) : Cols fs → List Field
-  | .nil => []
-  | .cons i c => fs[i.val] :: c.fields fs
+/-- The projected schema: the KEPT source fields, in source order. -/
+def Cols.fields : (fs : List Field) → Cols fs → List Field
+  | _, .nil => []
+  | f :: _, .keep c => f :: c.fields _
+  | _ :: _, .skip c => c.fields _
 
 /-- The projection's reader: a source row becomes the result row over
-    the computed schema — total (the positions are in range by
-    construction), no projection failure path at all. -/
+    the computed schema — total (the drop never fails), no projection
+    failure path at all. -/
 def Cols.pick (fs : List Field) (c : Cols fs) (row : RowVals fs) :
     RowVals (c.fields fs) :=
-  match c with
-  | .nil => .nil
-  | .cons i c => .cons (Row.field fs row i) (c.pick fs row)
+  match c, row with
+  | .nil, _ => .nil
+  | .keep c, .cons v rest => .cons v (c.pick _ rest)
+  | .skip c, .cons _ rest => c.pick _ rest
 
 /-! ## The typed fragment -/
 

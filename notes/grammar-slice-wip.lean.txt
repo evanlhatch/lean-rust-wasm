@@ -1,0 +1,447 @@
+/-
+# TextKitTests.GrammarSlice — the grammar layer's proof-of-life slice
+
+The design of record: `notes/design-grammar-layer-v2.md` §7. The smallest
+end-to-end exercise of the full discipline — ONE tiny recursive format
+(`PTree := leaf | node PTree`; the text `"x" | "(" tree ")"`) through
+grammar → certificate → law 1 → run round-trip → negative controls —
+before any byte-tied migration.
+
+Honest divergences from the §7 sketch (documented, not silent):
+1. The node arm's self-slot rides an `Option` (the `optE` dam): the
+   `SelfPathE` relation over-approximates the printer's branch choice,
+   and a value-carrying self-slot reachable from a `rel` whose `encode`
+   is total forces the decrease obligation on NON-node values too —
+   unsatisfiable (nothing is `(< 0)`-smaller than `leaf`). The `optE
+   none` arm has NO `SelfPathE` constructor, which kills the
+   over-approximated path. The `none` slot is parse-dead (the rel decode
+   of the none-slot yields `leaf`, whose arm prints `"x"` and never
+   nests), so the accepted-text language is exactly `"x" | "(" tree ")"`.
+2. Law 1 is instantiated (`PTree.run_print`); law 2's instance is
+   BLOCKED, not silently skipped: the branch-coherence conjunct
+   (`valueOk leafArm x = true → valueOk nodeArm x = false`) is FALSE for
+   this fixture — the node codec's `decode_encode` law (mandatory in
+   `Kit.Codec`) forces `decode ⟨(), none, ()⟩ = some leaf` (the leaf's
+   encode image must decode back, and the some-slot images are taken
+   injectively by the `node t` values, so `encode leaf` must hit the
+   none slot), and the rel node's `decode_owns` field then forces
+   `owns_node leaf = true`, so `valueOk nodeArm leaf = true` while
+   `valueOk leafArm leaf = true` — contradicting the conjunct in either
+   arm order. Escapes examined and rejected: a value-carrying self-slot
+   (kills the decrease, see 1); dropping the option (same); a
+   rel-wrapped selfE (the wrapped encode is still total + injective on
+   the image — same triangle). The fix belongs to the DESIGN (a
+   coherence-compatible recursion dam), not to this fixture.
+3. The `(sb, ·)` virtual-seq rows ride law 1's explicit `rowCtx`
+   premise (Laws.lean §6.4's discipline); here they are vacuous (the
+   slice's tail-firsts and tail-munches are empty — the §7 review's
+   arithmetic).
+4. The lexeme/codec rows live HERE, not in `TextKit/Grammar/Lexemes.lean`
+   (that file lands with the first migration wave's `kwLit`/`nameLex`/
+   `natLex` rows). The slice's literals are all single-char, so the
+   `lit` row lands at its single-char core.
+5. The axiom pins for the law instantiations live here (a `module` file
+   cannot import this non-module fixture — the module barrier, probed),
+   printed at build time for the axiom gate's replay.
+
+Negative controls (15-patterns #5): the certificate's teeth — sabotaged
+sibling grammars, each failing `wfCheck` with the NAMED row, pinned by
+`decide` (a control that stops failing fails the build). The WF-FIX
+control's honest form: a fix body with `selfE` in FIRST position makes
+the fix node UNINHABITABLE (the identity self-path `SelfPathE selfE x y
+→ y = x` contradicts the carried decrease `m y < m x`), so the
+closed-level WF-FIX negative is the E-level guardedness pin
+`firstE sabFixBody = none` plus the inhabitance argument; a closed fix
+value with a first-position selfE cannot be constructed to sabotage.
+-/
+
+import TextKit.Grammar
+import TextKit.Grammar.Check
+import TextKit.Grammar.Laws
+
+namespace TextKit.GrammarSlice
+
+/-! ## the fixture format: `PTree := leaf | node PTree` -/
+
+/-- The slice's AST. -/
+inductive PTree where
+  | leaf
+  | node : PTree → PTree
+  deriving Repr, BEq, DecidableEq
+
+/-- The carried measure (the fix's decrease witness). -/
+def PTree.depth : PTree → Nat
+  | .leaf => 0
+  | .node t => t.depth + 1
+
+/-! ## the lexeme row: the single-char literal -/
+
+/-- The scanner for a single-char literal yielding the payload `r`
+    (the `decEq` match keeps the law fields' proofs constructive). -/
+def charScan (c : Char) (r : R) : GParser R := fun cur =>
+  match cur.cs with
+  | c' :: rest => if c = c' then .ok (r, ⟨cur.off + 1, rest⟩)
+                  else .error (ParseError.base cur.off [s!"'{c}'"])
+  | [] => .error (ParseError.base cur.off [s!"'{c}'"])
+
+/-- The scan's success shape (the lexeme fields' shared extraction):
+    the input is EXACTLY the char plus the rest. -/
+theorem charScan_ok {R : Type} {c : Char} {r : R} {cur : Cursor} {r' : R}
+    {cur' : Cursor} (h : charScan c r cur = .ok (r', cur')) :
+    ∃ rest, cur.cs = c :: rest ∧ cur'.cs = rest ∧ cur'.off = cur.off + 1 := by
+  simp only [charScan] at h
+  revert h
+  cases cur.cs with
+  | nil => intro h; simp at h
+  | cons c' rest =>
+      intro h
+      simp only at h
+      by_cases hif : c = c'
+      · rw [if_pos hif] at h
+        obtain ⟨_, hcc⟩ := Prod.mk.inj (Except.ok.inj h)
+        rw [← hcc, ← hif]
+        exact ⟨rest, rfl, rfl, rfl⟩
+      · rw [if_neg hif] at h
+        simp at h
+
+theorem ofList_singleton_toList (c : Char) : (String.ofList [c]).toList = [c] := by
+  simp
+
+theorem ofList_singleton_length (c : Char) : (String.ofList [c]).length = 1 := by
+  simp
+
+theorem ofList_singleton_matches (c : Char) (rest : List Char) :
+    (HeadSpec.lit (String.ofList [c])).matches (c :: rest) = true := by
+  simp [HeadSpec.matches, ofList_singleton_toList]
+
+/-! ## the SelfPathE inversion lemmas (the general-index forms the
+    `cases` tactic needs — the concrete-grammar inversions route
+    through these) -/
+
+/-- The alt's branch inversion. -/
+def selfPathE_alt {R A : Type} (armL armR : GrammarE R A) {x : A} {y : R}
+    (h : SelfPathE (.altE armL armR) x y) : SelfPathE armL x y ∨ SelfPathE armR x y :=
+  match h with
+  | .altL p => Or.inl p
+  | .altR p => Or.inr p
+
+/-- The rel's sub-path inversion. -/
+def selfPathE_rel {R Raw A : Type} (m : Kit.Codec Raw A) (owns : A → Bool)
+    (don : ∀ raw r, m.decode raw = Option.some r → owns r = true)
+    (ex : ∀ raw r, m.decode raw = Option.some r → m.encode r = raw)
+    (nm : String) (vld : List String) (sub : GrammarE R Raw) {x : A} {y : R}
+    (h : SelfPathE (.relE m owns don ex nm vld sub) x y) :
+    SelfPathE sub (m.encode x) y :=
+  match h with
+  | .relP p => p
+
+/-- The punct-opt-punct spine's inversion: the value is the SOME slot
+    and the self-value is the slot's payload (the `none` slot has NO
+    path — the dam). -/
+theorem selfPathE_seq_opt_self (L1 : Lexeme Unit) (L2 : Lexeme Unit)
+    {x : Unit × (Option PTree × Unit)} {y : PTree}
+    (h : SelfPathE (GrammarE.seqE (GrammarE.atomE L1)
+        (GrammarE.seqE (GrammarE.optE (GrammarE.selfE : GrammarE PTree PTree))
+          (GrammarE.atomE L2))) x y) :
+    ∃ t, x = ((), Option.some t, ()) ∧ y = t :=
+  match h with
+  | .seqR (.seqL (.optP _ (.selfP _))) => ⟨_, rfl, rfl⟩
+
+/-- The single-char literal lexeme (the slice's `lit` row): prints the
+    char, scans exactly it, no munch discipline. -/
+def charLex (c : Char) (r : R) : Lexeme R where
+  scan := charScan c r
+  print := fun _ => String.ofList [c]
+  pre := fun _ => true
+  head := .lit (String.ofList [c])
+  munch := Option.none
+  scan_post := by
+    intro cur r' cur' h
+    exact rfl
+  scan_exact := by
+    intro cur r' cur' h
+    obtain ⟨rest, hcs, hcur, -⟩ := charScan_ok h
+    show cur.cs = (String.ofList [c]).toList ++ cur'.cs
+    rw [hcs, ofList_singleton_toList, hcur]
+    rfl
+  scan_off := by
+    intro cur r' cur' h
+    obtain ⟨-, -, -, hoff⟩ := charScan_ok h
+    rw [hoff, ofList_singleton_length]
+  scan_head := by
+    intro cur r' cur' h
+    obtain ⟨rest, hcs, -, -⟩ := charScan_ok h
+    show (HeadSpec.lit (String.ofList [c])).matches cur.cs = true
+    rw [hcs]
+    exact ofList_singleton_matches c rest
+  head_fail := by
+    intro cur h
+    refine ⟨ParseError.base cur.off [s!"'{c}'"], ?_⟩
+    show charScan c r cur = Except.error (ParseError.base cur.off [s!"'{c}'"])
+    simp only [charScan]
+    revert h
+    cases cur.cs with
+    | nil => intro h; rfl
+    | cons c' rest =>
+        intro h
+        simp only at h ⊢
+        by_cases hif : c = c'
+        · rw [if_pos hif] at h
+          rw [if_pos hif]
+          have hcon : (HeadSpec.lit (String.ofList [c])).matches (c' :: rest) = true := by
+            show (String.ofList [c]).toList.isPrefixOf (c' :: rest) = true
+            rw [ofList_singleton_toList, ← hif]
+            simp
+          exact absurd h hcon
+        · rw [if_neg hif]
+  print_scan := fun k r sfx _ _ => by
+    show charScan c r ⟨k, (String.ofList [c]).toList ++ sfx⟩
+      = Except.ok (r, ⟨k + (String.ofList [c]).length, sfx⟩)
+    simp only [charScan]
+    rw [if_pos rfl, ofList_singleton_length]
+  consumes := by
+    intro cur r' cur' h
+    obtain ⟨rest, hcs, hcur, hoff⟩ := charScan_ok h
+    rw [hcs, hcur]
+    exact Nat.lt_succ_self _
+  head_ne := by
+    show (HeadSpec.lit (String.ofList [c])).matches [] = false
+    show (String.ofList [c]).toList.isPrefixOf [] = false
+    simp
+
+/-! ## the codec rows -/
+
+def leafEncode : PTree → String := fun _ => "x"
+def leafDecode : String → Option PTree :=
+  fun s => if s = "x" then Option.some PTree.leaf else Option.none
+
+def leafCodec : Kit.Codec String PTree where
+  encode := leafEncode
+  decode := leafDecode
+  policy := fun _ => True
+  decode_encode := by intro b; cases b <;> simp [leafEncode, leafDecode]
+  decode_some_policy := by intro a b h; trivial
+
+def nodeEncode : PTree → (Unit × (Option PTree × Unit)) :=
+  fun x => match x with
+    | .node t => ((), Option.some t, ())
+    | .leaf => ((), Option.none, ())
+
+def nodeDecode : (Unit × (Option PTree × Unit)) → Option PTree :=
+  fun raw => match raw.2.1 with
+    | .some t => Option.some (PTree.node t)
+    | .none => Option.some PTree.leaf
+
+def nodeCodec : Kit.Codec (Unit × (Option PTree × Unit)) PTree where
+  encode := nodeEncode
+  decode := nodeDecode
+  policy := fun _ => True
+  decode_encode := by intro b; cases b <;> simp [nodeEncode, nodeDecode]
+  decode_some_policy := by intro a b h; trivial
+
+def leafOwns : PTree → Bool :=
+  fun x => match x with | .leaf => true | .node _ => false
+
+def leafDon : ∀ raw r, leafDecode raw = Option.some r → leafOwns r = true := by
+  intro raw r h
+  simp only [leafDecode] at h
+  by_cases hc : raw = "x"
+  · rw [if_pos hc] at h
+    have hr : PTree.leaf = r := Option.some.inj h
+    cases hr
+    rfl
+  · rw [if_neg hc] at h
+    simp at h
+
+def leafEx : ∀ raw r, leafDecode raw = Option.some r → leafEncode r = raw := by
+  intro raw r h
+  simp only [leafDecode] at h
+  by_cases hc : raw = "x"
+  · rw [if_pos hc] at h
+    have hr : r = PTree.leaf := (Option.some.inj h).symm
+    cases hr
+    show leafEncode PTree.leaf = raw
+    rw [hc]
+    rfl
+  · rw [if_neg hc] at h
+    simp at h
+
+def nodeOwns : PTree → Bool := fun _ => true
+
+def nodeDon : ∀ raw r, nodeDecode raw = Option.some r → nodeOwns r = true :=
+  fun raw r h => rfl
+
+def nodeEx : ∀ raw r, nodeDecode raw = Option.some r → nodeEncode r = raw := by
+  intro raw r h
+  cases raw with
+  | mk u1 pair =>
+    cases pair with
+    | mk slot u2 =>
+      cases slot with
+      | none =>
+          simp only [nodeDecode, Option.some.injEq] at h
+          cases h
+          rfl
+      | some t =>
+          simp only [nodeDecode, Option.some.injEq] at h
+          cases h
+          rfl
+
+/-! ## the grammar + the certificate -/
+
+open GrammarE in
+/-- The slice's fix body: the two rel arms over the punct/atom spine —
+    the node arm's selfE rides the `optE` dam (the header's note 1). -/
+def leafArm : GrammarE PTree PTree :=
+  .relE leafCodec leafOwns leafDon leafEx "leaf" []
+    (.atomE (charLex 'x' "x"))
+
+def nodeArm : GrammarE PTree PTree :=
+  .relE nodeCodec nodeOwns nodeDon nodeEx "node" []
+    (.seqE (.atomE (charLex '(' ()))
+      (.seqE (.optE .selfE) (.atomE (charLex ')' ()))))
+
+def ptreeBody : GrammarE PTree PTree :=
+  .altE leafArm nodeArm
+
+/-- The slice's decrease proof: the `SelfPathE` inversion (the node
+    arm's over-approximated path dies at the `optE none` slot for
+    non-node values; node values decrease by the ctor's depth). -/
+def ptreeDecreases : ∀ x y, SelfPathE ptreeBody x y → PTree.depth y < PTree.depth x := by
+  intro x y path
+  obtain p | p := selfPathE_alt leafArm nodeArm path
+  · exfalso
+    have p' := selfPathE_rel _ _ _ _ _ _ _ p
+    cases p'
+  · have p' := selfPathE_rel _ _ _ _ _ _ _ p
+    obtain ⟨t, hx, rfl⟩ := selfPathE_seq_opt_self _ _ p'
+    cases x with
+    | leaf => simp [nodeEncode] at hx
+    | node t' =>
+        have ht' : t = t' := by
+          simp only [nodeEncode, Prod.mk.injEq, Option.some.injEq] at hx
+          exact hx.2.1.symm
+        subst ht'
+        simp only [PTree.depth]
+        omega
+
+open Grammar in
+/-- The slice's grammar value: ONE binder, the real junction content. -/
+def ptreeGrammar : Grammar PTree :=
+  .fix PTree.depth ptreeBody ptreeDecreases
+
+/-- THE certificate discharge (06 §7's build-time check): the fixture's
+    WF-FIX/WF-ALT-1 rows hand-check green (the §7 review's arithmetic:
+    firstE = `[x, (]` ≠ none; the body non-nullable; tail-self-free —
+    the selfE is left of the non-nullable `")"` via the dam; the
+    WF-SEQ rows vacuous at the empty tail-firsts/munches). -/
+theorem ptreeCert : Grammar.Predictive ptreeGrammar :=
+  Grammar.wfCheck_sound ptreeGrammar (by decide)
+
+/-- The law-1 row context for the slice: the (sb, ·) rows are vacuous
+    (the empty tail-firsts + tail-munches, the header's note 3). -/
+theorem ptreeRowCtx : GrammarE.rowCtx PTree.depth ptreeBody ptreeDecreases ptreeBody := by
+  simp only [GrammarE.rowCtx, ptreeBody, GrammarE.tailFirstE, GrammarE.tailMunchE,
+    GrammarE.effFirstE, GrammarE.nullableE, GrammarE.firstE, GrammarE.tailSelfFreeE,
+    GrammarE.valueOkWalk, GrammarE.guardE]
+  simp
+
+/-! ## the law instantiation (law 1: run∘print) -/
+
+/-- The slice's law-1 instantiation (the design's `PTree.run_print`):
+    the compiled parser accepts the print of every value-owned text. -/
+theorem ptreeRunPrint (x : PTree) (hval : ptreeGrammar.valueOk x = true) :
+    Grammar.run ptreeGrammar (Grammar.print ptreeGrammar x) = .ok x :=
+  Grammar.run_print PTree.depth ptreeBody ptreeDecreases ptreeCert ptreeRowCtx x hval
+
+/-- The slice's law-1 instantiation at the parse face: parsing the print
+    returns the value and leaves the suffix. -/
+theorem ptreeParsePrint (fuel : Nat) (x : PTree) (sfx : List Char) (k : Nat)
+    (hval : ptreeGrammar.valueOk x = true)
+    (htail : ptreeGrammar.tailOk x sfx = true)
+    (hfuel : ((Grammar.print ptreeGrammar x).toList ++ sfx).length
+      + Grammar.guardSlack ptreeGrammar ≤ fuel) :
+    Grammar.parseG ptreeGrammar fuel ⟨k, (Grammar.print ptreeGrammar x).toList ++ sfx⟩
+      = .ok (x, ⟨k + (Grammar.print ptreeGrammar x).length, sfx⟩) :=
+  Grammar.parse_print_fix PTree.depth ptreeBody ptreeDecreases ptreeCert ptreeRowCtx
+    fuel x sfx k hval htail hfuel
+
+/-- the axiom pins (the axiom gate's replay face; the header's note 5) -/
+#print axioms ptreeRunPrint
+#print axioms ptreeParsePrint
+#print axioms ptreeCert
+
+/-! ## the negative controls (the certificate's teeth) -/
+
+/-- SABOTAGE 1 (WF-ALT-1): colliding alt heads — two `"("` branches. -/
+def sabAltHeadsBody : GrammarE PTree PTree :=
+  .altE
+    (.relE nodeCodec nodeOwns nodeDon nodeEx "node" []
+      (.seqE (.atomE (charLex '(' ()))
+        (.seqE (.optE .selfE) (.atomE (charLex ')' ()))))
+    (.relE nodeCodec nodeOwns nodeDon nodeEx "node2" []
+      (.seqE (.atomE (charLex '(' ()))
+        (.atomE (charLex ')' ()))))
+
+/-- The named-row pin: the colliding heads fail WF-ALT-1. -/
+theorem sabAltHeads_row :
+    (Grammar.wfProblems [] (Grammar.fix PTree.depth sabAltHeadsBody ptreeDecreases))
+    = ["WF-ALT-1 at []"] := by decide
+
+/-- SABOTAGE 2 (WF-ALT-2): a nullable LEFT branch. -/
+def sabAltNullableBody : GrammarE PTree PTree :=
+  .altE
+    (.relE nodeCodec nodeOwns nodeDon nodeEx "n" []
+      (.optE (.atomE (charLex 'x' "x"))))
+    (.atomE (charLex 'x' "x"))
+
+theorem sabAltNullable_row :
+    (Grammar.wfProblems [] (Grammar.fix PTree.depth sabAltNullableBody ptreeDecreases))
+    = ["WF-ALT-2 at []"] := by decide
+
+/-- SABOTAGE 3 (WF-OPT): a nullable opt body. -/
+def sabOptBody : GrammarE PTree PTree :=
+  .relE nodeCodec nodeOwns nodeDon nodeEx "n" []
+    (.optE (.optE (.atomE (charLex 'x' "x"))))
+
+theorem sabOpt_row :
+    (Grammar.wfProblems [] (Grammar.fix PTree.depth sabOptBody ptreeDecreases))
+    = ["WF-OPT at []"] := by decide
+
+/-- SABOTAGE 4 (WF-REP-1): a nullable rep body. -/
+def sabRepBody : GrammarE PTree PTree :=
+  .relE nodeCodec nodeOwns nodeDon nodeEx "n" []
+    (.repE (.optE (.atomE (charLex 'x' "x"))))
+
+theorem sabRep_row :
+    (Grammar.wfProblems [] (Grammar.fix PTree.depth sabRepBody ptreeDecreases))
+    = ["WF-REP-1 at []"] := by decide
+
+/-- SABOTAGE 5 (WF-FIX, the honest E-level form): a body with `selfE` in
+    FIRST position has NO firsts — and makes the fix node uninhabitable
+    (the identity self-path contradicts the carried decrease), so the
+    closed-level negative is this guardedness pin + the header's
+    inhabitance argument. -/
+def sabFixBody : GrammarE PTree PTree := .selfE
+
+theorem sabFix_pin : GrammarE.firstE sabFixBody = Option.none := rfl
+
+/-- SABOTAGE 6 (the law-level control, the premise's teeth): the
+    coherent-false grammar — `valueOk leafArm x = true → valueOk
+    nodeArm x = false` FAILS at `leaf` (the header's note 2) — passes
+    `wfCheck` (wfCheck knows no coherence row), and its law-2 instance
+    is a documented NON-instance. -/
+theorem sabCoherent_passes : Grammar.wfCheck ptreeGrammar = true := by decide
+
+theorem sabCoherent_fails :
+    ¬ (GrammarE.altCoherentE PTree.depth ptreeBody ptreeDecreases ptreeBody) := by
+  intro h
+  obtain ⟨hconj, -⟩ := h
+  have hv : GrammarE.valueOkWalk
+      (GrammarE.relE leafCodec leafOwns leafDon leafEx "leaf" []
+        (GrammarE.atomE (charLex 'x' "x"))) PTree.leaf
+      (fun y _ => Grammar.fixValueOk PTree.depth ptreeBody ptreeDecreases y) = true := by
+    simp
+  exact hconj PTree.leaf hv
+
+end TextKit.GrammarSlice

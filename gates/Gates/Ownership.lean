@@ -60,10 +60,14 @@ registry-replay preamble + the one-writer discipline's global face.
 Gate row: the ownership row itself (`gates ownership`).
 -/
 import Lean
+import Inspector.ArtifactScan
 import Gates.Packages
 import Gates.Common
 import SchemaCore
+import SchemaCore.Emit.Witness
 import WasmCore
+import Guest.Component
+import Faults
 
 open Lean
 open Kit (DataRegistry)
@@ -74,13 +78,20 @@ namespace Gates.Ownership
 /-! ## The declared set (read from the emitters, never a hand copy) -/
 
 /-- The REAL emitter set: the emitters whose outputs the tree's write
-    paths produce — the two `just gen` lanes + the snapshot writer.
-    (DemoApp's demo emitter declares NO outputs — empty by
-    construction; it contributes nothing to a declared set.) -/
+    paths produce — the two `just gen` lanes. (DemoApp's demo emitter
+    declares NO outputs — empty by construction; it contributes nothing
+    to a declared set.) -/
 def realEmitters : List (Kit.Emit.Emitter (DataRegistry Item)) :=
   [SchemaCore.witEmitter, SchemaCore.Emit.Rust.rustEmitter,
-   SchemaCore.Emit.Rust.commitSliceEmitter,
-   SchemaCore.snapshotEmitter]
+   SchemaCore.Emit.Ts.tsEmitter,
+   SchemaCore.Emit.Rust.commitSliceEmitter]
+
+/-- The SNAPSHOT writer (the universe snapshot's emitter row — the
+    spec is the routed Universe since wave-30 A2: the snapshot covers
+    the lanes' rows, so its spec type is the universe, not the item
+    registry). -/
+def snapshotEmitters : List (Kit.Emit.Emitter SchemaCore.Universe) :=
+  [SchemaCore.snapshotEmitter]
 
 /-- The wasm lane's REAL emitters (over `WasmCore.Module` — the spec
     type differs from SchemaCore's, so the two real-emitter lists are
@@ -99,11 +110,45 @@ def duelEmitters :
     List (Kit.Emit.Emitter (List (String × Kit.Duel.Expect))) :=
   [WasmCore.Duel.duelEmitter]
 
+/-- The COMPONENT lane's REAL emitter (over `Guest.Component.Spec` —
+    the fourth spec type; the `just componentgen` write path: the
+    world text `gen/component-slice.wit` + the component bytes
+    `gen/component-slice.wasm` + its `.hdr` sidecar). The emitter is
+    PURE (Guest.Component imports no Lean compiler machinery at its
+    own face — the LCNF re-run lives in the driver). -/
+def componentEmitters : List (Kit.Emit.Emitter Guest.Component.Spec) :=
+  [Guest.Component.componentEmitter, Guest.Component.stringComponentEmitter,
+   Guest.Component.edgeComponentEmitter]
+
+/-- The FAULTS lane's REAL emitter (over the allocated fault catalog — the
+    fifth spec type; the `lake exe faultsgen` write path: the generated
+    Rust fault surface `crates/mandate-faults/src/lib.rs`). -/
+def faultsEmitters :
+    List (Kit.Emit.Emitter (List (Faults.FaultItem × Nat))) :=
+  [Faults.faultsEmitter]
+
+/-- The WITNESS lane's REAL emitters (the sixth spec face; the `schema`
+    exe's + gen-check's write path — `SchemaCore.Emit.Witness.regen`'s TWO
+    emitters: the registry table `witnesses_generated.rs` + the duel set
+    `duel-witness/`'s manifest and vectors). Missing from this list was
+    the ownership gate's own drift: the emitters exist and write, so the
+    files under the generated root were ORPHANS by omission. -/
+def witnessEmitters : List (Kit.Emit.Emitter Unit) :=
+  [SchemaCore.Emit.Witness.witnessRegistryEmitter,
+   SchemaCore.Emit.Witness.witnessDuelEmitter]
+
 /-- The golden module: the `schema` exe's own write (SchemaMain's
     golden-body write — the byte-tie's theorem face). NOT an emitter
     output; the writer's declaration lives in SchemaMain, named here
     once so the declared-vs-actual agreement covers it too. -/
 def goldenModule : String := "schemacore/SchemaCore/Goldens.lean"
+
+/-- The witness lane's HAND-WRITTEN consumer (the Rust checker's port —
+    the duel's consumer face), which LIVES under a generated root
+    (`crates/schema-generated/tests/`) without being an artifact: the
+    golden-module precedent (the writer's declaration named here once,
+    provenance-commented — never an emitter output, a hand owns it). -/
+def witnessConsumer : String := "crates/schema-generated/tests/witness_check.rs"
 
 /-- The declared output set: the real emitters' declared paths (ALL
     the real sets — SchemaCore's, the wasm lane's, the duel lane's;
@@ -114,56 +159,25 @@ def goldenModule : String := "schemacore/SchemaCore/Goldens.lean"
 def declaredOutputs : List String :=
   let fromEmitters :=
     ((realEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
+      ++ (snapshotEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
       ++ (wasmEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
-      ++ (duelEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten)
+      ++ (duelEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
+      ++ (componentEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
+      ++ (faultsEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten
+      ++ (witnessEmitters.map fun e => e.outputs ++ e.binaryOutputs).flatten)
   let deduped :=
     (List.foldl (fun acc p => if acc.contains p then acc else p :: acc)
       [] fromEmitters).reverse
-  deduped ++ [goldenModule]
+  deduped ++ [goldenModule] ++ [witnessConsumer]
 
-/-! ## The on-disk set (walked from the artifact roots) -/
+/-! ## The on-disk set (the shared artifact scan) -/
 
-/-- One generated-artifact scan root: a directory (relative to the
-    repo root) + a required extension (`""` = every file under it). -/
-structure ScanRoot where
-  dir : String
-  ext : String
-
-/-- The scan roots (the tree's layout): the whole `gen/` directory +
-    the generated crate's Rust dirs. A committed-or-not file under a
-    root is artifact surface either way (the disk is stricter than
-    the VCS — it catches the uncommitted squatter before the commit). -/
-def scanRoots : List ScanRoot :=
-  [ { dir := "gen", ext := "" }
-  , { dir := "crates/schema-generated/src", ext := "rs" }
-  , { dir := "crates/schema-generated/tests", ext := "rs" } ]
-
-/-- The recursive directory walk, as an explicit worklist loop (the
-    linter's noNewPartial rule: no new `partial` — the file-system
-    tree is walked by an explicit stack, structurally on the stack's
-    own consumption). Absent roots sweep empty. -/
-def walk (root : System.FilePath) : IO (List String) := do
-  let mut acc : List String := []
-  let mut stack : List System.FilePath := [root]
-  repeat
-    match stack with
-    | [] => break
-    | dir :: rest =>
-      stack := rest
-      unless ← dir.pathExists do continue
-      let entries ← dir.readDir
-      for e in entries do
-        if ← e.path.isDir then
-          stack := e.path :: stack
-        else
-          acc := e.path.toString :: acc
-  pure acc.reverse
-
-/-- The files a root sweeps (the extension filter applied). -/
-def rootFiles (r : ScanRoot) : IO (List String) := do
-  let all ← walk r.dir
-  pure (if r.ext.isEmpty then all
-        else all.filter (·.endsWith ("." ++ r.ext)))
+/-- The on-disk artifact set — Inspector.ArtifactScan's ONE enumeration
+    (the ledger report's face rides the same surface; the former mirror
+    is retired — its scanRoots had already dropped the faults lane's
+    row, the drift a mirror cannot prevent). -/
+def onDiskArtifacts : IO (List String) :=
+  Inspector.ArtifactScan.scanGenerated
 
 /-! ## The verdict (ctors, never strings — 09 §8) -/
 
@@ -244,15 +258,13 @@ def selfCheck : Bool :=
     failed self-check. -/
 unsafe def run : IO UInt32 := do
   unless selfCheck do
-    IO.eprintln "ownership: SELF-CHECK FAILED — the duplicate-output \
-      fixture did not fire (the gate's tooth is broken; fail closed)"
+    IO.eprintln <| toString (GateDiag eGT0004
+      "ownership: SELF-CHECK FAILED — the duplicate-output \
+      fixture did not fire (the gate's tooth is broken; fail closed)")
     return 1
   let declared := declaredOutputs
-  -- the on-disk set, walked from the roots
-  let mut onDisk : List String := []
-  for r in scanRoots do
-    onDisk := onDisk ++ (← rootFiles r)
-  onDisk := onDisk.toArray.qsort (fun a b => a <= b) |>.toList
+  -- the on-disk set, the shared artifact scan's ONE enumeration
+  let onDisk ← onDiskArtifacts
   -- the declared paths the disk lacks
   let mut absent : List String := []
   for p in declared do
@@ -264,46 +276,62 @@ unsafe def run : IO UInt32 := do
   let realOutputs := realEmitters.map fun e => e.outputs ++ e.binaryOutputs
   let wasmOutputs := wasmEmitters.map fun e => e.outputs ++ e.binaryOutputs
   let duelOutputs := duelEmitters.map fun e => e.outputs ++ e.binaryOutputs
+  let componentOutputs := componentEmitters.map fun e => e.outputs ++ e.binaryOutputs
+  let faultsOutputs := faultsEmitters.map fun e => e.outputs ++ e.binaryOutputs
+  let witnessOutputs := witnessEmitters.map fun e => e.outputs ++ e.binaryOutputs
   let v := verdict declared onDisk absent.reverse
-    (realOutputs ++ wasmOutputs ++ duelOutputs)
+    (realOutputs ++ wasmOutputs ++ duelOutputs ++ componentOutputs
+      ++ faultsOutputs ++ witnessOutputs)
   -- the kits' cross-emitter verdicts over the REAL sets (exercised,
   -- not assumed; the collision rows above name the paths) + the
   -- cross-set one-writer face.
   let disjoint := Kit.Emit.outputsDisjoint realEmitters
     && Kit.Emit.outputsDisjoint wasmEmitters
     && Kit.Emit.outputsDisjoint duelEmitters
-    && decide ((realOutputs ++ wasmOutputs ++ duelOutputs).flatten.Nodup)
+    && Kit.Emit.outputsDisjoint componentEmitters
+    && Kit.Emit.outputsDisjoint faultsEmitters
+    && Kit.Emit.outputsDisjoint witnessEmitters
+    && decide ((realOutputs ++ wasmOutputs ++ duelOutputs ++ componentOutputs
+      ++ faultsOutputs ++ witnessOutputs).flatten.Nodup)
   match v with
   | .clean d o =>
       unless disjoint do
-        IO.eprintln "ownership: outputsDisjoint = false over the real \
+        IO.eprintln <| toString (GateDiag eGT0004
+          "ownership: outputsDisjoint = false over the real \
           emitter set with no collision row — the report and the kit \
-          disagree (a gate bug; fail closed)"
+          disagree (a gate bug; fail closed)")
         return 1
       IO.println s!"ownership: clean — {d} declared output(s), {o} \
         on-disk artifact(s) under the roots, declared-vs-actual agrees \
         both ways, emitters pairwise disjoint (Kit.Emit.outputsDisjoint \
         = true over ALL real sets — SchemaCore + the wasm lane + the \
-        duel lane — cross-set flatten nodup); collision negative \
-        control: fired"
+        duel lane + the component lane + the faults lane + the witness \
+        lane — cross-set \
+        flatten nodup); \
+        collision negative control: fired"
       return 0
   | .dirty fs =>
       for f in fs do
         match f with
         | .orphan p =>
-            IO.eprintln s!"ownership: ORPHAN {p} — on disk under a \
+            IO.eprintln <| toString (GateDiag eGT0005
+              s!"ownership: ORPHAN {p} — on disk under a \
               generated root but declared by NO emitter (the invisible \
-              squatter); delete it or declare it in an emitter's outputs"
+              squatter); delete it or declare it in an emitter's outputs")
         | .missing p =>
-            IO.eprintln s!"ownership: MISSING {p} — declared but absent; \
-              run `just gen` (or the artifact's own re-baseline) and commit"
+            IO.eprintln <| toString (GateDiag eGT0006
+              s!"ownership: MISSING {p} — declared but absent; \
+              run `just gen` (or the artifact's own re-baseline) and commit")
         | .collision p =>
-            IO.eprintln s!"ownership: COLLISION {p} — declared by more \
-              than one emitter (the one-writer rule's cross-emitter face)"
+            IO.eprintln <| toString (GateDiag eGT0007
+              s!"ownership: COLLISION {p} — declared by more \
+              than one emitter (the one-writer rule's cross-emitter face)")
       unless disjoint do
-        IO.eprintln s!"ownership: Kit.Emit.outputsDisjoint = false over \
+        IO.eprintln <| toString (GateDiag eGT0004
+          s!"ownership: Kit.Emit.outputsDisjoint = false over \
           the real emitter sets ({realEmitters.length} SchemaCore + \
-          {wasmEmitters.length} wasm + {duelEmitters.length} duel)"
+          {wasmEmitters.length} wasm + {duelEmitters.length} duel + \
+          {componentEmitters.length} component)")
       return 1
 
 end Gates.Ownership

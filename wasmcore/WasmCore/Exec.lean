@@ -88,8 +88,8 @@ The five questions (notes/v3/01-core.md):
   `step_preserves`/`step_store_inBounds` and the type-safety chain
   (`exec_typed`, `runFunc_safe` — hand theorems with named relational
   content).
-- **Gate row**: none at the gates yet (WasmCore is not in
-  Gates.Packages' gated set) + WasmCoreTests' execution pins
+- **Gate row**: WasmCore's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it) + WasmCoreTests' execution pins
   (the worked module runs; the trap teeth; the fuel honesty; the
   negative controls).
 
@@ -170,11 +170,20 @@ deriving Inhabited
     or operand-type mismatch — legacy's `Err.underflow`, renamed for
     what it is): UNREPRESENTABLE post-validation (the type-safety
     discipline). `memOOB` is the bounded-memory runtime trap (never
-    corruption). `unreach` is `unreachable`. -/
+    corruption). `unreach` is `unreachable`. The INDIRECT-CALL lane's
+    two RUNTIME traps (the table discipline's teeth — both
+    data-dependent checks the validator cannot do statically, both
+    DISTINCT from `typeErr` so the type-safety theorem survives the
+    new arm): `tabOOB` — the callee index is past the table's entries
+    (a null entry); `indirectSig` — the entry's resolved type differs
+    from the declared one (a mismatched closure applied; never a wrong
+    call). -/
 inductive Trap where
   | unreach
   | memOOB
   | typeErr
+  | tabOOB
+  | indirectSig
 deriving BEq, DecidableEq, Repr, Inhabited
 
 /-- THE layered outcome of a run — the honest ledger, never a bare
@@ -290,13 +299,6 @@ theorem popTys_of_stackTys : ∀ (pops : List ValType) (l : List Val) (ts : List
         · rw [popTys, if_neg hcond]
           exact absurd hty hcond
 
-/-- The memory byte-width of each mem op (the number the bounds check
-    couples — the row's sig fixes it). -/
-def memBytes : MemOp → Nat
-  | .i32load8u | .i32store8 => 1
-  | .i32load | .i32store => 4
-  | .i64load | .i64store | .i64store8 => 8
-
 /-- Read `n` bytes little-endian from the memory (the loads' fold). -/
 def readLE : Nat → Nat → (Nat → UInt8) → Nat
   | 0, _, _ => 0
@@ -310,6 +312,24 @@ def writeLE : Nat → Nat → Nat → (Nat → UInt8) → (Nat → UInt8)
   | n + 1, v, addr, m =>
       fun i => if i = addr then (v % 256).toUInt8
                else writeLE n (v / 256) (addr + 1) m i
+
+/-- The loads' value face: the row's push TYPE names the value's
+    width face (`[.i32]` → the zero-extension face, `[.i64]` → the
+    64-bit face) over the row-width LE read. The `_` arm is
+    unreachable for the universe's rows (the only single-pop rows are
+    the loads, whose pushes are `[.i32]`/`[.i64]`); a malformed row
+    falls to the honest `.i32 0` (the row's sig is `memRow_wf`'s
+    pin). -/
+def loadVal : List ValType → Nat → Nat → (Nat → UInt8) → Val
+  | [.i32], w, ea, m => .i32 (readLE w ea m).toUInt32
+  | [.i64], w, ea, m => .i64 (readLE w ea m).toUInt64
+  | _, _, _, _ => .i32 0
+
+/-- The stores' value face: the stored value's byte payload (the
+    machine value's Nat face — `writeLE`'s input). -/
+def valToNat : Val → Nat
+  | .i32 n => n.toNat
+  | .i64 n => n.toNat
 
 /-! ## The op arithmetic (the closed 19-op universe, explicit arms) -/
 
@@ -397,45 +417,30 @@ def step : State → Instr → Outcome
           .ok { s with locals := fun m => if m = n then v else s.locals m }
       | [] => .trap .typeErr
   | _, .call _ => .unmodeled
+  | _, .callindirect _ => .unmodeled
   | s, .mem op offset _ =>
-      match op, popTys (memPop op) s.stack with
-      | .i32load8u, some ([.i32 a], rest) =>
+      -- THE ROW-DRIVEN MEM ARMS (the 7 ctor arms' ONE body): the pop
+      -- SHAPE (the row's `memPop` — one i32 address = a load, two
+      -- values = a store) picks load vs store, the row's `memBytes`
+      -- is the bounds constant AND the LE fold's length, and the
+      -- row's `memPush` names the loaded value's face (`loadVal`).
+      -- A new mem ctor breaks the build until its row exists — the
+      -- row IS the semantics.
+      match popTys (memPop op) s.stack with
+      | some ([.i32 a], rest) =>
+          -- the loads (the row's push type names the value face)
           let ea := a.toNat + offset
-          if ea + 1 ≤ s.memSize
-          then .ok { s with stack := .i32 (s.mem ea).toUInt32 :: rest }
+          if ea + memBytes op ≤ s.memSize
+          then .ok { s with stack := loadVal (memPush op) (memBytes op) ea s.mem :: rest }
           else .trap .memOOB
-      | .i32load, some ([.i32 a], rest) =>
+      | some ([v, .i32 a], rest) =>
+          -- the stores (any value face — `valToNat`; the row's width
+          -- picks how many bytes land)
           let ea := a.toNat + offset
-          if ea + 4 ≤ s.memSize
-          then .ok { s with stack := .i32 (readLE 4 ea s.mem).toUInt32 :: rest }
+          if ea + memBytes op ≤ s.memSize
+          then .ok { s with mem := writeLE (memBytes op) (valToNat v) ea s.mem, stack := rest }
           else .trap .memOOB
-      | .i64load, some ([.i32 a], rest) =>
-          let ea := a.toNat + offset
-          if ea + 8 ≤ s.memSize
-          then .ok { s with stack := .i64 (readLE 8 ea s.mem).toUInt64 :: rest }
-          else .trap .memOOB
-      | .i32store, some ([.i32 v, .i32 a], rest) =>
-          let ea := a.toNat + offset
-          if ea + 4 ≤ s.memSize
-          then .ok { s with mem := writeLE 4 v.toNat ea s.mem, stack := rest }
-          else .trap .memOOB
-      | .i64store, some ([.i64 v, .i32 a], rest) =>
-          let ea := a.toNat + offset
-          if ea + 8 ≤ s.memSize
-          then .ok { s with mem := writeLE 8 v.toNat ea s.mem, stack := rest }
-          else .trap .memOOB
-      | .i32store8, some ([.i32 v, .i32 a], rest) =>
-          let ea := a.toNat + offset
-          if ea + 1 ≤ s.memSize
-          then .ok { s with mem := writeLE 1 v.toNat ea s.mem, stack := rest }
-          else .trap .memOOB
-      | .i64store8, some ([.i64 v, .i32 a], rest) =>
-          let ea := a.toNat + offset
-          if ea + 1 ≤ s.memSize
-          then .ok { s with mem := writeLE 1 v.toNat ea s.mem, stack := rest }
-          else .trap .memOOB
-      | _, none => .trap .typeErr
-      | _, some _ => .trap .typeErr
+      | _ => .trap .typeErr
   | s, .op o =>
       match popTys (opPop o) s.stack with
       | some (args, rest) =>
@@ -494,6 +499,68 @@ def localsDefault? : List ValType → Option (List Val)
 def callJoin (caller : State) (rest : List Val) (callee : State) : State :=
   { callee with locals := caller.locals, stack := callee.stack ++ rest }
 
+/-- The shared invoke core (the call/callindirect duplication's ONE
+    body): the args pop against the RESOLVED type `ft`
+    (`params.reverse`, the validator's call rows — the direct call
+    passes the callee's resolved type, the indirect call the DECLARED
+    type it just checked the entry against), bound over the defaults,
+    the callee runs as the fuel-shared sub-exec (the `run`
+    continuation — the caller passes `execList m fuel`), the return —
+    `.ok` or the `.branch none` signal — joins via `callJoin`; a `br`
+    escaping the callee answers `.unmodeled`. The two call arms differ
+    only in CALLEE RESOLUTION (static index vs the table's runtime
+    index + the declared-type check) — this is everything after it. -/
+def invokeFunc (f : Func) (ft : FuncType)
+    (stack : List Val) (caller : State) (is : List Instr)
+    (run : State → List Instr → Outcome) : Outcome :=
+  match popTys ft.params.reverse stack with
+  | some (bound, rest) =>
+      match localsDefault? f.locals with
+      | none => .unmodeled
+      | some defaults =>
+          match run
+              { locals := fun n =>
+                  (bound.reverse ++ defaults).getD n (.i32 0)
+              , stack := []
+              , mem := caller.mem
+              , memSize := caller.memSize } f.body with
+          | .ok s' => run (callJoin caller rest s') is
+          | .branch none s' => run (callJoin caller rest s') is
+          | .branch (some _) _ => .unmodeled
+          | .trap r => .trap r
+          | .structural => .structural
+          | .unmodeled => .unmodeled
+          | .outOfFuel => .outOfFuel
+  | none => .trap .typeErr
+
+/-- THE FRAME-ABSORPTION TAIL (the 8-arm outcome match's ONE body —
+    `block`/`loop`/`if_` instantiate the entry stack `esk`, the two
+    continuations (`kJoin` rides the `.ok` join, `kAbs` the
+    frame-absorption re-entry), and the `run` continuation exactly as
+    `invokeFunc` does): the sub-run's outcome either joins the tail,
+    is ABSORBED into the re-entry state (`.branch (some 0)` —
+    the branch-point LOCALS ride in, the frame-ENTRY stack `esk` is
+    restored, and the MEMORY stays the branch-point's — memory is
+    GLOBAL in wasm semantics: a frame's stores persist across its
+    branches; the boxed-object lanes' stores ride exactly this path),
+    decrements for the parent frame (`.branch (some (n+1))`), PASSES
+    the return signal (`.branch none` — `ret` ignores the frame
+    depth), or propagates trap/structural/unmodeled/outOfFuel
+    untouched. Explicit arms everywhere — no wildcard over
+    `Outcome`. -/
+def resume (s : State) (esk : List Val)
+    (kJoin kAbs : List Instr) (run : State → List Instr → Outcome) :
+    Outcome → Outcome
+  | .ok s' => run s' kJoin
+  | .branch (some 0) s2 =>
+      run { s with locals := s2.locals, stack := esk, mem := s2.mem } kAbs
+  | .branch (some (n + 1)) s2 => .branch (some n) s2
+  | .branch none s2 => .branch none s2
+  | .trap r => .trap r
+  | .structural => .structural
+  | .unmodeled => .unmodeled
+  | .outOfFuel => .outOfFuel
+
 /-- Run a body list of module `m`. Every flat step and every frame
     entry consumes one fuel unit; a loop RESTART consumes one via
     re-entry at the same instruction (the only backward edge — the
@@ -528,76 +595,62 @@ def execList (m : Module) : Nat → State → List Instr → Outcome
   | 0, _, _ => .outOfFuel
   | _ + 1, s, [] => .ok s
   | fuel + 1, s, .block body :: is =>
-      match execList m fuel s body with
-      | .ok s' => execList m fuel s' is
-      | .branch (some 0) s2 =>
-          execList m fuel { s with locals := s2.locals, stack := s.stack } is
-      | .branch (some (n + 1)) s2 => .branch (some n) s2
-      | .branch none s2 => .branch none s2
-      | .trap r => .trap r
-      | .structural => .structural
-      | .unmodeled => .unmodeled
-      | .outOfFuel => .outOfFuel
+      -- the frame-absorption tail is the ONE `resume` helper; the
+      -- block's continuation is `is`
+      resume s s.stack is is (execList m fuel) (execList m fuel s body)
   | fuel + 1, s, .loop body :: is =>
-      match execList m fuel s body with
-      | .ok s' => execList m fuel s' is
-      | .branch (some 0) s2 =>
-          -- the restart: re-run the loop instruction itself from the
-          -- frame-ENTRY stack (the branch-point locals)
-          execList m fuel { s with locals := s2.locals, stack := s.stack }
-            (.loop body :: is)
-      | .branch (some (n + 1)) s2 => .branch (some n) s2
-      | .branch none s2 => .branch none s2
-      | .trap r => .trap r
-      | .structural => .structural
-      | .unmodeled => .unmodeled
-      | .outOfFuel => .outOfFuel
+      -- the restart: `resume`'s continuation re-enters at the loop
+      -- instruction itself from the frame-ENTRY stack
+      resume s s.stack is (.loop body :: is) (execList m fuel)
+        (execList m fuel s body)
   | fuel + 1, s, .if_ t e :: is =>
       match s.stack with
       | .i32 b :: rest =>
           let chosen := if b != 0 then t else e
-          match execList m fuel { s with stack := rest } chosen with
-          | .ok s' => execList m fuel s' is
-          | .branch (some 0) s2 =>
-              execList m fuel { s with locals := s2.locals, stack := rest } is
-          | .branch (some (n + 1)) s2 => .branch (some n) s2
-          | .branch none s2 => .branch none s2
-          | .trap r => .trap r
-          | .structural => .structural
-          | .unmodeled => .unmodeled
-          | .outOfFuel => .outOfFuel
+          resume s rest is is (execList m fuel)
+            (execList m fuel { s with stack := rest } chosen)
       | _ => .trap .typeErr
   | fuel + 1, s, .call fn :: is =>
-      -- the calls layer: the args popped against the callee's resolved
-      -- type (the validator's `call` row), the callee run as a
-      -- fuel-shared sub-exec, the return joined into the caller
+      -- the calls layer: the callee resolved by STATIC index, the
+      -- shared invoke core does everything after it
       match m.funcs[fn]? with
       | none => .unmodeled
       | some f =>
           match m.typeAt f.tyIdx with
           | none => .unmodeled
-          | some ft =>
-              match popTys ft.params.reverse s.stack with
-              | some (bound, rest) =>
-                  match localsDefault? f.locals with
+          | some ft => invokeFunc f ft s.stack s is (execList m fuel)
+  | fuel + 1, s, .callindirect ty :: is =>
+      -- THE INDIRECT-CALL LAYER (the table discipline): the callee's
+      -- index is RUNTIME data — the i32 on top (the first-class
+      -- application's face: the closure object's fnIdx @8) — resolved
+      -- through the module's ONE table (`Module.tableAt`); the type
+      -- check pins the entry's resolved type to the declared one (a
+      -- mismatch TRAPS `indirectSig`, an out-of-bounds index TRAPS
+      -- `tabOOB` — never a wrong call); the args pop against the
+      -- DECLARED type (the validator's `callindirect` row), the callee
+      -- runs as the direct call's fuel-shared sub-exec.
+      match m.typeAt ty with
+      | none => .unmodeled
+      | some ft =>
+          match s.stack with
+          | .i32 ix :: rest =>
+              match m.tableAt ix.toNat with
+              | none => .trap .tabOOB
+              | some fn =>
+                  match m.funcs[fn]? with
                   | none => .unmodeled
-                  | some defaults =>
-                      match execList m fuel
-                          { locals := fun n =>
-                              (bound.reverse ++ defaults).getD n (.i32 0)
-                          , stack := []
-                          , mem := s.mem
-                          , memSize := s.memSize } f.body with
-                      | .ok s' =>
-                          execList m fuel (callJoin s rest s') is
-                      | .branch none s' =>
-                          execList m fuel (callJoin s rest s') is
-                      | .branch (some _) _ => .unmodeled
-                      | .trap r => .trap r
-                      | .structural => .structural
-                      | .unmodeled => .unmodeled
-                      | .outOfFuel => .outOfFuel
-              | none => .trap .typeErr
+                  | some f =>
+                      match m.typeAt f.tyIdx with
+                      | none => .unmodeled
+                      | some ft' =>
+                          -- the DECLARED-type check first (a mismatch
+                          -- traps `indirectSig`, never a wrong call);
+                          -- with `ft' = ft` the resolved-type pop IS the
+                          -- declared-type pop — the shared core
+                          if ft' = ft then
+                            invokeFunc f ft rest s is (execList m fuel)
+                          else .trap .indirectSig
+          | _ => .trap .typeErr
   | fuel + 1, s, i :: is =>
       match step s i with
       | .ok s' => execList m fuel s' is
@@ -724,11 +777,11 @@ theorem step_store_inBounds (s s' : State) (v a : UInt32) (rest : List Val) (off
       obtain ⟨hloc, hstk, hmem, hmsz⟩ := h
       refine ⟨hb, ?_, ?_, hstk.symm, hloc.symm⟩
       · rw [← hmem]
-        simp only [writeLE]
+        simp only [memBytes, memRow, writeLE, valToNat]
         simp [u32_toUInt8]
       · intro i hi
         rw [← hmem]
-        simp only [writeLE]
+        simp only [memBytes, memRow, writeLE, valToNat]
         by_cases hea : i = a.toNat + offset
         · exact absurd hea hi
         · rw [if_neg hea]
@@ -743,35 +796,54 @@ theorem step_store_oob_traps (s : State) (v a : UInt32) (rest : List Val) (offse
     (hstack : s.stack = .i32 v :: .i32 a :: rest)
     (hoob : ¬ (a.toNat + offset + 1 ≤ s.memSize)) :
     step s (.mem .i32store8 offset none) = .trap .memOOB := by
-  simp [step, hstack, memPop, memSig, memRow, popTys, if_neg hoob]
+  have hp : popTys (memPop MemOp.i32store8) s.stack
+      = some ([Val.i32 v, Val.i32 a], rest) := by
+    simp [hstack, memPop, memSig, memRow, popTys]
+  simp only [step, hp, memBytes, memRow]
+  exact if_neg hoob
 
 /-! ## The type-safety discipline (the flat slice) -/
 
-/-- The op arithmetic's typing law: when the popped arguments have
-    EXACTLY the row's pop types, the computed value has EXACTLY the
-    row's push type. (The ONE op table is the law's content: pop and
-    push are the row's projections; the per-op arms of `semOp` are the
-    machine face. This is the per-op-step preservation slice.) -/
-theorem semOp_typed (o : Op) (args : List Val) (v : Val)
-    (hty : stackTys args = opPop o)
-    (h : semOp o args = some v) :
-    opPush o = [tyOf v] := by
+/-- THE OP-ARITHMETIC SPEC (the closed-universe law, proved in ONE
+    args-case scaffold): args with EXACTLY the row's pop types always
+    compute, and the computed value has EXACTLY the row's push type.
+    (The ONE op table is the law's content: pop and push are the row's
+    projections; the per-op arms of `semOp` are the machine face.)
+    `semOp_typed`/`semOp_exists` are its two projections — the scaffold
+    is proved once, not twice. -/
+theorem semOp_spec (o : Op) (args : List Val) (hty : stackTys args = opPop o) :
+    ∃ v, semOp o args = some v ∧ opPush o = [tyOf v] := by
   cases args with
-  | nil => cases o <;> simp [stackTys, opPop, opSig, opRow] at hty h
+  | nil => cases o <;> simp [stackTys, opPop, opSig, opRow] at hty
   | cons v1 vs =>
     cases vs with
     | nil =>
       cases v1 <;> cases o <;>
-        (simp [semOp, stackTys, opPop, opPush, opSig, opRow] at hty h ⊢
-         try (subst h; simp))
+        (simp [semOp, stackTys, opPop, opPush, opSig, opRow] at hty ⊢
+         try exact absurd hty (by simp)) <;>
+        exact ⟨_, rfl, rfl⟩
     | cons v2 vs2 =>
       cases vs2 with
       | nil =>
         cases v1 <;> cases v2 <;> cases o <;>
-          (simp [semOp, stackTys, opPop, opPush, opSig, opRow] at hty h ⊢
-           try (subst h; simp))
+          (simp [semOp, stackTys, opPop, opPush, opSig, opRow] at hty ⊢
+           try exact absurd hty (by simp)) <;>
+          exact ⟨_, rfl, rfl⟩
       | cons v3 vs3 =>
         cases o <;> simp [stackTys, opPop, opSig, opRow] at hty
+
+/-- The op arithmetic's typing law (the spec's typing projection):
+    when the popped arguments have EXACTLY the row's pop types, the
+    computed value has EXACTLY the row's push type. This is the
+    per-op-step preservation slice. -/
+theorem semOp_typed (o : Op) (args : List Val) (v : Val)
+    (hty : stackTys args = opPop o)
+    (h : semOp o args = some v) :
+    opPush o = [tyOf v] := by
+  obtain ⟨v0, h0, hp⟩ := semOp_spec o args hty
+  rw [h, Option.some.injEq] at h0
+  subst h0
+  exact hp
 
 /-- The op STEP's preservation (the pipeline lemma): an op step that
     computes at all, computes on the row's pop shape to the row's push
@@ -793,154 +865,154 @@ theorem step_op_preserves (o : Op) (ts : List ValType) (s s' : State)
       simp [stackTys, ht, hrest]
   · next => simp at hstep
 
-/-- The mem STEP's preservation (the pipeline lemma): a mem step that
-    computes at all, computes on the row's pop shape to the row's push
-    shape (the bounds check only chooses trap vs compute — the
-    bounded-memory honesty does not disturb the types), locals
-    untouched. -/
-theorem step_mem_preserves (m : MemOp) (off : Nat) (ts : List ValType) (s s' : State)
-    (hstep : step s (.mem m off none) = .ok s')
-    (hstack : stackTys s.stack = memPop m ++ ts) :
-    stackTys s'.stack = memPush m ++ ts ∧ (∀ n, s'.locals n = s.locals n) := by
+/-- A one-value static view forces a singleton `i32` stack (the mem
+    loads' arg inversion — the family's scaffold is the row's pop
+    shape, decided once per shape). -/
+theorem args_i32_inv (args : List Val) (h : stackTys args = [.i32]) :
+    ∃ a, args = [.i32 a] := by
+  cases args with
+  | nil => simp [stackTys] at h
+  | cons v vs =>
+      cases v <;> cases vs <;> simp [stackTys] at h
+      exact ⟨_, rfl⟩
+
+/-- A two-value static view forces an `[.i32, .i32]` stack (the
+    i32-stores' arg inversion). -/
+theorem args_i32i32_inv (args : List Val) (h : stackTys args = [.i32, .i32]) :
+    ∃ v a, args = [.i32 v, .i32 a] := by
+  cases args with
+  | nil => simp [stackTys] at h
+  | cons v vs =>
+      cases vs with
+      | nil => cases v <;> simp [stackTys] at h
+      | cons w ws =>
+          cases ws with
+          | nil =>
+              cases v <;> cases w <;> simp [stackTys] at h
+              exact ⟨_, _, rfl⟩
+          | cons _ _ => simp [stackTys] at h
+
+/-- A two-value static view forces an `[.i64, .i32]` stack (the
+    i64-stores' arg inversion). -/
+theorem args_i64i32_inv (args : List Val) (h : stackTys args = [.i64, .i32]) :
+    ∃ v a, args = [.i64 v, .i32 a] := by
+  cases args with
+  | nil => simp [stackTys] at h
+  | cons v vs =>
+      cases vs with
+      | nil => cases v <;> simp [stackTys] at h
+      | cons w ws =>
+          cases ws with
+          | nil =>
+              cases v <;> cases w <;> simp [stackTys] at h
+              exact ⟨_, _, rfl⟩
+          | cons _ _ => simp [stackTys] at h
+
+/-- The generic LOAD arm (the row-driven step's shared face, proved
+    ONCE): whatever the row, once the pop succeeded with ONE `i32`
+    address, the step is the row's width bounds check + the row's
+    push-typed LE read — the three load ctors instantiate it with
+    their row's `memPush`. -/
+theorem step_mem_load_out (op : MemOp) (off : Nat) (al : Option Nat) (ts : List ValType)
+    (s : State) (a : UInt32) (rest : List Val)
+    (hpop : popTys (memPop op) s.stack = some ([.i32 a], rest))
+    (hpush : ∃ t, memPush op = [t] ∧ (t = ValType.i32 ∨ t = ValType.i64))
+    (hrest : stackTys rest = ts) :
+    (step s (.mem op off al) = .trap .memOOB ∨ ∃ s', step s (.mem op off al) = .ok s')
+    ∧ (∀ s', step s (.mem op off al) = .ok s' →
+        stackTys s'.stack = memPush op ++ ts ∧ (∀ n, s'.locals n = s.locals n)) := by
+  simp only [step, hpop]
+  by_cases h : a.toNat + off + memBytes op ≤ s.memSize
+  · refine ⟨Or.inr ⟨_, if_pos h⟩, ?_⟩
+    intro s' hx
+    rw [if_pos h] at hx
+    rw [Outcome.ok.injEq, State.mk.injEq] at hx
+    obtain ⟨hloc, hstk, hmem, hmsz⟩ := hx
+    obtain ⟨t, hpush', ht⟩ := hpush
+    refine ⟨?_, fun n => by rw [hloc]⟩
+    rw [← hstk, hpush']
+    cases ht with
+    | inl he => subst he; simp [stackTys, loadVal, hrest]
+    | inr he => subst he; simp [stackTys, loadVal, hrest]
+  · refine ⟨Or.inl (if_neg h), ?_⟩
+    intro s' hx
+    rw [if_neg h] at hx
+    simp at hx
+
+/-- The generic STORE arm (same discipline, the four store ctors'
+    shared face): the pop succeeded with a value over an `i32`
+    address, the row's width bounds the check and picks the bytes
+    that land. -/
+theorem step_mem_store_out (op : MemOp) (off : Nat) (al : Option Nat) (ts : List ValType)
+    (s : State) (v : Val) (a : UInt32) (rest : List Val)
+    (hpop : popTys (memPop op) s.stack = some ([v, .i32 a], rest))
+    (hpush : memPush op = [])
+    (hrest : stackTys rest = ts) :
+    (step s (.mem op off al) = .trap .memOOB ∨ ∃ s', step s (.mem op off al) = .ok s')
+    ∧ (∀ s', step s (.mem op off al) = .ok s' →
+        stackTys s'.stack = memPush op ++ ts ∧ (∀ n, s'.locals n = s.locals n)) := by
+  simp only [step, hpop]
+  by_cases h : a.toNat + off + memBytes op ≤ s.memSize
+  · refine ⟨Or.inr ⟨_, if_pos h⟩, ?_⟩
+    intro s' hx
+    rw [if_pos h] at hx
+    rw [Outcome.ok.injEq, State.mk.injEq] at hx
+    obtain ⟨hloc, hstk, hmem, hmsz⟩ := hx
+    refine ⟨?_, fun n => by rw [hloc]⟩
+    rw [← hstk, hpush, List.nil_append, hrest]
+  · refine ⟨Or.inl (if_neg h), ?_⟩
+    intro s' hx
+    rw [if_neg h] at hx
+    simp at hx
+
+/-- THE ONE MEM-OP SPEC (the mem family's TWO-SHAPE case analysis —
+    the row-driven step's load/store pop shapes, each proved once in
+    `step_mem_load_out`/`step_mem_store_out`): on a typed stack the
+    mem step answers trap-or-compute (the bounded-memory honesty), and
+    any computing answer pushes EXACTLY the row's push types with the
+    locals untouched. `step_mem_preserves`/`step_mem_outcome` are its
+    two projections — the family's case scaffold is proved ONCE, not
+    four times. -/
+theorem step_mem_spec (m : MemOp) (off : Nat) (al : Option Nat) (ts : List ValType)
+    (s : State) (hstack : stackTys s.stack = memPop m ++ ts) :
+    (step s (.mem m off al) = .trap .memOOB ∨ ∃ s', step s (.mem m off al) = .ok s')
+    ∧ (∀ s', step s (.mem m off al) = .ok s' →
+        stackTys s'.stack = memPush m ++ ts ∧ (∀ n, s'.locals n = s.locals n)) := by
   obtain ⟨args, rest, hpop, hargs, hrest⟩ :=
     popTys_of_stackTys (memPop m) s.stack ts hstack
   cases m
   case i32load8u =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil =>
-        cases v1 with
-        | i32 a =>
-            simp only [step, hpop] at hstep
-            split at hstep
-            · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-              obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-              exact ⟨by rw [← hstk]; simp [stackTys, hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-            · simp at hstep
-        | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨a, rfl⟩ := args_i32_inv args hargs
+    exact step_mem_load_out .i32load8u off al ts s a rest hpop ⟨_, rfl, Or.inl rfl⟩ hrest
   case i32load =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil =>
-        cases v1 with
-        | i32 a =>
-            simp only [step, hpop] at hstep
-            split at hstep
-            · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-              obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-              exact ⟨by rw [← hstk]; simp [stackTys, hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-            · simp at hstep
-        | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨a, rfl⟩ := args_i32_inv args hargs
+    exact step_mem_load_out .i32load off al ts s a rest hpop ⟨_, rfl, Or.inl rfl⟩ hrest
   case i64load =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil =>
-        cases v1 with
-        | i32 a =>
-            simp only [step, hpop] at hstep
-            split at hstep
-            · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-              obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-              exact ⟨by rw [← hstk]; simp [stackTys, hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-            · simp at hstep
-        | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨a, rfl⟩ := args_i32_inv args hargs
+    exact step_mem_load_out .i64load off al ts s a rest hpop ⟨_, rfl, Or.inr rfl⟩ hrest
   case i32store =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i32 v =>
-            cases v2 with
-            | i32 a =>
-                simp only [step, hpop] at hstep
-                split at hstep
-                · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-                  obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-                  exact ⟨by rw [← hstk]; simp [hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-                · simp at hstep
-            | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨v, a, rfl⟩ := args_i32i32_inv args hargs
+    exact step_mem_store_out .i32store off al ts s (.i32 v) a rest hpop rfl hrest
   case i64store =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i64 v =>
-            cases v2 with
-            | i32 a =>
-                simp only [step, hpop] at hstep
-                split at hstep
-                · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-                  obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-                  exact ⟨by rw [← hstk]; simp [hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-                · simp at hstep
-            | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i32 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨v, a, rfl⟩ := args_i64i32_inv args hargs
+    exact step_mem_store_out .i64store off al ts s (.i64 v) a rest hpop rfl hrest
   case i32store8 =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i32 v =>
-            cases v2 with
-            | i32 a =>
-                simp only [step, hpop] at hstep
-                split at hstep
-                · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-                  obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-                  exact ⟨by rw [← hstk]; simp [hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-                · simp at hstep
-            | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨v, a, rfl⟩ := args_i32i32_inv args hargs
+    exact step_mem_store_out .i32store8 off al ts s (.i32 v) a rest hpop rfl hrest
   case i64store8 =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i64 v =>
-            cases v2 with
-            | i32 a =>
-                simp only [step, hpop] at hstep
-                split at hstep
-                · rw [Outcome.ok.injEq, State.mk.injEq] at hstep
-                  obtain ⟨hloc, hstk, hmem, hmsz⟩ := hstep
-                  exact ⟨by rw [← hstk]; simp [hrest, memPush, memSig, memRow], fun n => by rw [hloc]⟩
-                · simp at hstep
-            | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i32 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
+    obtain ⟨v, a, rfl⟩ := args_i64i32_inv args hargs
+    exact step_mem_store_out .i64store8 off al ts s (.i64 v) a rest hpop rfl hrest
+
+/-- The mem STEP's preservation (the pipeline lemma): a mem step that
+    computes at all, computes on the row's pop shape to the row's push
+    shape (the bounds check only chooses trap vs compute — the
+    bounded-memory honesty does not disturb the types), locals
+    untouched. `step_mem_spec`'s preservation projection. -/
+theorem step_mem_preserves (m : MemOp) (off : Nat) (ts : List ValType) (s s' : State)
+    (hstep : step s (.mem m off none) = .ok s')
+    (hstack : stackTys s.stack = memPop m ++ ts) :
+    stackTys s'.stack = memPush m ++ ts ∧ (∀ n, s'.locals n = s.locals n) :=
+  (step_mem_spec m off none ts s hstack).2 s' hstep
 
 /-- The structure-update reductions (the preservation proofs' bridge:
     `with`-updates are `State.mk` applications — definitional). -/
@@ -987,11 +1059,11 @@ theorem stepFlag_drop_shape (c : Ctx) (b mid : List ValType)
     lemma is `exec_typed`'s per-step engine (the body-level frame
     induction + the module-level `runFunc_safe` are landed below it). -/
 theorem step_preserves (s s' : State) (i : Instr) (b mid : List ValType)
-    (lty : Nat → Option ValType)
+    (lty : Nat → Option ValType) (tny : Nat → Option FuncType)
     (hstep : step s i = .ok s')
     (hstack : stackTys s.stack = b)
     (hloc : ∀ n t, lty n = some t → tyOf (s.locals n) = t)
-    (hchk : stepFlag (Ctx.mk lty (fun _ => none) []) i b = .ok (false, mid)) :
+    (hchk : stepFlag (Ctx.mk lty (fun _ => none) tny []) i b = .ok (false, mid)) :
     stackTys s'.stack = mid ∧ (∀ n t, lty n = some t → tyOf (s'.locals n) = t) := by
   cases i with
   | i32const n =>
@@ -1058,6 +1130,7 @@ theorem step_preserves (s s' : State) (i : Instr) (b mid : List ValType)
       · rw [if_neg hn]
         exact hloc n' u hu
   | call _ => simp [step] at hstep
+  | callindirect _ => simp [step] at hstep
   | mem m off al =>
       obtain ⟨ts', hs, hmid⟩ :=
         stepFlag_popPush_shape _ _ (memPop m) (memPush m) b mid (by simp only [stepFlag]) hchk
@@ -1210,149 +1283,29 @@ theorem semOp_exists (o : Op) (args : List Val) (hty : stackTys args = opPop o) 
 
 /-- The mem STEP is total-and-honest on a typed stack: it answers
     `.ok` or the out-of-bounds trap — NEVER the type error (the
-    bounds check is the only rejection, the bounded-memory honesty). -/
+    bounds check is the only rejection, the bounded-memory honesty).
+    `step_mem_spec`'s outcome projection. -/
 theorem step_mem_outcome (m : MemOp) (off : Nat) (al : Option Nat) (ts : List ValType)
     (s : State) (hstack : stackTys s.stack = memPop m ++ ts) :
-    step s (.mem m off al) = .trap .memOOB ∨ ∃ s', step s (.mem m off al) = .ok s' := by
-  obtain ⟨args, rest, hpop, hargs, hrest⟩ :=
-    popTys_of_stackTys (memPop m) s.stack ts hstack
-  cases m
-  case i32load8u =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil =>
-        cases v1 with
-        | i32 a =>
-            simp only [step, hpop]
-            by_cases h : a.toNat + off + 1 ≤ s.memSize
-            · exact Or.inr ⟨_, if_pos h⟩
-            · exact Or.inl (if_neg h)
-        | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 => simp [memPop, memSig, memRow, stackTys] at hargs
-  case i32load =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil =>
-        cases v1 with
-        | i32 a =>
-            simp only [step, hpop]
-            by_cases h : a.toNat + off + 4 ≤ s.memSize
-            · exact Or.inr ⟨_, if_pos h⟩
-            · exact Or.inl (if_neg h)
-        | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 => simp [memPop, memSig, memRow, stackTys] at hargs
-  case i64load =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil =>
-        cases v1 with
-        | i32 a =>
-            simp only [step, hpop]
-            by_cases h : a.toNat + off + 8 ≤ s.memSize
-            · exact Or.inr ⟨_, if_pos h⟩
-            · exact Or.inl (if_neg h)
-        | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 => simp [memPop, memSig, memRow, stackTys] at hargs
-  case i32store =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i32 v =>
-              cases v2 with
-              | i32 a =>
-                  simp only [step, hpop]
-                  by_cases h : a.toNat + off + 4 ≤ s.memSize
-                  · exact Or.inr ⟨_, if_pos h⟩
-                  · exact Or.inl (if_neg h)
-              | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
-  case i64store =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i64 v =>
-              cases v2 with
-              | i32 a =>
-                  simp only [step, hpop]
-                  by_cases h : a.toNat + off + 8 ≤ s.memSize
-                  · exact Or.inr ⟨_, if_pos h⟩
-                  · exact Or.inl (if_neg h)
-              | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i32 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
-  case i32store8 =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i32 v =>
-              cases v2 with
-              | i32 a =>
-                  simp only [step, hpop]
-                  by_cases h : a.toNat + off + 1 ≤ s.memSize
-                  · exact Or.inr ⟨_, if_pos h⟩
-                  · exact Or.inl (if_neg h)
-              | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
-  case i64store8 =>
-    cases args with
-    | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-    | cons v1 vs =>
-      cases vs with
-      | nil => simp [memPop, memSig, memRow, stackTys] at hargs
-      | cons v2 vs2 =>
-        cases vs2 with
-        | nil =>
-          cases v1 with
-          | i64 v =>
-              cases v2 with
-              | i32 a =>
-                  simp only [step, hpop]
-                  by_cases h : a.toNat + off + 1 ≤ s.memSize
-                  · exact Or.inr ⟨_, if_pos h⟩
-                  · exact Or.inl (if_neg h)
-              | i64 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-          | i32 _ => simp [memPop, memSig, memRow, stackTys] at hargs
-        | cons v3 vs3 => simp [memPop, memSig, memRow, stackTys] at hargs
+    step s (.mem m off al) = .trap .memOOB ∨ ∃ s', step s (.mem m off al) = .ok s' :=
+  (step_mem_spec m off al ts s hstack).1
 
 /-- The checker's stepFlag reads ONLY `lty` for the flag-false
     non-call steps (the frame induction's bridge: the core theorem
     rides the plain-lty context `step_preserves` is stated against,
-    while the module driver's context carries the real `fenv`). -/
+    while the module driver's context carries the real `fenv`). The
+    `callindirect` step reads only `tenv` — carried unchanged, so its
+    transport is free. -/
 theorem stepFlag_congr (lty : Nat → Option ValType)
-    (fenv fenv' : Nat → Option FuncType) (r r' : List ValType)
+    (fenv fenv' tenv : Nat → Option FuncType) (r r' : List ValType)
     (i : Instr) (s mid : List ValType)
-    (h : stepFlag (Ctx.mk lty fenv r) i s = .ok (false, mid))
+    (h : stepFlag (Ctx.mk lty fenv tenv r) i s = .ok (false, mid))
     (hnc : ∀ fn, i ≠ Instr.call fn)
     (hff : FrameForm i = False) :
-    stepFlag (Ctx.mk lty fenv' r') i s = .ok (false, mid) := by
+    stepFlag (Ctx.mk lty fenv' tenv r') i s = .ok (false, mid) := by
   cases i with
   | call fn => exact absurd rfl (hnc fn)
+  | callindirect ty => simp only [stepFlag.eq_def] at h ⊢; exact h
   | ret => simp only [stepFlag.eq_def] at h; split at h <;> simp at h
   | br d => simp only [stepFlag.eq_def] at h; simp at h
   | unreach => simp only [stepFlag.eq_def] at h; simp at h
@@ -1386,7 +1339,8 @@ theorem execList_nil (m : Module) (fuel : Nat) (s : State) :
     execList m (fuel + 1) s [] = .ok s := rfl
 
 theorem execList_flat (m : Module) (fuel : Nat) (s : State) (i : Instr) (is : List Instr)
-    (hff : FrameForm i = False) (hnc : ∀ fn, i ≠ Instr.call fn) :
+    (hff : FrameForm i = False) (hnc : ∀ fn, i ≠ Instr.call fn)
+    (hci : ∀ ty, i ≠ Instr.callindirect ty) :
     execList m (fuel + 1) s (i :: is)
       = match step s i with
         | .ok s' => execList m fuel s' is
@@ -1402,6 +1356,7 @@ theorem execList_flat (m : Module) (fuel : Nat) (s : State) (i : Instr) (is : Li
   | localset n => simp [execList]
   | localtee n => simp [execList]
   | call fn => exact absurd rfl (hnc fn)
+  | callindirect ty => exact absurd rfl (hci ty)
   | mem mop offset al => simp [execList]
   | op o => simp [execList]
   | br d => simp [execList]
@@ -1446,47 +1401,66 @@ theorem execList_call (m : Module) (fuel : Nat) (s : State) (fn : Nat) (is : Lis
                         | .outOfFuel => .outOfFuel
                 | none => .trap .typeErr := rfl
 
+/-- The INDIRECT-call arm's equation (the table layer's reduction
+    face: the runtime index → the table entry → the type check → the
+    fuel-shared sub-exec + the join; the trap teeth named). -/
+theorem execList_callindirect (m : Module) (fuel : Nat) (s : State) (ty : Nat)
+    (is : List Instr) :
+    execList m (fuel + 1) s (Instr.callindirect ty :: is)
+      = match m.typeAt ty with
+        | none => .unmodeled
+        | some ft =>
+            match s.stack with
+            | .i32 ix :: rest =>
+                match m.tableAt ix.toNat with
+                | none => .trap .tabOOB
+                | some fn =>
+                    match m.funcs[fn]? with
+                    | none => .unmodeled
+                    | some f =>
+                        match m.typeAt f.tyIdx with
+                        | none => .unmodeled
+                        | some ft' =>
+                            if ft' = ft then
+                              match popTys ft.params.reverse rest with
+                              | some (bound, rest2) =>
+                                  match localsDefault? f.locals with
+                                  | none => .unmodeled
+                                  | some defaults =>
+                                      match execList m fuel
+                                          { locals := fun n =>
+                                              (bound.reverse ++ defaults).getD n (.i32 0)
+                                          , stack := []
+                                          , mem := s.mem
+                                          , memSize := s.memSize } f.body with
+                                      | .ok s' =>
+                                          execList m fuel (callJoin s rest2 s') is
+                                      | .branch none s' =>
+                                          execList m fuel (callJoin s rest2 s') is
+                                      | .branch (some _) _ => .unmodeled
+                                      | .trap r => .trap r
+                                      | .structural => .structural
+                                      | .unmodeled => .unmodeled
+                                      | .outOfFuel => .outOfFuel
+                              | none => .trap .typeErr
+                            else .trap .indirectSig
+            | _ => .trap .typeErr := rfl
+
 theorem execList_block (m : Module) (fuel : Nat) (s : State) (b is : List Instr) :
     execList m (fuel + 1) s (Instr.block b :: is)
-      = match execList m fuel s b with
-        | .ok s' => execList m fuel s' is
-        | .branch (some 0) s2 =>
-            execList m fuel { s with locals := s2.locals, stack := s.stack } is
-        | .branch (some (n + 1)) s2 => .branch (some n) s2
-        | .branch none s2 => .branch none s2
-        | .trap r => .trap r
-        | .structural => .structural
-        | .unmodeled => .unmodeled
-        | .outOfFuel => .outOfFuel := rfl
+      = resume s s.stack is is (execList m fuel) (execList m fuel s b) := rfl
 
 theorem execList_loop (m : Module) (fuel : Nat) (s : State) (b is : List Instr) :
     execList m (fuel + 1) s (Instr.loop b :: is)
-      = match execList m fuel s b with
-        | .ok s' => execList m fuel s' is
-        | .branch (some 0) s2 =>
-            execList m fuel { s with locals := s2.locals, stack := s.stack }
-              (Instr.loop b :: is)
-        | .branch (some (n + 1)) s2 => .branch (some n) s2
-        | .branch none s2 => .branch none s2
-        | .trap r => .trap r
-        | .structural => .structural
-        | .unmodeled => .unmodeled
-        | .outOfFuel => .outOfFuel := rfl
+      = resume s s.stack is (Instr.loop b :: is) (execList m fuel)
+          (execList m fuel s b) := rfl
 
 theorem execList_if_ (m : Module) (fuel : Nat) (s : State) (t e is : List Instr) :
     execList m (fuel + 1) s (Instr.if_ t e :: is)
       = match s.stack with
         | .i32 b :: rest =>
-            match execList m fuel { s with stack := rest } (if b != 0 then t else e) with
-            | .ok s' => execList m fuel s' is
-            | .branch (some 0) s2 =>
-                execList m fuel { s with locals := s2.locals, stack := rest } is
-            | .branch (some (n + 1)) s2 => .branch (some n) s2
-            | .branch none s2 => .branch none s2
-            | .trap r => .trap r
-            | .structural => .structural
-            | .unmodeled => .unmodeled
-            | .outOfFuel => .outOfFuel
+            resume s rest is is (execList m fuel)
+              (execList m fuel { s with stack := rest } (if b != 0 then t else e))
         | _ => .trap .typeErr := rfl
 
 /-! ### The StepTy inversions (the shape facts the flat cases ride) -/
@@ -1553,6 +1527,14 @@ theorem fenv_some (m : Module) (fn : Nat) (ft : FuncType)
 theorem stepTy_call_inv (c : Ctx) (base mid : List ValType) (fn : Nat)
     (h : StepTy c base (Instr.call fn) mid) :
     ∃ ft ts, c.fenv fn = some ft ∧ base = ft.params.reverse ++ ts
+      ∧ mid = ft.results.reverse ++ ts := by
+  cases h
+  exact ⟨_, _, by assumption, rfl, rfl⟩
+
+theorem stepTy_callindirect_inv (c : Ctx) (base mid : List ValType) (ty : Nat)
+    (h : StepTy c base (Instr.callindirect ty) mid) :
+    ∃ ft ts, c.tenv ty = some ft
+      ∧ base = .i32 :: (ft.params.reverse ++ ts)
       ∧ mid = ft.results.reverse ++ ts := by
   cases h
   exact ⟨_, _, by assumption, rfl, rfl⟩
@@ -1654,6 +1636,164 @@ theorem localsMap_typed (params lcls : List ValType) (bound defaults : List Val)
         (by rw [← hdf]; rw [stackTys_length]; exact hlt)]
     exact hget
 
+/-! ### The exec_typed machinery (the quadruple + the dispatches, named once) -/
+
+/-- THE QUADRUPLE (exec_typed's four-part conclusion, named once): the
+    no-type-trap guarantee, the completion face, the branch-locals
+    face, and the return face. A def, not a structure — the theorem's
+    statement keeps its shape; the proof cites the name. -/
+def ExecQuad (c : Ctx) (final : List ValType) (X : Outcome) : Prop :=
+  X ≠ Outcome.trap Trap.typeErr
+    ∧ (∀ s', X = Outcome.ok s' →
+          stackTys s'.stack = final
+          ∧ (∀ n t, c.lty n = some t → tyOf (s'.locals n) = t))
+    ∧ (∀ d s2, X = Outcome.branch (some d) s2 →
+          (∀ n t, c.lty n = some t → tyOf (s2.locals n) = t))
+    ∧ (∀ s2, X = Outcome.branch none s2 →
+          stackTys s2.stack = c.resRev
+          ∧ (∀ n t, c.lty n = some t → tyOf (s2.locals n) = t))
+
+/-- The dead-arm discharge (the quadruple's non-computing face:
+    structural/unmodeled/outOfFuel, killed once). -/
+theorem execQuad_dead (c : Ctx) (final : List ValType) (X : Outcome)
+    (hneT : X ≠ Outcome.trap Trap.typeErr)
+    (hok : ∀ s', X ≠ Outcome.ok s')
+    (hbr : ∀ d s2, X ≠ Outcome.branch (some d) s2)
+    (hret : ∀ s2, X ≠ Outcome.branch none s2) :
+    ExecQuad c final X :=
+  ⟨hneT, fun s' hX => absurd hX (hok s'), fun d s2 hX => absurd hX (hbr d s2),
+    fun s2 hX => absurd hX (hret s2)⟩
+
+/-- The always-dead arms (the three dead outcomes, each killed once
+    here — the per-case blocks repeat them no more). -/
+theorem execQuad_structural (c : Ctx) (final : List ValType) :
+    ExecQuad c final Outcome.structural :=
+  execQuad_dead c final _ (by simp) (by simp) (by simp) (by simp)
+
+theorem execQuad_unmodeled (c : Ctx) (final : List ValType) :
+    ExecQuad c final Outcome.unmodeled :=
+  execQuad_dead c final _ (by simp) (by simp) (by simp) (by simp)
+
+theorem execQuad_outOfFuel (c : Ctx) (final : List ValType) :
+    ExecQuad c final Outcome.outOfFuel :=
+  execQuad_dead c final _ (by simp) (by simp) (by simp) (by simp)
+
+/-- The branch-decrement face: a `.branch (some d)` outcome answers
+    the quadruple from the branch-point locals' typing alone. -/
+theorem execQuad_branchSome (c : Ctx) (final : List ValType) (d : Nat) (s2 : State)
+    (hl : ∀ n t, c.lty n = some t → tyOf (s2.locals n) = t) :
+    ExecQuad c final (Outcome.branch (some d) s2) := by
+  refine ⟨by simp, fun s' h => by simp at h, ?_, fun s3 h => by simp at h⟩
+  intro d' s3 h
+  rw [Outcome.branch.injEq] at h
+  obtain ⟨-, hs3⟩ := h
+  rw [← hs3]
+  exact hl
+
+/-- The return-pass face: a `.branch none` outcome answers the
+    quadruple from the returned stack's typing alone. -/
+theorem execQuad_branchNone (c : Ctx) (final : List ValType) (s2 : State)
+    (hstk : stackTys s2.stack = c.resRev)
+    (hl : ∀ n t, c.lty n = some t → tyOf (s2.locals n) = t) :
+    ExecQuad c final (Outcome.branch none s2) := by
+  refine ⟨by simp, fun s' h => by simp at h, fun d s3 h => by simp at h, ?_⟩
+  intro s3 h
+  rw [Outcome.branch.injEq] at h
+  obtain ⟨-, hs3⟩ := h
+  rw [← hs3]
+  exact ⟨hstk, hl⟩
+
+/-- The trap face: a non-type trap answers the quadruple. -/
+theorem execQuad_trap (c : Ctx) (final : List ValType) (r : Trap)
+    (hne : r ≠ Trap.typeErr) :
+    ExecQuad c final (Outcome.trap r) :=
+  ⟨fun h => hne (by rw [Outcome.trap.injEq] at h; exact h),
+    fun s' h => by simp at h, fun d s3 h => by simp at h, fun s3 h => by simp at h⟩
+
+/-- The flat cases' checker bridge (the congr + complete composition —
+    the per-instr blocks repeat it modulo ctor, so it is named once).
+    The tenv is CARRIED (only `callindirect` reads it; the flat steps
+    are tenv-blind — but the ctx shape must line up with
+    `step_preserves`' statement). -/
+theorem flat_chk (c : Ctx) (base mid : List ValType) (i : Instr)
+    (hst : StepTy c base i mid) (hff : FrameForm i = False)
+    (hnc : ∀ fn, i ≠ Instr.call fn) :
+    stepFlag (Ctx.mk c.lty (fun _ => none) c.tenv []) i base = .ok (false, mid) :=
+  stepFlag_congr c.lty c.fenv (fun _ => none) c.tenv c.resRev [] i base mid
+    (stepFlag_complete c base mid i hst) hnc hff
+
+/-- The flat push bridge (the consts' + localget's shared face): a
+    flat step that computes to a push rides `step_preserves` into the
+    tail's quadruple. -/
+theorem flat_push (c : Ctx) (m : Module) (fuel : Nat) (s s' : State) (i : Instr)
+    (b mid final : List ValType) (is : List Instr)
+    (hst : StepTy c b i mid) (hff : FrameForm i = False)
+    (hnc : ∀ fn, i ≠ Instr.call fn)
+    (hci : ∀ ty, i ≠ Instr.callindirect ty)
+    (hx : step s i = .ok s')
+    (hstack : stackTys s.stack = b)
+    (hloc : ∀ n t, c.lty n = some t → tyOf (s.locals n) = t)
+    (htail : BodyTy c mid is final)
+    (hok : ∀ (is : List Instr) (s2 : State) (mid final : List ValType),
+        BodyTy c mid is final → stackTys s2.stack = mid →
+        (∀ n t, c.lty n = some t → tyOf (s2.locals n) = t) →
+        ExecQuad c final (execList m fuel s2 is)) :
+    ExecQuad c final (execList m (fuel + 1) s (i :: is)) := by
+  rw [execList_flat m fuel s i is hff hnc hci]
+  obtain ⟨hstk2, hloc2⟩ := step_preserves s s' i b mid c.lty c.tenv hx hstack hloc
+    (flat_chk c b mid i hst hff hnc)
+  simp only [hx]
+  exact hok is s' mid final htail hstk2 hloc2
+
+/-- THE FRAME DISPATCH (the absorb/decrement/pass machine, named
+    once): a frame's sub-run outcome either joins the tail (`.ok`),
+    passes as the return signal (`.branch none`), is absorbed into the
+    re-entry state (`.branch (some 0)` — the entry stack `esk`, the
+    branch-point locals, the continuation `abs`), decrements
+    (`.branch (some (k+1))`), propagates the trap, or is dead.
+    `block`/`loop`/`if_` instantiate the equation, the entry stack and
+    the continuations. -/
+theorem frame_dispatch (m : Module) (fuel : Nat) (c : Ctx)
+    (s : State) (b : List Instr) (is abs : List Instr) (esk : List Val)
+    (base final : List ValType) (X : Outcome)
+    (hbodyQ : ExecQuad c base (execList m fuel s b))
+    (hgenT : ∀ s' : State, stackTys s'.stack = base →
+        (∀ n t, c.lty n = some t → tyOf (s'.locals n) = t) →
+        ExecQuad c final (execList m fuel s' is))
+    (hgenA : ∀ s' : State, stackTys s'.stack = base →
+        (∀ n t, c.lty n = some t → tyOf (s'.locals n) = t) →
+        ExecQuad c final (execList m fuel s' abs))
+    (hesk : stackTys esk = base)
+    (heq : X = resume s esk is abs (execList m fuel) (execList m fuel s b)) :
+    ExecQuad c final X := by
+  rw [heq]
+  cases hx : execList m fuel s b with
+  | ok s2 =>
+      simp only [resume]
+      obtain ⟨hstk2, hloc2⟩ := hbodyQ.2.1 s2 hx
+      exact hgenT s2 hstk2 hloc2
+  | branch k s2 =>
+      cases k with
+      | none =>
+          simp only [resume]
+          obtain ⟨hstkR, hlocR⟩ := hbodyQ.2.2.2 s2 hx
+          exact execQuad_branchNone c final s2 hstkR hlocR
+      | some k0 =>
+          cases k0 with
+          | zero =>
+              simp only [resume]
+              exact hgenA { s with locals := s2.locals, stack := esk, mem := s2.mem } hesk
+                (hbodyQ.2.2.1 0 s2 hx)
+          | succ k' =>
+              simp only [resume]
+              exact execQuad_branchSome c final k' s2 (hbodyQ.2.2.1 (k' + 1) s2 hx)
+  | trap r =>
+      simp only [resume]
+      exact execQuad_trap c final r (fun h0 => hbodyQ.1 (by rw [hx, h0]))
+  | structural => simp only [resume]; exact execQuad_structural c final
+  | unmodeled => simp only [resume]; exact execQuad_unmodeled c final
+  | outOfFuel => simp only [resume]; exact execQuad_outOfFuel c final
+
 /-! ### THE BODY-LEVEL TYPE SAFETY (the frame machine's preservation) -/
 
 /-- THE CORE THEOREM (legacy `Sem.exec_typed`'s content, ported to the
@@ -1688,8 +1828,8 @@ theorem localsMap_typed (params lcls : List ValType) (bound defaults : List Val)
 theorem exec_typed (m : Module)
     (hcal : ∀ fn : Nat, ∀ (ft : FuncType) (f : Func),
       m.fenv fn = some ft → m.funcs[fn]? = some f →
-      BodyTy (fnCtx m.fenv ft f) [] f.body ft.results.reverse) :
-    ∀ (fuel : Nat) (c : Ctx), c.fenv = m.fenv →
+      BodyTy (fnCtx m.fenv m.typeAt ft f) [] f.body ft.results.reverse) :
+    ∀ (fuel : Nat) (c : Ctx), c.fenv = m.fenv → c.tenv = m.typeAt →
       (∀ body base final s,
           BodyTy c base body final →
           stackTys s.stack = base →
@@ -1720,7 +1860,7 @@ theorem exec_typed (m : Module)
   intro fuel
   induction fuel with
   | zero =>
-      intro c _
+      intro c _ _
       refine ⟨?_, ?_⟩
       · intro body base final s _ _ _
         rw [execList_zero]
@@ -1731,21 +1871,14 @@ theorem exec_typed (m : Module)
         exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
           fun s2 h => by simp at h⟩
   | succ fuel ih =>
-      intro c hfenv
-      have ihc := ih c hfenv
+      intro c hfenv htenv
+      have ihc := ih c hfenv htenv
+      -- the tail's quadruple (the induction's part 1, ExecQuad-faced)
       have hok : ∀ (is : List Instr) (s2 : State) (mid final : List ValType)
           (htail : BodyTy c mid is final)
           (hstk2 : stackTys s2.stack = mid)
           (hloc2 : ∀ n t, c.lty n = some t → tyOf (s2.locals n) = t),
-          execList m fuel s2 is ≠ Outcome.trap Trap.typeErr
-          ∧ (∀ s', execList m fuel s2 is = .ok s' →
-                stackTys s'.stack = final
-                ∧ (∀ n t, c.lty n = some t → tyOf (s'.locals n) = t))
-          ∧ (∀ d s3, execList m fuel s2 is = .branch (some d) s3 →
-                (∀ n t, c.lty n = some t → tyOf (s3.locals n) = t))
-          ∧ (∀ s3, execList m fuel s2 is = .branch none s3 →
-                stackTys s3.stack = c.resRev
-                ∧ (∀ n t, c.lty n = some t → tyOf (s3.locals n) = t)) :=
+          ExecQuad c final (execList m fuel s2 is) :=
         fun is s2 mid final htail hstk2 hloc2 => ihc.1 is mid final s2 htail hstk2 hloc2
       constructor
       · intro body base final s hbody hstack hloc
@@ -1763,62 +1896,22 @@ theorem exec_typed (m : Module)
             have hff : FrameForm i = False := stepTy_frameFalse c base mid i hst
             cases i with
             | i32const n =>
-                rw [execList_flat m fuel s (Instr.i32const n) is hff (by simp)]
-                have hx : step s (Instr.i32const n)
-                    = .ok { s with stack := .i32 n.toUInt32 :: s.stack } := by
-                  simp [step]
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.i32const n) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.i32const n) base mid
-                    (stepFlag_complete c base mid (Instr.i32const n) hst)
-                    (by intro fn h; cases h) hff
-                obtain ⟨hstk2, hloc2⟩ := step_preserves s
-                  { s with stack := .i32 n.toUInt32 :: s.stack }
-                  (Instr.i32const n) base mid c.lty hx hstack hloc hchk
-                simp only [hx]
-                exact hok is _ mid final htail hstk2 hloc2
+                exact flat_push c m fuel s { s with stack := .i32 n.toUInt32 :: s.stack }
+                  (Instr.i32const n) base mid final is hst hff (by intro fn h; cases h)
+                  (by intro ty h; cases h) (by simp [step]) hstack hloc htail hok
             | i64const n =>
-                rw [execList_flat m fuel s (Instr.i64const n) is hff (by simp)]
-                have hx : step s (Instr.i64const n)
-                    = .ok { s with stack := .i64 n.toUInt64 :: s.stack } := by
-                  simp [step]
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.i64const n) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.i64const n) base mid
-                    (stepFlag_complete c base mid (Instr.i64const n) hst)
-                    (by intro fn h; cases h) hff
-                obtain ⟨hstk2, hloc2⟩ := step_preserves s
-                  { s with stack := .i64 n.toUInt64 :: s.stack }
-                  (Instr.i64const n) base mid c.lty hx hstack hloc hchk
-                simp only [hx]
-                exact hok is _ mid final htail hstk2 hloc2
+                exact flat_push c m fuel s { s with stack := .i64 n.toUInt64 :: s.stack }
+                  (Instr.i64const n) base mid final is hst hff (by intro fn h; cases h)
+                  (by intro ty h; cases h) (by simp [step]) hstack hloc htail hok
             | localget n =>
-                rw [execList_flat m fuel s (Instr.localget n) is hff (by simp)]
-                have hx : step s (Instr.localget n)
-                    = .ok { s with stack := s.locals n :: s.stack } := by
-                  simp [step]
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.localget n) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.localget n) base mid
-                    (stepFlag_complete c base mid (Instr.localget n) hst)
-                    (by intro fn h; cases h) hff
-                obtain ⟨hstk2, hloc2⟩ := step_preserves s
-                  { s with stack := s.locals n :: s.stack }
-                  (Instr.localget n) base mid c.lty hx hstack hloc hchk
-                simp only [hx]
-                exact hok is _ mid final htail hstk2 hloc2
+                exact flat_push c m fuel s { s with stack := s.locals n :: s.stack }
+                  (Instr.localget n) base mid final is hst hff (by intro fn h; cases h)
+                  (by intro ty h; cases h) (by simp [step]) hstack hloc htail hok
             | localset n =>
-                rw [execList_flat m fuel s (Instr.localset n) is hff (by simp)]
-                have hnc : ∀ fn, Instr.localset n ≠ Instr.call fn := by intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.localset n) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.localset n) base mid
-                    (stepFlag_complete c base mid (Instr.localset n) hst) hnc hff
+                rw [execList_flat m fuel s (Instr.localset n) is hff (by simp) (by simp)]
                 obtain ⟨t, ts, hb, hm, hl⟩ := stepTy_localset_inv c base mid n hst
+                have hchk := flat_chk c base mid (Instr.localset n) hst hff
+                  (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 obtain ⟨v, rest, h2⟩ := stackTys_cons_inv s.stack t ts hstack
@@ -1828,19 +1921,15 @@ theorem exec_typed (m : Module)
                   simp only [step, h2]
                 obtain ⟨hstk2, hloc2⟩ := step_preserves s
                   { s with locals := fun m => if m = n then v else s.locals m, stack := rest }
-                  (Instr.localset n) (t :: ts) ts c.lty hx hstack hloc hchk
+                  (Instr.localset n) (t :: ts) ts c.lty c.tenv hx hstack hloc hchk
                 rw [hm] at htail
                 simp only [hx]
                 exact hok is _ ts final htail hstk2 hloc2
             | localtee n =>
-                rw [execList_flat m fuel s (Instr.localtee n) is hff (by simp)]
-                have hnc : ∀ fn, Instr.localtee n ≠ Instr.call fn := by intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.localtee n) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.localtee n) base mid
-                    (stepFlag_complete c base mid (Instr.localtee n) hst) hnc hff
+                rw [execList_flat m fuel s (Instr.localtee n) is hff (by simp) (by simp)]
                 obtain ⟨t, ts, hb, hm, hl⟩ := stepTy_localtee_inv c base mid n hst
+                have hchk := flat_chk c base mid (Instr.localtee n) hst hff
+                  (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 obtain ⟨v, rest, h2⟩ := stackTys_cons_inv s.stack t ts hstack
@@ -1849,7 +1938,7 @@ theorem exec_typed (m : Module)
                   simp only [step, h2]
                 obtain ⟨hstk2, hloc2⟩ := step_preserves s
                   { s with locals := fun m => if m = n then v else s.locals m }
-                  (Instr.localtee n) (t :: ts) (t :: ts) c.lty hx hstack hloc hchk
+                  (Instr.localtee n) (t :: ts) (t :: ts) c.lty c.tenv hx hstack hloc hchk
                 rw [hm] at htail
                 simp only [hx]
                 exact hok is _ (t :: ts) final htail hstk2 hloc2
@@ -1857,32 +1946,39 @@ theorem exec_typed (m : Module)
                 -- the calls layer: the callee's entry state is
                 -- well-typed (`hcal` + `localsMap_typed`), the callee's
                 -- run rides the SAME IH at its own ctx, and the join
-                -- composes the stacks
+                -- composes the stacks (the ok/return faces named once)
                 obtain ⟨ft, ts, hfenvFn, hb, hm⟩ := stepTy_call_inv c base mid fn hst
                 rw [hm] at htail
                 rw [hb] at hstack
                 have hf' : m.fenv fn = some ft := by rw [← hfenv]; exact hfenvFn
                 obtain ⟨f, hfIdx, hftIdx⟩ := fenv_some m fn ft hf'
-                have hcB : BodyTy (fnCtx m.fenv ft f) [] f.body ft.results.reverse :=
+                have hcB : BodyTy (fnCtx m.fenv m.typeAt ft f) [] f.body ft.results.reverse :=
                   hcal fn ft f hf' hfIdx
                 obtain ⟨bound, rest, hpop, hbd, hrest⟩ :=
                   popTys_of_stackTys ft.params.reverse s.stack ts hstack
+                -- the join's stack composition (the ok + return faces)
+                have hjoinQ : ∀ (sC : State)
+                    (hface : stackTys sC.stack = ft.results.reverse),
+                    ExecQuad c final
+                      (execList m fuel (callJoin s rest sC) is) :=
+                  fun sC hface =>
+                    hok is (callJoin s rest sC) (ft.results.reverse ++ ts) final htail
+                      (by simp only [callJoin, stackTys_append, hface, hrest]) hloc
                 cases hd : localsDefault? f.locals with
                 | none =>
                     -- non-integer locals: outside the fragment (honest)
                     simp only [execList_call, hfIdx, hftIdx, hpop, hd]
-                    exact ⟨by simp, fun s3 h => by simp at h,
-                      fun d s3 h => by simp at h, fun s3 h => by simp at h⟩
+                    exact execQuad_unmodeled c final
                 | some defaults =>
                     have hdf : stackTys defaults = f.locals :=
                       localsDefault_typed f.locals defaults hd
-                    have hlocC : ∀ n t, (fnCtx m.fenv ft f).lty n = some t →
+                    have hlocC : ∀ n t, (fnCtx m.fenv m.typeAt ft f).lty n = some t →
                         tyOf ((bound.reverse ++ defaults).getD n (.i32 0)) = t :=
                       fun n t hn =>
                         localsMap_typed ft.params f.locals bound defaults n t hbd hdf hn
-                    have hresC : (fnCtx m.fenv ft f).resRev = ft.results.reverse := rfl
-                    obtain ⟨hneC, hokC, hbrC, hretC⟩ :=
-                      (ih (fnCtx m.fenv ft f) rfl).1 f.body [] ft.results.reverse
+                    have hresC : (fnCtx m.fenv m.typeAt ft f).resRev = ft.results.reverse := rfl
+                    obtain ⟨hneC, hokC, -, hretC⟩ :=
+                      (ih (fnCtx m.fenv m.typeAt ft f) rfl rfl).1 f.body [] ft.results.reverse
                         { locals := fun n =>
                             (bound.reverse ++ defaults).getD n (.i32 0)
                         , stack := []
@@ -1896,78 +1992,164 @@ theorem exec_typed (m : Module)
                         , stack := []
                         , mem := s.mem
                         , memSize := s.memSize } f.body with
-                    | ok s' =>
-                        have hstk2 : stackTys (callJoin s rest s').stack
-                            = ft.results.reverse ++ ts := by
-                          simp only [callJoin, stackTys_append]
-                          rw [(hokC s' hx).1, hrest]
-                        exact hok is (callJoin s rest s') (ft.results.reverse ++ ts)
-                          final htail hstk2 hloc
+                    | ok s' => exact hjoinQ s' (hokC s' hx).1
                     | branch d s2 =>
                         cases d with
                         | none =>
                             -- the callee's `ret`: the return signal joins
                             -- the caller (the results are on the callee's
                             -- stack, per the return clause)
-                            have hstk2 : stackTys (callJoin s rest s2).stack
-                                = ft.results.reverse ++ ts := by
-                              simp only [callJoin, stackTys_append]
-                              rw [(hretC s2 hx).1, hresC, hrest]
-                            exact hok is (callJoin s rest s2)
-                              (ft.results.reverse ++ ts) final htail hstk2 hloc
-                        | some d' =>
+                            exact hjoinQ s2 ((hretC s2 hx).1.trans hresC)
+                        | some _ =>
                             -- the br-escape: the validator's depth gap —
                             -- the honest unmodeled (branches do not cross
                             -- calls)
-                            exact ⟨by simp, fun s3 h => by simp at h,
-                              fun d'' s3 h => by simp at h, fun s3 h => by simp at h⟩
+                            exact execQuad_unmodeled c final
                     | trap r =>
-                        refine ⟨?_, fun s3 h => by simp at h,
-                          fun d s3 h => by simp at h, fun s3 h => by simp at h⟩
-                        intro hcon
-                        rw [Outcome.trap.injEq] at hcon
-                        apply hneC
-                        rw [hx, hcon]
-                    | structural =>
-                        exact ⟨by simp, fun s3 h => by simp at h,
-                          fun d s3 h => by simp at h, fun s3 h => by simp at h⟩
-                    | unmodeled =>
-                        exact ⟨by simp, fun s3 h => by simp at h,
-                          fun d s3 h => by simp at h, fun s3 h => by simp at h⟩
-                    | outOfFuel =>
-                        exact ⟨by simp, fun s3 h => by simp at h,
-                          fun d s3 h => by simp at h, fun s3 h => by simp at h⟩
+                        exact execQuad_trap c final r (fun h0 => hneC (by rw [hx, h0]))
+                    | structural => exact execQuad_structural c final
+                    | unmodeled => exact execQuad_unmodeled c final
+                    | outOfFuel => exact execQuad_outOfFuel c final
+            | callindirect ty =>
+                -- THE INDIRECT-CALL LAYER (the table discipline's type
+                -- safety): the callee index is RUNTIME data — the
+                -- table entry names the function, the type check pins
+                -- the entry's resolved type to the declared one, and
+                -- the callee's well-typed entry rides `hcal` at the
+                -- RESOLVED type (equal to the declared in the
+                -- computing branch). The runtime's declared type IS
+                -- the validator's (`htenv` — the tenv premise pins
+                -- c.tenv = m.typeAt). The traps (`tabOOB`/
+                -- `indirectSig`) are RUNTIME checks — distinct from
+                -- `typeErr` (the honest statement over the new arm: a
+                -- validated body never answers the TYPE error; the
+                -- table's runtime teeth stay possible, never a wrong
+                -- call).
+                obtain ⟨ft, ts, hten, hb, hm⟩ := stepTy_callindirect_inv c base mid ty hst
+                rw [hm] at htail
+                rw [hb] at hstack
+                have htyR : m.typeAt ty = some ft := htenv ▸ hten
+                obtain ⟨ix, rest0, hstack2⟩ := stackTys_cons_inv s.stack .i32 _ hstack
+                rw [hstack2] at hstack
+                have hcty : tyOf ix = .i32 ∧ stackTys rest0 = ft.params.reverse ++ ts := by
+                  have h2 : tyOf ix :: stackTys rest0
+                      = ValType.i32 :: (ft.params.reverse ++ ts) := hstack
+                  injection h2 with ha hres
+                  exact ⟨ha, hres⟩
+                cases ix with
+                | i32 ix =>
+                    simp only [execList_callindirect, htyR, hstack2]
+                    cases htab : m.tableAt ix.toNat with
+                    | none =>
+                        -- out of bounds: the named RUNTIME trap
+                        simp only
+                        exact execQuad_trap c final .tabOOB (by simp)
+                    | some fn =>
+                        cases hfIdx : m.funcs[fn]? with
+                        | none =>
+                            simp only [hfIdx]
+                            exact execQuad_unmodeled c final
+                        | some f =>
+                            cases hftR : m.typeAt f.tyIdx with
+                            | none =>
+                                simp only [hfIdx, hftR]
+                                exact execQuad_unmodeled c final
+                            | some ft' =>
+                                -- the table's TYPE CHECK: the entry's
+                                -- resolved type against the declared one
+                                by_cases hEq : ft' = ft
+                                · -- the computing branch: the runtime's
+                                  -- pops ride the DECLARED type; the
+                                  -- entry's resolved type agrees (`hEq`),
+                                  -- so the callee's typing converts
+                                  simp only [if_pos hEq, hfIdx, hftR]
+                                  obtain ⟨bound, rest2, hpop, hbd, hrest⟩ :=
+                                    popTys_of_stackTys ft.params.reverse rest0 ts hcty.2
+                                  have hf' : m.fenv fn = some ft' := by
+                                    simp only [Module.fenv, hfIdx]
+                                    rw [hftR]
+                                  have hcB : BodyTy (fnCtx m.fenv m.typeAt ft' f) []
+                                      f.body ft'.results.reverse := hcal fn ft' f hf' hfIdx
+                                  rw [hEq] at hcB
+                                  cases hd : localsDefault? f.locals with
+                                  | none =>
+                                      simp only [hpop]
+                                      exact execQuad_unmodeled c final
+                                  | some defaults =>
+                                      have hdf : stackTys defaults = f.locals :=
+                                        localsDefault_typed f.locals defaults hd
+                                      have hlocC : ∀ n t,
+                                          (fnCtx m.fenv m.typeAt ft f).lty n = some t →
+                                          tyOf ((bound.reverse ++ defaults).getD n (.i32 0)) = t :=
+                                        fun n t hn =>
+                                          localsMap_typed ft.params f.locals bound defaults n t
+                                            hbd hdf hn
+                                      have hresC :
+                                          (fnCtx m.fenv m.typeAt ft f).resRev
+                                            = ft.results.reverse := rfl
+                                      obtain ⟨hneC, hokC, -, hretC⟩ :=
+                                          (ih (fnCtx m.fenv m.typeAt ft f) rfl rfl).1 f.body []
+                                            ft.results.reverse
+                                            { locals := fun n =>
+                                                (bound.reverse ++ defaults).getD n (.i32 0)
+                                            , stack := []
+                                            , mem := s.mem
+                                            , memSize := s.memSize }
+                                            hcB (by simp [stackTys]) hlocC
+                                      have hjoinQ : ∀ (sC : State)
+                                          (hface : stackTys sC.stack = ft.results.reverse),
+                                          ExecQuad c final
+                                            (execList m fuel (callJoin s rest2 sC) is) :=
+                                        fun sC hface =>
+                                          hok is (callJoin s rest2 sC)
+                                            (ft.results.reverse ++ ts) final htail
+                                            (by simp only [callJoin, stackTys_append, hface,
+                                              hrest]) hloc
+                                      simp only [hpop]
+                                      cases hx : execList m fuel
+                                          { locals := fun n =>
+                                              (bound.reverse ++ defaults).getD n (.i32 0)
+                                          , stack := []
+                                          , mem := s.mem
+                                          , memSize := s.memSize } f.body with
+                                      | ok s' => exact hjoinQ s' (hokC s' hx).1
+                                      | branch d s2 =>
+                                          cases d with
+                                          | none =>
+                                              exact hjoinQ s2 ((hretC s2 hx).1.trans hresC)
+                                          | some _ =>
+                                              exact execQuad_unmodeled c final
+                                      | trap r =>
+                                          exact execQuad_trap c final r
+                                            (fun h0 => hneC (by rw [hx, h0]))
+                                      | structural => exact execQuad_structural c final
+                                      | unmodeled => exact execQuad_unmodeled c final
+                                      | outOfFuel => exact execQuad_outOfFuel c final
+                                · -- the sig mismatch: the named RUNTIME trap
+                                  simp only [if_neg hEq, hfIdx, hftR]
+                                  exact execQuad_trap c final .indirectSig (by simp)
+                | i64 => exfalso; simp [tyOf] at hcty
             | mem mop offset al =>
-                rw [execList_flat m fuel s (Instr.mem mop offset al) is hff (by simp)]
-                have hnc : ∀ fn, Instr.mem mop offset al ≠ Instr.call fn := by
-                  intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) [])
-                    (Instr.mem mop offset al) base = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.mem mop offset al) base mid
-                    (stepFlag_complete c base mid (Instr.mem mop offset al) hst) hnc hff
+                rw [execList_flat m fuel s (Instr.mem mop offset al) is hff (by simp) (by simp)]
                 obtain ⟨ts, hb, hm⟩ := stepTy_mem_inv c base mid mop offset al hst
+                have hchk := flat_chk c base mid (Instr.mem mop offset al) hst hff
+                  (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 rcases step_mem_outcome mop offset al ts s hstack with htrap | ⟨s2, hx⟩
                 · rw [htrap]
-                  exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                    fun s2 h => by simp at h⟩
+                  exact execQuad_dead c final (.trap .memOOB) (by simp) (by simp)
+                    (by simp) (by simp)
                 · obtain ⟨hstk2, hloc2⟩ := step_preserves s s2
-                    (Instr.mem mop offset al) (memPop mop ++ ts) (memPush mop ++ ts) c.lty hx
+                    (Instr.mem mop offset al) (memPop mop ++ ts) (memPush mop ++ ts) c.lty c.tenv hx
                     hstack hloc hchk
                   rw [hm] at htail
                   simp only [hx]
                   exact hok is _ (memPush mop ++ ts) final htail hstk2 hloc2
             | op o =>
-                rw [execList_flat m fuel s (Instr.op o) is hff (by simp)]
-                have hnc : ∀ fn, Instr.op o ≠ Instr.call fn := by intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.op o) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.op o) base mid
-                    (stepFlag_complete c base mid (Instr.op o) hst) hnc hff
+                rw [execList_flat m fuel s (Instr.op o) is hff (by simp) (by simp)]
                 obtain ⟨ts, hb, hm⟩ := stepTy_op_inv c base mid o hst
+                have hchk := flat_chk c base mid (Instr.op o) hst hff (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 obtain ⟨args, rest, hp, ha, hr⟩ :=
@@ -1976,21 +2158,15 @@ theorem exec_typed (m : Module)
                 have hx : step s (Instr.op o) = .ok { s with stack := v :: rest } := by
                   simp [step, hp, hv]
                 obtain ⟨hstk2, hloc2⟩ := step_preserves s { s with stack := v :: rest }
-                  (Instr.op o) (opPop o ++ ts) (opPush o ++ ts) c.lty hx hstack hloc hchk
+                  (Instr.op o) (opPop o ++ ts) (opPush o ++ ts) c.lty c.tenv hx hstack hloc hchk
                 rw [hm] at htail
                 simp only [hx]
                 exact hok is _ (opPush o ++ ts) final htail hstk2 hloc2
-            | br d =>
-                cases hst
+            | br d => cases hst
             | brif d =>
-                rw [execList_flat m fuel s (Instr.brif d) is hff (by simp)]
-                have hnc : ∀ fn, Instr.brif d ≠ Instr.call fn := by intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) (Instr.brif d) base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    (Instr.brif d) base mid
-                    (stepFlag_complete c base mid (Instr.brif d) hst) hnc hff
+                rw [execList_flat m fuel s (Instr.brif d) is hff (by simp) (by simp)]
                 obtain ⟨ts, hb, hm⟩ := stepTy_brif_inv c base mid d hst
+                have hchk := flat_chk c base mid (Instr.brif d) hst hff (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 obtain ⟨c0, rest, hstack2⟩ := stackTys_cons_inv s.stack .i32 ts hstack
@@ -2006,17 +2182,11 @@ theorem exec_typed (m : Module)
                         = .branch (some d) { s with stack := rest } := by
                         simp only [step, hstack2, if_pos hb]
                       rw [hx]
-                      refine ⟨by simp, ?_, ?_, ?_⟩
-                      · intro s2 h; simp at h
-                      · intro d' s2 hEq
-                        injection hEq with hd hls
-                        rw [← hls]
-                        exact hloc
-                      · intro s2 h; simp at h
+                      exact execQuad_branchSome c final d { s with stack := rest } hloc
                     · have hx : step s (Instr.brif d) = .ok { s with stack := rest } := by
                         simp only [step, hstack2, if_neg hb]
                       obtain ⟨hstk2, hloc2⟩ := step_preserves s
-                        { s with stack := rest } (Instr.brif d) (ValType.i32 :: ts) ts c.lty hx
+                        { s with stack := rest } (Instr.brif d) (ValType.i32 :: ts) ts c.lty c.tenv hx
                         (by rw [hstack2]; exact hstack) hloc hchk
                       rw [hm] at htail
                       simp only [hx]
@@ -2028,34 +2198,24 @@ theorem exec_typed (m : Module)
             | ret => cases hst
             | unreach => cases hst
             | drop =>
-                rw [execList_flat m fuel s Instr.drop is hff (by simp)]
-                have hnc : ∀ fn, Instr.drop ≠ Instr.call fn := by intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) Instr.drop base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    Instr.drop base mid
-                    (stepFlag_complete c base mid Instr.drop hst) hnc hff
+                rw [execList_flat m fuel s Instr.drop is hff (by simp) (by simp)]
                 obtain ⟨t, ts, hb, hm⟩ := stepTy_drop_inv c base mid hst
+                have hchk := flat_chk c base mid Instr.drop hst hff (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 obtain ⟨v, rest, h2⟩ := stackTys_cons_inv s.stack t ts hstack
                 have hx : step s Instr.drop = .ok { s with stack := rest } := by
                   simp only [step, h2]
                 obtain ⟨hstk2, hloc2⟩ := step_preserves s { s with stack := rest }
-                  Instr.drop (t :: ts) ts c.lty hx hstack hloc hchk
+                  Instr.drop (t :: ts) ts c.lty c.tenv hx hstack hloc hchk
                 rw [hm] at htail
                 simp only [hx]
                 exact hok is _ ts final htail hstk2 hloc2
             | select =>
-                rw [execList_flat m fuel s Instr.select is hff (by simp)]
-                have hnc : ∀ fn, Instr.select ≠ Instr.call fn := by intro fn h; cases h
-                have hchk : stepFlag (Ctx.mk c.lty (fun _ => none) []) Instr.select base
-                    = .ok (false, mid) :=
-                  stepFlag_congr c.lty c.fenv (fun _ => none) c.resRev []
-                    Instr.select base mid
-                    (stepFlag_complete c base mid Instr.select hst) hnc hff
+                rw [execList_flat m fuel s Instr.select is hff (by simp) (by simp)]
                 obtain ⟨ts, t, t', heq, htor, hb, hm⟩ :=
                   stepTy_select_inv c base mid hst
+                have hchk := flat_chk c base mid Instr.select hst hff (by intro fn h; cases h)
                 rw [hb, hm] at hchk
                 rw [hb] at hstack
                 obtain ⟨c0, rest1, hstack2⟩ :=
@@ -2087,7 +2247,7 @@ theorem exec_typed (m : Module)
                       split <;> rfl
                     obtain ⟨hstk2, hloc2⟩ := step_preserves s
                       { s with stack := (if b != 0 then v2 else v3) :: rest3 }
-                      Instr.select (ValType.i32 :: t :: t' :: ts) (t :: ts) c.lty hx
+                      Instr.select (ValType.i32 :: t :: t' :: ts) (t :: ts) c.lty c.tenv hx
                       (by rw [hstack2]; exact hstack) hloc hchk
                     rw [hm] at htail
                     simp only [hx]
@@ -2095,135 +2255,33 @@ theorem exec_typed (m : Module)
                 | i64 => simp [tyOf] at hcty
         | br _ is d =>
             have hx : step s (Instr.br d) = .branch (some d) s := by simp [step]
-            rw [execList_flat m fuel s (Instr.br d) is (by simp [FrameForm]) (by simp), hx]
-            refine ⟨by simp, ?_, ?_, ?_⟩
-            · intro s2 h; simp at h
-            · intro d' s2 hEq
-              injection hEq with hd hls
-              rw [← hls]
-              exact hloc
-            · intro s2 h; simp at h
+            rw [execList_flat m fuel s (Instr.br d) is (by simp [FrameForm]) (by simp) (by simp), hx]
+            exact execQuad_branchSome c base d s hloc
         | unreach _ is =>
             have hx : step s Instr.unreach = .trap Trap.unreach := by simp [step]
-            rw [execList_flat m fuel s Instr.unreach is (by simp [FrameForm]) (by simp), hx]
-            exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-              fun s2 h => by simp at h⟩
+            rw [execList_flat m fuel s Instr.unreach is (by simp [FrameForm]) (by simp) (by simp), hx]
+            exact execQuad_dead c base (.trap .unreach) (by simp) (by simp)
+              (by simp) (by simp)
         | ret _ is heq =>
             -- the return signal: the ret-point stack IS the results
             -- (the validator's ret rule, `heq`)
             have hx : step s Instr.ret = .branch none s := by simp [step]
-            rw [execList_flat m fuel s Instr.ret is (by simp [FrameForm]) (by simp), hx]
-            refine ⟨by simp, ?_, ?_, ?_⟩
-            · intro s2 h; simp at h
-            · intro d s2 h; simp at h
-            · intro s2 h
-              rw [Outcome.branch.injEq] at h
-              obtain ⟨-, hs2⟩ := h
-              rw [← hs2]
-              exact ⟨by rw [hstack]; exact heq, hloc⟩
+            rw [execList_flat m fuel s Instr.ret is (by simp [FrameForm]) (by simp) (by simp), hx]
+            exact execQuad_branchNone c base s (by rw [← heq]; exact hstack) hloc
         | block _ b is _ hb htail =>
-            obtain ⟨hne, hokB, hbrB, hretB⟩ := ihc.1 b base base s hb hstack hloc
-            rw [execList_block m fuel s b is]
-            cases hx : execList m fuel s b with
-            | ok s2 =>
-                obtain ⟨hstk2, hloc2⟩ := hokB s2 hx
-                exact hok is s2 base final htail hstk2 hloc2
-            | branch k s2 =>
-                cases k with
-                | none =>
-                    -- the return signal passes the frame untouched
-                    refine ⟨by simp, fun s3 h => by simp at h,
-                      fun d s3 h => by simp at h, ?_⟩
-                    intro s3 h
-                    rw [Outcome.branch.injEq] at h
-                    obtain ⟨-, hs3⟩ := h
-                    rw [← hs3]
-                    exact hretB s2 hx
-                | some k0 =>
-                    cases k0 with
-                    | zero =>
-                        -- absorbed: the frame's ENTRY stack, the
-                        -- branch-point locals
-                        exact ihc.1 is base final
-                          { s with locals := s2.locals, stack := s.stack } htail hstack
-                          (hbrB 0 s2 hx)
-                    | succ k' =>
-                        -- decremented for the parent frame
-                        refine ⟨by simp, ?_, ?_, ?_⟩
-                        · intro s3 h; simp at h
-                        · intro d' s3 hEq
-                          injection hEq with hd hls
-                          rw [← hls]
-                          exact hbrB (k' + 1) s2 hx
-                        · intro s3 h; simp at h
-            | trap r =>
-                refine ⟨?_, ?_, ?_, ?_⟩
-                · intro h
-                  apply hne
-                  rw [hx]
-                  injection h with hr
-                  rw [hr]
-                · intro s2 h; simp at h
-                · intro d s2 h; simp at h
-                · intro s2 h; simp at h
-            | structural =>
-                exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                  fun s2 h => by simp at h⟩
-            | outOfFuel =>
-                exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                  fun s2 h => by simp at h⟩
-            | unmodeled =>
-                exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                  fun s2 h => by simp at h⟩
+            exact frame_dispatch m fuel c s b is is s.stack base final
+              (execList m (fuel + 1) s (Instr.block b :: is))
+              (ihc.1 b base base s hb hstack hloc)
+              (fun s2 h1 h2 => ihc.1 is base final s2 htail h1 h2)
+              (fun s2 h1 h2 => ihc.1 is base final s2 htail h1 h2)
+              hstack (execList_block m fuel s b is)
         | loop _ b is _ hb htail =>
-            obtain ⟨hne, hokB, hbrB, hretB⟩ := ihc.1 b base base s hb hstack hloc
-            rw [execList_loop m fuel s b is]
-            cases hx : execList m fuel s b with
-            | ok s2 =>
-                obtain ⟨hstk2, hloc2⟩ := hokB s2 hx
-                exact hok is s2 base final htail hstk2 hloc2
-            | branch k s2 =>
-                cases k with
-                | none =>
-                    refine ⟨by simp, fun s3 h => by simp at h,
-                      fun d s3 h => by simp at h, ?_⟩
-                    intro s3 h
-                    rw [Outcome.branch.injEq] at h
-                    obtain ⟨-, hs3⟩ := h
-                    rw [← hs3]
-                    exact hretB s2 hx
-                | some k0 =>
-                    cases k0 with
-                    | zero =>
-                        exact ihc.2 b is base final { s with locals := s2.locals, stack := s.stack } hb
-                          htail hstack (hbrB 0 s2 hx)
-                    | succ k' =>
-                        refine ⟨by simp, ?_, ?_, ?_⟩
-                        · intro s3 h; simp at h
-                        · intro d' s3 hEq
-                          injection hEq with hd hls
-                          rw [← hls]
-                          exact hbrB (k' + 1) s2 hx
-                        · intro s3 h; simp at h
-            | trap r =>
-                refine ⟨?_, ?_, ?_, ?_⟩
-                · intro h
-                  apply hne
-                  rw [hx]
-                  injection h with hr
-                  rw [hr]
-                · intro s2 h; simp at h
-                · intro d s2 h; simp at h
-                · intro s2 h; simp at h
-            | structural =>
-                exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                  fun s2 h => by simp at h⟩
-            | outOfFuel =>
-                exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                  fun s2 h => by simp at h⟩
-            | unmodeled =>
-                exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                  fun s2 h => by simp at h⟩
+            exact frame_dispatch m fuel c s b is (Instr.loop b :: is) s.stack base final
+              (execList m (fuel + 1) s (Instr.loop b :: is))
+              (ihc.1 b base base s hb hstack hloc)
+              (fun s2 h1 h2 => ihc.1 is base final s2 htail h1 h2)
+              (fun s2 h1 h2 => ihc.2 b is base final s2 hb htail h1 h2)
+              hstack (execList_loop m fuel s b is)
         | if_ ts t e is _ hb1 hb2 htail =>
             obtain ⟨c0, rest, hstack2⟩ := stackTys_cons_inv s.stack .i32 ts hstack
             rw [hstack2] at hstack
@@ -2236,151 +2294,25 @@ theorem exec_typed (m : Module)
                 rw [execList_if_ m fuel s t e is, hstack2]
                 by_cases hb : b != 0
                 · simp only [if_pos hb]
-                  obtain ⟨hne, hokB, hbrB, hretB⟩ :=
-                    ihc.1 t ts ts { s with stack := rest } hb1 hcty.2 hloc
-                  cases hx : execList m fuel { s with stack := rest } t with
-                  | ok s2 =>
-                      obtain ⟨hstk2, hloc2⟩ := hokB s2 hx
-                      exact hok is s2 ts final htail hstk2 hloc2
-                  | branch k s2 =>
-                      cases k with
-                      | none =>
-                          refine ⟨by simp, fun s3 h => by simp at h,
-                            fun d s3 h => by simp at h, ?_⟩
-                          intro s3 h
-                          rw [Outcome.branch.injEq] at h
-                          obtain ⟨-, hs3⟩ := h
-                          rw [← hs3]
-                          exact hretB s2 hx
-                      | some k0 =>
-                          cases k0 with
-                          | zero =>
-                              exact ihc.1 is ts final { s with locals := s2.locals, stack := rest } htail
-                                hcty.2 (hbrB 0 s2 hx)
-                          | succ k' =>
-                              refine ⟨by simp, ?_, ?_, ?_⟩
-                              · intro s3 h; simp at h
-                              · intro d' s3 hEq
-                                injection hEq with hd hls
-                                rw [← hls]
-                                exact hbrB (k' + 1) s2 hx
-                              · intro s3 h; simp at h
-                  | trap r =>
-                      refine ⟨?_, ?_, ?_, ?_⟩
-                      · intro h
-                        apply hne
-                        rw [hx]
-                        injection h with hr
-                        rw [hr]
-                      · intro s2 h; simp at h
-                      · intro d s2 h; simp at h
-                      · intro s2 h; simp at h
-                  | structural =>
-                      exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                        fun s2 h => by simp at h⟩
-                  | outOfFuel =>
-                      exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                        fun s2 h => by simp at h⟩
-                  | unmodeled =>
-                      exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                        fun s2 h => by simp at h⟩
+                  exact frame_dispatch m fuel c { s with stack := rest } t is is rest ts final _
+                    (ihc.1 t ts ts { s with stack := rest } hb1 hcty.2 hloc)
+                    (fun s2 h1 h2 => ihc.1 is ts final s2 htail h1 h2)
+                    (fun s2 h1 h2 => ihc.1 is ts final s2 htail h1 h2)
+                    hcty.2 rfl
                 · simp only [if_neg hb]
-                  obtain ⟨hne, hokB, hbrB, hretB⟩ :=
-                    ihc.1 e ts ts { s with stack := rest } hb2 hcty.2 hloc
-                  cases hx : execList m fuel { s with stack := rest } e with
-                  | ok s2 =>
-                      obtain ⟨hstk2, hloc2⟩ := hokB s2 hx
-                      exact hok is s2 ts final htail hstk2 hloc2
-                  | branch k s2 =>
-                      cases k with
-                      | none =>
-                          refine ⟨by simp, fun s3 h => by simp at h,
-                            fun d s3 h => by simp at h, ?_⟩
-                          intro s3 h
-                          rw [Outcome.branch.injEq] at h
-                          obtain ⟨-, hs3⟩ := h
-                          rw [← hs3]
-                          exact hretB s2 hx
-                      | some k0 =>
-                          cases k0 with
-                          | zero =>
-                              exact ihc.1 is ts final { s with locals := s2.locals, stack := rest } htail
-                                hcty.2 (hbrB 0 s2 hx)
-                          | succ k' =>
-                              refine ⟨by simp, ?_, ?_, ?_⟩
-                              · intro s3 h; simp at h
-                              · intro d' s3 hEq
-                                injection hEq with hd hls
-                                rw [← hls]
-                                exact hbrB (k' + 1) s2 hx
-                              · intro s3 h; simp at h
-                  | trap r =>
-                      refine ⟨?_, ?_, ?_, ?_⟩
-                      · intro h
-                        apply hne
-                        rw [hx]
-                        injection h with hr
-                        rw [hr]
-                      · intro s2 h; simp at h
-                      · intro d s2 h; simp at h
-                      · intro s2 h; simp at h
-                  | structural =>
-                      exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                        fun s2 h => by simp at h⟩
-                  | outOfFuel =>
-                      exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                        fun s2 h => by simp at h⟩
-                  | unmodeled =>
-                      exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-                        fun s2 h => by simp at h⟩
+                  exact frame_dispatch m fuel c { s with stack := rest } e is is rest ts final _
+                    (ihc.1 e ts ts { s with stack := rest } hb2 hcty.2 hloc)
+                    (fun s2 h1 h2 => ihc.1 is ts final s2 htail h1 h2)
+                    (fun s2 h1 h2 => ihc.1 is ts final s2 htail h1 h2)
+                    hcty.2 rfl
             | i64 => simp [tyOf] at hcty
       · intro b is base final s hb htail hstack hloc
-        rw [execList_loop m fuel s b is]
-        cases hx : execList m fuel s b with
-        | ok s2 =>
-            obtain ⟨hstk2, hloc2⟩ := (ihc.1 b base base s hb hstack hloc).2.1 s2 hx
-            exact hok is s2 base final htail hstk2 hloc2
-        | branch k s2 =>
-            cases k with
-            | none =>
-                refine ⟨by simp, fun s3 h => by simp at h, fun d s3 h => by simp at h, ?_⟩
-                intro s3 h
-                rw [Outcome.branch.injEq] at h
-                obtain ⟨-, hs3⟩ := h
-                rw [← hs3]
-                exact ((ihc.1 b base base s hb hstack hloc).2.2.2 s2 hx)
-            | some k0 =>
-                cases k0 with
-                | zero =>
-                    exact ihc.2 b is base final { s with locals := s2.locals, stack := s.stack } hb
-                      htail hstack ((ihc.1 b base base s hb hstack hloc).2.2.1 0 s2 hx)
-                | succ k' =>
-                    refine ⟨by simp, ?_, ?_, ?_⟩
-                    · intro s3 h; simp at h
-                    · intro d' s3 hEq
-                      injection hEq with hd hls
-                      rw [← hls]
-                      exact (ihc.1 b base base s hb hstack hloc).2.2.1 (k' + 1) s2 hx
-                    · intro s3 h; simp at h
-        | trap r =>
-            refine ⟨?_, ?_, ?_, ?_⟩
-            · intro h
-              apply (ihc.1 b base base s hb hstack hloc).1
-              rw [hx]
-              injection h with hr
-              rw [hr]
-            · intro s2 h; simp at h
-            · intro d s2 h; simp at h
-            · intro s2 h; simp at h
-        | unmodeled =>
-            exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-              fun s2 h => by simp at h⟩
-        | structural =>
-            exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-              fun s2 h => by simp at h⟩
-        | outOfFuel =>
-            exact ⟨by simp, fun s2 h => by simp at h, fun d s2 h => by simp at h,
-              fun s2 h => by simp at h⟩
+        exact frame_dispatch m fuel c s b is (Instr.loop b :: is) s.stack base final
+          (execList m (fuel + 1) s (Instr.loop b :: is))
+          (ihc.1 b base base s hb hstack hloc)
+          (fun s2 h1 h2 => ihc.1 is base final s2 htail h1 h2)
+          (fun s2 h1 h2 => ihc.2 b is base final s2 hb htail h1 h2)
+          hstack (execList_loop m fuel s b is)
 
 /-! ## The module-level type safety -/
 
@@ -2406,7 +2338,14 @@ theorem runFunc_safe (m : Module) (i : Nat) (f : Func) (ft : FuncType)
     runFunc m i args fuel ≠ Outcome.trap Trap.typeErr
     ∧ (∀ s', runFunc m i args fuel = .ok s' →
           stackTys s'.stack = ft.results.reverse) := by
-  obtain ⟨ft2, hft2, hcf⟩ := checkFuncs_some m m.funcs 0 i f hval hf
+  -- the module check's unfold: the table discipline first, the
+  -- per-function fold second (the driver's two stages)
+  have hv2 : checkFuncs m 0 m.funcs = .ok () := by
+    rw [checkModule] at hval
+    cases htab : checkTables m with
+    | error e => rw [htab] at hval; simp at hval
+    | ok _ => rw [htab] at hval; exact hval
+  obtain ⟨ft2, hft2, hcf⟩ := checkFuncs_some m m.funcs 0 i f hv2 hf
   have hftE : some ft = some ft2 := hft.symm.trans hft2
   injection hftE with hftE2
   subst hftE2
@@ -2425,21 +2364,22 @@ theorem runFunc_safe (m : Module) (i : Nat) (f : Func) (ft : FuncType)
       -- the call-typing premise, discharged from the module check
       have hcal : ∀ fn : Nat, ∀ (ft' : FuncType) (g : Func),
           m.fenv fn = some ft' → m.funcs[fn]? = some g →
-          BodyTy (fnCtx m.fenv ft' g) [] g.body ft'.results.reverse := by
+          BodyTy (fnCtx m.fenv m.typeAt ft' g) [] g.body ft'.results.reverse := by
         intro fn ft' g hf hfIdx
-        obtain ⟨ft2, hft2, hcf2⟩ := checkFuncs_some m m.funcs 0 fn g hval hfIdx
+        obtain ⟨ft2, hft2, hcf2⟩ := checkFuncs_some m m.funcs 0 fn g hv2 hfIdx
         have hf2 : m.fenv fn = m.typeAt g.tyIdx := by
           simp only [Module.fenv, hfIdx]
         rw [hf2, hft2] at hf
         simp only [Option.some.injEq] at hf
         subst hf
-        exact checkFunc_sound m.fenv _ g hcf2
-      have hbody := checkFunc_sound m.fenv ft f hcf
-      have hloc : ∀ n t, (fnCtx m.fenv ft f).lty n = some t →
+        exact checkFunc_sound m.fenv m.typeAt _ g hcf2
+      have hbody := checkFunc_sound m.fenv m.typeAt ft f hcf
+      have hloc : ∀ n t, (fnCtx m.fenv m.typeAt ft f).lty n = some t →
           tyOf ((bound.reverse ++ defaults).getD n (.i32 0)) = t := by
         intro n t hn
         exact localsMap_typed ft.params f.locals bound defaults n t hbd hdf hn
-      obtain ⟨hnet, hokc, -, hretc⟩ := (exec_typed m hcal fuel (fnCtx m.fenv ft f) rfl).1
+      obtain ⟨hnet, hokc, -, hretc⟩ :=
+        (exec_typed m hcal fuel (fnCtx m.fenv m.typeAt ft f) rfl rfl).1
         f.body [] ft.results.reverse
         { locals := fun n => (bound.reverse ++ defaults).getD n (.i32 0), stack := []
         , mem := zeroMem, memSize := m.memMin * wasmPage }

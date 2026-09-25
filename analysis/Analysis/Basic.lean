@@ -51,8 +51,15 @@ The five questions (notes/v3/01-core.md):
   obligations (rung 3's discipline: an unsound transfer does not
   elaborate); the per-domain laws are small hand theorems (01 §7:
   the preferred foundation).
-- gate row: none yet — Analysis is outside Gates.Packages' gated set;
-  the tests' axiom pins carry the drift check (AnalysisTests.Axioms).
+- gate row: Analysis' row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); the tests' axiom pins carry the
+  drift check (AnalysisTests.Axioms).
+- leftover rule: KEPT — the engine's FIRST INSTANCE lives here (the
+  intervals domain); the framework's consumer is the analysis lanes
+  (the certificate pattern's producer face, 04 §3: the untrusted
+  analyzer + the γ-membership certificate). The AnalysisTests pins
+  (known answers + the type-level refusal teeth) are the standing
+  evidence until a lane consumes a domain beyond the worked one.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/

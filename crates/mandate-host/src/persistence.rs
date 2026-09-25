@@ -79,6 +79,10 @@ impl Journal {
     /// The delta's payload doesn't match the journal's schema, or the
     /// backend I/O failed.
     pub fn record(&mut self, delta: Delta) -> Result<u64, HostError> {
+        // THE OBSERVABILITY FACE (C1): the journal's append is one of the
+        // host's named operations — the dotted-static scope (low-cardinality
+        // ONLY; the delta's PAYLOAD data never enters the tag).
+        let _span = fast_observe::scope!("ledger.journal");
         self.log.append(delta).map_err(HostError::from)
     }
 

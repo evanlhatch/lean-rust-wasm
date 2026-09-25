@@ -8,14 +8,17 @@ carries no GateKit).
 list — no TODO/FIXME/unwrap/dbg!/unsafe in generated output. The scan
 surface is the EMITTERS' declared outputs (read from `SchemaCore.regen`
 — the same one-regen-semantics surface gen-check byte-ties; never a
-hand-copied artifact list), checked over the COMMITTED bytes: a
+hand-copied artifact list; PLUS the faults lane's regen — the fault
+surface rides the same discipline), checked over the COMMITTED bytes: a
 generator regression that starts emitting a banned construct fails the
 gate even though the generator itself compiles.
 
-The observability-inheritance row (§5's second half: generated host
-code without span coverage fails) is NOTED, not built — this tree has
-no host-code generator yet (the Rust emitter emits codecs, not host
-spans); the row lands with its first consumer (the leftover rule).
+The observability-inheritance row (§5's second half, wave-30 C1 LANDED:
+generated host code without span coverage fails) is the targeted
+REQUIRED-rule table `coverageRules` below — per generated host artifact,
+the span/fault coverage marker must be PRESENT in the committed bytes
+(the global banned list stays universal; these pin the
+observability-inheritance rule per artifact).
 
 Failures: a banned pattern present, an artifact absent (a path the
 emitter declares whose committed file vanished), or a load failure.
@@ -34,6 +37,8 @@ import Lean
 import Gates.Packages
 import Gates.Common
 import SchemaCore
+import SchemaCore.Emit.Witness
+import Faults
 
 open Lean
 
@@ -69,6 +74,29 @@ def auditRules : List AuditRule :=
       why := "generated Rust stays in the safe subset" }
   ]
 
+/-- The observability-inheritance rows (09 §5, wave-30 C1): generated
+    host code's coverage, REQUIRED per artifact — a (path, rule) table
+    applied only to the named artifact's committed bytes. The
+    span-coverage row: the generated codecs open their dotted-static
+    `scope!`s (the observability TargetFace — one per schema operation);
+    the fault-coverage row: the generated fault surface is fast-observe's
+    `error!` face (the registry's projection — no hand-rolled error
+    surface outside it). -/
+def coverageRules : List (String × AuditRule) :=
+  [ ("crates/schema-generated/src/lib.rs",
+     { name := "span-coverage"
+       pattern := "fast_observe::scope!"
+       required := true
+       why := "generated host code without span coverage fails the audit " ++
+         "(09 §5; the observability TargetFace — one dotted-static " ++
+         "scope! per schema operation)" })
+  , ("crates/mandate-faults/src/lib.rs",
+     { name := "fault-coverage"
+       pattern := "fast_observe::error!"
+       required := true
+       why := "generated error paths ride the registry's projection — " ++
+         "the error! face, never a hand-rolled error surface (09 §5)" }) ]
+
 /-- Pure audit: the violation descriptions for `emitted` (empty =
     clean). Required rules demand the pattern PRESENT; banned rules
     demand it ABSENT. -/
@@ -85,38 +113,54 @@ def auditFindings (rules : List AuditRule) (emitted : String) : List String :=
     emitters' declared outputs) against the rule list. Exit 1 on any
     violation or absent artifact. -/
 unsafe def run : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "audit" pkg fun env => do
-    match SchemaCore.regen env with
+    match ← Kit.Lane.runCoreIO env (SchemaCore.regen env) with
     | .error e =>
       IO.eprintln s!"audit: REGEN FAILED — {e}"
       return 1
     | .ok r => do
-      let mut failed := false
-      let mut scanned := 0
-      for f in r.files do
-        let path : System.FilePath := f.path
-        unless ← path.pathExists do
-          IO.eprintln s!"audit: {f.path} ABSENT — a declared artifact has no committed file"
-          failed := true
-          continue
-        scanned := scanned + 1
-        let committed ← IO.FS.readFile path
-        for v in auditFindings auditRules committed do
-          IO.eprintln s!"audit: {f.path}: {v}"
-          failed := true
-      -- the observability-inheritance row: NOTED, not built — no
-      -- host-code generator exists yet (the row lands with its first
-      -- consumer; 09 §5 + the leftover rule).
+      -- the shared artifact walk (Gates.forDeclared): the regen lane +
+      -- the WITNESS LANE's artifacts (SchemaCore.Emit.Witness.regen —
+      -- the same ONE copy gen-check byte-ties; the registry table + the
+      -- duel manifest, text) — the same banned-pattern discipline.
+      let scan : List Kit.Emit.GeneratedFile → IO (Nat × Bool) :=
+        fun files => do
+          let (_, present, failed) ← Gates.forDeclared "audit"
+            "a declared artifact has no committed file" files fun f committed => do
+            -- the universal banned list + the targeted coverage rules
+            -- (the observability-inheritance rows: only the named
+            -- artifact's bytes answer its required marker)
+            let vs := auditFindings auditRules committed
+              ++ (coverageRules.flatMap fun (path, rule) =>
+                    if f.path == path then auditFindings [rule] committed else [])
+            for v in vs do
+              IO.eprintln s!"audit: {f.path}: {v}"
+            return vs.isEmpty
+          return (present, failed)
+      let (s1, f1) ← scan r.files
+      let (s2, f2) ← scan SchemaCore.Emit.Witness.regen.1
+      -- THE FAULTS LANE's artifacts (the same ONE regen the faultsgen
+      -- writer + gen-check run): the fault surface rides the audit too
+      -- (the fault-coverage row's scan surface).
+      let (s3, f3) ←
+        match ← Faults.regen with
+        | .error e => do
+          IO.eprintln s!"audit: FAULTS REGEN FAILED — {e}"
+          pure (0, true)
+        | .ok modes => scan (Faults.faultsEmitter.run modes)
+      let scanned := s1 + s2 + s3
+      let failed := f1 || f2 || f3
       if failed then
         IO.eprintln "audit: VIOLATIONS — fix the generator (never hand-edit \
           the artifact), `just gen`, commit"
         return 1
       IO.println s!"audit: clean — {scanned} artifact(s) scanned, \
-        {auditRules.length} rule(s), no violations"
-      IO.println "audit: observability-inheritance row — NOTED, not built \
-        (no host-code generator exists yet; the span-coverage row lands \
-        with its first consumer)"
+        {auditRules.length} banned rule(s) + {coverageRules.length} \
+        coverage rule(s), no violations"
+      IO.println s!"audit: observability-inheritance rows LANDED (wave-30 \
+        C1): {coverageRules.map (fun p => p.2.name)} — generated host code \
+        without span coverage fails"
       return 0
 
 end Gates.Audit

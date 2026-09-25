@@ -39,14 +39,27 @@ open Lean Meta Linter EnvLinter
 
 namespace LintKit
 
+/-- The native_decide trust base's shape (the runner-checked
+certificate axiom's name; survives the plain and the `_private.`-
+mangled shapes). THE shape test — Gates.NativePolicy and the trust
+report consume this, never re-encode it. -/
+def isNativeDecideAxiom (n : Name) : Bool :=
+  ((toString n).splitOn "_native.native_decide.").length != 1
+
+/-- The bv_decide sibling (the same runner-checked certificate class:
+`Foo._native.bv_decide.ax_*`). -/
+def isBvDecideAxiom (n : Name) : Bool :=
+  ((toString n).splitOn "_native.bv_decide.").length != 1
+
+/-- The disclosed native trust base, both certificate siblings. -/
+def isNativeTrustBase (n : Name) : Bool :=
+  isNativeDecideAxiom n || isBvDecideAxiom n
+
 /-- The axiom allowlist: core triple + disclosed native_decide/bv_decide
 trust bases. THE allowlist — the gates consume this, never re-encode it. -/
 def isAllowedAxiom (n : Name) : Bool :=
   n == `propext || n == `Classical.choice || n == `Quot.sound ||
-  -- the disclosed native_decide trust base + its bv_decide sibling
-  -- (the same runner-checked certificate class: `Foo._native.bv_decide.ax_*`)
-  ((toString n).splitOn "_native.native_decide.").length != 1 ||
-  ((toString n).splitOn "_native.bv_decide.").length != 1
+  isNativeTrustBase n
 
 meta def axiomAllowlistTest (decl : Name) : MetaM (Option MessageData) := do
   if ← skipDecl decl then return none

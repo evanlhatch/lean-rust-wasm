@@ -11,9 +11,11 @@ version = "0.1.0"
 
 # The default build covers every library (the lakefile-fixer wave's
 # catch: a bare lake build with no defaultTargets builds NOTHING — the
-# green-by-vacuity trap). The test EXES stay out of the default build
-# (just test runs them).
-defaultTargets = ["Kit", "TextKit", "TestingKit", "LintKit", "Gates", "SchemaCore", "WasmCore", "Wit", "Machines", "ZSet", "Inspector", "Datalog", "Analysis", "Cost", "Scaffold", "Query", "Vortex", "Guest", "Effects", "ScaffoldDemo", "ScaffoldLedger"]
+# green-by-vacuity trap). The tests LIBS are default targets too (the
+# gates' env-loading rows — axioms, lintkit, kernel-check — replay
+# their oleans; a bare `just build` + `just gates` must be green). The
+# test EXES stay out (just test runs them).
+defaultTargets = ["Kit", "TextKit", "TestingKit", "LintKit", "Gates", "SchemaCore", "WasmCore", "Wit", "Machines", "ZSet", "Inspector", "Datalog", "Analysis", "Cost", "Scaffold", "Query", "Substrait", "Vortex", "Guest", "Effects", "ScaffoldDemo", "ScaffoldLedger", "Contracts", "Faults", "KitTestsLib", "LintKitTestsLib", "GatesTestsLib", "SchemaTestsLib", "WasmCoreTestsLib", "MachinesTestsLib", "ZSetTestsLib", "DatalogTestsLib", "CostTestsLib", "EffectsTestsLib", "ContractsTestsLib", "AnalysisTestsLib", "QueryTestsLib", "SubstraitTestsLib", "VortexTestsLib", "InspectorTestsLib", "ScaffoldTestsLib", "GuestTestsLib", "ComponentTestsLib", "Repr", "ReprTestsLib", "FaultsTestsLib"]
 
 # ── TestingKit (the shared test harness; notes/v3/15-patterns.md #5 + #14) ──
 # Core-only: no LSpec, no Plausible, no mathlib.
@@ -133,6 +135,21 @@ supportInterpreter = true
 name = "Gates"
 srcDir = "gates"
 roots = ["Gates"]
+globs = ["Gates", "Gates.+"]
+
+[[lean_lib]]
+name = "GatesTestsLib"
+srcDir = "gates"
+roots = ["GatesTests.Main", "GatesTests.Axioms"]
+
+[[lean_exe]]
+name = "GatesTests"
+srcDir = "gates"
+root = "GatesTests.Main"
+# The impact battery is pure over fixture scans/ledgers; the exe imports
+# Gates (the registry pin), whose drivers are unsafe — the interpreter
+# must be on (the InspectorTests pattern).
+supportInterpreter = true
 
 [[lean_exe]]
 name = "gates"
@@ -155,7 +172,12 @@ globs = ["Kit", "Kit.+"]
 [[lean_lib]]
 name = "KitTestsLib"
 srcDir = "kit"
-roots = ["KitTests.Main", "KitTests.Axioms"]
+# LaneDemo is a root ON PURPOSE: its teeth + the entourage pins fire at
+# elaboration time (a module's own initializers run only at import, so
+# the fixture's registration/consumption pair must BOTH be in the
+# build). LaneDemo2 is the wave-30 A2 acceptance fixture (the new
+# lane's row family + reader over the ONE log) — same discipline.
+roots = ["KitTests.Main", "KitTests.Axioms", "KitTests.LaneReg", "KitTests.LaneDemo", "KitTests.LaneReg2", "KitTests.LaneDemo2", "KitTests.Cli"]
 
 [[lean_exe]]
 name = "KitTests"
@@ -178,7 +200,7 @@ globs = ["SchemaCore", "SchemaCore.+", "SchemaTests.+"]
 [[lean_lib]]
 name = "SchemaTestsLib"
 srcDir = "schemacore"
-roots = ["SchemaTests.Main", "SchemaTests.Axioms", "SchemaTests.EntityMachine"]
+roots = ["SchemaTests.Main", "SchemaTests.Axioms", "SchemaTests.EntityMachine", "SchemaTests.Witness"]
 
 [[lean_exe]]
 name = "SchemaTests"
@@ -223,6 +245,46 @@ root = "WasmCoreTests.Main"
 name = "wasmgen"
 srcDir = "wasmcore"
 root = "WasmGenMain"
+
+# ── Faults (the faults lane — the E-code discipline's consumer) ──────
+# The failure-mode registry (the `@[fault]` lane over Kit.Lane's
+# substrate) + the E-CODE ALLOCATION FROM THE PERSISTED REGISTRY
+# (notes/code-registry.txt — the spec of record; a fault's code is never
+# hand-set, never position-derived) + the Rust face (the generated
+# typed-error enum, byte-tied through the emit spine). Imports Kit +
+# SchemaCore (READ-ONLY — Ty + the ONE type fold; the cone rule). The
+# registration and the consumption are different modules (the lane
+# substrate's initializer discipline). Tests: the exe carries the
+# build-time replay pins + the curated-failure controls + the live
+# artifact byte-tie + the mandatory negative controls; Axioms.lean is
+# part of the tests lib (the axiom self-check).
+
+[[lean_lib]]
+name = "Faults"
+srcDir = "faults"
+roots = ["Faults"]
+globs = ["Faults", "Faults.+", "FaultGenMain"]
+
+[[lean_lib]]
+name = "FaultsTestsLib"
+srcDir = "faults"
+roots = ["FaultsTests.Main", "FaultsTests.Axioms", "FaultsTests.Reg"]
+
+[[lean_exe]]
+name = "FaultsTests"
+srcDir = "faults"
+root = "FaultsTests.Main"
+# The driver replays the fault extension at runtime (the InspectorTests
+# pattern) + byte-ties the committed generated artifact.
+supportInterpreter = true
+
+# The faults lane's regen driver (the byte-tie's writer side). Unsafe
+# main: the runtime replay executes imported initializers.
+[[lean_exe]]
+name = "faultsgen"
+srcDir = "faults"
+root = "FaultGenMain"
+supportInterpreter = true
 
 # ── Kit.Lane — the lane substrate's demo lane (the end-to-end fixture) ──
 # The registration module (the register_lane mount) + the consumption
@@ -284,6 +346,13 @@ root = "MachinesTests.Main"
 # the trichotomy types (03 §7: command/delta/event never collapsed).
 # Core-only (imports Kit — the cone rule; the legacy dbsp's mathlib
 # weight ported as fresh theorems, mined for intent only).
+# The P1 merge: the ex-Circuit lib's modules landed here as
+# ZSet.Circuit / ZSet.CircuitCompile (the mined dbsp certification
+# template over the Z-set substrate: the operator templates, the
+# circuit, THE agreement theorem `Ckt.incrementalize_ok`, the rewrite
+# pass `recursive_opt_ok`, + the query-fragment compilation
+# `compile_ok` — the audit's evidence: machinery over ZSet.Weighted
+# Int α, its only edge ZSet). The suites joined ZSetTests' exe.
 # Tests: the exe carries the positive pins + the mandatory negative
 # controls; Axioms.lean is part of the tests lib (the axiom self-check).
 
@@ -296,7 +365,8 @@ globs = ["ZSet", "ZSet.+"]
 [[lean_lib]]
 name = "ZSetTestsLib"
 srcDir = "zset"
-roots = ["ZSetTests.Main", "ZSetTests.Axioms"]
+roots = ["ZSetTests.Main", "ZSetTests.Axioms",
+         "ZSetTests.Circuit", "ZSetTests.CircuitAxioms"]
 
 [[lean_exe]]
 name = "ZSetTests"
@@ -322,7 +392,7 @@ globs = ["Inspector", "Inspector.+", "InspectorTests.+"]
 [[lean_lib]]
 name = "InspectorTestsLib"
 srcDir = "inspector"
-roots = ["InspectorTests.Main", "InspectorTests.Axioms"]
+roots = ["InspectorTests.Main", "InspectorTests.Axioms", "InspectorTests.ExplainSpecs"]
 
 [[lean_exe]]
 name = "InspectorTests"
@@ -512,12 +582,41 @@ globs = ["Query", "Query.+"]
 [[lean_lib]]
 name = "QueryTestsLib"
 srcDir = "query"
-roots = ["QueryTests.Main", "QueryTests.Axioms"]
+roots = ["QueryTests.Main", "QueryTests.Axioms", "QueryTests.ExplainSpecs", "QueryTests.Bridge", "QueryTests.QLangSpecs"]
 
 [[lean_exe]]
 name = "QueryTests"
 srcDir = "query"
 root = "QueryTests.Main"
+
+# ── Substrait (the substrait port's seed — notes/v3/14-build-map.md's
+#    substrait row) ─────────────────────────────────────────────────────
+# The wire-faithful Proto types (the honest minimal core:
+# read/filter/project/join + the literal/field/scalarFunction expression
+# core), the typed layer RETARGETED onto SchemaCore's closed Ty (the
+# legacy's parallel SType universe dies — literal payloads ride
+# SchemaCore.Value; the WF bridge: by-name columns lower to in-range
+# wire ordinals, the rel lowering agrees with the wire width rule), and
+# the canonical text's seed (the scalar/token table + the type fragment
+# with its fuel-driven round-trip theorem; the decode ladder re-homes
+# onto the grammar layer — Phase 4, its LEMMAS port as content).
+# Core-only (imports SchemaCore + TextKit — the cone rule).
+
+[[lean_lib]]
+name = "Substrait"
+srcDir = "substrait"
+roots = ["Substrait"]
+globs = ["Substrait", "Substrait.+", "SubstraitTests.+"]
+
+[[lean_lib]]
+name = "SubstraitTestsLib"
+srcDir = "substrait"
+roots = ["SubstraitTests.Main", "SubstraitTests.Axioms"]
+
+[[lean_exe]]
+name = "SubstraitTests"
+srcDir = "substrait"
+root = "SubstraitTests.Main"
 
 # ── Vortex (the vortex lane's encoding seed) ─────────────────────────
 # The encoding selection as a PURE STATIC function (design doc:
@@ -595,7 +694,11 @@ globs = ["Guest", "Guest.+"]
 [[lean_lib]]
 name = "GuestTestsLib"
 srcDir = "guest"
-roots = ["GuestTests.Main", "GuestTests.Fixture", "GuestTests.Axioms"]
+# GuestTests.Deriv = the effects lane's integration pins (Main imports
+# it; the root keeps the olean in the lib's module set).
+roots = ["GuestTests.Main", "GuestTests.Fixture", "GuestTests.Axioms", "GuestTests.Deriv",
+         "GuestTests.StdSpecs", "GuestTests.StdAxioms", "GuestTests.StdFixture",
+         "GuestTests.EdgeSpecs"]
 
 [[lean_exe]]
 name = "GuestTests"
@@ -603,4 +706,111 @@ srcDir = "guest"
 root = "GuestTests.Main"
 # The driver's importModules + the LCNF re-run replay initializers —
 # the interpreter must be on (the InspectorTests pattern).
+supportInterpreter = true
+
+# ── Contracts (the contract lanes' wp engine — 08 §36) ────────────────
+# requires/ensures with wp-composition: the wp transformer over the
+# honest minimal imperative fragment (skip/assign/seq/cond) + the
+# soundness theorem (the wp-computed precondition suffices) + the
+# composition/conditional/consequence rules + the Contract surface
+# (the old-state/input/output/new-state discipline) with the satisfaction
+# obligation as the Prop-indexed Kit.Obligation + the point-discharge
+# discipline (the routine fragments decided, the rest surfaces) + the
+# feasibility discipline (04 §5: a vacuous precondition is DECLARED,
+# never mistaken for success). Over the effects lane's State model —
+# one state model, two lanes (no parallel table). Core-only (imports
+# Kit.Obligation + Effects.Footprint — the cone rule). Tests: the
+# rules' pins on concrete programs + the soundness exercised + the
+# discharge's teeth (a WRONG postcondition's obligation surfaces) + the
+# mandatory negative controls; Axioms.lean is part of the tests lib
+# (the axiom self-check).
+
+[[lean_lib]]
+name = "Contracts"
+srcDir = "contracts"
+roots = ["Contracts"]
+globs = ["Contracts", "Contracts.+", "ContractsTests.+"]
+
+[[lean_lib]]
+name = "ContractsTestsLib"
+srcDir = "contracts"
+roots = ["ContractsTests.Main", "ContractsTests.Axioms"]
+
+[[lean_exe]]
+name = "ContractsTests"
+srcDir = "contracts"
+root = "ContractsTests.Main"
+
+# The P2 merge: the ex-GuestStd lib's modules landed under guest/ as
+# Guest.Std.* (the namespace GuestStd kept — the content byte-identical);
+# the Guest lib's `Guest.+` glob carries them. The tests joined the
+# GuestTests exe (GuestTests.StdSpecs.stdSuites appended to its
+# `mainOfSuites` list — one runner, the two lanes' IO faces composed);
+# the fixture module joined GuestTestsLib (the LCNF re-run needs its
+# olean at runtime, never a static import).
+
+# ── Repr (the representation-independence lane) ──────────────────────
+# The reviews' §2 discipline (the meaning↔representation split), the
+# zset canonical-rep discipline GENERALIZED: `Represents` — the
+# relation + the operations' preservation fields (an implementation
+# whose operations don't preserve the relation doesn't construct) + the
+# composition + THE generic client theorem + the construction gate's
+# teeth. The worked example (Repr.FinMap): ONE abstract structure (the
+# finitely-supported map) at TWO honestly different representations
+# (the sorted assoc list + the unsorted-with-duplicates list), the
+# canonicity face vs the non-iso Abstraction grade. Core-only (imports
+# Kit.Relation + ZSet.Basic — the cone rule; both C1, and the key class
+# landed once in the canonical-rep machinery: MapKey extends
+# ZSet.CanonKey, the consolidation debt's payment). Tests: the exe carries the
+# agreements' pins + the client theorem's instance + the teeth + the
+# mandatory negative controls; Axioms.lean is part of the tests lib
+# (the axiom self-check).
+
+[[lean_lib]]
+name = "Repr"
+srcDir = "repr"
+roots = ["Repr"]
+globs = ["Repr", "Repr.+"]
+
+[[lean_lib]]
+name = "ReprTestsLib"
+srcDir = "repr"
+roots = ["ReprTests.Main", "ReprTests.Axioms"]
+
+[[lean_exe]]
+name = "ReprTests"
+srcDir = "repr"
+root = "ReprTests.Main"
+
+# ── ComponentTests (the component lane's battery + its writer exe) ────
+# The component emission's pins: the world-checked emission (the bytes
+# + the world text, both byte-tied to the committed artifacts) + the
+# skew teeth + the mandatory negative controls. `componentgen` is the
+# WRITER side (the LCNF re-run's product through the emit spine — the
+# `wasmgen` precedent). The fixture module is part of the tests lib
+# (the driver imports it at runtime — the LCNF re-run needs its
+# olean, never a static import).
+
+[[lean_lib]]
+name = "ComponentTestsLib"
+srcDir = "guest"
+roots = ["ComponentTests.Main", "ComponentTests.Fixture", "ComponentTests.Axioms",
+         "ComponentTests.StringFixture", "ComponentTests.EdgeFixture",
+         "ComponentTests.Pipeline",
+         "ComponentTests.Gen", "ComponentTests.GenFixture"]
+
+[[lean_exe]]
+name = "ComponentTests"
+srcDir = "guest"
+root = "ComponentTests.Main"
+# The driver's importModules + the LCNF re-run replay initializers —
+# the interpreter must be on (the GuestTests pattern).
+supportInterpreter = true
+
+[[lean_exe]]
+name = "componentgen"
+srcDir = "guest"
+root = "ComponentGenMain"
+# The LCNF re-run (the guest function IS compiled here) — the
+# interpreter must be on.
 supportInterpreter = true

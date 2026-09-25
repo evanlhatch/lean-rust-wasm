@@ -25,18 +25,21 @@ adjacency — distinct codes ride the strict order, an equality would
 force an adjacent failure), `codeRegistryWf.check` its decidable
 shadow, soundness proved, completeness proved (the checker computes
 exactly the Prop). Concrete literals that need the invariants as ELABO-
-RATION gates use `DataRegistry`/`CodedRegistry` (Kit.Registry); this
-module is the persisted-runtime sibling.
+RATION gates use `DataRegistry` (Kit.Registry); this module is the
+persisted-runtime sibling.
 
 The file format (`notes/code-registry.txt`): one row per line,
 `name<TAB>code`, an optional leading `-` marking the tombstone, rows
-sorted by code, LF line endings, no blank lines, no comments. Parse and
-print are TOTAL (TextKit.Basic's scanners; the typed grammar layer of
-05 §1 is a later order — there the round-trip law widens to the typed
-grammar). THE ROUND TRIP IS A THEOREM here: `parse_print` — a
-well-formed (`wfProp`) registry with `rowNameOk` names prints to its
-canonical bytes and parses back EXACTLY (`parse (print r) = .ok r`);
-the gate re-derives the bytes and the KitTests pin rides the theorem.
+sorted by code, LF line endings, no blank lines, no comments. The
+format IS a `TextKit.Grammar` value (05 §1's typed grammar layer — the
+flat rep-of-lines shape, `GrammarSlice`'s template): the derived
+parser/printer replaced the old hand-rolled pair, and THE ROUND TRIP
+IS THE GENERIC THEOREM'S INSTANCE: `parse_print` — a well-formed
+(`wfProp`) registry with `rowNameOk` names prints to its canonical
+bytes and parses back EXACTLY (`parse (print r) = .ok r`) —
+`Grammar.run_print_fixFree` (+ the wrapper's newline discipline + the
+wf gate); the exactness direction instantiates `Grammar.print_parse`.
+The gate re-derives the bytes and the KitTests pin rides the theorem.
 
 Core-only (no mathlib/Batteries). Five questions (notes/v3/01-core.md):
 - root: DATA — Universe content (closed codes + total denotation); the
@@ -47,13 +50,20 @@ Core-only (no mathlib/Batteries). Five questions (notes/v3/01-core.md):
 - spine reading: as-data (the gate replays it; nothing prints but the
   total `print`).
 - ladder rung: rung 2-3 — `sortedCodes_iff` + the CheckedProp proofs
-  are small inductions; no proof family.
+  are small inductions; the format's round trip is the generic laws'
+  INSTANCE (the lexeme fields + the wrapper discipline are the only
+  format-local proofs).
 - gate row: `gates code-registry-check` (Gates.CodeRegistryCheck) + the
   KitTests pins + the axiom pins in KitTests.Axioms.
 -/
 
 import Kit.CheckedProp
 import TextKit.Basic
+import TextKit.Literals
+import TextKit.Grammar
+import TextKit.Grammar.Lexemes
+import TextKit.Grammar.Check
+import TextKit.Grammar.Laws
 namespace Kit
 
 /-! ## the row -/
@@ -308,380 +318,388 @@ the allocation the discipline produces (next free: {reg.nextCode}) — a hand-ed
               else .ok reg')
     (.ok [])
 
-/-! ## the file format — print/parse, both total -/
+/-! ## the file format — a Grammar value (05 §1's typed grammar layer) -/
 
-/-- Render one row: `[-]name<TAB>code`. -/
-def renderRow (row : CodeRow) : String :=
-  (if row.retired then "-" else "") ++ row.name ++ "\t" ++ toString row.code
-
-/-- Print the registry: one row per line, LF-terminated (the committed
-    file's canonical bytes). -/
-def print (r : CodeRegistry) : String :=
-  r.foldl (fun acc row => acc ++ renderRow row ++ "\n") ""
+open TextKit
 
 /-- A row name's charset: anything but the separators (a LEADING `-`
     is the tombstone marker — names starting with `-` are reserved). -/
 def rowNameChar (c : Char) : Bool := c != '\t' && c != '\n' && c != '\r'
 
-/-- Parse one row's body (`name<TAB>code`, the flag already stripped):
-    TextKit's `scanNat` for the code; the line must be fully consumed.
-    Total; `none` = malformed. -/
-def parseRowBody (cs : List Char) (retired : Bool) : Option CodeRow :=
-  let name := String.ofList (cs.takeWhile rowNameChar)
-  if name = "" then none
-  else
-    match cs.dropWhile rowNameChar with
-    | '\t' :: rest1 =>
-        match TextKit.scanNat rest1 with
-        | some (code, rest2) => if rest2 = [] then some ⟨name, code, retired⟩ else none
-        | none => none
-    | _ => none
-
-/-- Parse one line: `[-]name<TAB>code`. Total; `none` = malformed.
-    (The dispatch is the beq-face of the `-` marker — same behavior as
-    the pattern-match spelling, at the grade the proofs consume.) -/
-def parseRow (line : String) : Option CodeRow :=
-  let cs := line.toList
-  if cs.head? == some '-' then parseRowBody (cs.drop 1) true
-  else if cs = [] then none
-  else parseRowBody cs false
-
-/-- The fold step of the line loop: propagate the error, else push the
-    parsed row (the reversal is undone at the tail). -/
-def parseStep (acc : Except String (List CodeRow)) (line : String) :
-    Except String (List CodeRow) :=
-  match acc with
-  | .error e => .error e
-  | .ok rows =>
-      match parseRow line with
-      | some row => .ok (row :: rows)
-      | none => .error "code-registry: malformed row — expected \
-`[-]name<TAB>code` (the `-` marks a retired tombstone); no blank lines"
-
-/-- The line loop's tail: reverse the accumulated rows, then the
-    well-formedness gate — an ill-formed (unsorted, duplicate-named)
-    file is a REFUSAL, never a silent accept. -/
-def parseLines (ls : List String) : Except String CodeRegistry :=
-  match ls.foldl parseStep (.ok []) with
-  | .error e => .error e
-  | .ok revRows =>
-      let r := revRows.reverse
-      if codeRegistryWf.check r then .ok r
-      else .error "code-registry: ill-formed registry — names must be unique \
-and rows sorted by code (distinct codes ride the strict order)"
-
-/-- The trailing-newline discipline: a final empty line is the file's,
-    not a row's (dropped). -/
-def dropLastEmpty (ls : List String) : List String :=
-  if ls.getLast? == some "" then ls.take (ls.length - 1) else ls
-
-/-- Parse the file: one `[-]name<TAB>code` row per line, LF endings,
-    no blank lines; the final newline's empty tail is the file's, not a
-    row's. The result must satisfy `codeRegistryWf.check` — an
-    ill-formed (unsorted, duplicate-named) file is a REFUSAL, never a
-    silent accept. Total over String. (The line split rides the
-    List-level `splitOnP` — the same discipline as a single-char
-    `String.splitOn`, at the grade its lemma library lives at.) -/
-def parse (s : String) : Except String CodeRegistry :=
-  parseLines (dropLastEmpty ((s.toList.splitOnP (· == '\n')).map String.ofList))
-
-/-! ## the round trip — the file format's law -/
-
 /-- A row name's round-trip discipline: nonempty, separator-free, and
     NOT `-`-led (a leading `-` is the reserved tombstone marker — the
-    format's metacharacter honesty). -/
+    format's metacharacter honesty). This is the name lexeme's
+    write-side gate (`pre`) — exactly the value discipline the
+    round-trip law needs. (The emptiness is read at the toList —
+    `List.isEmpty` — the same discipline, at the grade the proofs
+    reduce.) -/
 def rowNameOk (s : String) : Bool :=
-  !s.isEmpty && s.toList.all rowNameChar
+  !s.toList.isEmpty && s.toList.all rowNameChar
     && !(s.toList.head?.getD '-' == '-')
 
-/-! ### the code token — `toString n` scans back through `scanNat` -/
+/-! ### the lexemes (TextKit.Grammar.Lexemes' shared constructors —
+     the 06 §7 generator: the per-format constructions were N
+     near-identical ~300-line proofs; the obligations discharge ONCE
+     at the generic shape, and these are the instantiations) -/
 
-private theorem takeWhile_all {p : Char → Bool} : ∀ l : List Char,
-    (∀ c ∈ l, p c = true) → l.takeWhile p = l := by
-  intro l h
-  have h2 := List.takeWhile_append_of_pos h (l₂ := [])
-  rw [← List.append_nil l, h2]
-  simp
+/-- The registry's single-char literal (the separators `-`, `\t`,
+    `\n`): the shared const-char lexeme at the unit payload — the
+    exact one-char scan whose `print_scan` holds over ANY suffix (the
+    lit-scan's exactness), so it carries no munch. -/
+def charLex (c : Char) : Lexeme Unit := TextKit.constCharLex c ()
 
-private theorem dropWhile_all {p : Char → Bool} : ∀ l : List Char,
-    (∀ c ∈ l, p c = true) → l.dropWhile p = [] := by
-  intro l h
-  have h2 := List.dropWhile_append_of_pos h (l₂ := [])
-  rw [← List.append_nil l, h2]
-  rfl
+/-- The format's three literal tokens: the tombstone marker, the
+    name/code separator, the line terminator. -/
+def dashAtom : Lexeme Unit := charLex '-'
+def tabAtom : Lexeme Unit := charLex '\t'
+def nlAtom : Lexeme Unit := charLex '\n'
 
-private theorem toString_decDigits (n : Nat) :
-    (toString n).toList = Nat.toDigits 10 n := by
-  rw [Nat.toString_eq_ofList_toDigits, String.toList_ofList]
+/-- The row-name head class: a `rowNameChar` that is not the tombstone
+    marker `-` (the dash-led run parses ONLY as a tombstone — the
+    metacharacter honesty; the WF-SEQ-1 row at the opt-dash junction
+    demands the disjointness from `lit "-"`). -/
+def nameHeadChar (c : Char) : Bool := rowNameChar c && !(c == '-')
 
-/-- THE CODE TOKEN'S LAW: a code's decimal spelling scans back to the
-    code exactly (`TextKit.scanNat` over `toString`'s `toDigits` spec —
-    the row format's digit token round-trips; the digit theory is core
-    Nat.ToString's: `isDigit_of_mem_toDigits`, `toDigits_ne_nil`,
-    `ofDigitChars_ten_toDigits`). -/
-theorem scanNat_toString (n : Nat) :
-    TextKit.scanNat (toString n).toList = some (n, []) := by
-  have hall : ∀ c ∈ Nat.toDigits 10 n, Char.isDigit c = true :=
-    fun c hc => Nat.isDigit_of_mem_toDigits (by decide) (by decide) hc
-  rw [toString_decDigits, TextKit.scanNat, takeWhile_all _ hall,
-    dropWhile_all _ hall]
-  have hne : String.ofList (Nat.toDigits 10 n) ≠ "" := by
-    intro hcon
-    have h2 := congrArg String.toList hcon
-    rw [String.toList_ofList] at h2
-    exact Nat.toDigits_ne_nil h2
-  have hf : (fun (a : Nat) (d : Char) => a * 10 + (d.toNat - '0'.toNat))
-      = (fun (a : Nat) (d : Char) => 10 * a + (d.toNat - '0'.toNat)) := by
-    funext a d; simp [Nat.mul_comm]
-  rw [if_neg hne, String.toList_ofList, hf, ← Nat.ofDigitChars_eq_foldl,
-    Nat.ofDigitChars_ten_toDigits]
+/-- The head class rides the run class (the ident-atom's chain
+    premise). -/
+theorem nameHeadChar_chain : ∀ c, nameHeadChar c = true → rowNameChar c = true :=
+  fun _c hc => (Bool.and_eq_true_iff.mp hc).1
 
-/-! ### the row law — renderRow parses back through parseRow -/
+/-- `rowNameOk` IS the shared ident-atom's gate: the head-class form of
+    the same discipline (the bridge to `TextKit.identOk` — pointwise
+    equal; the getD form is the spell the format's gate reads at). -/
+theorem rowNameOk_eq (s : String) :
+    rowNameOk s = TextKit.identOk nameHeadChar rowNameChar s := by
+  cases hs : s.toList with
+  | nil => simp [rowNameOk, TextKit.identOk, hs]
+  | cons c cs =>
+      show ((!s.toList.isEmpty && s.toList.all rowNameChar) &&
+          !(s.toList.head?.getD '-' == '-')) =
+        ((!s.toList.isEmpty && s.toList.all rowNameChar) &&
+          s.toList.head?.all nameHeadChar)
+      rw [hs, List.isEmpty_cons, List.head?_cons]
+      simp only [Bool.not_false, Option.getD_some, Option.all_some]
+      cases hrc : rowNameChar c with
+      | false => simp [hrc, nameHeadChar]
+      | true =>
+          cases hb : (c == '-') with
+          | false => simp [hrc, hb, nameHeadChar]
+          | true => simp [hrc, hb, nameHeadChar]
 
-private theorem beq_false_of_isDigit {c : Char} (h : c.isDigit = true) :
-    (c == '\n') = false := by
-  cases hc : (c == '\n') with
-  | false => rfl
-  | true =>
-      have he := beq_iff_eq.mp hc
-      rw [he] at h
-      simp [Char.isDigit] at h
+/-- The row-name lexeme: the shared ident-atom at the registry's char
+    classes (`munch` is the charset itself — the separator `\t` breaks
+    it, the maximal-munch boundary). -/
+def nameAtom : Lexeme String :=
+  TextKit.identAtom "<name>" nameHeadChar rowNameChar nameHeadChar_chain
 
-private theorem ne_of_rowNameChar {c : Char} (h : rowNameChar c = true) :
-    (c == '\n') = false := by
-  have h2 := Bool.and_eq_true_iff.mp h
-  have h3 := Bool.and_eq_true_iff.mp h2.1
-  simpa using h3.2
+/-- The code lexeme: the shared nat-atom (the canonical-scanNat
+    discipline — a leading zero is a refusal). -/
+def codeAtom : Lexeme Nat := TextKit.natAtom
 
-private theorem renderRow_toList_flat (row : CodeRow) (hret : row.retired = false) :
-    (renderRow row).toList
-      = row.name.toList ++ '\t' :: (toString row.code).toList := by
-  rw [renderRow, if_neg (by simp [hret]), String.toList_append,
-    String.toList_append, String.toList_append, String.toList_empty,
-    List.nil_append, List.append_assoc]
-  rfl
+/-! ### the row + the line -/
 
-private theorem renderRow_toList_tomb (row : CodeRow) (hret : row.retired = true) :
-    (renderRow row).toList
-      = '-' :: (row.name.toList ++ '\t' :: (toString row.code).toList) := by
-  rw [renderRow, if_pos hret, String.toList_append,
-    String.toList_append, String.toList_append, List.append_assoc]
-  rfl
+/-- The row's raw parse shape (the seq/opt tuple face; the units are
+    the separator markers' payloads). -/
+abbrev RowRaw := Option Unit × (String × (Unit × Nat))
 
-private theorem renderRow_ne_newline (row : CodeRow)
-    (h : ∀ c ∈ row.name.toList, rowNameChar c = true) :
-    ∀ c ∈ (renderRow row).toList, (c == '\n') = false := by
-  have hdigit : ∀ c ∈ (toString row.code).toList, (c == '\n') = false := by
-    intro c hc
-    rw [toString_decDigits] at hc
-    exact beq_false_of_isDigit (Nat.isDigit_of_mem_toDigits (by decide)
-      (by decide) hc)
-  cases hret : row.retired with
-  | false =>
-      intro c hc
-      rw [renderRow_toList_flat row hret, List.mem_append] at hc
-      rcases hc with hc | hc
-      · exact ne_of_rowNameChar (h c hc)
-      · rcases List.mem_cons.mp hc with hc | hc
-        · rw [hc]; simp
-        · exact hdigit c hc
-  | true =>
-      intro c hc
-      rw [renderRow_toList_tomb row hret, List.mem_cons, List.mem_append] at hc
-      rcases hc with hc | hc
-      · rw [hc]; simp
-      · rcases hc with hc | hc
-        · exact ne_of_rowNameChar (h c hc)
-        · rcases List.mem_cons.mp hc with hc | hc
-          · rw [hc]; simp
-          · exact hdigit c hc
+open Grammar in
+/-- One row: the optional tombstone dash, the name, the TAB, the code. -/
+def rowRawGrammar : Grammar RowRaw :=
+  .seq (.opt (.atom dashAtom))
+    (.seq (.atom nameAtom) (.seq (.atom tabAtom) (.atom codeAtom)))
 
-private theorem parseRowBody_render (cs : List Char) (code : Nat) (retired : Bool)
-    (hall : ∀ c ∈ cs, rowNameChar c = true) (hne : String.ofList cs ≠ "") :
-    parseRowBody (cs ++ '\t' :: (toString code).toList) retired
-      = some ⟨String.ofList cs, code, retired⟩ := by
-  have hfail : rowNameChar '\t' = false := rfl
-  rw [parseRowBody, List.takeWhile_append_of_pos hall,
-    List.dropWhile_append_of_pos hall]
-  rw [List.takeWhile_cons_of_neg (by simp [hfail]),
-    List.dropWhile_cons_of_neg (by simp [hfail])]
-  simp only [List.append_nil, if_neg hne]
-  rw [scanNat_toString]
-  simp
+/-- One raw row → the row (the tombstone bit is the dash's presence;
+    the separator units drop). -/
+def rowDecode : RowRaw → Option CodeRow :=
+  fun raw => some ⟨raw.2.1, raw.2.2.2, raw.1.isSome⟩
 
-private theorem parseRow_dash (rest : List Char) :
-    parseRow (String.ofList ('-' :: rest)) = parseRowBody rest true := by
-  rw [parseRow, String.toList_ofList]
-  rfl
+/-- A row → its raw spelling (encode). -/
+def rowEncode : CodeRow → RowRaw :=
+  fun row => ((if row.retired then Option.some () else Option.none),
+    (row.name, ((), row.code)))
 
-theorem parseRow_renderRow (row : CodeRow) (h : rowNameOk row.name) :
-    parseRow (renderRow row) = some row := by
-  obtain ⟨rname, rcode, rret⟩ := row
-  have h12 := Bool.and_eq_true_iff.mp h
-  have h2 := Bool.and_eq_true_iff.mp h12.1
-  have hne : rname ≠ "" := by
-    intro hcon
-    rw [hcon] at h2
-    simp at h2
-  have hall : ∀ c ∈ rname.toList, rowNameChar c = true :=
-    List.all_eq_true.mp h2.2
-  have hhd := h12.2
-  have hneL : String.ofList rname.toList ≠ "" := by
-    rw [String.ofList_toList]
-    exact hne
-  cases rret with
-  | false =>
-      cases hcd : rname.toList with
-      | nil =>
-          exact absurd (show rname = "" from by
-            rw [show rname = String.ofList rname.toList from
-              String.ofList_toList.symm, hcd]) hne
-      | cons c cs =>
-          have hhd2 : rname.toList.head?.getD '-' = c := by simp [hcd]
-          rw [hhd2] at hhd
-          have hbeq'' : (c == '-') = false := by
-            cases hb : (c == '-') with
-            | false => rfl
-            | true => rw [hb] at hhd; simp at hhd
-          have hhd' : c ≠ '-' := by
-            intro hcon
-            rw [hcon] at hbeq''
-            simp at hbeq''
-          have hbeqS : (some c == some '-') = false := by simp [hbeq'']
-          have hall' : ∀ x ∈ c :: cs, rowNameChar x = true := by
-            intro x hx
-            rw [← hcd] at hx
-            exact hall x hx
-          have hne' : String.ofList (c :: cs) ≠ "" := by
-            rw [← hcd, String.ofList_toList]
-            exact hne
-          have hname' : String.ofList (c :: cs) = rname := by
-            rw [← hcd, String.ofList_toList]
-          rw [show renderRow ⟨rname, rcode, false⟩
-              = String.ofList (renderRow ⟨rname, rcode, false⟩).toList from
-            String.ofList_toList.symm, renderRow_toList_flat _ rfl,
-            parseRow, String.toList_ofList, hcd, List.cons_append,
-            List.head?_cons,
-            if_neg (show ¬((some c == some '-') = true) from by simp [hbeqS]),
-            if_neg (by simp), ← List.cons_append,
-            parseRowBody_render (c :: cs) rcode false hall' hne', hname']
-  | true =>
-      have hnameL : String.ofList rname.toList = rname :=
-        String.ofList_toList
-      rw [show renderRow ⟨rname, rcode, true⟩
-          = String.ofList (renderRow ⟨rname, rcode, true⟩).toList from
-        String.ofList_toList.symm, renderRow_toList_tomb _ rfl,
-        parseRow, String.toList_ofList,
-        show (('-' :: (rname.toList ++ '\t' :: (toString rcode).toList)).head?
-            == some '-') = true from rfl,
-        if_pos rfl,
-        show ('-' :: (rname.toList ++ '\t' :: (toString rcode).toList)).drop 1
-          = rname.toList ++ '\t' :: (toString rcode).toList from rfl,
-        parseRowBody_render rname.toList rcode true hall hneL, hnameL]
+open Grammar in
+/-- One line: the row + the LF terminator (one per line — the
+    committed file's discipline; the parse wrapper handles a MISSING
+    final newline). -/
+def lineRawGrammar : Grammar (RowRaw × Unit) :=
+  .seq rowRawGrammar (.atom nlAtom)
 
-/-! ### the line structure — print's fold, splitOnP, the tail -/
+/-- The raw line list → the registry. -/
+def rowsDecode : List (RowRaw × Unit) → Option CodeRegistry
+  | [] => Option.some []
+  | p :: rest =>
+      match rowDecode p.1 with
+      | .some row => (rowsDecode rest).map (fun r' => row :: r')
+      | .none => .none
 
-private theorem print_foldl : ∀ (rest : CodeRegistry) (init : String),
-    rest.foldl (fun acc row => acc ++ renderRow row ++ "\n") init
-      = init ++ print rest
-  | [], _ => by simp [print]
-  | row :: rest, init => by
-      rw [List.foldl_cons, print_foldl rest (init ++ renderRow row ++ "\n"),
-        show print (row :: rest)
-          = (row :: rest).foldl (fun acc x => acc ++ renderRow x ++ "\n") ""
-          from rfl,
-        List.foldl_cons,
-        print_foldl rest ("" ++ renderRow row ++ "\n")]
-      simp [String.append_assoc]
+/-- THE registry codec: the raw IS the line list; decode unmaps the
+    rows (the tombstone bit from the dash's presence). -/
+def registryCodec : Kit.Codec (List (RowRaw × Unit)) CodeRegistry where
+  encode := fun r => r.map (fun row => (rowEncode row, ()))
+  decode := rowsDecode
+  policy := fun _ => True
+  decode_encode := by
+    intro r
+    induction r with
+    | nil => rfl
+    | cons row rest ih =>
+        have hrow : rowDecode (rowEncode row) = some row := by
+          cases row with
+          | mk name code retired =>
+              cases retired <;> simp [rowDecode, rowEncode]
+        show rowsDecode ((rowEncode row, ()) :: (rest.map fun row => (rowEncode row, ())))
+          = some (row :: rest)
+        simp only [rowsDecode, hrow, ih, Option.map_some]
+  decode_some_policy := fun _ _ _ => trivial
+
+/-- The codec's left-inverse (the rel node's `exact` field): decode
+    determines encode — the raw spelling is recovered. (Public: the
+    graduation's exactness premise cites it.) -/
+theorem rowEncode_of_decode (rv : RowRaw) (row : CodeRow)
+    (h : rowDecode rv = .some row) : rowEncode row = rv := by
+  obtain ⟨dash, nm, u, cd⟩ := rv
+  cases u
+  rw [rowDecode] at h
+  have hrow : ⟨nm, cd, dash.isSome⟩ = row := Option.some.inj h
+  cases dash <;> rw [← hrow] <;> simp [rowEncode]
+
+theorem encode_of_rowsDecode : ∀ (raw : List (RowRaw × Unit)) (r : CodeRegistry),
+    rowsDecode raw = .some r → r.map (fun row => (rowEncode row, ())) = raw := by
+  intro raw
+  induction raw with
+  | nil =>
+      intro r h
+      simp only [rowsDecode] at h
+      have hr : r = [] := (Option.some.inj h).symm
+      rw [hr]; rfl
+  | cons p rest ih =>
+      intro r h
+      simp only [rowsDecode] at h
+      cases hrw : rowDecode p.1 with
+      | none => rw [hrw] at h; simp at h
+      | some row =>
+          rw [hrw] at h
+          cases hr2 : rowsDecode rest with
+          | none => rw [hr2] at h; simp at h
+          | some rs =>
+              rw [hr2] at h
+              simp only [Option.map_some, Option.some.injEq] at h
+              have hr : r = row :: rs := h.symm
+              show List.map (fun row => (rowEncode row, ())) r = p :: rest
+              rw [hr, List.map_cons, rowEncode_of_decode p.1 row hrw]
+              have hrest : rs.map (fun row => (rowEncode row, ())) = rest :=
+                ih rs (by rw [hr2])
+              rw [hrest]
+
+/-- The decode's TOTALITY as data (the graduation's witness function):
+    the raw line list never refuses — every row decodes (the row level
+    is total: `rowDecode` is `some`-valued by construction) and the
+    fold recurses. -/
+def rowsDecodeTotal : ∀ (raw : List (RowRaw × Unit)),
+    {r : CodeRegistry // rowsDecode raw = some r}
+  | [] => ⟨[], rfl⟩
+  | ((dash, (nm, ((), code))), ()) :: rest =>
+      let t := rowsDecodeTotal rest
+      ⟨⟨nm, code, dash.isSome⟩ :: t.1, by
+        simp only [rowsDecode, rowDecode, t.2, Option.map_some]⟩
+
+/-- THE GRADUATION (15-patterns #11 at the codec grade,
+    `Kit.Codec.toIsoOfExact`): the total decode + the exactness law
+    (`encode_of_rowsDecode`) assemble the TRUE `Iso` — the raw line
+    list ≅ the registry, both round trips. -/
+def registryIso : Kit.Iso (List (RowRaw × Unit)) CodeRegistry :=
+  registryCodec.toIsoOfExact rowsDecodeTotal encode_of_rowsDecode
+
+open Grammar in
+/-- THE file format as a grammar value: the flat rep-of-lines (the
+    slice's shape — no `fix`, no `self` anywhere), under the registry
+    codec (the ONE `rel` node; the raw IS the line list). -/
+def registryGrammar : Grammar CodeRegistry :=
+  .rel registryCodec (fun _ => true) (fun _ _ _ => rfl)
+    (fun _raw _r h => encode_of_rowsDecode _ _ h)
+    "registry" [] (.rep lineRawGrammar)
+
+/-! ### the certificate + the law premises' discharge -/
+
+/-- THE certificate discharge (06 §7's build-time check): the format's
+    WF rows hand-check green (WF-REP-1: the line is non-nullable;
+    WF-REP-2: vacuous — the LF atom's munch is none; WF-SEQ-1: the
+    dash/name heads vs the TAB/LF literals are prefix-free; WF-SEQ-2:
+    the name's munch broken by the TAB literal, the code's munch broken
+    by the LF literal). -/
+theorem registryCert : Grammar.Predictive registryGrammar :=
+  Grammar.wfCheck_sound registryGrammar (by decide)
+
+/-- The fix-free fold (no `fix` node anywhere). -/
+theorem registryFixFree : Grammar.FixFree registryGrammar := by
+  repeat constructor
+
+/-- Law 2's coherence premise: NO `alt` node anywhere — the fold's
+    branches are all trivial. -/
+theorem registryCoherent : Grammar.altCoherent registryGrammar := by
+  repeat constructor
+
+/-- The valueOk faces at the raw row (the folds' simp readings — the
+    value discipline is the name lexeme's `pre` and nothing else). -/
+private theorem valueOk_row_none (name : String) (code : Nat)
+    (h : rowNameOk name = true) :
+    Grammar.valueOk rowRawGrammar ((Option.none : Option Unit), (name, ((), code)))
+      = true := by
+  have hp : nameAtom.pre name = true := by
+    show TextKit.identOk nameHeadChar rowNameChar name = true
+    rw [← rowNameOk_eq]
+    exact h
+  simp [Grammar.valueOk, rowRawGrammar, charLex, tabAtom, codeAtom,
+    dashAtom, constCharLex, natAtom, hp]
+
+private theorem valueOk_row_some (name : String) (code : Nat)
+    (h : rowNameOk name = true) :
+    Grammar.valueOk rowRawGrammar ((Option.some () : Option Unit), (name, ((), code)))
+      = true := by
+  have hp : nameAtom.pre name = true := by
+    show TextKit.identOk nameHeadChar rowNameChar name = true
+    rw [← rowNameOk_eq]
+    exact h
+  simp [Grammar.valueOk, rowRawGrammar, charLex, tabAtom, codeAtom,
+    dashAtom, constCharLex, natAtom, hp]
+
+private theorem valueOk_nl : Grammar.valueOk (.atom nlAtom) () = true := rfl
+
+/-- The grammar's value discipline IS the name discipline: `valueOk`
+    holds exactly when every row's name is `rowNameOk` (the name
+    lexeme's write-side gate; every other field is trivially owned). -/
+theorem valueOk_names (r : CodeRegistry) (h : ∀ row ∈ r, rowNameOk row.name) :
+    Grammar.valueOk registryGrammar r = true := by
+  have hline : ∀ row : CodeRow, rowNameOk row.name = true →
+      Grammar.valueOk lineRawGrammar (rowEncode row, ()) = true := by
+    intro row hn
+    cases row with
+    | mk name code retired =>
+        cases retired with
+        | false =>
+            show Grammar.valueOk lineRawGrammar
+                (((Option.none : Option Unit), (name, ((), code))), ()) = true
+            simp [lineRawGrammar, Grammar.valueOk, charLex, nlAtom,
+              valueOk_row_none name code hn]
+        | true =>
+            show Grammar.valueOk lineRawGrammar
+                (((Option.some () : Option Unit), (name, ((), code))), ()) = true
+            simp [lineRawGrammar, Grammar.valueOk, charLex, nlAtom,
+              valueOk_row_some name code hn]
+  show (r.map (fun row => (rowEncode row, ()))).all
+    (fun z => Grammar.valueOk lineRawGrammar z) = true
+  rw [List.all_eq_true]
+  intro z hz
+  obtain ⟨row, hr, rfl⟩ := List.mem_map.mp hz
+  exact hline row (h row hr)
+
+/-! ### the derived print/parse (the wrappers) -/
+
+/-- The row's spelling (the derived printer at the raw row) — the old
+    hand-rolled `renderRow`'s bytes, now the grammar's. -/
+def rowPrint : RowRaw → String := Grammar.printG rowRawGrammar
+
+/-- Print the registry: the grammar's derived printer — one
+    `[-]name<TAB>code` row per line, LF-terminated (the committed
+    file's canonical bytes; byte-identical to the old hand-rolled
+    `print`, which died). -/
+def print (r : CodeRegistry) : String := Grammar.print registryGrammar r
+
+/-- Parse the file: the grammar's derived parser (the run entry) + the
+    well-formedness gate — an ill-formed (unsorted, duplicate-named)
+    file is a REFUSAL, never a silent accept. The trailing-newline
+    discipline: a MISSING final newline canonicalizes (the wrapper
+    appends the LF the line terminator needs; the empty file is the
+    empty registry). -/
+def parse (s : String) : Except String CodeRegistry :=
+  let s' := if s == "" || s.toList.getLast? == some '\n' then s else s ++ "\n"
+  match Grammar.run registryGrammar s' with
+  | .error _ =>
+      .error "code-registry: malformed row — expected `[-]name<TAB>code` \
+(the `-` marks a retired tombstone); one row per line, LF endings, no \
+blank lines"
+  | .ok r =>
+      if codeRegistryWf.check r then .ok r
+      else .error "code-registry: ill-formed registry — names must be \
+unique and rows sorted by code (distinct codes ride the strict order)"
+
+private theorem print_nil : print [] = "" := rfl
 
 private theorem print_cons (row : CodeRow) (rest : CodeRegistry) :
-    print (row :: rest) = renderRow row ++ "\n" ++ print rest := by
-  show (row :: rest).foldl (fun acc x => acc ++ renderRow x ++ "\n") ""
-    = renderRow row ++ "\n" ++ print rest
-  rw [List.foldl_cons, print_foldl rest ("" ++ renderRow row ++ "\n")]
+    print (row :: rest) = (rowPrint (rowEncode row) ++ "\n") ++ print rest := rfl
+
+private theorem getLast?_append_nl (xs : List Char) :
+    (xs ++ ['\n']).getLast? = some '\n' := by
+  rw [List.getLast?_append]
   simp
 
-private theorem nl_list : "\n".toList = ['\n'] := rfl
+private theorem getLast?_append_right (a b : List Char) (hb : b ≠ []) :
+    (a ++ b).getLast? = b.getLast? := by
+  rw [List.getLast?_append]
+  cases hb2 : b.getLast? with
+  | none => exact absurd hb2 (by simp [hb])
+  | some l => simp
 
-private theorem splitOnP_print (r : CodeRegistry)
-    (h : ∀ row ∈ r, ∀ c ∈ row.name.toList, rowNameChar c = true) :
-    (print r).toList.splitOnP (· == '\n')
-      = r.map (fun row => (renderRow row).toList) ++ [[]] := by
+/-- The derived print is LF-terminated (the last byte of a nonempty
+    registry's print — the parse wrapper's no-append branch on the
+    canonical bytes). -/
+private theorem print_last_newline : ∀ (r : CodeRegistry), r ≠ [] →
+    (print r).toList.getLast? = some '\n' := by
+  intro r
   induction r with
-  | nil => simp [print, List.splitOnP_nil]
+  | nil => intro h; exact absurd rfl h
   | cons row rest ih =>
-      rw [print_cons, String.toList_append, String.toList_append,
-        nl_list, List.append_assoc, List.cons_append, List.nil_append]
-      rw [List.splitOnP_append_cons (renderRow row).toList
-        (print rest).toList (sep := '\n') rfl]
-      rw [List.splitOnP_eq_singleton
-        (renderRow_ne_newline row (h row (List.mem_cons_self)))]
-      rw [ih (fun g hg => h g (List.mem_cons_of_mem _ hg))]
-      simp [List.map_cons]
+      intro hne
+      rw [print_cons, String.toList_append]
+      cases rest with
+      | nil =>
+          show ((rowPrint (rowEncode row) ++ "\n").toList ++ ([] : List Char)).getLast?
+            = Option.some '\n'
+          rw [List.append_nil, String.toList_append, TextKit.lit_nl,
+            getLast?_append_nl]
+      | cons r2 rs =>
+          have hrest : (r2 :: rs) ≠ [] := by simp
+          have hne2 : (print (r2 :: rs)).toList ≠ [] := by
+            have h3 := ih hrest
+            intro h0; rw [h0] at h3; simp at h3
+          rw [getLast?_append_right _ _ hne2]
+          exact ih hrest
 
-private theorem getLast?_append_singleton (xs : List String) (a : String) :
-    (xs ++ [a]).getLast? = some a := by
-  induction xs with
-  | nil => rfl
-  | cons x xs ih => simp [List.getLast?_cons, ih]
+/-! ### the round trip — the file format's law, the generic instances -/
 
-private theorem dropLastEmpty_append (xs : List String) :
-    dropLastEmpty (xs ++ [""]) = xs := by
-  rw [dropLastEmpty, getLast?_append_singleton]
-  rw [if_pos (by simp)]
-  have hlen : (xs ++ [""]).length = xs.length + 1 := by simp
-  rw [hlen, Nat.add_sub_cancel]
-  induction xs with
-  | nil => simp
-  | cons x xs ih => simp
-
-private theorem foldl_parseStep (r : CodeRegistry) : ∀ rows : List CodeRow,
-    (∀ row ∈ r, parseRow (renderRow row) = some row) →
-    (r.map renderRow).foldl parseStep (.ok rows) = .ok (r.reverse ++ rows) := by
-  intro rows
-  induction r generalizing rows with
-  | nil => intro _h; rfl
-  | cons row rest ih =>
-      intro h
-      simp only [List.map_cons, List.foldl_cons, parseStep,
-        h row (List.mem_cons_self)]
-      simp only [ih (row :: rows) (fun g hg => h g (List.mem_cons_of_mem _ hg)),
-        List.reverse_cons, List.append_assoc, List.cons_append,
-        List.nil_append]
-
-private theorem map_ofList_map_toList (r : CodeRegistry) :
-    List.map String.ofList (List.map (fun row => (renderRow row).toList) r)
-      = r.map renderRow := by
-  induction r with
-  | nil => simp
-  | cons row rest ih => simp
-
-/-- THE FILE-FORMAT LAW: a well-formed registry prints to its canonical
-    text and parses back to EXACTLY itself — the honest round trip over
-    the canonical bytes. The name discipline `rowNameOk` is the
-    format's metacharacter honesty (the reserved `-` head, the
-    separators); the well-formedness gate accepts exactly what `wfProp`
-    holds (the CheckedProp's completeness). -/
+/-- THE FILE-FORMAT LAW (the grammar layer's instance): a well-formed
+    registry prints to its canonical text and parses back to EXACTLY
+    itself. The hand-proved family of the pre-grammar file (the digit
+    token's law, the row law, the line-structure fold — ~250 lines)
+    died here: the content is `Grammar.run_print_fixFree`'s; what
+    remains is the wrapper's newline discipline + the wf gate. -/
 theorem parse_print (r : CodeRegistry) (hwf : CodeRegistry.wfProp r)
     (hnames : ∀ row ∈ r, rowNameOk row.name) :
     parse (print r) = .ok r := by
-  have hchars : ∀ row ∈ r, ∀ c ∈ row.name.toList, rowNameChar c = true := by
-    intro row hm c hc
-    have h1 := Bool.and_eq_true_iff.mp (hnames row hm)
-    exact List.all_eq_true.mp (Bool.and_eq_true_iff.mp h1.1).2 c hc
-  have hrow : ∀ row ∈ r, parseRow (renderRow row) = some row :=
-    fun row hm => parseRow_renderRow row (hnames row hm)
-  have hmap : List.map String.ofList
-      (List.map (fun row => (renderRow row).toList) r ++ [[]])
-      = r.map renderRow ++ [""] := by
-    rw [List.map_append, List.map_singleton, map_ofList_map_toList]
-  rw [parse, splitOnP_print r hchars, hmap, dropLastEmpty_append, parseLines,
-    foldl_parseStep r [] hrow]
-  simp only [List.append_nil, List.reverse_reverse]
+  simp only [parse]
+  have hcond : ((print r == "" || (print r).toList.getLast? == some '\n') = true) := by
+    cases r with
+    | nil => rw [print_nil]; simp
+    | cons row rest => simp [print_last_newline (row :: rest) (by simp)]
+  rw [if_pos hcond]
+  have hrun : Grammar.run registryGrammar (print r) = .ok r :=
+    Grammar.run_print_fixFree registryGrammar registryFixFree registryCert r
+      (valueOk_names r hnames)
+  simp only [hrun]
   rw [if_pos (show codeRegistryWf.check r = true from
     Bool.and_eq_true_iff.mpr
       ⟨decide_eq_true_iff.mpr hwf.1, (sortedCodes_iff _).mpr hwf.2⟩)]
 
+/-- Law 2 (the exactness direction) at the registry's grammar: a
+    successful derived parse consumed EXACTLY the print of its result
+    (+ the parsed value is value-owned — the name discipline). -/
+theorem print_parse (fuel : Nat) (ys : CodeRegistry) (cur cur' : Cursor)
+    (h : Grammar.parseG registryGrammar fuel cur = .ok (ys, cur')) :
+    cur.cs = (print ys).toList ++ cur'.cs ∧
+    cur'.off = cur.off + (print ys).length ∧
+    Grammar.valueOk registryGrammar ys = true :=
+  Grammar.print_parse registryGrammar fuel registryCoherent h
 /-! ## the coverage face — the tree's referenced codes vs the registry
 
 05 §4's envelope discipline at the registry: every E-code the tree
@@ -698,7 +716,7 @@ data here, so the teeth tests construct occurrences directly.
     HERE and in `notes/code-registry.txt` in the same change. -/
 def codeFamilies : List String :=
   ["KB", "KD", "KL", "TK", "SC", "SD", "SCF", "SN", "SE", "WV", "SU", "GC",
-    "EM"]
+    "EM", "IN", "FT", "QL", "SS", "LK", "GT"]
 
 /-- The RAW code shape: uppercase letters (the family prefix's
     spelling) followed by exactly 4 digits — the family clause

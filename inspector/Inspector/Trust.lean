@@ -42,12 +42,15 @@ The five questions (notes/v3/01-core.md):
 -/
 
 import Inspector.Obligations
+import Inspector.Tables
+import Kit.ListExtras
 import LintKit
 import Lean
 
 namespace Inspector.Trust
 
 open Lean
+open Inspector.Tables (obligRowsOf selectRows tierQueries)
 
 /-! ## The axiom surface -/
 
@@ -64,26 +67,19 @@ inductive AxiomClass where
   | outside
 deriving BEq, Repr
 
-/-- The native trust base's shape (the same runner-checked certificate
-    class LintKit.AxiomAllowlist matches — RENDERED here per class, the
-    allowlist membership itself is LintKit's, consumed below). -/
-def isNativeTrustBase (n : Name) : Bool :=
-  ((toString n).splitOn "_native.native_decide.").length != 1 ||
-  ((toString n).splitOn "_native.bv_decide.").length != 1
-
 /-- Classify one axiom: the core triple by name, the native trust
-    bases by their certificate shape, everything else OUTSIDE — via
+    bases by their certificate shape (LintKit.isNativeTrustBase — the
+    ONE shape test, consumed), everything else OUTSIDE — via
     `LintKit.isAllowedAxiom` (consumed, never re-encoded). -/
 def classifyAxiom (n : Name) : AxiomClass :=
   if n == `propext || n == `Classical.choice || n == `Quot.sound then .coreTriple
-  else if isNativeTrustBase n then .nativeTrustBase
+  else if LintKit.isNativeTrustBase n then .nativeTrustBase
   else if LintKit.isAllowedAxiom n then .nativeTrustBase
   else .outside
 
-/-- String-list dedup, order-preserving. -/
-def dedup : List Name → List Name
-  | [] => []
-  | x :: xs => if xs.contains x then dedup xs else x :: dedup xs
+/-- Name-list dedup, order-preserving — Kit.ListExtras.dedup's face
+(the ONE dedup). -/
+def dedup : List Name → List Name := Kit.ListExtras.dedup
 
 /-- Sort + dedup the axiom set (deterministic rendering). -/
 def sortedAxioms (axs : List Name) : List Name :=
@@ -130,14 +126,18 @@ def tierLine (t : Kit.Tier) (n : Nat) : String :=
   | .guestVerified => "; the verifier's identity must be pinned (04 §7)"
   | _ => "")
 
-/-- The tiers' distribution over the replayed rows, in the closed
-    tier order (the evidence-strength profile). -/
+/-- The tiers' distribution over the replayed rows, in the closed tier
+    order (the evidence-strength profile). THE MIGRATED COUNTS (C5):
+    each tier's count is the qlang! filter `qTier*` over the oblig
+    table (`tierQueries` — the closed tier set's render spellings as
+    the string literals), walked in the table's order (`selectRows`),
+    so each count is the hand filter's (the spellings are distinct per
+    tier — the closed set's render is injective in practice). -/
 def tierDistribution (rows : List Inspector.InspRow) : String :=
   "obligation tiers (the evidence-strength profile over the replayed rows):\n" ++
   String.intercalate "\n"
-    ([Kit.Tier.provedAtElab, .decidableNow, .generatedCheck, .oracleSwept,
-      .guestVerified].map fun t =>
-        tierLine t (rows.filter (fun r => r.tier == t) |>.length))
+    (tierQueries.map fun (t, q) =>
+      tierLine t (selectRows q (obligRowsOf rows) |>.length))
 
 /-! ## The duel rows' status (the honest zero) -/
 
@@ -177,15 +177,11 @@ def trustReport (replayed : String) (projMods totalMods : Nat)
 
 /-- The replayed roots' distinct axiom cone: every decl whose module is
     rooted at one of the roots (LintKit.packageDecls, consumed) gets
-    its kernel `collectAxioms` cone; the union is the surface the
-    report classifies. Host-side (the env machinery). -/
+    its kernel `collectAxioms` cone; the union is LintKit.axiomUnion's
+    (the ONE fold). Host-side (the env machinery). -/
 unsafe def axiomCones (env : Lean.Environment) (roots : Array Name) :
     CoreM (List Name) := do
   let decls ← LintKit.packageDecls env roots
-  let mut set : NameSet := {}
-  for d in decls do
-    for a in ← collectAxioms d do
-      set := set.insert a
-  pure set.toList
+  pure (← LintKit.axiomUnion decls).toList
 
 end Inspector.Trust

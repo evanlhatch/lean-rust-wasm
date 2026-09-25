@@ -10,8 +10,9 @@ never writes `Ty` or `Item` by hand).
 The registration is MOUNTED on the lane substrate (Kit.Lane's
 `register_lane` — 12 §2's steps 1–2 mechanized into one kit call):
 
-- the extension: substrate-generated (`schemaExt`, append-only,
-  addImportedFn-concatenates the imported arrays);
+- the log: substrate-generated rows appended to the ONE compile-time
+  event log (`Kit.Lane.laneLogExt`, wave-30 A2 — the lane-tagged row
+  family; append on add, addImportedFn-concatenates on import);
 - the attribute: substrate-generated (`@[schema]`, the `attr` clause
   keeps the slice's authoring surface byte-stable); the custom
   `builder` clause CONSUMES the description layer (the CONVERGED
@@ -22,9 +23,9 @@ The registration is MOUNTED on the lane substrate (Kit.Lane's
   item type, the value evaluated at elaboration) is the lane shape
   KitTests.LaneReg exercises end-to-end; `naming` is the registry's
   lookup key (the item's Lean name);
-- the replay/fold faces: `getSchemaItems` + `schemaRegistry` (the
+- the replay/fold faces: `getSchemas` + `schemaRegistry` (the
   substrate's generated accessors; the fold hook materializes the
-  replay into a `Kit.DataRegistry`).
+  routed replay into a `Kit.DataRegistry`).
 
 The duplicate-name refusal is the substrate's closed-world Diag
 (got + the taken names + the ONE engine's did-you-mean — was a bare
@@ -90,8 +91,9 @@ meta def reflectStruct (env : Lean.Environment) (declName : Lean.Name) :
     substrate's DEFAULT builder (a `def` of the item type, the value
     evaluated at elaboration) is the lane shape — KitTests.LaneReg
     exercises it end-to-end. `naming` is the registry's lookup key.
-    Generates: `schemaExt` (the append-only compile-time event log),
-    `@[schema]`, `getSchemaItems` (the replay accessor),
+    Appends to the ONE log (`Kit.Lane.laneLogExt`; the lane's rows are
+    the `schema`-tagged family), generates
+    `@[schema]`, `getSchemas` (the routed replay reader),
     `schemaRegistry` (the fold hook — the replay materialized into a
     `Kit.DataRegistry`), `schemaNameOf`, `schemaAttrReg` (the
     attribute's initializer). -/

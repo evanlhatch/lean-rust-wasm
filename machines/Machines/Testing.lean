@@ -269,6 +269,27 @@ theorem deadlockFree_proved (m : MachineWithInv S I) (inputs : List I)
       · exfalso
         simp at hgap
 
+/-- The verdict's `find?` face, unfolded once (both guard-coverage
+    bridges' shared assembly): the verdict IS the sweep's `find?`
+    result, read through `Option.elim`. -/
+theorem guardCoverage_find? (m : MachineWithInv S I) (inputs : List I)
+    (states : List S) (hcomplete : ∀ i, i ∈ inputs) (v : Option I)
+    (h : guardCoverage m inputs states hcomplete
+      = v.elim .proved (fun i => .refuted (.dead i))) :
+    inputs.find? (fun i => !states.any (fun s => m.enabled s i)) = v := by
+  simp only [guardCoverage] at h
+  cases hf : inputs.find? (fun i => !states.any (fun s => m.enabled s i)) with
+  | none =>
+      rw [hf] at h
+      cases v with
+      | none => rfl
+      | some i' => simp at h
+  | some i' =>
+      rw [hf] at h
+      cases v with
+      | none => simp at h
+      | some i'' => cases h; rfl
+
 /-- A `.proved` guard-coverage verdict MEANS: every event (the sweep
     is complete by the caller's proof) is enabled somewhere. The bridge
     from the sweep to the proposition (pattern #1). -/
@@ -277,13 +298,7 @@ theorem guardCoverage_proved (m : MachineWithInv S I) (inputs : List I)
     (h : guardCoverage m inputs states hcomplete = .proved) :
     ∀ i, i ∈ inputs → ∃ s, s ∈ states ∧ m.enabled s i = true := by
   intro i hi
-  have hfind : inputs.find? (fun i => !states.any (fun s => m.enabled s i)) = none := by
-    simp only [guardCoverage] at h
-    cases hf : inputs.find? (fun i => !states.any (fun s => m.enabled s i)) with
-    | none => rfl
-    | some i' =>
-        rw [hf] at h
-        simp at h
+  have hfind := guardCoverage_find? m inputs states hcomplete none h
   have hnot := List.find?_eq_none.mp hfind i hi
   simp only [Bool.not_eq_true'] at hnot
   cases hb : states.any (fun s => m.enabled s i) with
@@ -298,16 +313,7 @@ theorem guardCoverage_refuted (m : MachineWithInv S I) (inputs : List I)
     (states : List S) (hcomplete : ∀ i, i ∈ inputs) (i : I)
     (h : guardCoverage m inputs states hcomplete = .refuted (.dead i)) :
     i ∈ inputs ∧ ∀ s ∈ states, m.enabled s i = false := by
-  have hfind : inputs.find? (fun i => !states.any (fun s => m.enabled s i)) = some i := by
-    simp only [guardCoverage] at h
-    cases hf : inputs.find? (fun i => !states.any (fun s => m.enabled s i)) with
-    | none => rw [hf] at h; simp at h
-    | some i' =>
-        rw [hf] at h
-        injection h with h1
-        injection h1 with h2
-        subst h2
-        rfl
+  have hfind := guardCoverage_find? m inputs states hcomplete (some i) h
   refine ⟨List.mem_of_find?_eq_some hfind, fun s hs => ?_⟩
   have hp := List.find?_some hfind
   simp only [Bool.not_eq_true'] at hp

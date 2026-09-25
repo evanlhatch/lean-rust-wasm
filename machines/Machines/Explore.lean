@@ -224,6 +224,33 @@ theorem badEntry_none (inv? : S → Bool) (acc : List (S × List I))
   have := List.find?_eq_none.mp h p hp
   simpa using this
 
+/-! ## THE OBSERVER INVERSION KIT (pattern 18's face b, G-lite) -/
+
+/-- Each verdict observer's output is a function of `badEntry` alone —
+    the equation faces, proved once. The soundness theorems' handler
+    blocks (`hbudget`/`hstable`'s `cases hb : badEntry …`) become
+    one-line rewrites; every FUTURE theorem over these observers cites
+    these instead of re-spelling the match reduction. -/
+theorem refutedOf_none {inv? : S → Bool} {acc : List (S × List I)}
+    (h : badEntry inv? acc = none) :
+    refutedOf inv? acc = .unknown .budgetExhausted := by
+  simp [refutedOf, h]
+
+theorem refutedOf_some {inv? : S → Bool} {acc : List (S × List I)}
+    {e : S × List I} (h : badEntry inv? acc = some e) :
+    refutedOf inv? acc = .refuted e.2 e.1 := by
+  simp [refutedOf, h]
+
+theorem stabilizedOf_none {inv? : S → Bool} {acc : List (S × List I)}
+    (h : badEntry inv? acc = none) :
+    stabilizedOf inv? acc = .proved := by
+  simp [stabilizedOf, h]
+
+theorem stabilizedOf_some {inv? : S → Bool} {acc : List (S × List I)}
+    {e : S × List I} (h : badEntry inv? acc = some e) :
+    stabilizedOf inv? acc = .refuted e.2 e.1 := by
+  simp [stabilizedOf, h]
+
 /-! ## The fold's laws (proved ONCE over the parameterized shape) -/
 
 /-- THE COVERAGE INDUCTION (the stabilization⇒coverage induction,
@@ -338,12 +365,12 @@ theorem exploreAux_proved (m : Machine S I) (inv? : S → Bool) (inputs : List I
     (hbudget := by
         intro a _ hcon
         cases hb : badEntry inv? a with
-        | none => simp [refutedOf, hb] at hcon
-        | some e => simp [refutedOf, hb] at hcon)
+        | none => simp [refutedOf_none hb] at hcon
+        | some e => simp [refutedOf_some hb] at hcon)
     (hstable := by
         intro a hseed hclosed hcon
         cases hb : badEntry inv? a with
-        | some e => simp [stabilizedOf, hb] at hcon
+        | some e => simp [stabilizedOf_some hb] at hcon
         | none =>
             have hclean := badEntry_none inv? a hb
             intro s hr
@@ -360,6 +387,19 @@ theorem check_proved (m : Machine S I) (inv? : S → Bool) (inputs : List I)
     (hinputs : ∀ s i s', m.Reachable init s → m.step s i s' → i ∈ inputs) :
     ∀ s, m.Reachable init s → inv? s = true :=
   exploreAux_proved m inv? inputs init fuel [(init, [])] (by simp) h hinputs
+
+/-- THE VERDICT HANDLER (the some-face assembly, written once): a
+    refuted verdict from a SEEN violation is the witness — the
+    observer's `some` face is the shared injection + `seen_refuted`
+    route, whichever observer reported it. -/
+theorem seen_handler (m : Machine S I) (inv? : S → Bool) (acc : List (S × List I))
+    (init : S) (hacc : ∀ p ∈ acc, m.run init p.2 = some p.1)
+    (e : S × List I) (t : List I) (bad : S)
+    (hb : badEntry inv? acc = some e)
+    (hcon : Verdict.refuted e.2 e.1 = Verdict.refuted t bad) :
+    m.run init t = some bad ∧ inv? bad = false ∧ m.Reachable init bad := by
+  obtain ⟨rfl, rfl⟩ := Verdict.refuted.inj hcon
+  exact seen_refuted m inv? acc init hacc e hb
 
 /-- REFUTED WITNESS: the `.refuted` verdict's tape is a REAL
     counterexample — it runs from the initial state to `bad`, and `bad`
@@ -382,25 +422,21 @@ theorem exploreAux_refuted (m : Machine S I) (inv? : S → Bool) (inputs : List 
         cases hb : badEntry inv? a with
         | none =>
             intro t b hcon
-            simp [refutedOf, hb] at hcon
+            simp [refutedOf_none hb] at hcon
         | some e =>
             intro t b hcon
-            simp only [refutedOf, hb] at hcon
-            injection hcon with h1 h2
-            subst h1; subst h2
-            exact seen_refuted m inv? a init hacc' e hb)
+            rw [refutedOf_some hb] at hcon
+            exact seen_handler m inv? a init hacc' e t b hb hcon)
     (hstable := by
         intro a hacc'
         cases hb : badEntry inv? a with
         | none =>
             intro t b hcon
-            simp [stabilizedOf, hb] at hcon
+            simp [stabilizedOf_none hb] at hcon
         | some e =>
             intro t b hcon
-            simp only [stabilizedOf, hb] at hcon
-            injection hcon with h1 h2
-            subst h1; subst h2
-            exact seen_refuted m inv? a init hacc' e hb)
+            rw [stabilizedOf_some hb] at hcon
+            exact seen_handler m inv? a init hacc' e t b hb hcon)
     fuel acc hacc
   exact hgen tape bad h
 

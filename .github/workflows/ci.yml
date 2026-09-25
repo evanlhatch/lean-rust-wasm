@@ -1,0 +1,100 @@
+# ── ci.yml: CI runs EXACTLY `just ci` ────────────────────────────────
+# The local/CI parity discipline (notes/v3/13-interfaces.md): "just
+# gates locally; CI runs the same; a red gate names the gate + the
+# divergence, never a bare failure". The workflow's ONLY job step is the
+# justfile's `ci` row — the full composition (build + the test exes +
+# the gates battery + the Rust crates' cargo tests) — so a local
+# `just ci` is byte-for-byte what the runner executes. The gate naming
+# lives in the gates exe's own reports (every gate names its gate +
+# divergence in the run log; `gates all` collects every verdict in
+# registry order), never in this file.
+#
+# Toolchain assumptions (mined from legacy/.github/workflows/ci.yml's
+# working discipline):
+#   - Lean is elan-pinned: lean-toolchain says leanprover/lean4:v4.33.0;
+#     a manual elan-init install with that default lands the toolchain at
+#     ~/.elan/toolchains/leanprover--lean4---v4.33.0/, and the elan SHIMS
+#     on PATH serve the justfile's bare `lake` calls (this justfile uses
+#     plain `lake`, unlike the legacy one's hardcoded toolchain path).
+#   - NO mathlib (the tree is core-only; Cli + batteries + lean4lean are
+#     the only requires) — no cachix olean fetch step exists; the first
+#     build compiles the small dep closure from source.
+#   - cargo: the ubuntu-latest runner ships a Rust toolchain; the crates
+#     (schema-generated, mandate-delta, mandate-host) need nothing else.
+#   - The elab-watch row inside `just gates`: its committed baseline
+#     (notes/elab-baseline.tsv) carries the REFERENCE calibration — the
+#     module/reference ratio divides out CI-vs-local machine speed, so a
+#     slower runner is not a false regression. A genuine ratio
+#     regression flags exactly as it does locally; the re-baseline is
+#     the deliberate `--write --accept-drift` + commit, same as the
+#     other baselined gates.
+#
+# Caching: elan toolchains, the lake build dir (.lake — the dep closure
+# AND the tree's oleans), cargo registry + target.
+# ──────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    ci:
+        name: the full battery (build + tests + gates + rust — `just ci`)
+        runs-on: ubuntu-latest
+        timeout-minutes: 240
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: install just
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: just
+
+            - name: cache elan (the lean-toolchain pin, v4.33.0)
+              uses: actions/cache@v4
+              with:
+                  path: ~/.elan
+                  key: lean-elan-v1-${{ runner.os }}-v4.33.0
+
+            - name: install elan + the pinned toolchain (lean-toolchain)
+              run: |
+                  set -euo pipefail
+                  [ -x "$HOME/.elan/bin/elan" ] || \
+                    curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y \
+                      --default-toolchain leanprover/lean4:v4.33.0
+                  echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+                  elan show
+                  test -d "$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+
+            - name: cache lake builds (.lake — the dep closure + the oleans)
+              uses: actions/cache@v4
+              with:
+                  path: .lake
+                  key: lean-lake-v1-${{ runner.os }}-v4.33.0-${{ hashFiles('lake-manifest.json') }}
+                  restore-keys: |
+                      lean-lake-v1-${{ runner.os }}-v4.33.0-
+
+            - name: cache cargo (registry + target — the `just rust` lane)
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      target
+                  key: rust-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+                  restore-keys: |
+                      rust-v1-${{ runner.os }}-
+
+            # THE battery — the same recipe a local dev runs. A red run's
+            # log names the gate + the divergence (the gates exe's own
+            # report discipline), never a bare failure.
+            - name: just ci (build + test + gates + rust)
+              run: just ci

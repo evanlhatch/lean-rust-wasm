@@ -133,7 +133,11 @@ unexpanders + printer. The curated instance-gate failure is part of the
 surface (04 §3's shape in 05). Before writing ANY surface: check whether
 the surface is a grammar (TextKit) or a clause command (the GenKit
 clause kit) or a Lean attribute (register_check_attribute) — the three
-existing shapes cover the space.
+existing shapes cover the space. A DECLARATION GENERATOR (the
+`declare_fold` family) rides the parse route (15-patterns #19): the
+generated commands render to source text + re-parse via
+`Lean.Parser.runParserCategory` — quotation splices carry macro-scope
+hygiene walls exactly when the generated patterns capture bindings.
 
 ## 7. A new gate / check
 
@@ -171,6 +175,9 @@ duel (the oracle), monitor (runtime) — one Statement, many mounts.
 - Zero sorry/axiom; a missing theorem is information, a stub is a lie;
   the axiom gate's baselines re-sync with the `--write` discipline (a
   content-changing re-baseline is deliberate).
+- Generated commands capture bindings → the parse route (15-patterns
+  #19): render to source + re-parse, never a quotation splice whose
+  hygiene scopes elaborate differently from byte-identical hand code.
 - Negative controls are mandatory and structural (the PropSpec control
   field); a gate without teeth gets a sabotage row.
 - The docs-check gate: notes' Lean fences name real decls or tag

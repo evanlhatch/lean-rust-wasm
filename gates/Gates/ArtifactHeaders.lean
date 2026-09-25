@@ -67,31 +67,25 @@ def headerVerdict (committed : String) : HeaderVerdict :=
 /-- `gates artifact-headers` — presence + shape over every committed
     generated artifact. Exit 1 on any malformed/absent header. -/
 unsafe def run : IO UInt32 := do
-  let pkg : PkgSpec := { dir := "SchemaCore", roots := #[`SchemaCore.Slice] }
+  let pkg : PkgSpec := { dir := "SchemaCore", srcDir := "schemacore", roots := #[`SchemaCore.Slice] }
   Gates.withPkgEnv "artifact-headers" pkg fun env => do
-    match SchemaCore.regen env with
+    match ← Kit.Lane.runCoreIO env (SchemaCore.regen env) with
     | .error e =>
       IO.eprintln s!"artifact-headers: REGEN FAILED — {e}"
       return 1
     | .ok r => do
-      let mut failed := false
-      let mut ok := 0
-      for f in r.files do
-        let path : System.FilePath := f.path
-        unless ← path.pathExists do
-          IO.eprintln s!"artifact-headers: {f.path} ABSENT — a declared \
-            artifact has no committed file"
-          failed := true
-          continue
-        let committed ← IO.FS.readFile path
+      -- the shared artifact walk (Gates.forDeclared) — the audit lane's
+      -- skeleton, the header verdict as this gate's own
+      let (_, ok, failed) ← Gates.forDeclared "artifact-headers"
+        "a declared artifact has no committed file" r.files fun f committed => do
         match headerVerdict committed with
-        | .ok => ok := ok + 1
+        | .ok => return true
         | .malformed why => do
           IO.eprintln s!"artifact-headers: {f.path} MALFORMED — {why}; \
             a headerless file at a generated path is a hand-written file \
             squatting on the one-writer rule"
-          failed := true
-        | .absent => pure ()
+          return false
+        | .absent => return true
       if failed then return 1
       IO.println s!"artifact-headers: clean — {ok} artifact(s) carry the \
         2-line GENERATED header"

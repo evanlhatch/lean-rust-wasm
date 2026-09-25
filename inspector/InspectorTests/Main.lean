@@ -58,6 +58,14 @@ runner is TestingKit's (`mainOfSuites`). Suites:
    mandatory negative controls (an early divergence, a rewritten
    original, a fabricated divergence, a renumbering, an out-of-range
    fabrication).
+9. `the duel replay` — the committed duel vectors' Lean REPLAY (the
+   four committed duel sets re-run through the landed engines against
+   their committed manifests — the regression discipline, green), a
+   PLANTED divergence's explain face (the witness naming BOTH sides,
+   the Diag, the ready-to-paste ledger row), and the mandatory
+   negative controls (a lying agree, a refusal hiding as a decode, a
+   malformed manifest parsing, a planted divergence staying hidden, a
+   ledger row omitting the witness).
 
 Axiom self-check: `Axioms.lean` (imported below) pins #print axioms
 over the pure rendering faces — zero axioms or the build fails.
@@ -68,13 +76,21 @@ import Inspector.LedgerView
 import Inspector.Cites
 import Inspector.Trust
 import Inspector.WhatIf
+import Inspector.Explain
+import Inspector.DuelReplay
+import Inspector.Tables
 import Kit.Ledger
 import TestingKit.Harness
+import InspectorTests.ExplainSpecs
 import InspectorTests.Axioms
 
 open Lean
 
 open Inspector TestingKit
+open Inspector.Tables (ledgerRowOf ledgerRowsOf obligRowsOf selectRows projectRows
+  readStr readU64 qTierOracleSwept qObligGaps qObligFlagged qObligLabels
+  codeRowsOf itemRowsOf qCodeNames qItemNames)
+open SchemaCore (Item Field)
 
 /-! ## The fabricated fixtures (the teeth's material) -/
 
@@ -337,7 +353,53 @@ def ledgerSpecs : List Spec :=
               s!"the round-trip rows drifted: {rows.length} row(s)"
         | .error e => assert false s!"the canonical print refused to parse: {e}"
         assert (Kit.Ledger.selfStable printed)
-          "the canonical print failed its own stability check")
+          "the canonical print failed its own stability check"
+        -- C5 BYTE-COMPAT TEETH: the qlang!-migrated backward table
+        -- renders each row byte-identically to the hand line (the csv
+        -- columns ARE the ledger file's own list spellings).
+        for a in fixtureLedger do
+          assertEq "backward row bytes" (Inspector.LedgerView.renderBackwardLine a)
+            (Inspector.LedgerView.renderBackwardRowT (ledgerRowOf a))
+        assert ((Inspector.LedgerView.backwardTable fixtureLedger).contains
+            "  gen/a.wit ← wit (rev rev-1, hash 7)\n    spec rows: Schema.Example\n")
+          "the migrated backward table's bytes drifted"
+        -- the migrated forward table's universe: both artifacts named
+        assert ((Inspector.LedgerView.forwardTable fixtureLedger).contains
+            "Schema.Example → gen/a.wit, gen/b.rs")
+          "the migrated forward universe drifted"
+        -- THE OBLIG TABLE + THE QUERY AGREEMENT: the migrated sweep
+        -- counts are the hand filters' (dual-computation pin).
+        let orows := obligRowsOf [honestDecided, honestOracle, gapRow]
+        assertEq "gap count agreement"
+          ([honestDecided, honestOracle, gapRow].filter (·.hasGap) |>.length)
+          (selectRows qObligGaps orows |>.length)
+        assertEq "flagged count agreement"
+          ([honestDecided, honestOracle, gapRow].filter (fun r => !r.isClean) |>.length)
+          (selectRows qObligFlagged orows |>.length)
+        assertEq "tier count agreement"
+          ([honestDecided, honestOracle, gapRow].filter (·.tier == .oracleSwept) |>.length)
+          (selectRows qTierOracleSwept orows |>.length)
+        -- the labels projection: both labels present (sorted order)
+        let labels := (projectRows qObligLabels orows).map (fun r => readStr r "label")
+        assert (labels.contains "test/honest-decided" && labels.contains "test/fabricated-gap")
+          "the labels projection lost a label"
+        -- THE CODE REGISTRY'S TABLE FACE (C5): the row face + the
+        -- names projection over a fabricated registry.
+        let crows := codeRowsOf [ { name := "IN0001", code := 1, retired := false }
+                                , { name := "IN0002", code := 2, retired := true } ]
+        assertEq "registry rows" crows.length 2
+        let cnames := (projectRows qCodeNames crows).map (fun r => readStr r "name")
+        assert (cnames.contains "IN0001" && cnames.contains "IN0002")
+          "the registry's names projection lost a name"
+        -- THE SNAPSHOT'S TABLE FACE (C5): one row per (item, field).
+        let irows := itemRowsOf [ { name := "Example"
+                                  , fields := [{ name := "count", ty := .u64 },
+                                               { name := "label", ty := .string }] } ]
+        assertEq "item rows" irows.length 2
+        let inames := (projectRows qItemNames irows).map (fun r => readStr r "item")
+        assert (inames.contains "Example") "the snapshot's item projection lost the item"
+        assert (irows.any (fun r => readStr r "field" == "count" && readStr r "ty" == "u64"))
+          "the snapshot's ty column drifted")
       [ ("forward under-reports the enumeration face (the pre-correction query)",
           fun _ => assert
             (!(Kit.Ledger.forward `Schema.Example [`Schema.Example]
@@ -559,6 +621,121 @@ def whatIfSpecs : List Spec :=
                 no occurrence at 9, nothing modified")]
     1 42 (h := by simp)]
 
+/-! ## 9. The duel replay (the committed duel vectors' Lean replay +
+##    the explain discipline: the witness + the ledger rows) -/
+
+/-- The planted divergence: the codec duel's `bool_false` vector
+    replayed against a FLIPPED expectation (`atom bool true` — a
+    doctored manifest row, everything else byte-identical). The
+    verdict must be a divergence whose witness names BOTH sides (the
+    planted expectation, the Lean replay's observation). -/
+unsafe def plantCodecDivergence :
+    IO (Option (String × Kit.Duel.Verdict)) := do
+  match Inspector.DuelReplay.duelEntries.find? (fun e => e.name == "schema-codec") with
+  | none => return none
+  | some e =>
+    let text ← IO.FS.readFile (e.dir ++ "/manifest.txt")
+    let planted := text.replace "atom bool false" "atom bool true"
+    match Inspector.DuelReplay.parseManifest planted with
+    | .error _ => return none
+    | .ok m =>
+      match m.rows.find? (fun (p, _) => p.endsWith "bool_false.bin") with
+      | none => return none
+      | some (p, x) =>
+        let bytes ← IO.FS.readBinFile p
+        return some (p, Inspector.DuelReplay.rowVerdict p x (e.engine p x bytes))
+
+open Inspector.DuelReplay in
+def duelSpecs (runs : List (String × Except String (List (String × Kit.Duel.Verdict))))
+    (planted : Option (String × Kit.Duel.Verdict)) : List Spec :=
+  [ Spec.ofList "the committed duel sets replay green (the regression discipline)"
+      (fun _ => do
+        -- THE REGISTRY PIN: exactly the five committed duels (a new duel
+        -- lands its row — the registration point — and the count moves)
+        assertEq "duel count" duelEntries.length 5
+        -- THE VOCABULARY PIN: the expectation render-parse round trip
+        -- over the closed four (the manifest's ONE format, read back)
+        for x in [Kit.Duel.Expect.decode "atom u64 300", .refuse,
+                  .run "i64:42", .trap] do
+          match parseExpect x.render with
+          | .ok y =>
+              let drift := s!"the expectation vocabulary drifted: {x.render}"
+              assert (y == x) drift
+          | .error e =>
+              let miss := s!"render-parse round trip failed for {x.render}: {e}"
+              assert false miss
+        -- THE REPLAY PIN: every committed duel replays green — every
+        -- committed byte re-ran through the Lean engine and matched its
+        -- committed expectation (tested agreement, never a theorem)
+        for (name, run) in runs do
+          match run with
+          | .error msg => assert false s!"{name}: {msg}"
+          | .ok rows =>
+            for (p, v) in rows do
+              let bad := s!"{name}: {p} — {Kit.Duel.Verdict.render v}"
+              assert (isAgree v) bad)
+      [("a lying agree is green", fun _ =>
+          let lie := match rowVerdict "v" (.decode "a") (.value "b") with
+            | .agree => true | _ => false
+          assert lie
+            "control fired: decode-a vs value-b must diverge")
+      , ("a refusal hides as a decode", fun _ =>
+          let lie := match rowVerdict "v" .refuse (.value "decoded") with
+            | .agree => true | _ => false
+          assert lie
+            "control fired: a refuse expectation over a decoded vector must diverge")
+      , ("a malformed manifest parses", fun _ =>
+          let lie := match parseManifest "x" with
+            | .ok _ => true | .error _ => false
+          assert lie
+            "control fired: a manifest without the generator row must refuse")
+      ] 1 42 (h := by simp)
+  , Spec.ofList "a planted divergence explains with the witness (both sides)"
+      (fun _ => do
+        match planted with
+        | none => assert false "the planted divergence did not run"
+        | some (p, v) =>
+            match v with
+            | .diverge w =>
+                -- THE WITNESS: the vector + BOTH sides (04 §8: never a
+                -- bare "behavior changed")
+                assertEq "witness loc" w.loc p
+                assertEq "witness lhs (the planted expectation)" w.lhs
+                  "decode atom bool true"
+                assertEq "witness rhs (the Lean replay's observation)" w.rhs
+                  "value atom bool false"
+                -- THE EXPLAIN FACE: the Diag names both sides
+                let d := divergenceDiag "schema-codec" w
+                assert (d.message.contains "atom bool true")
+                  "the Diag lost the planted side"
+                assert (d.message.contains "atom bool false")
+                  "the Diag lost the observed side"
+                -- THE LEDGER ROW: the divergences.md discipline's face
+                let lr := ledgerRow "2026-09-28" "schema-codec" w
+                assert (lr.startsWith "| 2026-09-28 | schema-codec |")
+                  "the ledger row's columns drifted"
+                assert (lr.contains w.loc) "the ledger row lost the vector"
+                assert (lr.contains w.lhs && lr.contains w.rhs)
+                  "the ledger row lost a side of the witness"
+            | _ => assert false "the planted verdict is not a divergence")
+      [("a planted divergence stays hidden", fun _ =>
+          match planted with
+          | none => assert false "control did not run"
+          | some (_, v) =>
+              assert (isAgree v)
+                "control fired: the planted expectation flip must diverge")
+      , ("the ledger row omits the witness", fun _ =>
+          match planted with
+          | none => assert false "control did not run"
+          | some (_p, v) =>
+              match v with
+              | .diverge w =>
+                  assert (!(ledgerRow "2026-09-28" "schema-codec" w).contains w.loc)
+                    "control fired: the ledger row must name the vector"
+              | _ => assert false "control: not a divergence")
+      ] 1 42 (h := by simp)
+  ]
+
 /-! ## The driver -/
 
 unsafe def main : IO UInt32 := do
@@ -567,6 +744,10 @@ unsafe def main : IO UInt32 := do
       IO.eprintln s!"InspectorTests: LOAD FAILED — {e}"
       return 1
   | .ok rows =>
+      let duelRuns ←
+        Inspector.DuelReplay.duelEntries.mapM
+          (fun e => do return (e.name, ← Inspector.DuelReplay.replayDuel e))
+      let planted ← plantCodecDivergence
       TestingKit.mainOfSuites
         [ ("live replay", liveReplaySpecs rows)
         , ("live why", liveWhySpecs rows)
@@ -575,4 +756,6 @@ unsafe def main : IO UInt32 := do
         , ("ledger reading", ledgerSpecs)
         , ("proof coverage", citesSpecs)
         , ("trust report", trustSpecs)
-        , ("what-if", whatIfSpecs) ]
+        , ("what-if", whatIfSpecs)
+        , ("explain", inspectorExplainSpecs)
+        , ("duel replay", duelSpecs duelRuns planted) ]

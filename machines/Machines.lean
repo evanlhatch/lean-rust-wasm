@@ -56,6 +56,29 @@ re-exports by importing):
   `Refines` (impl ≤ spec: the observer-parameterized simulation, with
   the behavior-inclusion law `beh_le` and the composition tower
   `Refines.comp` over `Kit.Rel.comp`).
+- `Machines.Crash` — the crash/recovery refinement (D13's 10C: first-class
+  crash steps + persistent/volatile separation): the `CrashMachine` (the
+  state splits persistent/volatile IN THE TYPE), the CRASH STEP as a
+  first-class transition (`crashStep`: the volatile dropped,
+  unrepresentable in the down state's type; the persistent survives),
+  the RECOVERY transition (`up` — the persistent alone reconstructs the
+  honest resumed state) + the FAITHFUL FRAGMENT (`FaithfulAt`/
+  `Faithful` — recovery reconstructs, closed under the honest step) +
+  THE REFINEMENT both ways riding the landed `Coalg.Refines` (`refines_crashy`/`refines_free_crashy`) + the behavior-preservation payoff
+  (`beh_eq_faithful` — the observed behavior streams are EQUAL when the
+  recovery is faithful) + the worked example: the journal-backed
+  event-sourcing machine (`Crash.Journal` — the state = the replay of
+  the persistent journal + the volatile cache; a crash + the recovery =
+  the journal's replay).
+- `Machines.CrashLog` — the delta log AS a crash machine (A5): the
+  durable/volatile split IN THE TYPE (the persistent journal + the
+  volatile materialized state), append as the ONE transition family,
+  the replay as the recovery (`Machines.Crash.Log`); the torn-tail
+  recovery lands EXACTLY at the crash point's replay (the longest
+  valid prefix — `recover_prefix`), the recovered state is faithful
+  again, and the refinement (behavior preserved across crashes)
+  instantiates on the log's faithful fragment; the lossy log (journals
+  nothing) is the load-bearing-premise control.
 - `Machines.Closure` — THE CLOSURE BRIDGE (02 §9's dissolution): the
   machine-as-rules encoding (each enabled transition `(s, i, s')` = the
   ground rule `state(s') :- state(s), in(i)`) + `deriv_iff_reachable`
@@ -93,5 +116,7 @@ import Machines.Testing
 import Machines.Stream
 import Machines.Fusion
 import Machines.Coalg
+import Machines.Crash
+import Machines.CrashLog
 import Machines.Closure
 import Machines.Session

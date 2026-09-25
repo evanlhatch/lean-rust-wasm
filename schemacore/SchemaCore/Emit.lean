@@ -29,10 +29,14 @@ its row.
 
 The LAW (honest at this size): the closed-world naming precondition —
 the registry's names are unique (`reg.nodup`, the DataRegistry's own
-in-the-type invariant). The driver emits through `runCertified` with
-that certificate: the artifact is unemittable without the discharged
-law. The fields-nodup fact rides the OBLIGATION row (Item.lean), not
-the emitter law — the reflection's guarantee lives in Lean's structure
+in-the-type invariant). The inherited-correctness audit retired the
+old `law := some reg => (reg.items.map reg.nameOf).Nodup` literal: the
+certificate was `reg.nodup` — a PROOF FIELD of the spec value (the
+audit's vacuous-certificate finding; the artifact is unemittable
+without the uniqueness ALREADY, in the type). `law := none`; the
+naming uniqueness is carried where it is real — the DataRegistry
+field. The fields-nodup fact rides the OBLIGATION row (Item.lean), not
+an emitter law — the reflection's guarantee lives in Lean's structure
 discipline; carrying it as registry evidence is the row-bridge slice's
 work.
 
@@ -54,9 +58,9 @@ Core-only.
 The five questions (notes/v3/01-core.md):
 - root: Crossing — the universe (`DataRegistry Item`) read into the
   WIT-flavored target grammar.
-- carrier grade: the law is the closed-world naming precondition
-  (registry nodup) — a discharged certificate through `runCertified`,
-  an honest precondition rather than a round trip.
+- carrier grade: the naming precondition is `DataRegistry`'s
+  nodup-in-the-type (the certificate face retired — the audit's
+  vacuous-certificate finding); the artifacts ride plain `run`.
 - spine reading: the Interpretation stage (01 §5) — `regen` is the ONE
   fold; the `schema` driver and `gates gen-check` both read it.
 - ladder rung: total structural folds; the law rides the obligation
@@ -96,6 +100,7 @@ import SchemaCore.Fold
 import SchemaCore.Item
 import SchemaCore.Register
 import SchemaCore.Emit.Rust
+import SchemaCore.Emit.Ts
 
 open Kit
 
@@ -302,9 +307,10 @@ def renderWit (reg : DataRegistry Item) : String :=
 /-! ## The emitter -/
 
 /-- The slice's ONE emitter. `outputs_nodup` is in the type (Kit.Emit);
-    the law is the registry's closed-world naming invariant — the
-    precondition the artifact's item names need (the correspondence
-    law's NAME layer; the TYPE layer is renderTy's graded lowering +
+    the naming invariant is the registry's own nodup-in-the-type (the
+    old law literal was the proof field restated — the audit's
+    vacuous-certificate finding; `law := none`); the correspondence
+    law's NAME layer is the type; the TYPE layer is renderTy's graded lowering +
     `Ty.witLossless`'s fragment data, pinned in SchemaTests: the
     lossless lowerings pairwise distinct, the lossy rows' collisions
     named, nothing dropped silently). -/
@@ -321,7 +327,7 @@ def witEmitter : Kit.Emit.Emitter (DataRegistry Item) where
     -- the refusal face: NO artifact (the absence the byte-tie
     -- catches); regen's loud decided check is the driver's route
     | .error _ => []
-  law := some fun reg => (reg.items.map reg.nameOf).Nodup
+  law := none
 
 /-! ## The shared regen core -/
 
@@ -330,43 +336,64 @@ structure Regen where
   reg : DataRegistry Item
   files : List Kit.Emit.GeneratedFile
 
-/-- The ONE regen semantics, over a replayed environment: read the
-    extension state, decide the registry's nodup (loud on duplicates),
-    run the emitter through the CERTIFIED lane. Consumers: the `schema`
-    exe (the writer) and `gates gen-check` (the byte-tie) — one copy,
-    never two. -/
-def regen (env : Lean.Environment) : Except String Regen := do
-  let reg ← registryOfItems (schemaExt.getState env)
+/-- The regen's PURE core: the replayed items → the registry (nodup
+    decided loudly) → the certified files (the WIT construction
+    boundary's loud refusal before any emission). -/
+def regenOfItems (items : List Item) : Except String Regen := do
+  let reg ← registryOfItems items
   -- the WIT construction boundary: the record-level nodup facts,
   -- decided LOUDLY before any emission (a malformed registry refuses
   -- here — never silently misrenders)
   let _witChecked ← witCheckedOfReg reg
   let files :=
-    witEmitter.runCertified reg reg.nodup ++
-    Emit.Rust.rustEmitter.runCertified reg reg.nodup ++
+    witEmitter.run reg ++
+    Emit.Rust.rustEmitter.run reg ++
+    -- the TYPESCRIPT lane (the SECOND CodeTarget row — the spine's
+    -- marginal-cost measurement; the JSON interop face's artifact)
+    Emit.Ts.tsEmitter.run reg ++
     -- the DUEL's text lane (the manifest): the vectors are the duel
     -- emitter's binaryOutputs (the writer's binary loop; the binary
     -- byte-tie's gate wiring is the named follow-up)
-    Emit.Rust.duelEmitter.runCertified reg reg.nodup ++
+    Emit.Rust.duelEmitter.run reg ++
     -- the COMMIT DUEL's text lane (the bidirectional slice's
     -- differential — the vectors ride the binary loop with the first
     -- duel's)
-    commitDuelEmitter.runCertified reg reg.nodup
+    commitDuelEmitter.run reg ++
+    -- the COMMIT-SLICE consumer (the duel's Rust side, ONE emitter —
+    -- never a golden rope crack; its byte-tie rides THIS files list,
+    -- the gen-check compare — a mirror fix regens through here)
+    Emit.Rust.commitSliceEmitter.run reg
   return { reg := reg, files := files }
+
+/-- The ONE regen semantics, over a replayed environment: route the ONE
+    log (wave-30 A2) to the schema lane and re-materialize the items,
+    then the pure core. Consumers: the `schema` exe (the writer) and
+    `gates gen-check` (the byte-tie) — one copy, never two. `CoreM`
+    face (the routed replay evaluates the rows' values). -/
+unsafe def regen (env : Lean.Environment) : Lean.CoreM (Except String Regen) := do
+  match ← getSchemas env with
+  | .error e => pure (.error e)
+  | .ok items => pure (regenOfItems items)
 
 /-! ## The golden module (the byte-tie's theorem face; 09 §2) -/
 
-/-- One char's escaped spelling inside a Lean string literal. -/
-def leanEscapeChar : Char → String
-  | '\n' => "\\n"
-  | '\t' => "\\t"
-  | '\\' => "\\\\"
-  | '\"' => "\\\""
-  | c => String.singleton c
+/-- One char's escaped spelling inside a Lean string literal — the
+    Lean literal syntax's escape TABLE (Kit.Text's per-character policy
+    shape; `none` = the byte-identity pass-through). -/
+def leanEscapeChar : Char → Option String
+  | '\n' => some "\\n"
+  | '\t' => some "\\t"
+  | '\\' => some "\\\\"
+  | '\"' => some "\\\""
+  | _ => none
 
-/-- A quoted, escaped Lean string literal for `s`. -/
+/-- A quoted, escaped Lean string literal for `s` — Kit.Text's ONE walk
+    at this table (the escaper adoption: the kit owns the walk, the
+    consumer owns the table; the bytes are unchanged — every table hit
+    spells what the hand roll spelled, everything else passes through,
+    `escapeWith_none`'s reproducibility root). -/
 def leanStrLit (s : String) : String :=
-  "\"" ++ String.join (s.toList.map leanEscapeChar) ++ "\""
+  Kit.escapeWith leanEscapeChar s
 
 /-- The `KeyTy` ctor's literal spelling. -/
 def keyLeanLit : KeyTy → String
@@ -417,6 +444,7 @@ def goldensBody (reg : DataRegistry Item) : String :=
   let witLit := leanStrLit (renderWit reg)
   let libChunksLit := chunksLeanLit (Text.chunks (Emit.Rust.libRope reg))
   let diffChunksLit := chunksLeanLit (Text.chunks Emit.Rust.differentialRope)
+  let tsChunksLit := chunksLeanLit (Text.chunks (Emit.Ts.tsRope reg))
   "-- SchemaCore.Goldens — the committed goldens' Lean-side twin\n-- (the byte-tie upgraded to the proved-theorem channel; notes/v3/09-gates-ops.md §2). GENERATED by the `schema` exe — never hand-edit;\n-- regenerate with `just gen`.\n--\n-- The THREE channels:
 -- 1. THE THEOREMS (below, kernel-discharged): the emitters' run over the
 --    pinned registry IS the embedded golden — `emitter … = committed-bytes`
@@ -428,13 +456,25 @@ def goldensBody (reg : DataRegistry Item) : String :=
 --    files ARE the fresh regen's bytes. Together: emitter = committed
 --    file, by construction and by proof.
 import SchemaCore
-import SchemaCore.Slice\n\nopen SchemaCore Kit\n\nnamespace SchemaCore.Goldens\n\n/-- The registered items as literals — written by the same regen run\n    that writes the artifacts (the two channels agree by\n    construction). -/\ndef sliceItems : List Item := " ++ itemsLit ++ "\n\n/-- The pinned registry (the theorems' spec value). -/\ndef sliceReg : DataRegistry Item :=\n  { items := sliceItems, nameOf := fun it => it.name, nodup := by decide }\n\n/-- `gen/schema-slice.wit`'s body (the committed artifact minus its\n    2-line GENERATED header — the gate's `tieOf` stripping exactly). -/\ndef goldenWit : String := " ++ witLit ++ "\n\n/-- The lib.rs body's CHUNKS (the rope's `Text.chunks` — the same walk\n    `libRope` renders — so the join is definitional and the kernel\n    never executes it: the monolithic-literal whnf is quadratic in the\n    body and blows the elaboration budget (measured: 5min for the\n    differential alone); the chunk form is the budget-honest rung —\n    this module elaborates in ~12s, dominated by `lib_artifact`'s rope\n    crack — the note 09 §7 asks for). -/\ndef libChunks : List String := " ++ libChunksLit ++ "\n\n/-- `crates/schema-generated/src/lib.rs`'s body = the chunks joined. -/\ndef goldenLib : String := String.join libChunks\n\n/-- The differential body's chunks (`differentialRope`'s walk). -/\ndef diffChunks : List String := " ++ diffChunksLit ++ "\n\n/-- `crates/schema-generated/tests/differential.rs`'s body. -/\ndef goldenDiff : String := String.join diffChunks
+import SchemaCore.Slice\n\nopen SchemaCore Kit\n\nnamespace SchemaCore.Goldens\n\n/-- The registered items as literals — written by the same regen run\n    that writes the artifacts (the two channels agree by\n    construction). -/\ndef sliceItems : List Item := " ++ itemsLit ++ "\n\n/-- The pinned registry (the theorems' spec value). -/\ndef sliceReg : DataRegistry Item :=\n  { items := sliceItems, nameOf := fun it => it.name, nodup := by decide }\n\n/-- `gen/schema-slice.wit`'s body (the committed artifact minus its\n    2-line GENERATED header — the gate's `tieOf` stripping exactly). -/\ndef goldenWit : String := " ++ witLit ++ "\n\n/-- The lib.rs body's CHUNKS (the rope's `Text.chunks` — the same walk\n    `libRope` renders — so the join is definitional and the kernel\n    never executes it: the monolithic-literal whnf is quadratic in the\n    body and blows the elaboration budget (measured: 5min for the\n    differential alone); the chunk form is the budget-honest rung —\n    this module elaborates in ~12s, dominated by `lib_artifact`'s rope\n    crack — the note 09 §7 asks for). -/\ndef libChunks : List String := " ++ libChunksLit ++ "\n\n/-- `crates/schema-generated/src/lib.rs`'s body = the chunks joined. -/\ndef goldenLib : String := String.join libChunks\n\n/-- The differential body's chunks (`differentialRope`'s walk). -/\ndef diffChunks : List String := " ++ diffChunksLit ++ "\n\n/-- `crates/schema-generated/tests/differential.rs`'s body. -/\ndef goldenDiff : String := String.join diffChunks\n\n/-- The TS artifact's chunks (the SECOND CodeTarget row's rope —\n    `Emit.Ts.tsRope`'s walk; the same chunk form the lib/diff\n    channels ride). -/
+def tsChunks : List String := " ++ tsChunksLit ++ "\n\n/-- `gen/schema-slice.ts`'s body = the chunks joined. -/
+def goldenTs : String := String.join tsChunks
 \n/-! ## The theorems (the byte-tie upgraded: emitter = golden module) -/\n\nset_option maxRecDepth 100000 in\n/-- THE WIT TIE: the emitter's run over the pinned registry IS the\n    committed golden — kernel-reduced (`rfl`; the WIT lane is fully\n    structural: the typed-AST renderer + `lastName`'s fold). -/\ntheorem wit_artifact :\n    witEmitter.run sliceReg\n      = [{ path := \"gen/schema-slice.wit\", contents := goldenWit }] := rfl\n\nset_option maxRecDepth 100000 in
-/-- THE RUST TIE: the second emitter's run IS the two committed Rust
-    artifacts' bodies (the codec folds are structural algebras —
-    `encAlg`/`decAlg` — so the kernel cracks the whole rope). The
-    commit-slice consumer (tests/commit_slice.rs) is a THIRD artifact
-    on its OWN emitter — its ONE tie is `gates gen-check` (the duel
-    manifest's channel), never a golden rope crack.-/\ntheorem lib_artifact :\n    Emit.Rust.rustEmitter.run sliceReg\n      = [{ path := \"crates/schema-generated/src/lib.rs\", contents := goldenLib },\n         { path := \"crates/schema-generated/tests/differential.rs\",\n           contents := goldenDiff }] := rfl\n\nset_option maxRecDepth 100000 in\n/-- THE DIFFERENTIAL TIE: the differential's body is the committed\n    vector file's bytes, kernel-reduced (all-structural fold +\n    `encVal`'s dependent fold). -/\ntheorem diff_artifact :\n    Emit.Rust.renderDifferential = goldenDiff := rfl\n\n/-! ## The teeth (the live link) -/\n\n/-- BUILD-TIME TEETH: the pinned registry IS the live registration\n    (the replayed `@[schema]` state of the imported `SchemaCore.Slice`).\n    A universe change without `just gen` FAILS THE BUILD here — the\n    theorem channel stays glued to the live registry. -/\nmeta def goldensTeeth : Lean.Elab.Command.CommandElabM Unit := do\n  let env ← Lean.getEnv\n  let items := schemaExt.getState env\n  unless items == sliceItems do\n    throwError \"Goldens: the live `@[schema]` registration drifted from \\\n      the pinned sliceItems — run `just gen` and commit (the golden \\\n      module is generated; never hand-edit)\"\n\n#eval goldensTeeth\n\nend SchemaCore.Goldens\n"
+/- THE RUST TIE (the runtime pin — the honest evidence downgrade,
+    NAMED): the lib.rs API-surface growth (~2.5x body — the builder +
+    the 02 §3 lookups + the serde face) made the kernel's rope crack
+    blow up: the joined form's whnf is quadratic in the body
+    (>19min at ~660 lines), and even the CHUNKS-level `rfl` exceeded
+    8M heartbeats (>200s, kernel-side string building). The lib tie
+    therefore runs as a COMPILED eval in the teeth below (the same
+    #eval lane the live-registry teeth use — milliseconds); the
+    differential's kernel crack STAYS (small body, `rfl`).
+    `gates gen-check` remains the committed-bytes byte-tie of record
+    for BOTH artifacts. The commit-slice consumer
+    (tests/commit_slice.rs) is a THIRD artifact on its OWN emitter —
+    its ONE tie is `gates gen-check` (the duel manifest's channel),
+    never a golden rope crack.-/\n/- THE LIB TIE, runtime: the rendered rope IS the committed chunks —
+    compiled-eval at elaboration (fails the build loudly on drift; the
+    kernel channel's downgrade is the growth-budget note above). -/\n#eval show Lean.Elab.Command.CommandElabM Unit from do\n  let rendered := Text.render (Emit.Rust.libRope sliceReg)\n  unless rendered == goldenLib do\n    throwError \"Goldens: the lib.rs rope drifted from the committed \\\n      golden — run `just gen` and commit (never hand-edit)\"\n\nset_option maxRecDepth 100000 in\n/-- THE DIFFERENTIAL TIE: the differential's body is the committed\n    vector file's bytes, kernel-reduced (all-structural fold +\n    `encVal`'s dependent fold). -/\ntheorem diff_artifact :\n    Emit.Rust.renderDifferential = goldenDiff := rfl\n\nset_option maxRecDepth 100000 in\n/-- THE TS TIE (the SECOND CodeTarget row's channel): the TS emitter's\n    run over the pinned registry IS the committed golden —\n    kernel-reduced (the TS rope is all-structural folds; the body is\n    differential-sized, the same chunk-crack budget the differential\n    rides). -/\ntheorem ts_artifact :\n    Emit.Ts.tsEmitter.run sliceReg\n      = [{ path := \"gen/schema-slice.ts\", contents := goldenTs }] := rfl\n\n/-! ## The teeth (the live link) -/\n\n/-- BUILD-TIME TEETH: the pinned registry IS the live registration\n    (the replayed `@[schema]` state of the imported `SchemaCore.Slice`).\n    A universe change without `just gen` FAILS THE BUILD here — the\n    theorem channel stays glued to the live registry. -/\nunsafe def goldensTeeth : Lean.Elab.Command.CommandElabM Unit := do\n  let env ← Lean.getEnv\n  match ← Lean.Elab.Command.liftCoreM (getSchemas env) with\n  | .error e => throwError s!\"Goldens: the live `@[schema]` replay refused: {e}\"\n  | .ok items =>\n    unless items == sliceItems do\n      throwError \"Goldens: the live `@[schema]` registration drifted from \\\n        the pinned sliceItems — run `just gen` and commit (the golden \\\n        module is generated; never hand-edit)\"\n\n#eval goldensTeeth\n\nend SchemaCore.Goldens\n"
 
 end SchemaCore

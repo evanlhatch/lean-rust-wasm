@@ -52,9 +52,10 @@ The five questions (notes/v3/01-core.md):
   pairs (the six named in §6); nothing is emitted.
 - ladder rung: hand theorems of the small generic kind (01 §7) —
   `Expr.preserves` is the ONE generic theorem per interpretation pair.
-- gate row: the axiom pins in `KitTests.Axioms` (Kit is outside the
-  axiom gate's package set) + the KitTests pins — positive + the
-  mandatory negative controls (the row premise is load-bearing).
+- gate row: Kit's row in Gates.Packages' gated set (the per-library
+  axiom sweep covers it); the axiom pins in `KitTests.Axioms` + the
+  KitTests pins — positive + the mandatory negative controls (the row
+  premise is load-bearing).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/

@@ -305,7 +305,7 @@ def migrateRefusalSpec : Spec :=
             key is a different entity set (08 §19)")
     , ("the cap-0 field gets a default",
         fun _ =>
-          assert (match Ty.migrateDefault (.bounded 0) with
+          assert (match defaultVal? (.bounded 0) with
             | some _ => true | none => false)
           "control fired: a cap-0 bounded is UNINHABITED — the honest \
             default is none, and the derivation refuses (noDefault)") ]

@@ -26,7 +26,12 @@ refusal:
    `Kit.CodeRegistry.codeShape`) must name a LIVE row of the registry
    (`Kit.CodeRegistry.coverageOffenders`): a hand-strung code outside
    the persisted registry is a gate refusal — the envelope discipline
-   (05 §4) lands at the source, not in a convention.
+   (05 §4) lands at the source, not in a convention. ALLOWANCE, named:
+   the tooth scans string LITERALS, so a code assembled by
+   concatenation (the digits computed, never spelled) is invisible to
+   it — the honest blind spot (the ComponentTests control's spelling
+   discipline is the countermeasure: codes are spelled, so the tooth
+   sees them).
 
 `--write` is the deliberate allocation/normalization step: it
 bootstraps an absent file (the empty allocation history) and

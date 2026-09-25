@@ -24,6 +24,9 @@ import Query
 import TestingKit.Lcg
 import TestingKit.Spec
 import TestingKit.Harness
+import QueryTests.ExplainSpecs
+import QueryTests.Bridge
+import QueryTests.QLangSpecs
 import QueryTests.Axioms
 
 open Query SchemaCore TestingKit ZSet
@@ -70,9 +73,10 @@ def dupCustomers : List (RowVals custFields) :=
 def bigOrders : Q orderFields orderFields :=
   .select (.u64GtLit "total" 100) .table
 
-/-- Projection: orders → (cust, total) — columns 1 and 2. -/
+/-- Projection: orders → (cust, total) — skip `id`, keep `cust`, keep
+    `total` (the order-preserving drop; the v2 `Cols`). -/
 def orderCols : Cols orderFields :=
-  .cons ⟨1, by decide⟩ (.cons ⟨2, by decide⟩ .nil)
+  .skip (.keep (.keep .nil))
 
 def custTotal : Q orderFields (orderCols.fields orderFields) :=
   .project orderCols .table
@@ -185,4 +189,7 @@ def keyjoinSpec : Spec :=
 /-! ## The driver -/
 
 def main : IO UInt32 :=
-  mainOfSuites [("QueryTests", [fragmentSpec, weightsSpec, keyjoinSpec])]
+  mainOfSuites [("QueryTests", [fragmentSpec, weightsSpec, keyjoinSpec])
+                , ("explanations", explainSpecs)
+                , ("bridge", [QueryTests.Bridge.bridgeSpec])
+                , ("qlang", [QueryTests.QLangSpecs.qlangSpec])]

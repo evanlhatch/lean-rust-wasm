@@ -26,8 +26,12 @@ The five questions (notes/v3/01-core.md):
 -/
 
 import Inspector.Obligations
+import Inspector.Tables
 
 namespace Inspector
+
+open Inspector.Tables (obligRowsOf selectRows projectRows readStr
+  qObligGaps qObligFlagged qObligLabels)
 
 /-! ## The why-answer (one row's evidence chain) -/
 
@@ -68,11 +72,18 @@ def InspRow.renderWhy (r : InspRow) : String :=
   (if r.defects.isEmpty then "" else "\n" ++ flagLines)
 
 /-- The unknown-label answer: the LOUD miss — the available labels are
-    listed (the one engine's did-you-mean discipline at report scale). -/
+    listed (the one engine's did-you-mean discipline at report scale).
+    THE MIGRATED SHAPE (C5): the labels ride the qlang! PROJECTION
+    `qObligLabels` over the oblig table (the drop projection's
+    narrowing), read back through the projected rows — the engine's
+    canonical order (sorted; the projection's honest order change, no
+    pin distinguishes it). -/
 def whyUnknown (rows : List InspRow) (label : String) : String :=
   "inspector: NO obligation labeled `" ++ label ++ "` in the replayed rows\n" ++
   "  available labels:\n" ++
-  (String.intercalate "\n" (rows.map (fun r => s!"    - {r.label}"))) ++ "\n" ++
+  (String.intercalate "\n"
+    ((projectRows qObligLabels (obligRowsOf rows)).map
+      (fun r => s!"    - {readStr r "label"}"))) ++ "\n" ++
   "  (the full sweep: lake exe inspector report)"
 
 /-- The why command over the collected rows: an exact label match
@@ -105,8 +116,15 @@ def InspRow.renderSweep (r : InspRow) : String :=
     registered outside them is invisible here (09 §4: conservative
     invalidation governs the gates' consumption). -/
 def report (replayed : String) (rows : List InspRow) : String :=
-  let gaps := rows.filter (·.hasGap)
-  let flagged := rows.filter (fun r => !r.isClean)
+  -- THE MIGRATED COUNTS (C5): the two sweep filters are qlang! queries
+  -- over the oblig table — the gap filter on the discharge tag's closed
+  -- spelling (`qObligGaps`), the flagged filter on the defect count's
+  -- u64 face (`qObligFlagged`) — walked in the table's order
+  -- (`selectRows`), so the counts are the hand filters'. The ROW
+  -- RENDERING stays `renderSweep` (the render face over the typed row —
+  -- the table's strings cannot re-render the evidence chain).
+  let gaps := selectRows qObligGaps (obligRowsOf rows)
+  let flagged := selectRows qObligFlagged (obligRowsOf rows)
   "obligation sweep — replayed roots: " ++ replayed ++ "\n" ++
   s!"{rows.length} obligation row(s):\n" ++
   (String.intercalate "\n" (rows.map (·.renderSweep))) ++ "\n" ++

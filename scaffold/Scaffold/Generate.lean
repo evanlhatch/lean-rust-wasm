@@ -37,8 +37,10 @@ spec's `name`):
 
 The header discipline: every generated module carries the
 `Kit.Emit.header` block (the @[derived]-equivalent stamp — 01 §5: the
-generated surface is byte-tie-stable; the content hash folds the body
-through the LCG BEFORE the header is prepended — no circularity).
+generated surface is byte-tie-stable; the content hash is the body's
+`String.hash` — the byte-tie's ONE text hash,
+`Kit.Emit.GenMeta.contentHash`'s contract — computed BEFORE the header
+is prepended, so there is no circularity).
 
 The generator is TOTAL: `generate : AppSpec → Except Kit.Diag …` —
 defined for every input; a malformed spec is the Diag refusal (the
@@ -51,8 +53,7 @@ byte-tie lives in ScaffoldTests (golden-pinned); the generated
 registration module is elaborated IN-PROCESS by the tests (the
 compiled-ness proof where honestly checkable).
 
-Core-only (imports Kit.Emit + Scaffold.Spec + TestingKit.Golden — the
-cone rule).
+Core-only (imports Kit.Emit + Scaffold.Spec — the cone rule).
 
 Five questions (notes/v3/01-core.md):
 - root: Crossing — the generative engine: spec read into Lean source.
@@ -70,7 +71,6 @@ Five questions (notes/v3/01-core.md):
 
 import Kit.Emit
 import Kit.Derive.Evidence
-import TestingKit.Golden
 import Scaffold.Spec
 
 namespace Scaffold
@@ -371,13 +371,26 @@ def testsBody (spec : AppSpec) : String :=
     , "-- app module's elaboration). A drift FAILS the build."
     , "#eval show Lean.CoreM Unit from do"
     , "  let env ← Lean.getEnv"
-    , "  match " ++ baseOf spec ++ "Registry env with"
+    , "  match ← " ++ baseOf spec ++ "Registry env with"
     , "  | .error e => Lean.throwError s!\"lane fold drifted: {e}\""
     , "  | .ok reg =>"
     , "    if reg.items.length ≥ 1 && reg.items[0]!.name == \"sample\" then"
     , "      pure ()"
     , "    else"
     , "      Lean.throwError \"lane replay drifted: wrong item count or name\""
+    , ""
+    , "/- The lane's negative controls (Kit.Lane's ONE teeth shape —"
+    , "    the audit's E3): the control commands are taken VERBATIM (the"
+    , "    #guard_msgs shape); the expected refusals are computed from the"
+    , "    mount's OWN Diag constructors; the dup tooth also pins its"
+    , "    valid-list against the live registration state. A drift FAILS"
+    , "    the build. -/"
+    , "lane_dup_tooth \"sample\" [\"sample\"] in"
+    , "  @[" ++ baseOf spec ++ "] def " ++ baseOf spec ++ "DupEntry : " ++ itemTyOf spec
+    , "    := { name := \"sample\", weight := 99 }"
+    , ""
+    , "lane_wrong_tooth " ++ spec.name ++ "." ++ itemTyOf spec ++ " in"
+    , "  @[" ++ baseOf spec ++ "] def " ++ baseOf spec ++ "WrongEntry : Nat := 5"
     , ""
     , "/-- The suite: the property widens to the app's real invariants;"
     , "    the two controls are the ENTOURAGE'S mechanical shapes"
@@ -421,7 +434,7 @@ def generate (spec : AppSpec) : Except Kit.Diag (List Kit.Emit.GeneratedFile) :=
           { time := "-"
             specSha := "scaffold-golden"
             items := spec.capabilities.length
-            contentHash := TestingKit.Golden.contentHash body }
+            contentHash := body.hash }
         { path := path
           contents := Kit.Emit.header .lean "scaffold" s!"AppSpec {spec.name}" gm ++ body }
       let files :=

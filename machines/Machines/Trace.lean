@@ -246,11 +246,6 @@ def toExecution (e : Exec m s fin) : Kit.Execution (I × S) where
   result := none
   cost := e.record.length
 
-/-- The bridge law: the standard AUDIT observer sees exactly the
-    execution's record (the result projection is honestly `none`). -/
-theorem toExecution_audit (e : Exec m s fin) :
-    (Kit.auditObs (I × S)).see e.toExecution = (none, e.record) := rfl
-
 /-! ## THE GRADUATION (16-surface §5.1, 15-patterns #11): Exec ≅ the
     runnable tapes -/
 

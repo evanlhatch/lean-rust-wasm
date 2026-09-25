@@ -35,6 +35,7 @@ The five questions (notes/v3/01-core.md):
 -/
 
 import LintKit
+import Kit.ListExtras
 import Lean
 
 namespace Inspector.Cites
@@ -107,11 +108,6 @@ def zeroCites (c : Cites) (cands : List (Name × Name)) : List (Name × Name) :=
         | none => false)
     && !(c.pinned t)
 
-/-- Per-library dedup, order-preserving (the report's section list). -/
-def dedupLibs : List String → List String
-  | [] => []
-  | x :: xs => if xs.contains x then dedupLibs xs else x :: dedupLibs xs
-
 /-- One library's section: its uncited theorems. -/
 def renderLib (unc : List (Name × Name)) (lib : String) : String :=
   let rows := unc.filter (fun (m, _) => m.getRoot.toString == lib)
@@ -126,7 +122,8 @@ def uncitedReport (unc : List (Name × Name)) (_scanned : Nat) : String :=
   if unc.isEmpty then "  (none — every scanned theorem is cited outside \
       its own module or pinned by a test)"
   else String.intercalate "\n"
-    ((dedupLibs (unc.map (fun (m, _) => m.getRoot.toString))).map (renderLib unc))
+    ((Kit.ListExtras.dedup (unc.map (fun (m, _) => m.getRoot.toString))).map
+      (renderLib unc))
 
 /-- THE ZERO-CITATION REPORT: the coverage statement rides the top (the
     demand-set honesty — the scan is exactly the replayed closure's

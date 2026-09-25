@@ -174,6 +174,18 @@ theorem ruleOf_safe (t : S × I × S) : (ruleOf t).safe = true := by
   simp [ruleOf, Datalog.Rule.safe, Datalog.Rule.bound, Datalog.Lit.vars,
     Datalog.Term.vars]
 
+/-- The extraction's per-rule one-liners, lifted to the whole program
+    (written once): every rule of `programOf` IS a `ruleOf t`, so the
+    derivation premises (`deriv_iff_eval`'s wf/safe slots) are these
+    two lines at every consumer. -/
+theorem programOf_wf (m : Machine S I) (states : List S) (inputs : List I) :
+    ∀ r ∈ programOf m states inputs, r.wf := fun r hr => by
+  obtain ⟨t, _, hEq⟩ := List.mem_map.mp hr; subst hEq; exact ruleOf_wf t
+
+theorem programOf_safe (m : Machine S I) (states : List S) (inputs : List I) :
+    ∀ r ∈ programOf m states inputs, r.safe = true := fun r hr => by
+  obtain ⟨t, _, hEq⟩ := List.mem_map.mp hr; subst hEq; exact ruleOf_safe t
+
 /-! ## The extraction's tie: rules ↔ transitions -/
 
 /-- Every extracted triple's step is real: the table never invents a
@@ -325,11 +337,8 @@ theorem bridge [DecidableEq S] [DecidableEq I] [Inhabited S]
     (s : S) :
     s ∈ rs ↔ ⟨stPred, [.inl s]⟩ ∈
       Datalog.eval (programOf m states inputs) (edbOf init inputs) := by
-  have hpwf : ∀ r ∈ programOf m states inputs, r.wf := fun r hr => by
-    obtain ⟨t, _, hEq⟩ := List.mem_map.mp hr; subst hEq; exact ruleOf_wf t
-  have hsafe : ∀ r ∈ programOf m states inputs, r.safe = true :=
-    fun r hr => by
-      obtain ⟨t, _, hEq⟩ := List.mem_map.mp hr; subst hEq; exact ruleOf_safe t
+  have hpwf := programOf_wf m states inputs
+  have hsafe := programOf_safe m states inputs
   rw [Testing.reachableStates] at hstab
   constructor
   · intro hmem
@@ -377,11 +386,7 @@ theorem inv_of_eval [DecidableEq S] [DecidableEq I] [Inhabited S]
     (s : S) (hr : m.Reachable init s) : inv? s = true :=
   hinv s ((Datalog.deriv_iff_eval (programOf m states inputs)
     (edbOf init inputs) (edb_wf init inputs)
-    (fun r hmem => by
-      obtain ⟨t, _, hEq⟩ := List.mem_map.mp hmem; subst hEq; exact ruleOf_wf t)
-    (fun r hmem => by
-      obtain ⟨t, _, hEq⟩ := List.mem_map.mp hmem; subst hEq;
-        exact ruleOf_safe t)
+    (programOf_wf m states inputs) (programOf_safe m states inputs)
     (⟨stPred, [.inl s]⟩ : Datalog.Atom (MVal S I))).mp (
       (deriv_iff_reachable m states inputs init hinit hclosed hinputs s).2
       hr))

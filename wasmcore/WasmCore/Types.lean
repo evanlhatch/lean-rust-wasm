@@ -38,6 +38,13 @@ inductive ValType where
   | funcref | externref
 deriving BEq, DecidableEq, Repr, Inhabited
 
+/-- The value types' canonical SPELLING (the ONE rendering — the
+    checker's diagnostics and the WAT emitter both cite this; no
+    parallel spelling table). -/
+def renderValType : ValType → String
+  | .i32 => "i32" | .i64 => "i64" | .f32 => "f32" | .f64 => "f64"
+  | .funcref => "funcref" | .externref => "externref"
+
 /-- A function signature: params in order, results in order. -/
 structure FuncType where
   params : List ValType

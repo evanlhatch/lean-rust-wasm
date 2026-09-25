@@ -24,8 +24,9 @@ The five questions (notes/v3/01-core.md):
 - spine reading: none — the evidence discipline's substrate.
 - ladder rung: rung 1 — `rfl`/structural; same-seed replay is by
 construction.
-- gate row: none — TestingKit is outside Gates.Packages' gated set;
-TestingKitTests self-tests the tape discipline.
+- gate row: TestingKit's row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); TestingKitTests self-tests the
+  tape discipline.
 -/
 
 module
@@ -68,5 +69,39 @@ def Tape.byte (t : Tape) : UInt64 × Tape :=
 def Tape.below (t : Tape) (bound : UInt64) : Nat × Tape :=
   let s := lcg t.state
   (((s >>> 16) % bound).toNat, ⟨s⟩)
+
+/-! ## The shared drawers (the domain cores' sweep faces draw through
+    THESE — one copy, the seeded-sweep discipline) -/
+
+/-- One char from a small alphabet (the drawer's leaf). Mined verbatim
+    from SchemaCore.Derive's sweep face — the HOME is here (C0 testingkit;
+    the domain cores import, never hand-copy; the next schemacore wave's
+    adoption is a delete-and-import). -/
+def drawChar (t : Tape) : Char × Tape :=
+  let p := t.below 4
+  ((['a', 'b', 'c', 'd'])[p.1]!, p.2)
+
+/-- The structural repeat: draw `n` values. -/
+def drawMany : Nat → (Tape → α × Tape) → Tape → List α × Tape
+  | 0, _, t => ([], t)
+  | n + 1, draw, t =>
+      let (x, t) := draw t
+      let (xs, t) := drawMany n draw t
+      (x :: xs, t)
+
+/-- The structural repeat over an OPTIONAL drawer (`none` propagates —
+    the loud gap, never a silent shorter list). -/
+def drawManyO : Nat → (Tape → Option (α × Tape)) → Tape →
+    Option (List α × Tape)
+  | 0, _, t => some ([], t)
+  | n + 1, draw, t =>
+      (draw t).bind fun p =>
+        (drawManyO n draw p.2).map fun q => (p.1 :: q.1, q.2)
+
+/-- A short string (length < 4) over the small alphabet. -/
+def drawString (t : Tape) : String × Tape :=
+  let p := t.below 4
+  let (cs, t) := drawMany p.1 drawChar p.2
+  (String.ofList cs, t)
 
 end TestingKit

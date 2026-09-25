@@ -4,7 +4,7 @@
 Owner: the SchemaCore agent (the mandate tree, `schemacore/`).
 
 The check lane's end-to-end fixture: the `@[check]` entries append to
-`checkExt` at elaboration (the default builder — a `def` of the item
+the ONE log at elaboration (the default builder — a `def` of the item
 type, the value evaluated at elaboration); the replay/legality teeth
 are `#eval` pins (a drift FAILS the build); the curated failures are
 the `#guard_msgs` negative controls. A module's own initializers do
@@ -87,45 +87,50 @@ def mixedRows : List (RowVals exampleCheckFields) := [goodRow, badRow]
 
 #eval show Lean.CoreM Unit from do
   let env ← Lean.getEnv
-  -- the replay: two entries, registration order
-  let checks := getChecks env
-  unless checks.length == 2
-      && checks[0]!.name == "example-count-positive"
-      && checks[1]!.name == "example-count-zero" do
-    throwError s!"check lane replay drifted: {checks.map (·.name)}"
-  -- the fold hook: the registry materializes (nodup decided)
-  match checkRegistry env with
-  | .error e => throwError s!"check lane fold drifted: {e}"
-  | .ok reg =>
-      unless reg.items.length == 2 do
-        throwError "check lane registry drifted: wrong item count"
-  -- the legality teeth: BOTH fixtures are well-scoped against the
-  -- LIVE universe (the target resolves; the snapshot is not stale;
-  -- every read field is on the record)
-  let items := schemaExt.getState env
-  for c in checks do
-    unless (c.scopedDiags items).isEmpty do
-      throwError s!"check lane legality drifted for `{c.name}`: \
-        {c.scopedDiags items}"
-  -- the obligation view: both rows compute decidableNow (the claim
-  -- index needs no table for the tier's read — `[]` names the type,
-  -- the claim's content is not read here)
-  unless checks.all (fun c => (c.obligation []).tier == .decidableNow) do
-    throwError "check lane obligation tier drifted"
+  -- the replay: two entries, registration order (the routed fold over
+  -- the ONE log — wave-30 A2)
+  match ← getChecks env with
+  | .error e => throwError s!"check lane replay refused: {e}"
+  | .ok checks =>
+    unless checks.length == 2
+        && checks[0]!.name == "example-count-positive"
+        && checks[1]!.name == "example-count-zero" do
+      throwError s!"check lane replay drifted: {checks.map (·.name)}"
+    -- the fold hook: the registry materializes (nodup decided)
+    match ← checkRegistry env with
+    | .error e => throwError s!"check lane fold drifted: {e}"
+    | .ok reg =>
+        unless reg.items.length == 2 do
+          throwError "check lane registry drifted: wrong item count"
+    -- the legality teeth: BOTH fixtures are well-scoped against the
+    -- LIVE universe (the target resolves; the snapshot is not stale;
+    -- every read field is on the record)
+    match ← getSchemas env with
+    | .error e => throwError s!"check lane legality: the universe replay \
+      refused: {e}"
+    | .ok items =>
+      for c in checks do
+        unless (c.scopedDiags items).isEmpty do
+          throwError s!"check lane legality drifted for `{c.name}`: \
+            {c.scopedDiags items}"
+    -- the obligation view: both rows compute decidableNow (the claim
+    -- index needs no table for the tier's read — `[]` names the type,
+    -- the claim's content is not read here)
+    unless checks.all (fun c => (c.obligation []).tier == .decidableNow) do
+      throwError "check lane obligation tier drifted"
 
-/- NEGATIVE CONTROL: a duplicate entry name is the closed-world
-    refusal (Kit.Diag — got + the taken names + the ONE engine's
-    did-you-mean). -/
-/-- error: [KL0001] error: @[check] dupCheck: `example-count-positive` is already a registered item — names must be fresh (got: example-count-positive) — valid: example-count-positive, example-count-zero — did you mean: example-count-positive? -/
-#guard_msgs in
-@[check] def dupCheck : CheckItem :=
-  { name := "example-count-positive"
-    schemaRef := "Example"
-    fields := exampleCheckFields
-    pred := .lit true }
+/- NEGATIVE CONTROLS, as the ONE teeth shape (Kit.Lane's lane-teeth
+    macros — the audit's E3): the control commands are taken VERBATIM
+    (the #guard_msgs shape); the expected refusals are computed from
+    the mount's OWN Diag constructors (a message or valid-space drift
+    fails the build); the dup tooth ALSO pins its valid-list against
+    the live registration state. -/
+lane_dup_tooth "example-count-positive" ["example-count-positive", "example-count-zero"] in
+  @[check] def dupCheck : CheckItem :=
+    { name := "example-count-positive"
+      schemaRef := "Example"
+      fields := exampleCheckFields
+      pred := .lit true }
 
-/- NEGATIVE CONTROL: the entry must be a `def` of the lane's item
-    type — the curated usage message (KL0003). -/
-/-- error: [KL0003] error: @[check] wrongCheck: the entry's type is not the lane's item type `SchemaCore.CheckItem` — valid usage: `@[check] def wrongCheck : SchemaCore.CheckItem := <value>` -/
-#guard_msgs in
-@[check] def wrongCheck : Nat := 5
+lane_wrong_tooth SchemaCore.CheckItem in
+  @[check] def wrongCheck : Nat := 5

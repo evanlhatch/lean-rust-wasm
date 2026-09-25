@@ -37,15 +37,19 @@ scalar sub-universe's key positions route through `KeyTy.toTy` (below
 the first fold a key position is a plain `Ty` again — Ty.lean's
 discipline), so the key fold needs no `Ty` recursion inside it.
 
-UPDATE (the `declare_fold` migration): the `KeyTy`/`Ty` entourages are
-GENERATED now — two `Kit.Derive.Fold.declare_fold` calls replace the
-hand-written algebra/fold/equations/initiality families (~120 LOC
-down); the generated names + statements are exactly the hand ones',
-so every consumer is untouched and the byte-tie over the migrated
-renderers (`gates gen-check`) proves the generated fold
-defeq-compatible with the hand walk. The DEPENDENT fold (`foldValue`)
-STAYS hand-written — the GADT family is outside the generator's honest
-scope (its refusal names the extension).
+UPDATE (the `declare_fold` + `declare_dependent_fold` migration): the
+`KeyTy`/`Ty` entourages are GENERATED — two `Kit.Derive.Fold.declare_fold`
+calls — and the DEPENDENT value entourage is GENERATED too: one
+`Kit.Derive.DepFold.declare_dependent_fold Value` call replaces the
+hand-written `ValueAlg`/`foldValue`/`foldVList`/`foldVMap` + the hand
+equation family (~150 LOC down); the generated names + statements are
+exactly the hand ones' (the mutual-sibling record `ValueAlg P Q R`, the
+`vnil`/`mcons` row names, the co-siblings' implicit indices), so every
+consumer — `valEncAlg` first — is untouched and the byte-tie over the
+migrated renderers (`gates gen-check`) proves the generated folds
+defeq-compatible with the hand walks. What the hand file LACKED and
+the generator ADDS: the initiality laws (`foldValue_unique` and the
+cou-siblings', all axiom-free — pinned by SchemaTests + KitTests).
 
 HONEST RESIDUE (the consumers that do NOT migrate, each named with its
 proof-level reason):
@@ -80,6 +84,7 @@ emitters' artifacts.
 import SchemaCore.Ty
 import SchemaCore.Value
 import Kit.Derive.Fold
+import Kit.Derive.DepFold
 
 namespace SchemaCore
 
@@ -102,10 +107,9 @@ declare_fold KeyTy
    arrives raw — a `Nat` has no fold), the fold (`foldTy`, total,
    structural, kernel-visible), the equation set (`foldTy_<ctor>`) and
    the initiality law (`foldTy_unique` — the migration's theorem,
-   cited by every migrated renderer). The DEPENDENT half (`foldValue`
-   and its siblings) STAYS hand-written below — the GADT family is
-   outside the generator's honest scope (the generator's own refusal
-   names it: the motive rides the index, 06 §2). -/
+   cited by every migrated renderer). The DEPENDENT half is generated
+   below by `declare_dependent_fold Value` (the mutual-sibling
+   extension: the motive rides the index, 06 §2). -/
 declare_fold Ty
 
 /-- THE FUSION LAW: a map that carries one algebra to the other passes
@@ -136,168 +140,20 @@ theorem foldTy_fusion {α β : Type} {alg : TyAlg α} {alg' : TyAlg β} {h : α 
 
 /-! ## The dependent value fold (the GADT family's one walk, 06 §2) -/
 
-/-- The DEPENDENT value algebra: ONE record carrying the whole sibling
-    family's rows (`Value`/`VList`/`VMap` — 06 §2's sibling discipline:
-    the record rows are the family, no nested `List (Value t)` data),
-    each row's result riding its index — `P` at the value's index, `Q`
-    at the list sibling's, `R` at the map sibling's. A new family ctor
-    refuses to compile until the algebra grows its row (the same
-    compiler-driven extension point as `foldTy`, one level up). -/
-structure ValueAlg (P : Ty → Type) (Q : Ty → Type) (R : KeyTy → Ty → Type) where
-  bool : Bool → P .bool
-  u64 : UInt64 → P .u64
-  i64 : Int64 → P .i64
-  string : String → P .string
-  none : {t : Ty} → P (.option t)
-  some : {t : Ty} → P t → P (.option t)
-  ok : {ok err : Ty} → P ok → P (.result ok err)
-  err : {ok err : Ty} → P err → P (.result ok err)
-  list : {t : Ty} → Q t → P (.list t)
-  map : {k : KeyTy} → {v : Ty} → R k v → P (.map k v)
-  set : {k : KeyTy} → Q k.toTy → P (.set k)
-  bounded : {cap : Nat} → Fin cap → P (.bounded cap)
-  vnil : {t : Ty} → Q t
-  vcons : {t : Ty} → P t → Q t → Q t
-  mnil : {k : KeyTy} → {v : Ty} → R k v
-  mcons : {k : KeyTy} → {v : Ty} → P k.toTy → P v → R k v → R k v
-
--- THE DEPENDENT FOLD: the GADT family's one walk (01 §1's
--- initial-algebra shape for an INDEXED family — the motive rides the
--- index, `06` §2's discipline). Mutual over the sibling family,
--- structural, kernel-visible: concrete values reduce by `rfl`.
-mutual
-def foldValue {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    (alg : ValueAlg P Q R) : (t : Ty) → Value t → P t
-  | .bool, .bool b => alg.bool b
-  | .u64, .u64 n => alg.u64 n
-  | .i64, .i64 n => alg.i64 n
-  | .string, .string s => alg.string s
-  | .option _, .none => alg.none
-  | .option t, .some v => alg.some (foldValue alg t v)
-  | .result ok _, .ok v => alg.ok (foldValue alg ok v)
-  | .result _ err, .err v => alg.err (foldValue alg err v)
-  | .list _, .list vl => alg.list (foldVList alg vl)
-  | .map _ _, .map m => alg.map (foldVMap alg m)
-  | .set _, .set vl => alg.set (foldVList alg vl)
-  | .bounded _, .bounded f => alg.bounded f
-
-def foldVList {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    (alg : ValueAlg P Q R) : {t : Ty} → VList t → Q t
-  | _, .nil => alg.vnil
-  | _, .cons v vs => alg.vcons (foldValue alg _ v) (foldVList alg vs)
-
-def foldVMap {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    (alg : ValueAlg P Q R) : {k : KeyTy} → {v : Ty} → VMap k v → R k v
-  | _, _, .nil => alg.mnil
-  | _, _, .cons kv vv m =>
-      alg.mcons (foldValue alg _ kv) (foldValue alg _ vv) (foldVMap alg m)
-end
-
-/-- The dependent fold's equation set (06 §5 — consumers prove against
-    these, never against brecOn plumbing). All `rfl`: the recursion is
-    structural, so the equations are kernel reduction, not opacity. -/
-theorem foldValue_bool {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} (b : Bool) :
-    foldValue alg .bool (.bool b) = alg.bool b := rfl
-theorem foldValue_u64 {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} (n : UInt64) :
-    foldValue alg .u64 (.u64 n) = alg.u64 n := rfl
-theorem foldValue_i64 {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} (n : Int64) :
-    foldValue alg .i64 (.i64 n) = alg.i64 n := rfl
-theorem foldValue_string {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} (s : String) :
-    foldValue alg .string (.string s) = alg.string s := rfl
-theorem foldValue_none {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {t : Ty} :
-    foldValue alg (.option t) .none = alg.none := rfl
-theorem foldValue_some {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {t : Ty} (v : Value t) :
-    foldValue alg (.option t) (.some v) = alg.some (foldValue alg t v) := rfl
-theorem foldValue_ok {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {ok err : Ty} (v : Value ok) :
-    foldValue alg (.result ok err) (.ok v) = alg.ok (foldValue alg ok v) := rfl
-theorem foldValue_err {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {ok err : Ty} (v : Value err) :
-    foldValue alg (.result ok err) (.err v) = alg.err (foldValue alg err v) := rfl
-theorem foldValue_list {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {t : Ty} (vl : VList t) :
-    foldValue alg (.list t) (.list vl) = alg.list (foldVList alg vl) := rfl
-theorem foldValue_map {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {k : KeyTy} {v : Ty} (m : VMap k v) :
-    foldValue alg (.map k v) (.map m) = alg.map (foldVMap alg m) := rfl
-theorem foldValue_set {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {k : KeyTy} (vl : VList k.toTy) :
-    foldValue alg (.set k) (.set vl) = alg.set (foldVList alg vl) := rfl
-theorem foldValue_bounded {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {cap : Nat} (f : Fin cap) :
-    foldValue alg (.bounded cap) (.bounded f) = alg.bounded f := rfl
-theorem foldVList_nil {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {t : Ty} :
-    foldVList alg (.nil : VList t) = alg.vnil := rfl
-theorem foldVList_cons {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {t : Ty} (v : Value t) (vs : VList t) :
-    foldVList alg (.cons v vs) = alg.vcons (foldValue alg t v) (foldVList alg vs) := rfl
-theorem foldVMap_nil {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {k : KeyTy} {v : Ty} :
-    foldVMap alg (.nil : VMap k v) = alg.mnil := rfl
-theorem foldVMap_cons {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R} {k : KeyTy} {v : Ty}
-    (kv : Value k.toTy) (vv : Value v) (m : VMap k v) :
-    foldVMap alg (.cons kv vv m)
-      = alg.mcons (foldValue alg k.toTy kv) (foldValue alg v vv) (foldVMap alg m) := rfl
-
-/-- THE DEPENDENT INITIALITY LAW (the dependent fold's uniqueness, the
-    motive discipline of 06 §2 made a theorem): a triple of functions
-    over the sibling family that commutes with the algebra on every ctor
-    IS the fold — one mutual induction over the family, proved ONCE
-    here, cited by every migrated dependent consumer. -/
-theorem foldValue_unique {P : Ty → Type} {Q : Ty → Type} {R : KeyTy → Ty → Type}
-    {alg : ValueAlg P Q R}
-    {f : (t : Ty) → Value t → P t}
-    {fL : {t : Ty} → VList t → Q t}
-    {fM : {k : KeyTy} → {v : Ty} → VMap k v → R k v}
-    (hb : ∀ b, f .bool (.bool b) = alg.bool b)
-    (hu : ∀ n, f .u64 (.u64 n) = alg.u64 n)
-    (hi : ∀ n, f .i64 (.i64 n) = alg.i64 n)
-    (hst : ∀ s, f .string (.string s) = alg.string s)
-    (hnone : ∀ t, f (.option t) .none = alg.none)
-    (hsome : ∀ (t : Ty) (v : Value t), f (.option t) (.some v) = alg.some (f t v))
-    (hok : ∀ (ok err : Ty) (v : Value ok),
-      f (.result ok err) (.ok v) = alg.ok (f ok v))
-    (herr : ∀ (ok err : Ty) (v : Value err),
-      f (.result ok err) (.err v) = alg.err (f err v))
-    (hlist : ∀ (t : Ty) (vl : VList t), f (.list t) (.list vl) = alg.list (fL vl))
-    (hmap : ∀ (k : KeyTy) (v : Ty) (m : VMap k v), f (.map k v) (.map m) = alg.map (fM m))
-    (hset : ∀ (k : KeyTy) (vl : VList k.toTy), f (.set k) (.set vl) = alg.set (fL vl))
-    (hbd : ∀ (cap : Nat) (fv : Fin cap), f (.bounded cap) (.bounded fv) = alg.bounded fv)
-    (hvnil : ∀ t, fL (.nil : VList t) = alg.vnil)
-    (hvcons : ∀ (t : Ty) (v : Value t) (vs : VList t),
-      fL (.cons v vs) = alg.vcons (f t v) (fL vs))
-    (hmnil : ∀ (k : KeyTy) (v : Ty), fM (.nil : VMap k v) = alg.mnil)
-    (hmcons : ∀ (k : KeyTy) (v : Ty) (kv : Value k.toTy) (vv : Value v) (m : VMap k v),
-      fM (.cons kv vv m) = alg.mcons (f k.toTy kv) (f v vv) (fM m)) :
-    ∀ (t : Ty) (v : Value t), f t v = foldValue alg t v := by
-  apply Value.rec
-    (motive_1 := fun t v => f t v = foldValue alg t v)
-    (motive_2 := fun t vl => fL vl = foldVList alg vl)
-    (motive_3 := fun k v m => fM m = foldVMap alg m)
-  case bool => intro b; exact hb b
-  case u64 => intro n; exact hu n
-  case i64 => intro n; exact hi n
-  case string => intro s; exact hst s
-  case none => intro t; exact hnone t
-  case some => intro t v ih; rw [hsome t v, ih]; rfl
-  case ok => intro ok err v ih; rw [hok ok err v, ih]; rfl
-  case err => intro ok err v ih; rw [herr ok err v, ih]; rfl
-  case list => intro t vl ihL; rw [hlist t vl, ihL]; rfl
-  case map => intro k v m ihM; rw [hmap k v m, ihM]; rfl
-  case set => intro k vl ihL; rw [hset k vl, ihL]; rfl
-  case bounded => intro cap fv; exact hbd cap fv
-  next => intro t; exact hvnil t
-  next => intro t v vs ihV ihL; rw [hvcons t v vs, ihV, ihL]; rfl
-  next => intro k v; exact hmnil k v
-  next => intro k v kv vv m ihKV ihVV ihM; rw [hmcons k v kv vv m, ihKV, ihVV, ihM]; rfl
+/- THE DEPENDENT FOLD ENTOURAGE, GENERATED: `declare_dependent_fold
+   Value` — the MUTUAL-SIBLING extension (the named extension the
+   generator's old refusal named): ONE record (`ValueAlg P Q R`) whose
+   rows are the whole block's (sibling, ctor) pairs — the head
+   sibling's rows keyed by `P`, the co-siblings' by `Q`/`R` (the row
+   names carry the sibling's initial: `vnil`, `mcons`) — the per-
+   sibling folds (`foldValue` with the head's explicit index; the
+   co-siblings' indices riding their values), the equation set
+   (`foldValue_bool` … `foldVMap_cons`, all `rfl`), and the initiality
+   laws (`foldValue_unique` + the co-siblings', axiom-free — the hand
+   file never had them). The generated names + statements are exactly
+   the hand entourage's (the migration is DEFEQ-compatible — the
+   byte-tie over the migrated consumers is the proof). -/
+declare_dependent_fold Value
 
 /-! ## The migrated consumers, as algebras -/
 
@@ -311,12 +167,6 @@ def keyWitAlg : KeyTyAlg String where
   u64 := "u64"
   i64 := "i64"
   string := "string"
-
-/-- THE KEY COHERENCE: Ty.lean's leaf key rendering IS the key fold
-    over `keyWitAlg` — the KeyTy uniqueness law's exercise (a
-    four-rfl-commute check, then initiality does the rest). -/
-theorem renderKeyTy_eq (k : KeyTy) : renderKeyTy k = foldKeyTy keyWitAlg k :=
-  foldKeyTy_unique (x := k) rfl rfl rfl rfl
 
 /-- The WIT lowering as an ALGEBRA (07 R1 step 1 — the rows, verbatim
     from the pre-fold `renderTy`; the graded correspondence table per
@@ -417,13 +267,6 @@ theorem renderTy_bounded_u64_collision (cap : Nat) :
 /-- The key position's rendering coherence (Ty.lean's pin, carried): a
     key's rendering IS the fold at its injected type. -/
 theorem renderKeyTy_toTy (k : KeyTy) : renderKeyTy k = renderTy k.toTy := by
-  cases k <;> rfl
-
-/-- The WIT ALGEBRA'S ROW COHERENCE at the scalar leaves (the key
-    sub-universe's slice of `witAlg` — one scalar table, the fold's
-    `map`/`set` fields consume the KEY directly). -/
-theorem witAlg_key_coherence (k : KeyTy) :
-    foldTy witAlg k.toTy = foldKeyTy keyWitAlg k := by
   cases k <;> rfl
 
 /-- Pairwise surface distinctness over a CONCRETE type list (decidable;

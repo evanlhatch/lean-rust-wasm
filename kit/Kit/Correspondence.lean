@@ -33,8 +33,9 @@ The five questions (notes/v3/01-core.md):
 - ladder rung: the laws (composition, lifting, transport) are hand
   theorems of the small generic kind (01 §7: often the best
   foundation).
-- gate row: none yet — Kit is outside Gates.Packages' gated set;
-  KitTests.Axioms pins the law theorems' cones (core triple only).
+- gate row: Kit's row in Gates.Packages' gated set (the per-library
+  axiom sweep covers it); KitTests.Axioms pins the law theorems' cones
+  (core triple only).
 -/
 
 import Kit.Relation
@@ -287,6 +288,29 @@ def transportRight (i : Iso B B') (c : Codec A B) : Codec A B' where
         simp only [Option.map_some] at h
         exact c.decode_some_policy a x hc
 
+/-- THE codec→iso graduation (the honest shape, `Retraction.toImageIso`'s
+    precedent at the codec grade — 15-patterns #11): a codec whose
+    decode is TOTAL + the EXACTNESS law (a successful decode
+    determines the encode: `decode a = some b → encode b = a`) is a
+    TRUE `Iso`. Totality is a DATA premise — the decider's own witness
+    function (`{b // decode a = some b}`), never `Exists.choose` (the
+    kit stays computational, zero `Classical.choice`); the exactness
+    law is the Prop face. `decode_encode` supplies the `to_inv` round
+    trip, the exactness law supplies `inv_to` — a codec whose decode
+    refuses (the wire's honest gap) cannot state the totality premise,
+    and a non-exact one cannot state the law. -/
+def toIsoOfExact (c : Codec A B)
+    (total : ∀ a, {b // c.decode a = some b})
+    (exact : ∀ a b, c.decode a = some b → c.encode b = a) :
+    Iso A B where
+  to a := (total a).1
+  inv := c.encode
+  to_inv b := by
+    have h1 : c.decode (c.encode b) = some ((total (c.encode b)).1) :=
+      (total (c.encode b)).2
+    exact Option.some.inj (h1.symm.trans (c.decode_encode b))
+  inv_to a := exact a _ ((total a).2)
+
 end Codec
 
 /-! ## Normalization — sound + idempotent (canonical forms) -/
@@ -462,10 +486,30 @@ runs over graphs; the grades refine. Direction honesty, judged per grade:
   ACCEPTED (`decode_some_policy` makes the policy visible in the graph)
   and names `b`. The encode direction is deliberately NOT the graph: it
   is total on `B`, not on the wire's `A`s.
+- `Normalization`: the graph is `norm`'s FUNCTION graph — the grade's
+  soundness law pins every edge inside the lane's own relation
+  (`Normalization.toRel_sound`); the grade has NO carrier `trans`, so
+  its honest tower shape is the COLLAPSE: idempotence composes the
+  graph with itself into itself (`Normalization.toRel_comp_self`).
+- `Simulation`: the graph IS the grade's state relation `R` — the
+  grade's one-step law IS the graph's preservation under the steps
+  (`Simulation.toRel_step`); `trans` DEFINES its relation as the
+  witness chain, so the tower merge is definitional.
+- `Abstraction`: the graph is `conc` read `a → b` ("a is a concrete
+  value OF the abstract b") — the OVER-approximation is visible in the
+  graph (one `a` may relate to many `b`s: this is the one grade whose
+  graph is deliberately NOT single-valued); `trans`'s concretization
+  is the witness chain, so the tower merge is definitional.
 
 The agreement shape is POINTWISE `Iff` — `Rel.comp_assoc`'s honest
 precedent (`Eq` of relations would buy the same content via funext +
 propext, nothing more).
+
+The discipline ties (01-core §6, 16 §5.3): the identity carriers'
+graphs are the engine's diagonal (`toRel_refl` per grade — reflexivity
+cited, not re-proved), and the FUNCTIONAL grades' graphs are
+single-valued (`toRel_det` per grade) — determinism for free, cited
+per carrier instead of proved per site.
 -/
 
 /-- The graph of an `Iso`: `R a b := b = i.to a`. -/
@@ -527,5 +571,128 @@ theorem Codec.toRel_refl (A : Type) (a b : A) :
     (Codec.refl A).toRel a b ↔ Rel.refl A a b := by
   show (some a = some b) ↔ a = b
   exact ⟨Option.some.inj, fun h => by rw [h]⟩
+
+/-- The graph of a `Normalization`: `R a b := n.norm a = b` — the
+    FUNCTION graph; the grade's soundness law pins every edge inside
+    the lane's own relation (`Normalization.toRel_sound`), the
+    grade's idempotence collapses the graph's self-composition
+    (`Normalization.toRel_comp_self`). -/
+abbrev Normalization.toRel (n : Normalization A) : Rel A A :=
+  fun a b => n.norm a = b
+
+/-- The soundness tie, `Normalization` grade: every graph edge rides
+    inside the lane's own relation — the grade's law implies the
+    graph's preservation. -/
+theorem Normalization.toRel_sound (n : Normalization A) {a b : A}
+    (h : n.toRel a b) : n.R a b := by
+  rw [← h]
+  exact n.sound a
+
+/-- THE tower shape, `Normalization` grade (the honest per-grade form:
+    the grade has NO carrier `trans` — idempotence, not composition,
+    is its second law — so the tower merge is the COLLAPSE): the graph
+    composed with itself IS the graph. The forward direction spends
+    the idempotence law and nothing else; the backward one is the
+    graph's own reflexivity at the canonical form. -/
+theorem Normalization.toRel_comp_self (n : Normalization A) (a c : A) :
+    (Rel.comp n.toRel n.toRel a c ↔ n.toRel a c) :=
+  ⟨fun h => by
+      obtain ⟨b, h1, h2⟩ := h
+      rw [← h2, ← h1, n.idempotent],
+   fun h => ⟨n.norm a, rfl, by
+      show n.norm (n.norm a) = c
+      rw [n.idempotent]
+      exact h⟩⟩
+
+/-- The unit row, `Normalization` grade: the identity normalization's
+    graph IS the diagonal. -/
+theorem Normalization.toRel_refl (A : Type) (a b : A) :
+    (Normalization.refl A).toRel a b ↔ Rel.refl A a b :=
+  ⟨fun h => h, fun h => h⟩
+
+/-- The graph of a `Simulation`: the state relation `R` itself — the
+    relation the grade's one-step law preserves. -/
+abbrev Simulation.toRel (s : Simulation A B) : Rel A B := s.R
+
+/-- THE grade's law AT the graph's name: an `A`-step between
+    graph-related states has a `B`-step whose endpoints stay
+    graph-related — the one-step preservation IS the graph's
+    preservation under the steps (the restatement is the citation
+    face; no new proof). -/
+theorem Simulation.toRel_step (s : Simulation A B) {a a' : A} {b : B}
+    (h : s.toRel a b) (hs : s.stepA a a') :
+    ∃ b', s.toRel a' b' ∧ s.stepB b b' :=
+  s.sim a a' b h hs
+
+/-- THE tower merge, `Simulation` grade: `trans` DEFINES the
+    composite's relation as the witness chain — the engine's
+    `Rel.comp`'s literal shape, so the agreement is definitional
+    (`Iff.rfl`; the `hcomp` premise routes the intermediate steps —
+    the grade's own honesty, unchanged). -/
+theorem Simulation.toRel_trans (s : Simulation A B) (t : Simulation B C)
+    (hcomp : ∀ x y, s.stepB x y → t.stepA x y) (a : A) (c : C) :
+    (s.trans t hcomp).toRel a c ↔ Rel.comp s.toRel t.toRel a c :=
+  Iff.rfl
+
+/-- The unit row, `Simulation` grade: the identity simulation's
+    relation IS the diagonal. -/
+theorem Simulation.toRel_refl (A : Type) (step : A → A → Prop)
+    (a b : A) :
+    (Simulation.refl A step).toRel a b ↔ Rel.refl A a b :=
+  ⟨fun h => h, fun h => h⟩
+
+/-- The graph of an `Abstraction`: `R a b := p.conc b a` — read "a is
+    a concrete value OF the abstract b"; the over-approximation is
+    visible in the graph (one `a` may sit under many `b`s). -/
+abbrev Abstraction.toRel (p : Abstraction A B) : Rel A B :=
+  fun a b => p.conc b a
+
+/-- The soundness tie, `Abstraction` grade: every value sits in its
+    own abstraction's graph edge — the grade's law, at the graph's
+    name. -/
+theorem Abstraction.toRel_sound (p : Abstraction A B) (a : A) :
+    p.toRel a (p.abst a) :=
+  p.sound a
+
+/-- THE tower merge, `Abstraction` grade: `trans` DEFINES the
+    composite's concretization as the witness chain — the engine's
+    `Rel.comp`'s literal shape, so the agreement is definitional. -/
+theorem Abstraction.toRel_trans (p : Abstraction A B)
+    (q : Abstraction B C) (a : A) (c : C) :
+    (p.trans q).toRel a c ↔ Rel.comp p.toRel q.toRel a c :=
+  Iff.rfl
+
+/-- The unit row, `Abstraction` grade: the identity abstraction's
+    graph IS the diagonal (exact by construction). -/
+theorem Abstraction.toRel_refl (A : Type) (a b : A) :
+    (Abstraction.refl A).toRel a b ↔ Rel.refl A a b :=
+  ⟨fun h => h.symm, fun h => h.symm⟩
+
+/-! ### The determinism ties (01-core §6, 16 §5.3) -/
+
+/-- The FUNCTIONAL grades' graphs are single-valued — determinism for
+    free, one row per grade, cited per carrier instead of proved per
+    site (16 §5.3). The identity carriers' rows are `Rel.det_iff`'s
+    diagonal case (the `toRel_refl` unit rows above); the partial
+    grade's graph is single-valued too (a decode names AT MOST one
+    value); `Simulation`/`Abstraction` are deliberately absent — their
+    graphs are genuine relations, and single-valuedness there would be
+    a false claim, not a theorem. -/
+
+theorem Iso.toRel_det (i : Iso A B) {a : A} {b b' : B}
+    (h1 : i.toRel a b) (h2 : i.toRel a b') : b = b' :=
+  h1.trans h2.symm
+
+theorem Retraction.toRel_det (r : Retraction A B) {a : A} {b b' : B}
+    (h1 : r.toRel a b) (h2 : r.toRel a b') : b = b' :=
+  h1.trans h2.symm
+
+theorem Codec.toRel_det (c : Codec A B) {a : A} {b b' : B}
+    (h1 : c.toRel a b) (h2 : c.toRel a b') : b = b' :=
+  Option.some.inj (h1.symm.trans h2)
+
+theorem Normalization.toRel_det (n : Normalization A) {a b b' : A}
+    (h1 : n.toRel a b) (h2 : n.toRel a b') : b = b' :=
+  h1.symm.trans h2
 
 end Kit

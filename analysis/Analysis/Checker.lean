@@ -47,7 +47,9 @@ The five questions (notes/v3/01-core.md):
 - ladder rung: rung 6 done ONCE at the engine (Kit.Expr.preserves) —
   this file only cites it; the rows are rung-3-style fields over
   Intervals' hand theorems.
-- gate row: none yet — AnalysisTests.Axioms pins the axiom cones.
+- gate row: Analysis' row in Gates.Packages' gated set (the
+  per-library axiom sweep covers it); AnalysisTests.Axioms pins the
+  axiom cones.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/

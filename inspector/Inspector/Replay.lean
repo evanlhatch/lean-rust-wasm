@@ -42,11 +42,12 @@ namespace Inspector
 
 /-! ## The lane readers (the discovery mechanism) -/
 
-/-- One replayed lane: its name + the reader that projects its env
-    extension's items onto the uniform row. -/
+/-- One replayed lane: its name + the reader that projects its rows of
+    the ONE log onto the uniform row. `CoreM` face: the routed replay
+    re-materializes the rows' values (wave-30 A2). -/
 structure LaneReader where
   lane : String
-  read : Lean.Environment → List InspRow
+  read : Lean.Environment → Lean.CoreM (Except String (List InspRow))
 
 /-- The check lane's reader (SchemaCore.Check's registry): one row per
     registered invariant, tier COMPUTED by the lane
@@ -58,30 +59,41 @@ structure LaneReader where
     discharge state at replay is the loud gap: the extension carries no
     table; the decidable-now backend fires per-table via
     `SchemaCore.CheckItem.dischargeOn` — never fabricated green. -/
-def checkLaneReader : LaneReader :=
+unsafe def checkLaneReader : LaneReader :=
   { lane := "check"
-    read := fun env =>
-      (SchemaCore.getChecks env).map fun c =>
-        { lane := "check"
-          label := (c.obligation []).label
-          tier := .decidableNow
-          provenance := (c.obligation []).provenance
-          payload := String.intercalate ", " (c.obligation []).payload
-          observer := none
-          eCode := none
-          discharge :=
-            .openGap "no table provided at replay — the decidable-now backend \
-              fires per-table (SchemaCore.CheckItem.dischargeOn)" } }
+    read := fun env => do
+      match ← SchemaCore.getChecks env with
+      | .error e => pure (.error e)
+      | .ok checks =>
+        pure (.ok (checks.map fun c =>
+          { lane := "check"
+            label := (c.obligation []).label
+            tier := .decidableNow
+            provenance := (c.obligation []).provenance
+            payload := String.intercalate ", " (c.obligation []).payload
+            observer := none
+            eCode := none
+            discharge :=
+              .openGap "no table provided at replay — the decidable-now backend \
+                fires per-table (SchemaCore.CheckItem.dischargeOn)" })) }
 
 /-- The registered lane readers: ONE per lane the inspector replays.
     A new lane lands its reader here (one writer per reader; the
     leftover rule — no reader ahead of its first content). -/
-def laneReaders : List LaneReader := [checkLaneReader]
+unsafe def laneReaders : List LaneReader := [checkLaneReader]
 
 /-- The aggregation: every registered lane reader's rows, in reader
-    order (the replay is deterministic — registration order per lane). -/
-def collect (env : Lean.Environment) : List InspRow :=
-  laneReaders.flatMap (fun r => r.read env)
+    order (the replay is deterministic — registration order per lane).
+    The first reader refusal is the loud error (no partial green). -/
+unsafe def collect (env : Lean.Environment) :
+    Lean.CoreM (Except String (List InspRow)) :=
+  laneReaders.foldlM (fun acc r =>
+    match acc with
+    | .error e => pure (.error e)
+    | .ok rows => do
+        match ← r.read env with
+        | .error e => pure (.error e)
+        | .ok rs => pure (.ok (rows ++ rs))) (.ok [])
 
 /-! ## The replay (the gates' loadPkgEnv discipline, mirrored) -/
 
@@ -145,6 +157,15 @@ unsafe def replayEnvs :
 unsafe def collectReplayed : IO (Except String (List InspRow)) := do
   match ← replayEnvs with
   | .error e => return .error e
-  | .ok envs => return .ok (envs.flatMap fun (_, env) => collect env)
+  | .ok envs => do
+    let mut out : Except String (List InspRow) := .ok []
+    for (_, env) in envs do
+      match out with
+      | .error _ => break
+      | .ok rows =>
+          match ← Kit.Lane.runCoreIO env (collect env) with
+          | .error e => out := .error e
+          | .ok rs => out := .ok (rows ++ rs)
+    return out
 
 end Inspector

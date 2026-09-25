@@ -109,6 +109,7 @@ SchemaCore-rooted).
 
 import SchemaCore.Diff
 import SchemaCore.Event
+import SchemaCore.Keys
 import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
 
 namespace SchemaCore
@@ -144,20 +145,10 @@ deriving Repr, BEq, DecidableEq, Inhabited
 def Ty.eqMatch? (a b : Ty) : Option (PLift (a = b)) :=
   if h : a = b then some (PLift.up h) else none
 
-/-- The type's DEFAULT VALUE (the `fill` source): an honest option —
-    a cap-0 `bounded` is uninhabited, so an added field of that type
-    has no default and the derivation refuses (`noDefault`). -/
-def Ty.migrateDefault : (t : Ty) → Option (Value t)
-  | .bool => some (.bool false)
-  | .u64 => some (.u64 0)
-  | .i64 => some (.i64 0)
-  | .string => some (.string "")
-  | .option _ => some .none
-  | .list _ => some (.list VList.nil)
-  | .result ok _ => (Ty.migrateDefault ok).map (fun v => Value.ok v)
-  | .map _ _ => some (.map VMap.nil)
-  | .set _ => some (.set VList.nil)
-  | .bounded cap => if h : 0 < cap then some (.bounded ⟨0, h⟩) else none
+-- The type's DEFAULT VALUE (the `fill` source) is defaultVal? —
+-- ONE default table per universe (the parallel-table ban): an honest
+-- option, a cap-0 `bounded` uninhabited, the derivation's `noDefault`
+-- refusal its face. The alias name is gone; consumers cite Keys.
 
 /-- A field IS its name and type (the plan's `carry` needs it). -/
 theorem Field.eq_of_name_ty {a b : Field} (hn : a.name = b.name)
@@ -219,6 +210,43 @@ def FieldPlan.stableKey (key : String) :
   | _, _, .retype _ fN _ _ p => !(fN.name == key) && stableKey key p
   | _, _, .fill f _ p => !(f.name == key) && stableKey key p
 
+/-- THE PREMISE LEMMAS: a fill/retype step's key-stability premise
+    splits into the written field's ≠-key + the tail's stability (the
+    premise unpack's ONE home — every consumer cites, none re-derives
+    the `simpa` walk). -/
+theorem FieldPlan.stableKey_fill {key : String} {new : List Field}
+    {f : Field} {v : Value f.ty} {p : FieldPlan [] new}
+    (h : (FieldPlan.fill f v p).stableKey key = true) :
+    (!(f.name == key)) = true ∧ p.stableKey key = true := by
+  simpa [FieldPlan.stableKey] using h
+
+theorem FieldPlan.stableKey_retype {key : String} {fOld fNew : Field}
+    {old new : List Field} {hn : fOld.name = fNew.name}
+    {m : Value fOld.ty → Value fNew.ty} {p : FieldPlan old new}
+    (h : (FieldPlan.retype fOld fNew hn m p).stableKey key = true) :
+    (!(fNew.name == key)) = true ∧ p.stableKey key = true := by
+  simpa [FieldPlan.stableKey] using h
+
+/-- The ¬-key faces (the `if_neg`-ready form, one derivation each). -/
+theorem FieldPlan.stableKey_fill_notKey {key : String} {new : List Field}
+    {f : Field} {v : Value f.ty} {p : FieldPlan [] new}
+    (h : (FieldPlan.fill f v p).stableKey key = true) :
+    ¬((f.name == key) = true) := by
+  have h1 := (FieldPlan.stableKey_fill h).1
+  cases hb : (f.name == key) with
+  | false => simp
+  | true => rw [hb] at h1; simp at h1
+
+theorem FieldPlan.stableKey_retype_notKey {key : String} {fOld fNew : Field}
+    {old new : List Field} {hn : fOld.name = fNew.name}
+    {m : Value fOld.ty → Value fNew.ty} {p : FieldPlan old new}
+    (h : (FieldPlan.retype fOld fNew hn m p).stableKey key = true) :
+    ¬((fNew.name == key) = true) := by
+  have h1 := (FieldPlan.stableKey_retype h).1
+  cases hb : (fNew.name == key) with
+  | false => simp
+  | true => rw [hb] at h1; simp at h1
+
 /-! ## The key-stability laws (the local law's substrate) -/
 
 /-- The projection is STABLE under a key-stable upcast: the key
@@ -252,12 +280,8 @@ theorem FieldPlan.project_key_stable (key : String) :
       intro h r
       cases r with
       | cons v vs =>
-          simp only [FieldPlan.stableKey, Bool.and_eq_true] at h
-          obtain ⟨h1, h2⟩ := h
-          have hnfN : ¬((fN.name == key) = true) := by
-            cases hb : (fN.name == key) with
-            | false => simp
-            | true => rw [hb] at h1; simp at h1
+          obtain ⟨_, h2⟩ := FieldPlan.stableKey_retype h
+          have hnfN := FieldPlan.stableKey_retype_notKey h
           have hnfO : ¬((fO.name == key) = true) := by rw [hn]; exact hnfN
           show RowVals.project? _ (.cons (m v) (p.upcast vs)) key
             = RowVals.project? _ (.cons v vs) key
@@ -266,12 +290,8 @@ theorem FieldPlan.project_key_stable (key : String) :
   | fill f v p ih =>
       intro h r
       cases r
-      simp only [FieldPlan.stableKey, Bool.and_eq_true] at h
-      obtain ⟨h1, h2⟩ := h
-      have hnf : ¬((f.name == key) = true) := by
-        cases hb : (f.name == key) with
-        | false => simp
-        | true => rw [hb] at h1; simp at h1
+      obtain ⟨_, h2⟩ := FieldPlan.stableKey_fill h
+      have hnf := FieldPlan.stableKey_fill_notKey h
       show RowVals.project? _ (.cons v (p.upcast .nil)) key
         = RowVals.project? _ .nil key
       simp only [RowVals.project?, if_neg hnf, ih h2 .nil]
@@ -426,6 +446,8 @@ theorem FieldPlan.stableKey_comp (key : String) {old mid new : List Field} :
       intro p12 _ _
       cases p12
       rfl
+  -- the premise unpacks ride `stableKey_fill`/`stableKey_retype` (the
+  -- premise lemmas, ONE home per split)
   | carry f p ih =>
       intro p12 h23 h12
       have h23' : p.stableKey key = true := by
@@ -434,50 +456,40 @@ theorem FieldPlan.stableKey_comp (key : String) {old mid new : List Field} :
       | carry _ p12 =>
           have h12' : p12.stableKey key = true := by
             simpa [FieldPlan.stableKey] using h12
-          simp only [FieldPlan.comp, FieldPlan.stableKey]
+          simp only [FieldPlan.comp]
           exact ih p12 h23' h12'
       | retype fO fM hn m p12 =>
-          have hx : (!(f.name == key)) = true ∧ p12.stableKey key = true := by
-            simpa [FieldPlan.stableKey] using h12
-          simp only [FieldPlan.comp, FieldPlan.stableKey, hx.1,
-            ih p12 h23' hx.2, Bool.and_true]
+          obtain ⟨hx1, hx2⟩ := FieldPlan.stableKey_retype h12
+          simp only [FieldPlan.comp, FieldPlan.stableKey, hx1,
+            ih p12 h23' hx2, Bool.and_true]
       | fill _ v p12 =>
-          have hx : (!(f.name == key)) = true ∧ p12.stableKey key = true := by
-            simpa [FieldPlan.stableKey] using h12
-          simp only [FieldPlan.comp, FieldPlan.stableKey, hx.1,
-            ih p12 h23' hx.2, Bool.and_true]
+          obtain ⟨hx1, hx2⟩ := FieldPlan.stableKey_fill h12
+          simp only [FieldPlan.comp, FieldPlan.stableKey, hx1,
+            ih p12 h23' hx2, Bool.and_true]
   | retype fM fN hn m p ih =>
       intro p12 h23 h12
-      have h23x : (!(fN.name == key)) = true ∧ p.stableKey key = true := by
-        simpa [FieldPlan.stableKey] using h23
+      obtain ⟨h231, h232⟩ := FieldPlan.stableKey_retype h23
       cases p12 with
       | carry _ p12 =>
           have h12' : p12.stableKey key = true := by
             simpa [FieldPlan.stableKey] using h12
-          simp only [FieldPlan.comp, FieldPlan.stableKey, h23x.1,
-            ih p12 h23x.2 h12', Bool.and_true]
+          simp only [FieldPlan.comp, FieldPlan.stableKey, h231,
+            ih p12 h232 h12', Bool.and_true]
       | retype fO fM' hn12 m12 p12 =>
-          have hx : p12.stableKey key = true := by
-            have hx' := h12
-            simp only [FieldPlan.stableKey, Bool.and_eq_true] at hx'
-            exact hx'.2
-          simp only [FieldPlan.comp, FieldPlan.stableKey, h23x.1,
-            ih p12 h23x.2 hx, Bool.and_true]
+          obtain ⟨hx1, hx2⟩ := FieldPlan.stableKey_retype h12
+          simp only [FieldPlan.comp, FieldPlan.stableKey, h231,
+            ih p12 h232 hx2, Bool.and_true]
       | fill _ v p12 =>
-          have hx : p12.stableKey key = true := by
-            have hx' := h12
-            simp only [FieldPlan.stableKey, Bool.and_eq_true] at hx'
-            exact hx'.2
-          simp only [FieldPlan.comp, FieldPlan.stableKey, h23x.1,
-            ih p12 h23x.2 hx, Bool.and_true]
+          obtain ⟨hx1, hx2⟩ := FieldPlan.stableKey_fill h12
+          simp only [FieldPlan.comp, FieldPlan.stableKey, h231,
+            ih p12 h232 hx2, Bool.and_true]
   | fill f v p ih =>
       intro p12 h23 _
       cases p12 with
       | nil =>
-          have h23x : (!(f.name == key)) = true ∧ p.stableKey key = true := by
-            simpa [FieldPlan.stableKey] using h23
-          simp only [FieldPlan.comp, FieldPlan.stableKey, h23x.1,
-            ih (FieldPlan.nil : FieldPlan [] []) h23x.2 rfl, Bool.and_true]
+          obtain ⟨h231, h232⟩ := FieldPlan.stableKey_fill h23
+          simp only [FieldPlan.comp, FieldPlan.stableKey, h231,
+            ih (FieldPlan.nil : FieldPlan [] []) h232 rfl, Bool.and_true]
 
 /-- THE COMPOSITION LAW, value level: the composed plan's upcaster IS
     the composition of the upcasters — the ONE induction (over `comp`),
@@ -609,7 +621,7 @@ def deriveFieldPlan (item : String) (key : String)
   | [], fN :: new' =>
       if fN.name == key then .error (.keyUnstable item fN.name)
       else
-        match Ty.migrateDefault fN.ty with
+        match defaultVal? fN.ty with
         | some v =>
             FieldPlan.fill fN v <$> deriveFieldPlan item key remedies [] new'
         | none => .error (.noDefault item fN.name)

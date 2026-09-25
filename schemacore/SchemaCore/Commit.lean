@@ -20,8 +20,11 @@ THE DISCIPLINE, HONEST FIRST CUT:
   transfer-row INSERT into the ledger + the two keyed account UPDATES
   read off the SNAPSHOT (a missing endpoint contributes NO account
   delta — the insert still fires, so the foreign-key query catches it;
-  a self-transfer's two updates collapse to net zero through the keyed
-  applicator);
+  a self-transfer's two updates share ONE key and both read the
+  SNAPSHOT row: the keyed fold applies them src-then-dst, each update
+  REPLACING the row sharing the key image wholesale — the dst row
+  wins, so the balance reads `bal + amt` (the amount added ONCE), NOT
+  net zero — the true semantics pinned in SchemaTests.Commit);
 - `checkDelta` — THE VIOLATION QUERY over the POST-STATE (the delta
   applied to the whole db): the honest first cut. The
   change-proportional face — the violation relation updated
@@ -46,7 +49,10 @@ Deliberate exclusions (the leftover rule): the runtime-checked-
 transition level (the guest-compiled checker + its trust story) is the
 wasm wave's content — THIS slice's evidence level is the DIFFERENTIAL
 (03 §3's table), landed as the `commitDuel` vector set below, whose
-Rust consumer re-proposes the deltas and agrees verdict-for-verdict;
+Rust consumer re-proposes the deltas and agrees verdict-for-verdict —
+the SAME-KEY face included (the duel's p12, src = dst: the checker
+computes the expectation, the consumer's self-transfer tooth pins the
+dst-row-wins balance);
 concurrent commit arbitration (CAS/recheck/proven commutativity) — the
 single-threaded snapshot-version discipline is the honest first cut;
 batch proposals — the first batch consumer lands them.
@@ -134,9 +140,14 @@ def applyDeltas (db : Db) (d : Deltas) : Db where
     insert ALWAYS fires (the intent is recorded — a missing endpoint
     then REFUSES through the foreign-key query, never silently
     no-ops); the two account updates fire only when the snapshot has
-    the endpoint row. A self-transfer's two updates share one key: the
-    keyed applicator's last-wins leaves the balance unchanged (the net
-    zero the command MEANS). -/
+    the endpoint row. A self-transfer's two updates share one key AND
+    both are computed from the SNAPSHOT's row: the keyed fold applies
+    them in src-then-dst order and each update REPLACES the rows
+    sharing the key image with its full row (`applyRowDelta`'s update
+    arm — no arithmetic composes), so the LAST (dst) row wins
+    entirely: the balance ends at `bal + amt` (the amount added once),
+    NOT net zero and NOT unchanged. Pinned in SchemaTests.Commit
+    (the postDb self-transfer pin: `[110, 50]` on the fixture). -/
 def Proposal.deltas (db : Db) (p : Proposal) : Deltas where
   accounts :=
     ((db.accounts.find? (fun r => accId r == p.src)).map
@@ -277,12 +288,15 @@ def fixtureSnap : DbSnap := ⟨1, { accounts := fixtureAccounts, transfers := []
 
 /-- The duel's proposals (the commands the handwritten Rust side
     re-proposes): the legal transfer, the overdraft, the dangling
-    endpoint, the stale snapshot. One per face of the slice. -/
+    endpoint, the stale snapshot, and the SELF-TRANSFER (the same-key
+    face — src = dst; the coverage gap closed this wave). One per face
+    of the slice. -/
 def duelProposals : List (String × Proposal) :=
   [ ("p8",  { base := 1, tid := 8, src := 1, dst := 2, amount := 30 })
   , ("p9",  { base := 1, tid := 9, src := 2, dst := 1, amount := 500 })
   , ("p10", { base := 1, tid := 10, src := 9, dst := 1, amount := 5 })
-  , ("p11", { base := 0, tid := 11, src := 1, dst := 2, amount := 5 }) ]
+  , ("p11", { base := 0, tid := 11, src := 1, dst := 2, amount := 5 })
+  , ("p12", { base := 1, tid := 12, src := 1, dst := 1, amount := 10 }) ]
 
 /-- The duel's directory (Kit.Duel's ONE-directory-per-duel rule). -/
 def commitDuelDir : String := "crates/schema-generated/tests/duel-commit"
@@ -306,14 +320,24 @@ def expectOf (p : Proposal) : Kit.Duel.Expect :=
   | .ok _ => Kit.Duel.Expect.decode "accept"
   | .error _ => Kit.Duel.Expect.refuse
 
-/-- THE COMMIT DUEL's vector set: the four proposals' wire bytes + the
+/-- THE COMMIT DUEL's vector set: the five proposals' wire bytes + the
     checker-computed expectations. The Rust consumer re-proposes each
     delta (the handwritten command) and must agree verdict-for-verdict
-    — the differential level, tested agreement, never a theorem. -/
+    — the differential level, tested agreement, never a theorem. The
+    coverage claim, honest: the SAME-KEY face is IN the set (p12,
+    src = dst) — the checker computes its accept (the dst row wins
+    wholesale, `bal + amt` keeps the fixture valid), and the consumer's
+    self-transfer tooth pins the resulting BALANCE, so the old mirror
+    (the `src != dst` guard reading `bal − amt`) fails the set. -/
 def commitDuel : Kit.Duel.VectorSet where
   dir := commitDuelDir
   name := "commit-slice"
   generator := "SchemaCore.Commit"
+  -- The manifest sits next to Rust code (the artifact-headers gate's
+  -- shape contract checks the `//` spelling) — the DRY sweep: the
+  -- style is the VectorSet's OWN field, the emitter's only behavioral
+  -- parameter.
+  style := .doubleSlash
   vectors := duelProposals.map (fun np =>
     { path := commitDuelPath np.1
       contents := (proposalBytes np.2).toByteArray })
@@ -321,20 +345,14 @@ def commitDuel : Kit.Duel.VectorSet where
     (commitDuelPath np.1, expectOf np.2))
 
 /-- The duel's emitter (the manifest rides the TEXT lane, the vectors
-    the BINARY lane — the existing duel emitter's shape, a second
-    directory). -/
-def commitDuelEmitter : Kit.Emit.Emitter (DataRegistry Item) where
-  name := s!"duel:{commitDuel.name}"
-  style := .doubleSlash
-  specSource := "SchemaCore.Slice"
-  outputs := [commitDuel.dir ++ "/manifest.txt"]
-  binaryOutputs := commitDuel.vectors.map (·.path)
-  binaryOutputs_nodup := commitDuel.vectors_nodup
-  run _ :=
-    [ { path := commitDuel.dir ++ "/manifest.txt"
-      , contents := Kit.Duel.manifestBody commitDuel } ]
-  runBinary := some fun _ => commitDuel.vectors
-  law := some fun reg => (reg.items.map reg.nameOf).Nodup
+    the BINARY lane) — Kit.Duel's ONE emitter body (`emitterWith`) at
+    this lane's parameters: the DataRegistry spec (the naming invariant
+    rides the registry's own nodup-in-the-type — the audit's
+    vacuous-certificate finding retired the law literal).
+    Never hand-rolled here (the DRY sweep). -/
+def commitDuelEmitter : Kit.Emit.Emitter (DataRegistry Item) :=
+  Kit.Duel.emitterWith commitDuel "SchemaCore.Slice"
+    (law := none)
 
 /-! ## The Rust consumer (the handwritten command + the duel's other side) -/
 
@@ -364,7 +382,10 @@ def commitSliceRust : String :=
 //! transactional adapter commits against the SAME snapshot version.
 //! This test is the Rust half: it re-proposes each committed delta
 //! byte-identically and must agree verdict-for-verdict with the
-//! Lean-side golden. Tested agreement — never a theorem; the
+//! Lean-side golden — the SAME-KEY face included (the duel's p12:
+//! src = dst; the self-transfer tooth pins the dst-row-wins balance,
+//! so the old `src != dst` mirror — bal − amt — fails the set).
+//! Tested agreement — never a theorem; the
 //! runtime-checked transition is the wasm wave's content.
 
 use schema_generated::{dec_u64, enc_varint};
@@ -372,35 +393,12 @@ use schema_generated::{dec_u64, enc_varint};
 /// The duel manifest, compile-time pinned to the committed artifact.
 const MANIFEST: &str = include_str!(\"duel-commit/manifest.txt\");
 
-/// The generated crate's repo-root prefix (the manifest's rows are
-/// repo-root-relative; the test binary's cwd is the crate root).
-const CRATE_PREFIX: &str = \"crates/schema-generated/\";
-
-/// Kit.Duel's consumer contract: skip the 2-line GENERATED header and
-/// the `generator` provenance row, split each row on the tab.
-fn manifest_rows() -> Vec<(String, Option<String>)> {
-    MANIFEST
-        .lines()
-        .skip(2)
-        .filter(|line| !line.is_empty() && !line.starts_with(\"generator\t\"))
-        .map(|line| {
-            let mut parts = line.split('\\t');
-            let path = parts.next().expect(\"manifest row: path\").to_string();
-            let expect = parts.next().expect(\"manifest row: expectation\");
-            (path, expect.strip_prefix(\"decode \").map(str::to_string))
-        })
-        .collect()
-}
-
-/// Re-base a manifest row's repo-root-relative path to the crate root.
-fn crate_path(row_path: &str) -> &str {
-    match row_path.strip_prefix(CRATE_PREFIX) {
-        Some(p) => p,
-        None => row_path,
-    }
-}
-
-/// The fixture mirror (SchemaCore.Commit's fixtureSnap): version 1,
+"
+  ++ Kit.Duel.rustCratePrefix
+  ++ Kit.Duel.rustManifestRows "(String, Option<String>)"
+      "(path, expect.strip_prefix(\"decode \").map(str::to_string))"
+  ++ Kit.Duel.rustCratePath
+  ++ "/// The fixture mirror (SchemaCore.Commit's fixtureSnap): version 1,
 /// two accounts, an empty ledger.
 #[derive(Clone)]
 struct Account {
@@ -490,12 +488,25 @@ fn commit(
     let mut transfers2 = transfers.clone();
     transfers2.push((tid, src, dst, amount));
     let amt = amount as i64;
+    // THE SELF-TRANSFER DISCIPLINE (the Lean model's keyed fold,
+    // mirrored exactly): both account updates are computed from the
+    // SNAPSHOT rows and applied src-then-dst, each update REPLACING
+    // the rows sharing the key image with its full row (no arithmetic
+    // composes) — the LAST (dst) row wins entirely, so a self-transfer
+    // reads bal + amt (the amount added ONCE), never net zero and
+    // never unchanged. Pinned by SchemaTests.Commit's selfP (`[110,
+    // 50]`) and the duel's p12 tooth below.
+    let snapshot = accounts2.clone();
     for a in accounts2.iter_mut() {
+        let s = snapshot
+            .iter()
+            .find(|s| s.id == a.id)
+            .expect(\"the working copy's rows are the snapshot's\");
         if a.id == src {
-            a.balance -= amt;
+            a.balance = s.balance - amt;
         }
-        if a.id == dst && src != dst {
-            a.balance += amt;
+        if a.id == dst {
+            a.balance = s.balance + amt;
         }
     }
     let vs = violations(&accounts2, &transfers2);
@@ -544,6 +555,48 @@ fn commit_duel() {
         }
     }
     assert!(saw_accept && saw_refuse, \"the duel must exercise both verdicts\");
+}
+
+/// THE NEGATIVE CONTROL (the self-transfer's tooth): the duel's
+/// same-key vector (src == dst) must commit AND leave the balance at
+/// bal + amt — the LAST (dst) update wins wholesale, the Lean model's
+/// pinned `[110, 50]`. The old mirror guarded `src != dst` and read
+/// bal − amt (90): THIS test fails on that mirror.
+#[test]
+fn self_transfer_dst_row_wins() {
+    let mut found = false;
+    for (path, note) in manifest_rows() {
+        if note.as_deref() != Some(\"accept\") {
+            continue;
+        }
+        let bytes = std::fs::read(crate_path(&path)).expect(\"duel vector file present\");
+        let (base, tid, src, dst, amount) = dec_proposal(&bytes)
+            .unwrap_or_else(|| panic!(\"proposal {} does not decode\", path));
+        if src != dst {
+            continue;
+        }
+        found = true;
+        let (mut version, mut accounts, mut transfers) = fixture();
+        let before = accounts
+            .iter()
+            .find(|a| a.id == src)
+            .expect(\"the src row is in the fixture\")
+            .balance;
+        commit(&mut version, &mut accounts, &mut transfers, base, tid, src, dst, amount)
+            .unwrap_or_else(|e| panic!(\"{}: the self-transfer must commit: {}\", path, e));
+        let after = accounts
+            .iter()
+            .find(|a| a.id == src)
+            .expect(\"the src row survives the commit\")
+            .balance;
+        assert_eq!(
+            after,
+            before + amount as i64,
+            \"{}: the self-transfer's balance is not bal + amt (the dst row must win wholesale)\",
+            path
+        );
+    }
+    assert!(found, \"the duel carries no self-transfer (src == dst) vector\");
 }
 
 /// THE NEGATIVE CONTROL (the stale face): the stale vector's refusal

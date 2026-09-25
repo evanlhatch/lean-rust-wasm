@@ -20,6 +20,17 @@ import Inspector.LedgerView
 import Inspector.Cites
 import Inspector.Trust
 import Inspector.WhatIf
+import Inspector.Explain
+import Inspector.DuelReplay
+import Inspector.Tables
+
+/-- info: 'Inspector.Tables.selectRows' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Inspector.Tables.selectRows
+
+/-- info: 'Inspector.Tables.projectRows' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Inspector.Tables.projectRows
 
 /-- info: 'Inspector.InspRow.defects' depends on axioms: [propext] -/
 #guard_msgs in
@@ -76,7 +87,7 @@ the trust report) — all inside the core triple -/
 #guard_msgs in
 #print axioms Inspector.Trust.axiomSummary
 
-/-- info: 'Inspector.Trust.tierDistribution' depends on axioms: [propext] -/
+/-- info: 'Inspector.Trust.tierDistribution' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Inspector.Trust.tierDistribution
 
@@ -135,3 +146,67 @@ the trust report) — all inside the core triple -/
 /-- info: 'Inspector.WhatIf.whatIfJournal_seqs' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms Inspector.WhatIf.whatIfJournal_seqs
+
+/-! ## the explain command's pure faces (02 §11) — all inside the
+   core triple -/
+
+/-- info: 'Inspector.Explain.explainReport' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.Explain.explainReport
+
+/-- info: 'Inspector.Explain.renderRepair' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.Explain.renderRepair
+
+/-- info: 'Inspector.Explain.renderRepairDelta' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.Explain.renderRepairDelta
+
+/-- info: 'Inspector.Explain.xPresent' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.Explain.xPresent
+
+/-! ## the duel replay's pure faces (the replay + the explain
+   discipline) — all inside the core triple; the engines' axiom
+   surfaces are the LANES' (WasmCore.Duel's computed expectations, the
+   codec's GADT walks, the checker's verdicts), re-run as data -/
+
+/-- info: 'Inspector.DuelReplay.rowVerdict' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.rowVerdict
+
+/-- info: 'Inspector.DuelReplay.parseExpect' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.parseExpect
+
+/-- info: 'Inspector.DuelReplay.parseManifest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.parseManifest
+
+/-- info: 'Inspector.DuelReplay.report' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.report
+
+/-- info: 'Inspector.DuelReplay.ledgerRow' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.ledgerRow
+
+/-- info: 'Inspector.DuelReplay.divergenceDiag' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.divergenceDiag
+
+/-- info: 'Inspector.DuelReplay.wasmEngine' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.wasmEngine
+
+/-- info: 'Inspector.DuelReplay.codecEngine' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.codecEngine
+
+/-- info: 'Inspector.DuelReplay.journalEngine' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.journalEngine
+
+/-- info: 'Inspector.DuelReplay.commitEngine' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Inspector.DuelReplay.commitEngine

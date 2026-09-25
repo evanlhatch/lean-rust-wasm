@@ -26,12 +26,31 @@ The pipeline is a machine: states = the checks; transitions = the gate
 runs; the invariant = emissions green. One driver over the gate registry
 (the report-gate combinator); the obligations are the gate's data — a
 registered obligation with no discharge, or evidence resolving to
-nothing, fails the gate. The current composition: lean-build, gen-check
-(the stripped byte-tie + hand-edit detection), artifact-headers,
-wit-check, lean-axioms (sharded, baselined report), native-policy,
-kernel-check (the lean4lean sweep), manifest-check, coverage, docs-check,
-check-schema, breaking, wasm-diff-check, budget-check, splice-smoke,
-rt-conformance, lean-lint — each a row, each with teeth.
+nothing, fails the gate. The current composition — `Gates.gateNames`
+(in `gates/Gates.lean`) is the single source; the names below are its
+rows in run order, each a CHILD `lake exe gates <name>` process,
+run at bounded parallelism (GATES_ALL_JOBS, default 3) with ALL
+verdicts collected — the parallel-collection discipline (the
+sequential first-failure-stop was the OOM era's shape; the gates are
+independent read-only checks, every `--write` is a manual mode), the
+report ordered by the registry: packages-check (the gated table ×
+lakefile agreement, lib- AND root-level), lint (the enforcement wave:
+the lintkit exe's OWN shard fold per gated package — the env/text
+linters' CI teeth; the row fails when any package has findings, the
+sabotage teeth live in GatesTests.Main), axioms (the sharded,
+baselined report), docs-check, gen-check (the stripped byte-tie +
+hand-edit detection), code-registry-check, snapshot-check, audit,
+artifact-headers, native-policy, coverage, kernel-check (the lean4lean sweep: one
+invocation per module — the batch mode's ~300 concurrent replays was
+the recorded hang — the leaves pooled at GATES_KERNEL_JOBS, the inner
+nodes exclusive, a per-module wall budget at GATES_KERNEL_BUDGET_SECS
+whose expiry is an UNKNOWN with a named report, never a hang),
+ownership, breaking, decide-first-census + zero-citation-census (the
+§8 promotion: the proof-hygiene censuses as BASELINED report-gates —
+the findings are data, drift flagged — landed at the first adjudicated
+nonempty run), nolint-census (the `@[nolint]` opt-out rows'
+per-(linter, file) counts, baselined; a new silenced site is a
+deliberate re-baseline diff) — each a row, each with teeth.
 
 ## 4. Provenance (the artifact ledger)
 
@@ -89,3 +108,32 @@ A gate's answer is a VERDICT (categories are ctors, never strings) + a
 machine exit code. No prose-only gates. The semantic-diff discipline
 (08 §27): where a verdict is "behavior changed", it carries the
 distinguishing witness or the equivalence proof.
+
+**The census promotions (the enforcement wave's landing — the trigger
+executed):** the proof-hygiene censuses stay default-OFF (the census
+grade), but their first ADJUDICATED nonempty fold ran and the outcomes
+are on record as BASELINED REPORT-GATES (the axiom-report discipline:
+output committed, drift flagged, findings are DATA never failures):
+
+- `decide-first` — 65 findings, ALL in the heuristic's own
+  false-positive classes (rfl-proved theorems whose elaborated terms
+  route through non-computational casts; quantified-hypothesis
+  statements the synthesizable-Decidable statement filter lets
+  through — not actually closed spaces). Promoted as
+  `gates decide-first-census` (notes/decide-first-census.md): a new
+  hand script over a closed space is exactly the signal the census
+  exists for, and it now surfaces as a review-queue drift line.
+- `zero-citation` — 1455 findings, the LAW-LIBRARY class: the theorem
+  layer ships as API and mechanically it is indistinguishable from
+  dead code (the ~130 reasoned `@[nolint]` rows cover only the sites
+  the earlier adjudication touched). Promoted as
+  `gates zero-citation-census` (notes/zero-citation-census.md), still
+  census-grade: every NEW uncited theorem surfaces as a deliberate
+  re-baseline diff naming it (fixed, consumed, or the reasoned
+  opt-out).
+
+(The close-out audit's "measured ZERO census findings" claim did NOT
+survive the fresh fold — the earlier `--enable` runs died mid-fold;
+the gate rows above carry the honest numbers. The GENERATED-`<m>Keys`
+reminder stands: macro-generated declarations remain the census's real
+false-positive surface, invisible to source grep.)

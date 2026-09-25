@@ -3,14 +3,13 @@
 
 `DataRegistry`: name uniqueness IN THE TYPE (a duplicate-named literal
 fails to elaborate — there is no runtime rejection path because there
-is no illegal state). `CodedRegistry`: position-derived dense codes
-(codes are NEVER hand-set — collision-free by construction, denseness
-by construction; the executable `denseCheck` survives any hand-set-code
-regression).
+is no illegal state). (The death-check retired `CodedRegistry` — the
+position-derived dense codes — with no consumer beyond its own test
+fixture; the persisted-code-space discipline lives in `Kit.CodeRegistry`
++ `Kit.CheckedProp`.)
 
 Provenance: mined from
 `legacy/lean/codegen-core/CodegenCore/DataRegistry.lean` +
-`CodedRegistry.lean` + Registry.lean's `allocateCodes` +
 DidYouMean.lean's engine — theorem content ported, files FRESH
 (the env-extension layer of legacy Registry.lean deliberately does NOT
 port here: this is the value-level registry; the compile-time event
@@ -23,8 +22,7 @@ Core-only (no mathlib/Batteries). `Lean.EditDistance` is the compiler's
 own DP — core.
 
 The five questions (notes/v3/01-core.md):
-- root: Universe — finite, name-keyed data; position-derived dense
-  codes.
+- root: Universe — finite, name-keyed data.
 - carrier grade: nodup-in-type (a duplicate-named literal fails to
   elaborate — the unrepresentable grade); didYouMean is plain
   first-order data.
@@ -32,8 +30,9 @@ The five questions (notes/v3/01-core.md):
   value-level integral; the env-log mount is Kit.Lane's).
 - ladder rung: rung 1 — invariants decided/in-the-type; no proof
   family.
-- gate row: none yet — Kit is outside Gates.Packages' gated set;
-  KitTests pins the allocation + suggestion behavior.
+- gate row: Kit's row in Gates.Packages' gated set (the per-library
+  axiom sweep covers it); KitTests pins the allocation + suggestion
+  behavior.
 -/
 
 import Lean
@@ -54,19 +53,6 @@ namespace Kit
 def didYouMean (got : String) (dict : List String) (maxDist : Nat := 3) :
     List String :=
   TextKit.didYouMean got dict maxDist
-
-/-! ## Code allocation — position-derived, never hand-set -/
-
-/-- Allocate `"{pre}{start+i}"`-style identifiers from list position. -/
-def allocateCodes {α : Type} (pre : String) (start : Nat) (items : List α) :
-    List (α × String) :=
-  items.zipIdx.map (fun (item, i) => (item, s!"{pre}{start + i}"))
-
-/-- Code allocation preserves count — one code per item, always. -/
-theorem allocateCodes_length {α : Type} (pre : String) (start : Nat)
-    (items : List α) :
-    (allocateCodes pre start items).length = items.length := by
-  simp [allocateCodes]
 
 /-! ## DataRegistry — name uniqueness in the type -/
 
@@ -195,93 +181,6 @@ theorem all_insert (reg : DataRegistry α) (item : α)
     (reg.insert item hfresh).all = item :: reg.all := rfl
 
 end DataRegistry
-
-/-! ## CodedRegistry — the dense code space -/
-
-/-- A named registry with allocated codes: name uniqueness from
-    `DataRegistry.nodup`, code collision-freedom from `codesNodup` —
-    both proof fields defaulted to `by decide`, so a concrete literal
-    carries both invariants BY CONSTRUCTION.
-
-    Deliberately NO `insert`: codes are position-derived, so a mid-list
-    insertion would reallocate every later code. Coded registries grow
-    by append at the authoring layer. -/
-structure CodedRegistry (α : Type) extends DataRegistry α where
-  /-- The code prefix (`"E"` for failure modes). -/
-  codePrefix : String
-  /-- The first code's number; code of item `i` is `s!"{codePrefix}{start + i}"`. -/
-  start : Nat
-  /-- The allocated codes are distinct. Default discharged by `decide`
-      over the concrete items; override with an explicit proof for
-      non-concrete item lists. -/
-  codesNodup : ((allocateCodes codePrefix start items).map (·.2)).Nodup := by decide
-
-namespace CodedRegistry
-
-/-- The allocated (item, code) pairs, in registration order. -/
-def codes (reg : CodedRegistry α) : List (α × String) :=
-  allocateCodes reg.codePrefix reg.start reg.items
-
-/-- Code allocation preserves count — one code per item, always. -/
-theorem codes_length (reg : CodedRegistry α) :
-    reg.codes.length = reg.items.length :=
-  allocateCodes_length reg.codePrefix reg.start reg.items
-
-/-- Collision-freedom transported to `codes` (definitionally the raw
-    allocation the proof field quantifies over). -/
-theorem codes_nodup (reg : CodedRegistry α) :
-    (reg.codes.map (·.2)).Nodup :=
-  reg.codesNodup
-
-/-- Position injectivity: the position of `items[i]` IS `i` — the
-    name-map is nodup (`reg.nodup`), so two positions naming the same
-    item are one position. -/
-theorem idxOf_getElem_inj [BEq α] [LawfulBEq α] (reg : CodedRegistry α)
-    (i : Fin reg.items.length) : reg.items.idxOf reg.items[i.1] = i.1 := by
-  have hmem : reg.items[i.1] ∈ reg.items := List.getElem_mem i.2
-  have hj := List.getElem_idxOf (List.idxOf_lt_length_of_mem hmem)
-  have hlen₁ : reg.items.idxOf reg.items[i.1]
-      < (reg.items.map reg.nameOf).length := by
-    rw [List.length_map]
-    exact List.idxOf_lt_length_of_mem hmem
-  have hlen₂ : i.1 < (reg.items.map reg.nameOf).length := by
-    rw [List.length_map]
-    exact i.2
-  have hmap? : (reg.items.map reg.nameOf)[reg.items.idxOf reg.items[i.1]]?
-      = (reg.items.map reg.nameOf)[i.1]? := by
-    rw [List.getElem?_map, List.getElem?_map,
-      List.getElem?_eq_getElem (List.idxOf_lt_length_of_mem hmem),
-      List.getElem?_eq_getElem i.2, hj]
-  exact (List.getElem?_inj hlen₁ reg.nodup).mp hmap?
-
-/-- The executable denseness check: every allocated code, stripped of
-    the prefix, parses to exactly `start + position`. -/
-def denseCheck (reg : CodedRegistry α) : Bool :=
-  reg.codes.zipIdx.all fun c =>
-    (c.1.2.drop reg.codePrefix.length).toNat? == some (reg.start + c.2)
-
-/-- Positions ↔ members: name uniqueness makes the position map
-    injective, membership total. The `[BEq α]` is for `idxOf` (the
-    inverse's lookup). -/
-def membersIso [BEq α] [LawfulBEq α] (reg : CodedRegistry α) :
-    Iso (Fin reg.items.length) {a // a ∈ reg.items} where
-  to i := ⟨reg.items[i.1]'i.2, List.getElem_mem i.2⟩
-  inv a := ⟨reg.items.idxOf a.1, List.idxOf_lt_length_of_mem a.2⟩
-  to_inv a := Subtype.ext (List.getElem_idxOf (List.idxOf_lt_length_of_mem a.2))
-  inv_to i := Fin.ext (idxOf_getElem_inj reg i)
-
-/-- The dense/exhaustive upgrade: when EVERY `a : α` is registered (the
-    enum case), the position correspondence is total on α — an honest
-    `Iso (Fin n) α`. Fires only when `α` is exhausted by the registry;
-    for a non-enum α the honest form is `membersIso`. -/
-def finIso [BEq α] [LawfulBEq α] (reg : CodedRegistry α)
-    (hex : ∀ a : α, a ∈ reg.items) : Iso (Fin reg.items.length) α where
-  to i := reg.items[i.1]'i.2
-  inv a := ⟨reg.items.idxOf a, List.idxOf_lt_length_of_mem (hex a)⟩
-  to_inv a := List.getElem_idxOf (List.idxOf_lt_length_of_mem (hex a))
-  inv_to i := Fin.ext (idxOf_getElem_inj reg i)
-
-end CodedRegistry
 
 /-! ## nodupNamesIso — the indexed-name space (the RowVals-projection
 correspondence) -/

@@ -255,24 +255,22 @@ def Value.render : (t : Ty) → Value t → String
   | .option _, .some v => s!"some {Value.render _ v}"
   | .result _ _, .ok v => s!"ok {Value.render _ v}"
   | .result _ _, .err v => s!"err {Value.render _ v}"
-  | .list _, .list vl => s!"[{vl.renderList}]"
-  | .map _ _, .map vm => s!"map[{vm.renderMap}]"
-  | .set _, .set vl => s!"[{vl.renderList}]"
+  | .list _, .list vl => "[" ++ String.intercalate ", " (VList.strings vl) ++ "]"
+  | .map _ _, .map vm => "map[" ++ String.intercalate ", " (VMap.strings vm) ++ "]"
+  | .set _, .set vl => "[" ++ String.intercalate ", " (VList.strings vl) ++ "]"
   | .bounded _, .bounded f => toString f.val
 
-def VList.renderList : {t : Ty} → VList t → String
-  | _, .nil => ""
-  | _, .cons v vs =>
-      match vs with
-      | .nil => Value.render _ v
-      | _ => s!"{Value.render _ v}, {vs.renderList}"
+/-- The diagnostic render's element strings (the comma-join's operand —
+    the hand last-arm case split is `String.intercalate`'s semantics). -/
+def VList.strings : {t : Ty} → VList t → List String
+  | _, .nil => []
+  | _, .cons v vs => Value.render _ v :: VList.strings vs
 
-def VMap.renderMap : {k : KeyTy} → {v : Ty} → VMap k v → String
-  | _, _, .nil => ""
+/-- The diagnostic render's element strings (the map edition). -/
+def VMap.strings : {k : KeyTy} → {v : Ty} → VMap k v → List String
+  | _, _, .nil => []
   | _, _, .cons k v rest =>
-      match rest with
-      | .nil => s!"{Value.render _ k}={Value.render _ v}"
-      | _ => s!"{Value.render _ k}={Value.render _ v}, {rest.renderMap}"
+      s!"{Value.render _ k}={Value.render _ v}" :: VMap.strings rest
 end
 
 /-- The ToString instance (the lanes' diagnostic surface). -/

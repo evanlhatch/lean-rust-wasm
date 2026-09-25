@@ -26,6 +26,8 @@ Evidence, not architecture — the five-question block lives in the modules unde
 import TextKit
 import TestingKit.Harness
 import TextKitTests.Axioms
+import TextKitTests.GrammarSlice
+import TextKitTests.Lexemes
 
 open TextKit
 open TestingKit
@@ -42,6 +44,13 @@ def errOf (r : Except ParseError (α × List Char)) : Option ParseError :=
   match r with
   | .error e => Option.some e
   | .ok _ => none
+
+/-- Two run outcomes agree (the grammar slice's face: no cursor). -/
+def runEq [BEq α] (a b : Except ParseError α) : Bool :=
+  match a, b with
+  | .ok x, .ok y => x == y
+  | .error e, .error e' => e == e'
+  | _, _ => false
 
 /-- The default error shape (comparing against constructed values) —
     the envelope's ONE construction path (`ParseError.base`). -/
@@ -216,7 +225,42 @@ def combinatorSpec : Spec :=
             "control fired: the consumed input did NOT rewind (the jump was dropped)") ]
     4 42
 
+/-- The grammar slice (the fix-free fixture's behavior pins + the
+    law faces' runtime twins + the sabotage controls). The theorem-level
+    pins (the two laws' instantiations + the named-row controls) live in
+    `TextKitTests.GrammarSlice`. -/
+def grammarSpec : Spec :=
+  Spec.ofList "TextKit.grammar — the fix-free slice: the flat rep's round trips + the law faces"
+    (fun _ => do
+      assert (runEq (Grammar.run GrammarSlice.flatGrammar "xy")
+          (.ok [false, true]))
+        "flat rep: run accepts the canonical text"
+      assert (runEq (Grammar.run GrammarSlice.flatGrammar "yxyx")
+          (.ok [true, false, true, false]))
+        "flat rep: the multi-token parse"
+      assert ((match Grammar.run GrammarSlice.flatGrammar "z" with
+        | .error _ => true | .ok _ => false))
+        "flat rep: a non-token char refuses (run demands full consumption)"
+      assert ((match Grammar.run GrammarSlice.flatGrammar "xy!" with
+        | .error _ => true | .ok _ => false))
+        "flat rep: trailing garbage refuses"
+      assert (runEq (Grammar.run GrammarSlice.sabValueOverlap "y") (.ok false))
+        "the value-overlap grammar mis-parses (the certificate's excluded shape)")
+    [ ("the colliding-head grammar's print re-parses to the printed value",
+        fun _ =>
+          assert (runEq (Grammar.run GrammarSlice.sabAltHeads
+              (Grammar.print GrammarSlice.sabAltHeads true))
+            (.ok true))
+            "control fired: the WF-ALT-1 collision mis-parses its own print")
+    , ("the value-overlap grammar's accepted text is the result's print",
+        fun _ =>
+          assert ((Grammar.print GrammarSlice.sabValueOverlap false) == "y")
+            "control fired: the coherence-false grammar is exactness-false") ]
+    4 42
+
 def main : IO UInt32 := do
   TestingKit.mainOfSuites
     [ ("TextKit.scanners", [scannerSpec])
-    , ("TextKit.combinators", [combinatorSpec]) ]
+    , ("TextKit.combinators", [combinatorSpec])
+    , ("TextKit.grammar", [grammarSpec])
+    , ("TextKit.lexemes", [LexemesSlice.lexemesSpec]) ]

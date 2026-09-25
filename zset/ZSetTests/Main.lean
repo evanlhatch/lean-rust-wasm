@@ -31,10 +31,14 @@ modules under test.
 
 import ZSet
 import ZSet.Graph
+import ZSet.Circuit
+import ZSet.CircuitCompile
 import TestingKit.Lcg
 import TestingKit.Spec
 import TestingKit.Harness
 import ZSetTests.Axioms
+import ZSetTests.CircuitAxioms
+import ZSetTests.Circuit
 
 open ZSet TestingKit
 
@@ -535,6 +539,80 @@ theorem nonCanonicalRepRefused :
   rw [h] at h3
   omega
 
+/-! ## 9. THE UNIVERSAL PROPERTY (T3: ZSet.Free) — the free abelian group -/
+
+/-- The generator assignment under test: `k ↦ k + 3` into `Int` (the
+    `Kit.intAdd` additive carrier). -/
+def ftest : Nat → Int := fun k => (k : Int) + 3
+
+/-- THE EXTENSION'S WEIGHT PRESERVATION, pinned in values: the lift of
+    the weight-`w` singleton is `w • f k` — here `5 • (3 + 3) = 30`. -/
+theorem lift_single_value :
+    (ZSet.lift Kit.intAdd ftest).toFun (singleW 3 5) = 30 := by
+  rw [ZSet.lift_single]
+  rfl
+
+/-- THE EXTENSION over a two-key Z-set, pinned in values: the signed
+    sum of the generator values. -/
+theorem lift_value :
+    (ZSet.lift Kit.intAdd ftest).toFun (fromList [(3, 5), (7, -2)])
+      = 5 * 6 + (-2) * 10 := by
+  rfl
+
+/-- FAITHFULNESS (the uniqueness half): two homs agreeing on the
+    weight-1 generators are equal — the canonical-rep discipline's
+    `weightOfW_inj` IS the faithfulness. -/
+theorem ext_single_pin (h₁ h₂ : ZSet.Hom Nat Int Kit.intAdd)
+    (h : ∀ k, h₁.toFun (singleW k 1) = h₂.toFun (singleW k 1)) : h₁ = h₂ :=
+  ZSet.Hom.ext_single (g := Kit.intAdd) (h₁ := h₁) (h₂ := h₂) h
+
+/-- THE ISO's round trips (the universal property as ONE object:
+    homs out of `ZSet α` ≅ the generator assignments). -/
+theorem homIso_round_trips (h : ZSet.Hom Nat Int Kit.intAdd)
+    (f : Nat → Int) :
+    (ZSet.homIso Kit.intAdd).to ((ZSet.homIso Kit.intAdd).inv f) = f
+    ∧ (ZSet.homIso Kit.intAdd).inv
+        ((ZSet.homIso Kit.intAdd).to h) = h :=
+  ⟨(ZSet.homIso Kit.intAdd).to_inv f,
+   (ZSet.homIso Kit.intAdd).inv_to h⟩
+
+/-- Sabotage: a NON-additive candidate (the entry COUNTER — it counts
+    rep entries instead of summing weights) fails the hom law: on the
+    doubled singleton the law demands `1 = 2` and fails. -/
+def countEntries (m : ZSet Nat) : Int := m.rep.length
+
+theorem negCountNotHom :
+    countEntries (add (fromList [(3, 2)] : ZSet Nat) (fromList [(3, 2)])) = 1
+    ∧ countEntries (fromList [(3, 2)] : ZSet Nat)
+      + countEntries (fromList [(3, 2)] : ZSet Nat) = 2 := by
+  decide
+
+/-- The universal-property sweep: the lift's weight preservation over
+    drawn (key, weight) pairs, against the assignment's values. -/
+def freeSpec : Spec :=
+  Spec.ofList "free abelian group (universal property)" (fun t => do
+    let (k, t1) := drawKeyLo t
+    let (w, _) := drawW t1
+    let fk : Int := (k : Int) + 3
+    assert ((ZSet.lift Kit.intAdd ftest).toFun (singleW k w)
+        == w * fk) s!"{k}: the lift broke the weight preservation"
+    assert ((ZSet.lift Kit.intAdd ftest).toFun
+        (add (singleW k w) (singleW k w)) == 2 * (w * fk))
+      s!"{k}: the lift broke additivity"
+    -- the iso's legs at values: the restriction of the lift IS the assignment
+    assert (((ZSet.homIso Kit.intAdd).inv ftest).toFun (singleW k 1) == fk)
+      "the extension broke the generator"
+    )
+    [ ("the entry counter passes the hom law", fun _ => do
+        assert (countEntries (add (fromList [(3, 2)] : ZSet Nat)
+          (fromList [(3, 2)])) == 2) "control fired: the counter is a hom")
+    , ("the lift ignores the assignment", fun t => do
+        let (kc, _) := drawKeyLo t
+        assert ((ZSet.lift Kit.intAdd (fun _ => (0 : Int))).toFun
+          (singleW kc 1) == (kc : Int) + 3)
+          "control fired: the lift kept the assignment") ]
+    64 43
+
 /-! ## The driver -/
 
 def gradSpec : Spec := Spec.ofList "the rep ≅ weight-function graduation"
@@ -555,4 +633,10 @@ def gradSpec : Spec := Spec.ofList "the rep ≅ weight-function graduation"
 def main : IO UInt32 :=
   mainOfSuites [("ZSet", [groupSpec, canonSpec, trichotomySpec, homomorphismSpec,
     abstractSpec, oneTheoremIdSpec, oneTheoremCollapseSpec, oldValuesSpec, bridgeSpec,
-    graphSpec, gradSpec])]
+    graphSpec, gradSpec, freeSpec]),
+    -- The circuit lane's suites (the P1 merge: CircuitTests joined ZSetTests;
+    -- the modules live at ZSet.Circuit / ZSet.CircuitCompile).
+    ("Ckt-agree", [specAgree]),
+     ("Ckt-old-values", [specOldValues]),
+     ("Ckt-compile", [specCompile]),
+     ("Ckt-rewrite", [specRewrite])]

@@ -27,8 +27,8 @@ import Kit.CheckedProp
 import Kit.Emit
 import Kit.Ledger
 import Kit.Suggest
-import Kit.FreshName
 import Kit.Diag
+import Kit.Cli
 import Kit.Lane
 import Kit.CodeRegistry
 import Kit.Change
@@ -36,14 +36,16 @@ import Kit.Observer
 import Kit.Text
 import Kit.Duel
 import Kit.Mangle
-import Kit.Json
-import Kit.Validation
 import Kit.Derive.Fold
+import Kit.Derive.DepFold
 import Kit.Derive.Bridge
+import Kit.Derive.Cascade
 import Kit.Derive.Evidence
 import TextKit.Error
+import TextKit.Grammar
 import TestingKit.Harness
 import KitTests.Axioms
+import KitTests.Cli
 
 open Kit
 open Kit.Emit
@@ -63,8 +65,10 @@ def bitOptIso : Iso Bool (Option Unit) where
   inv_to b := by cases b <;> rfl
 
 /-- The honest wire codec for one bit over small naturals: bytes 0/1,
-    policy `n < 2`, decode refuses everything else. -/
-def bitEncode : Bool → Nat := fun b => cond b 1 0
+    policy `n < 2`, decode refuses everything else. The encode IS the
+    upstream `Bool.toNat` (the dupDefBodies discipline: the upstream
+    declaration cited, never copied). -/
+def bitEncode : Bool → Nat := Bool.toNat
 def bitDecode : Nat → Option Bool := fun n => if n < 2 then some (n % 2 == 1) else none
 def bitPolicy : Nat → Prop := fun n => n < 2
 
@@ -74,7 +78,7 @@ def bitCodec : Codec Nat Bool where
   policy := bitPolicy
   decode_encode := by
     intro b
-    cases b <;> simp [bitEncode, bitDecode, cond]
+    cases b <;> simp [bitEncode, bitDecode]
   decode_some_policy := by
     intro a b h
     unfold bitDecode at h
@@ -116,35 +120,6 @@ example : oblg.claim = (42 = 42) := rfl
 def itemReg : DataRegistry Nat where
   items := [1, 2, 3]
   nameOf := fun n => s!"item{n}"
-
-/-- A closed enumeration: the CodedRegistry's `finIso` upgrade fires. -/
-inductive Color where
-  | red | green | blue
-
-def colorName : Color → String
-  | .red => "red" | .green => "green" | .blue => "blue"
-
-def colorReg : CodedRegistry Color where
-  items := [Color.red, Color.green, Color.blue]
-  nameOf := colorName
-  codePrefix := "C"
-  start := 100
-
-theorem colorExhaustive : ∀ a : Color, a ∈ colorReg.items := by
-  intro a; cases a <;> simp [colorReg]
-
-deriving instance BEq, DecidableEq for Color
-
-instance : LawfulBEq Color where
-  rfl {a} := by cases a <;> rfl
-  eq_of_beq := by
-    intro a b h
-    match a, b with
-    | .red, .red => rfl
-    | .green, .green => rfl
-    | .blue, .blue => rfl
-    | .red, .green | .green, .red | .red, .blue | .blue, .red
-    | .green, .blue | .blue, .green => exact Bool.noConfusion h
 
 /-! ## Fixtures — CheckedProp -/
 
@@ -255,7 +230,7 @@ def vs1 : Kit.Duel.VectorSet where
 /-- The witness fixture (the diverge row's minimal evidence). -/
 def witnessAt : Kit.Duel.Witness := { loc := "v", lhs := "1", rhs := "2" }
 
-/-! ## Fixtures — Diag / Suggest / FreshName -/
+/-! ## Fixtures — Diag / Suggest -/
 
 /-- The valid space the fixture failures speak over. -/
 def fixtureValid : List String := ["were", "what", "when"]
@@ -395,8 +370,15 @@ def toyR : Rel Nat (Nat → Nat) := fun n f => ∀ acc, f acc = n + acc
 
 def toyLeaf₁ : Nat → Nat := fun n => n
 def toyUn₁ : Nat → Nat := fun a => a + a
-def toyBin₁ : Nat → Nat → Nat := fun a b => a + b
-def toyLeaf₂ : Nat → Nat → Nat := fun n acc => n + acc
+/-- The direct-side binary row: the sum. Its body is shared with the
+    accumulator-side leaf `toyLeaf₂` below (the dupDefBodies
+    discipline: one definition, two roles — never a copy). The row is
+    `Nat.add` itself — the upstream constant cited, never re-spelled
+    (the dupDefBodies upstream class). -/
+def toyBin₁ : Nat → Nat → Nat := Nat.add
+/-- The accumulator-side leaf (state + acc): the SAME body as the
+    direct side's binary row `toyBin₁` — shared, not copied. -/
+def toyLeaf₂ : Nat → Nat → Nat := toyBin₁
 def toyUn₂ : (Nat → Nat) → Nat → Nat := fun f acc => f (f acc)
 def toyBin₂ : (Nat → Nat) → (Nat → Nat) → Nat → Nat := fun f g acc => f (g acc)
 
@@ -553,7 +535,7 @@ theorem relDetPin (a b : Nat) : ((∃ _k : Nat, a = b) ↔ a = b) :=
 theorem relIdLeftPin : (Rel.comp (Rel.refl Nat) relR 1 2 ↔ relR 1 2) :=
   Rel.comp_reflLeft relR 1 2
 
-/-! ## Fixtures — Mangle / Json / Validation -/
+/-! ## Fixtures — Mangle -/
 
 /-- The mined legacy corpus: every convention emits from the SAME word
     list (camel/snake/kebab differ only in glue + capitalization). -/
@@ -567,21 +549,6 @@ def collidingNames : List String := ["FooBar", "foo-bar"]
     ACCEPTS the colliding pair (both names distinct) where the real
     `mangleWf` refuses (the negative control's producer). -/
 def sabMangleWf (ns : List String) : Bool := ns.Nodup
-
-/-- Sabotaged fold: the Except-shaped early exit (the first error wins,
-    the rest of the list never reports) — the anti-early-exit control's
-    producer: it counts ONE failure where Validation counts ALL three. -/
-def sabEarlyCount : Nat :=
-  match (([1, 2, 3] : List Nat).foldlM (fun (_ : Nat) (_ : Nat) => Except.error "e") 0 :
-    Except String Nat) with
-  | .error _ => 1
-  | .ok _ => 0
-
-/-- Sabotaged escaper: the RAW wrap (no escaping — the quote passes
-    through into the output's body) — the negative control's producer:
-    on a quote-carrying input its output differs from the real
-    `Kit.Json.jsonStr`'s. -/
-def sabJsonStr (s : String) : String := "\"" ++ s ++ "\""
 
 /-! ## Sabotage fixtures — the negatives' producers
 
@@ -624,11 +591,6 @@ def sabCheck : Nat → Bool := fun a => a % 2 == 1
     closedWorld constructor cannot produce this shape). -/
 def skipSuggest : Diag :=
   { fixtureClosed with suggest := none }
-
-/-- Sabotaged verdict (always fresh, never enumerates): a duplicate
-    passes it — the always-fresh control's producer. -/
-def sabVerdict : String → String → String → List String → Option String :=
-  fun _ _ _ _ => none
 
 /-- Sabotaged allocator: max over the LIVE rows only (tombstones
     ignored) — on the all-high-retired fixture it would REUSE the
@@ -774,12 +736,6 @@ def registrySpec : Spec :=
           | .ok _ => false
           | .error miss => miss.didYouMean == ["item1", "item2", "item3"])
         "registry.missSuggests"
-      assert (decide (colorReg.codes.length = 3)) "codedRegistry.codesLength"
-      assert (colorReg.denseCheck) "codedRegistry.denseCheck"
-      assert (decide ((colorReg.finIso colorExhaustive).to ⟨1, by decide⟩ = Color.green))
-        "codedRegistry.finIso"
-      assert (decide ((colorReg.membersIso.inv ⟨Color.blue, by simp [colorReg]⟩).1 = 2))
-        "codedRegistry.membersIso"
       -- THE insert restoration: freshness is an ARGUMENT (no illegal
       -- state to reject); the laws are exercised, not just stated.
       assert (
@@ -959,7 +915,7 @@ def duelSpec (duelOk : Bool) : Spec :=
     4 42
 
 def diagSuggestSpec : Spec :=
-  Spec.ofList "Kit.Diag / Suggest / FreshName — the error-surface pins"
+  Spec.ofList "Kit.Diag / Suggest — the error-surface pins"
     (fun _ => do
       assert (decide (Kit.editDistance? "kitten" "sitting" 5 = some 3))
         "suggest.distance.kittenSitting"
@@ -972,21 +928,6 @@ def diagSuggestSpec : Spec :=
       assert (decide (Kit.suggestFor "whre" fixtureValid
         = some " — did you mean: were, what, when?")) "suggest.order.nearestFirst"
       assert (decide (Kit.suggestFor "zzzzzz" ["a", "b"] = none)) "suggest.noneWhenNothingClose"
-      assert ((Kit.freshNameCheck "kit-tests" "item4" "item"
-          ["item1", "item2", "item3"]).isOk)
-        "freshName.freshIsOk"
-      assert (decide (Kit.freshNameVerdict "kit-tests" "item2" "item"
-          ["item1", "item2", "item3"]
-        = some "kit-tests: `item2` is already a registered item — \
-names must be fresh — did you mean: item2, item1, item3?"))
-        "freshName.duplicateCuratedShape"
-      assert (!((Kit.freshNameCheck "kit-tests" "item2" "item"
-          ["item1", "item2", "item3"]).isOk))
-        "freshName.checkCarriesTheVerdict"
-      assert (decide ((Kit.freshNameVerdict "kit-tests" "item4" "item"
-          ["item1", "item2", "item3"]) = none)) "freshName.verdictDichotomyFreshSide"
-      assert ((Kit.freshNameVerdict "kit-tests" "item2" "item"
-          ["item1", "item2", "item3"]).isSome) "freshName.verdictDichotomyDuplicateSide"
       assert (decide (fixtureClosed.suggest = some " — did you mean: were, what, when?" ∧
           fixtureClosed.got = some "whre" ∧ fixtureClosed.valid = fixtureValid))
         "diag.closedWorldFillsSuggest"
@@ -1011,13 +952,7 @@ valid: were, what, when — did you mean: were, what, when?"))
     , ("the closed-world skip is well-shaped",
         fun _ =>
           assert (diagSuggestOk skipSuggest)
-            "control fired: a closed-world Diag without its suggestion passed the shape check")
-    , ("the always-fresh verdict agrees with the real one",
-        fun _ =>
-          assert (decide (sabVerdict "kit-tests" "item2" "item"
-              ["item1", "item2", "item3"]
-            = Kit.freshNameVerdict "kit-tests" "item2" "item" ["item1", "item2", "item3"]))
-            "control fired: the sabotaged verdict matched the real verdict") ]
+            "control fired: a closed-world Diag without its suggestion passed the shape check") ]
     4 42
 
 def codeRegistrySpec : Spec :=
@@ -1168,7 +1103,8 @@ def codeRegistrySpec : Spec :=
     , ("the lax parser agrees with the real parse",
         fun _ =>
           assert ((sabParse "alpha\t1x\n").isSome
-            == (CodeRegistry.parseRow "alpha\t1x\n").isSome)
+            == (match CodeRegistry.parse "alpha\t1x\n" with
+                | .ok _ => true | .error _ => false))
             "control fired: the lax parser accepted the malformed line") ]
     4 42
 
@@ -1219,6 +1155,20 @@ def codeCoverageSpec (committed : Except String CodeRegistry) : Spec :=
             TextKit.parseCode].all
           (fun c => r.lookup c.code ≠ none)))
           "coverage.familyConstantsLive"
+        -- the CASCADE generator's family (Kit.Derive.Cascade's KD rows,
+        -- the KD family extended)
+        assert (decide ([Kit.Derive.Cascade.eKD0010,
+            Kit.Derive.Cascade.eKD0011, Kit.Derive.Cascade.eKD0012,
+            Kit.Derive.Cascade.eKD0013, Kit.Derive.Cascade.eKD0014].all
+          (fun c => r.lookup c.code ≠ none)))
+          "coverage.cascadeFamilyLive"
+        -- the DEPENDENT-FOLD generator's family (Kit.Derive.DepFold's
+        -- KD rows, the KD family extended)
+        assert (decide ([Kit.Derive.DepFold.eKD0015,
+            Kit.Derive.DepFold.eKD0016, Kit.Derive.DepFold.eKD0017,
+            Kit.Derive.DepFold.eKD0018, Kit.Derive.DepFold.eKD0019].all
+          (fun c => r.lookup c.code ≠ none)))
+          "coverage.depFoldFamilyLive"
         -- the replay's negative control: a tampered code falls off the
         -- discipline's sequence AND fails the stability verdict
         let tampered := r.map fun row =>
@@ -1422,6 +1372,77 @@ def relationSpec : Spec :=
               to the diagonal — det_iff's premise is not load-bearing") ]
     4 42
 
+/-! ## Fixtures — Correspondence, the bridge's remaining grades -/
+
+/-- The even-down normalization (round to even), relation: same parity
+    — the bridge's `Normalization`-grade fixture. -/
+def evenNorm : Normalization Nat where
+  norm n := n - n % 2
+  -- the lane's relation: y IS x's even-down form (the A1 debris's
+  -- "same parity" was FALSE for odd inputs — the normal form moves
+  -- odd n to n-1, a DIFFERENT parity; the repair names the relation
+  -- the round-to-even actually preserves)
+  R x y := y = x - x % 2
+  sound n := rfl
+  idempotent n := by
+    show (n - n % 2) - ((n - n % 2) % 2) = n - n % 2
+    omega
+
+/-- The parity-step simulation: `Nat` steps +1, `Bool` steps toggle,
+    related by "the bit names the parity" — the bridge's
+    `Simulation`-grade fixture. -/
+def parityStepA : Nat → Nat → Prop := fun n m => m = n + 1
+def parityStepB : Bool → Bool → Prop := fun b b' => b' = !b
+
+def paritySim : Simulation Nat Bool where
+  stepA := parityStepA
+  stepB := parityStepB
+  R n b := cond b 1 0 = n % 2
+  sim n n' b h hs := by
+    subst hs
+    cases b with
+    | true =>
+        refine ⟨false, ?_, rfl⟩
+        show 0 = (n + 1) % 2
+        have h1 : (1 : Nat) = n % 2 := h
+        omega
+    | false =>
+        refine ⟨true, ?_, rfl⟩
+        show 1 = (n + 1) % 2
+        have h2 : (0 : Nat) = n % 2 := h
+        omega
+
+/-- The capped abstraction: values below 10 stand for themselves, all
+    others ALSO stand for the cap 10 (TOP) — the over-approximation is
+    VISIBLE in the graph (12 relates to both 12 and 10): the bridge's
+    `Abstraction`-grade fixture, deliberately not single-valued. -/
+def cappedAbst : Abstraction Nat Nat where
+  abst n := min n 10
+  conc m n := m = n ∨ m = 10 ∧ n ≥ 10
+  sound n := by
+    show min n 10 = n ∨ min n 10 = 10 ∧ n ≥ 10
+    by_cases h : n < 10 <;> omega
+
+/-- The composite simulation graph is SHARP: `paritySim` chained with
+    the diagonal-leg simulation does NOT relate the even `4` to `true`
+    — the witness chain's only candidate rides the diagonal (the right
+    leg's `R` IS the diagonal), so the chain refuses exactly when the
+    parity leg refuses (the proof-level pin's content, stated for
+    citation). -/
+theorem sabSimCompRefused :
+    ¬((paritySim.trans (Simulation.refl Bool parityStepB)
+        (fun _ _ h => h)).toRel 4 true) := by
+  rintro ⟨m, h1, h2⟩
+  cases m with
+  | true =>
+      exfalso
+      have h1' : (1 : Nat) = 4 % 2 := h1
+      exact absurd h1' (by omega)
+  | false =>
+      exfalso
+      have h2' : false = true := h2
+      exact absurd h2' (by decide)
+
 /-! ## Kit.Correspondence — the carrier-as-graph bridge + Kit.Hyper — the
 hyperproperty substrate (16-surface §4.1 + §4.3)
 
@@ -1498,18 +1519,55 @@ def bridgeSpec : Spec :=
           let _codecUnit := Codec.toRel_refl Nat 4 4
           let _distinguishable := decide (sabRet.toRel true 3 ∧
             ¬((bitRetraction.trans retSucc).toRel true 3))
+          -- the remaining grades (the honest per-grade shapes): the
+          -- Normalization COLLAPSE (idempotence, no carrier trans), the
+          -- Simulation/Abstraction DEFINITIONAL merges, the units, the
+          -- determinism ties
+          let _norm := Normalization.toRel_comp_self evenNorm 7 6
+            |>.mp ⟨6, rfl, rfl⟩
+          let _normUnit := Normalization.toRel_refl Nat 4 4
+          let _normDet := Normalization.toRel_det evenNorm
+            (by decide : evenNorm.toRel 7 6) (by decide : evenNorm.toRel 7 6)
+          let _sim := Simulation.toRel_trans paritySim
+            (Simulation.refl Bool parityStepB) (fun _ _ h => h) 3 true
+            |>.mpr ⟨true, rfl, rfl⟩
+          let _simUnit := Simulation.toRel_refl Nat parityStepA 2 2
+          let _simStep := paritySim.toRel_step
+            (by show (1 : Nat) = 3 % 2; decide : paritySim.toRel 3 true)
+            (by rfl : parityStepA 3 4)
+          let _abst := Abstraction.toRel_trans cappedAbst cappedAbst 12 10
+            |>.mpr ⟨12, Or.inl rfl, Or.inr ⟨rfl, by omega⟩⟩
+          let _abstUnit := Abstraction.toRel_refl Nat 7 7
+          let _simSharp := sabSimCompRefused -- the composite graph is sharp
           true)
         "bridge.towerMergeElaborates")
-    [ ("the codec's graph answers the out-of-policy byte",
+    [ ("the normalization's graph refused the un-normalized edge",
         fun _ =>
-          assert (decide (bitCodec.toRel 7 true ∨ bitCodec.toRel 7 false))
-            "control fired: the partial graph answered a byte the \
-              accepted-byte policy refuses")
-    , ("the off-by-two composite's graph is the engine's composite graph",
+          assert (decide (evenNorm.toRel 7 7))
+            "control fired: the even-down graph answered 7 → 7 — the \
+              function graph carries no information")
+    , ("the capped abstraction's graph keeps the cap's gap",
         fun _ =>
-          assert (decide (sabCompCheck true 3 == honestCompCheck true 3))
-            "control fired: the wrong composite's graph agreed with the \
-              engine's composite — the agreement theorem is vacuous") ]
+          -- the projection's Decidable search is stuck (the structure
+          -- field's plain def), so the pin decides the conc's
+          -- disjunction directly, tied to the abstraction beside it
+          let _tie : ¬cappedAbst.toRel 5 10 := by
+            show ¬((10 : Nat) = 5 ∨ 10 = 10 ∧ 5 ≥ 10)
+            decide
+          assert (decide ((10 : Nat) = 5 ∨ 10 = 10 ∧ 5 ≥ 10))
+            "control fired: the over-approximation pulled 5 under the \
+              cap — the graph is not an over-approximation")
+    , ("the parity simulation refused the wrong parity",
+        fun _ =>
+          -- the A1 debris's pin asserted the WRONG polarity (toRel 4
+          -- true is FALSE — 4 is even); the tie + decide make the
+          -- refusal's read explicit
+          let _tie : ¬paritySim.toRel 4 true := by
+            show ¬((1 : Nat) = 4 % 2)
+            decide
+          assert (decide ((1 : Nat) = 4 % 2))
+            "control fired: the parity simulation related the even 4 to \
+              true — the graph carries no information") ]
     4 42
 
 /-- NEGATIVE CONTROL producer: the self-pair-only noninterference
@@ -1637,18 +1695,12 @@ def textSpec : Spec :=
             "control fired: the separator-dropping join matched intercalate") ]
     4 42
 
-/-! ## Kit.Mangle / Kit.Json / Kit.Validation — the restored machinery's
-pins
+/-! ## Kit.Mangle — the restored machinery's pins
 
 - Mangle: every convention over the SAME word list (the mined legacy
   corpus pins) + THE post-mangle uniqueness discipline: the colliding
   pair FAILS the WF check, the bridge names the culprits, and the
   negative control is the pre-mangle saboteur that accepts it.
-- Json: the ONE escaping decision + the two brace styles + the empty
-  array (the byte-level pins).
-- Validation: the accumulator collects ALL failures (the element-count
-  law, read off the value) + the negative control: the Except-shaped
-  early exit reports only the FIRST failure.
 -/ --
 
 def mangleSpec : Spec :=
@@ -1697,83 +1749,6 @@ def mangleSpec : Spec :=
         fun _ =>
           assert (Kit.mangleWf kebab collidingNames)
             "control fired: the WF check accepted the colliding pair") ]
-    4 42
-
-def jsonSpec : Spec :=
-  Spec.ofList "Kit.Json — the ONE escaping decision + the builders"
-    (fun _ => do
-      assert (decide (Kit.Json.jsonStr "a\"b" = "\"a\\\"b\""))
-        "json.jsonStr.escapesQuote"
-      assert (decide (Kit.Json.jsonStr "a\\b" = "\"a\\\\b\""))
-        "json.jsonStr.escapesBackslash"
-      assert (decide (Kit.Json.jsonStr "plain" = "\"plain\""))
-        "json.jsonStr.plain"
-      assert (decide (Kit.Json.obj [("k", "1"), ("k2", "2")] = "{\"k\": 1, \"k2\": 2}"))
-        "json.obj.tight"
-      assert (decide (Kit.Json.objPad [("k", "1")] = "{ \"k\": 1 }"))
-        "json.objPad.paddedRow"
-      assert (decide (Kit.Json.arr ["1", "2"] = "[1, 2]")) "json.arr"
-      assert (decide (Kit.Json.arr [] = "[]")) "json.arrEmpty")
-    [ ("the raw-wrap escaper is the real one",
-        fun _ =>
-          assert (decide (sabJsonStr "a\"b" == Kit.Json.jsonStr "a\"b"))
-            "control fired: the unescaped (raw-wrap) escaper matched \
-              the real escaper's output")
-    , ("the tight obj renders as a padded row",
-        fun _ =>
-          assert (decide (Kit.Json.obj [("k", "1")] = Kit.Json.objPad [("k", "1")]))
-            "control fired: the two brace styles collapsed to one") ]
-    4 42
-
-def validationSpec : Spec :=
-  Spec.ofList "Kit.Validation — the error-accumulating applicative pins"
-    (fun _ => do
-      -- all-ok folds to the plain fold (the ok-identity law, read off
-      -- the value)
-      assert (
-          match Validation.foldlM (fun b a => .ok (b + a) : Nat → Nat →
-            Validation String Nat) 0 [1, 2, 3] with
-          | .ok s => s == 6
-          | .errs _ => false)
-        "validation.foldlMAllOk"
-      -- THE anti-early-exit pin: EVERY failing step reports — all
-      -- three failures collected, in element order.
-      assert (
-          match Validation.foldlM (fun _ _ => .errs ["e"] : Nat → Nat →
-            Validation String Nat) 0 [1, 2, 3] with
-          | .errs es => es == ["e", "e", "e"]
-          | .ok _ => false)
-        "validation.accumulatesAllFailures"
-      -- the element-count law (the proved face of the same pin)
-      assert (decide (
-        (Validation.foldlM (fun _ _ => .errs ["e"] : Nat → Nat → Validation String Nat)
-          0 [1, 2, 3]).errors?.length = 3))
-        "validation.errCountEqualsElementCount"
-      -- traverse: mixed failures accumulate head-first, in list order
-      assert (
-          match Validation.traverse (fun n => if n % 2 == 0 then .ok (n * 2 :
-            Nat) else .errs [s!"odd {n}"]) [1, 2, 3] with
-          | .errs es => es == ["odd 1", "odd 3"]
-          | .ok _ => false)
-        "validation.traverseAccumulatesInOrder"
-      -- traverse all-ok: ok of the plain map (traverse_ok, value face)
-      assert (
-          match Validation.traverse (fun n => .ok (n * 2 : Nat) :
-            Nat → Validation String Nat) [1, 2, 3] with
-          | .ok xs => xs == [2, 4, 6]
-          | .errs _ => false)
-        "validation.traverseAllOk")
-    [ ("the early exit collects everything",
-        fun _ =>
-          assert (sabEarlyCount == 3)
-            "control fired: the Except-shaped fold reported every failure \
-              (it cannot — it exited at the first)")
-    , ("the accumulator drops the tail",
-        fun _ =>
-          assert (decide (
-            (Validation.foldlM (fun _ _ => .errs ["e"] : Nat → Nat → Validation String Nat)
-              0 [1, 2, 3]).errors?.length = 1))
-            "control fired: the accumulator reported only the first failure") ]
     4 42
 
 /-! ## Kit.Ledger — the provenance ledger (09 §4) — the fixtures
@@ -1847,6 +1822,25 @@ def nonCanonicalLedger : String :=
   let s := Kit.Ledger.print ledgerFx
   String.ofList (s.toList.take (s.length - 1))
 
+/-- Sabotaged wf gate: the derived run WITHOUT the well-formedness gate
+    — it ACCEPTS the unsorted ledger (the grammar's bytes are fine; the
+    refusal is the gate's tooth). The negative control's producer. -/
+def sabParseNoWf (s : String) : Bool :=
+  let s' := if s == "" || s.toList.getLast? == some '\n' then s else s ++ "\n"
+  match TextKit.Grammar.run Kit.Ledger.ledgerGrammar s' with
+  | .ok _ => true | .error _ => false
+
+/-- The unsorted ledger's text (the wf gate's control's input). -/
+def unsortedLedger : String :=
+  "gen/b.wit\te\t\t\t-\t1\t\ngen/a.wit\te\t\t\t-\t2\t\n"
+
+/-- COMPILE-TIME PIN (the migrated surface's fixture discharge): the
+    fixture ledger is well-formed — the law's wf premise holds at the
+    fixture. (The rowOk/spellability premises are pinned at runtime by
+    the round-trip + selfStable asserts — String literals do not
+    kernel-reduce through the char classes.) -/
+example : Kit.Ledger.wf ledgerFx = true := by decide
+
 /-- Kit.Ledger — the provenance-ledger pins. `driverRows` folds in from
     `main`'s IO half (the duel write's recorded rows). -/
 def ledgerSpec (driverRows : List Kit.Ledger.LedgerRow) : Spec :=
@@ -1894,6 +1888,23 @@ def ledgerSpec (driverRows : List Kit.Ledger.LedgerRow) : Spec :=
           match Kit.Ledger.parse "gen/a.wit\te\t\t\t-\tx\t\n" with
           | .error _ => true | .ok _ => false)
         "ledger.refusesBadHash"
+      -- THE MIGRATED SURFACE'S TEETH: the write-side gates' refusal
+      -- faces — an empty field (the field lexeme's nonempty gate), an
+      -- empty list member (the comma run), and the CANONICAL-hash
+      -- discipline (the nat atom refuses a leading zero — the raw `01`
+      -- is not the spelling of the value it scans to)
+      assert (
+          match Kit.Ledger.parse "gen/a.wit\t\t\t\t\t1\t\n" with
+          | .error _ => true | .ok _ => false)
+        "ledger.refusesEmptyField"
+      assert (
+          match Kit.Ledger.parse "gen/a.wit\te\ta,,b\t\t-\t1\t\n" with
+          | .error _ => true | .ok _ => false)
+        "ledger.refusesEmptyListMember"
+      assert (
+          match Kit.Ledger.parse "gen/a.wit\te\t\t\t-\t01\t\n" with
+          | .error _ => true | .ok _ => false)
+        "ledger.refusesLeadingZeroHash"
       -- BACKWARD: the artifact's FULL spec surface (rows + collections)
       assert (Kit.Ledger.backward ledgerFx "gen/schema-slice.wit"
         == [`SchemaCore.Item.a, `SchemaCore.Item.b, `SchemaCore.registry])
@@ -1999,7 +2010,14 @@ def ledgerSpec (driverRows : List Kit.Ledger.LedgerRow) : Spec :=
             == (Kit.Ledger.selfStable nonCanonicalLedger))
             "control fired: the parse-only stability matched the real \
               stability — it accepted the non-canonical bytes \
-              (the missing final newline)") ]
+              (the missing final newline)")
+    , ("the gate-less parse agrees with the real one",
+        fun _ =>
+          assert (sabParseNoWf unsortedLedger
+            == (Kit.Ledger.parse unsortedLedger |>.toBool))
+            "control fired: the gate-less parse matched the real parse — \
+              the wf gate's refusal is not load-bearing (the grammar's \
+              bytes accepted the unsorted ledger)") ]
     4 42
 
 
@@ -2014,6 +2032,7 @@ here). The value-level pins are the `deriveSpec` below.
 -/
 
 open Kit.Derive.Fold
+open Kit.Derive.DepFold
 open Kit.Derive.Bridge
 
 /-! ### The fold fixture — the generated fold ≡ the hand fold -/
@@ -2067,6 +2086,235 @@ theorem handFold_eq (alg : Tree2Alg' α) (t : Tree2) :
 -- the generated equation lemmas reduce (kernel-visible)
 example : foldTree2 (tree2AlgOf natAlg') (.node .leaf 3 (.lit true)) = 5 := rfl
 example : foldTree2 (tree2AlgOf natAlg') (.wrap 2 .leaf) = 2 := rfl
+
+/-! ### The dependent fold fixture — the GADT family's generated fold
+    (the `declare_dependent_fold` entourage — mirrors `Value`'s shape:
+    a nullary ctor at a concrete index, a wrapper with an implicit
+    index binder and a recursive child at the binder's index, a
+    raw-payload + recursive ctor, and a second nullary at the same
+    index as the leaf — the two-ctors-one-index shape). -/
+
+inductive Ix where
+  | zero : Ix
+  | succ : Ix → Ix
+
+inductive V2 : Ix → Type where
+  | vt : Nat → V2 .zero
+  | vs : {n : Ix} → V2 n → V2 (.succ n)
+  | vp : {n : Ix} → Nat → V2 n → V2 (.succ n)
+  | vnil : V2 .zero
+
+declare_dependent_fold V2
+
+/-- The HAND sibling (the pre-generator shape, mined from
+    `SchemaCore.Fold`'s `foldValue`) — the migration's other side. -/
+structure V2Alg' (P : Ix → Type) where
+  vt : Nat → P .zero
+  vs : {n : Ix} → P n → P (.succ n)
+  vp : {n : Ix} → Nat → P n → P (.succ n)
+  vnil : P .zero
+
+def handDepFold (alg : V2Alg' P) : (i : Ix) → V2 i → P i
+  | .zero, .vt k => alg.vt k
+  | .succ n, .vs v => alg.vs (handDepFold alg n v)
+  | .succ n, .vp k v => alg.vp k (handDepFold alg n v)
+  | .zero, .vnil => alg.vnil
+
+/-- The transported algebra (the thin wrapper — the rows verbatim). -/
+def v2AlgOf (alg : V2Alg' P) : V2Alg P where
+  vt k := alg.vt k
+  vs v := alg.vs v
+  vp k v := alg.vp k v
+  vnil := alg.vnil
+
+/-- The fixture algebra (a Nat-valued counter riding the index). -/
+def v2natAlg : V2Alg' (fun _ => Nat) where
+  vt _ := 1
+  vs {_} a := a + 1
+  vp {_} k a := a + k
+  vnil := 7
+
+/-- THE MIGRATION PIN: the hand fold IS the generated fold (over the
+    transported algebra) — THE INITIALITY THEOREM CITED (one
+    application; the commutation rows are `fun _ => rfl`). -/
+theorem handDepFold_eq (alg : V2Alg' (fun _ => Nat)) (i : Ix) (x : V2 i) :
+    handDepFold alg i x = foldV2 (v2AlgOf alg) i x :=
+  foldV2_unique (alg := v2AlgOf alg) (f := handDepFold alg)
+    (fun _ => rfl) (fun {_} _ => rfl) (fun {_} _ _ => rfl) rfl x
+
+-- the generated equation lemmas reduce (kernel-visible)
+example : foldV2 (v2AlgOf v2natAlg) .zero (.vt 3) = 1 := rfl
+example : foldV2 (v2AlgOf v2natAlg) (.succ .zero) (.vs (.vt 3)) = 2 := rfl
+example : foldV2 (v2AlgOf v2natAlg) (.succ .zero) (.vp 10 (.vt 3)) = 11 := rfl
+example : foldV2 (v2AlgOf v2natAlg) .zero .vnil = 7 := rfl
+example : foldV2 (v2AlgOf v2natAlg) (.succ .zero) (.vp 10 .vnil) = 17 := rfl
+
+/-! ### The MUTUAL dependent-fold fixture — the sibling block's generated
+    fold (the `declare_dependent_fold` MUTUAL extension — the
+    `Value`/`VList`/`VMap` shape: ONE record carrying the block's rows,
+    the head sibling's explicit index, the co-siblings' implicit ones,
+    the co-sibling rows carrying the sibling's initial: `lnil`, `knil`)
+    -/
+
+/-- The fixture index universe (a two-ctor index so the result-index
+    patterns stay ctor-headed). -/
+inductive Ty2 where
+  | b0 : Ty2
+  | b1 : Ty2 → Ty2
+
+/- The fixture sibling block: the head sibling `W` (leaf / wrapper /
+   two CROSS-SIBLING containers) + the co-siblings `L2`, `K2` (a plain
+   list and a pair-list — the `VList`/`VMap` shapes). BLOCK comment: a
+   doc comment cannot ride `mutual` (the doc-comment grammar expects a
+   declaration keyword). -/
+mutual
+inductive W : Ty2 → Type where
+  | wa : Nat → W .b0
+  | ws : {t : Ty2} → W t → W (.b1 t)
+  | wl : {t : Ty2} → L2 t → W (.b1 t)
+  | wr : {k : Ty2} → K2 k → W (.b1 k)
+inductive L2 : Ty2 → Type where
+  | nil : {t : Ty2} → L2 t
+  | cons : {t : Ty2} → W t → L2 t → L2 t
+inductive K2 : Ty2 → Type where
+  | nil : {k : Ty2} → K2 k
+  | cons : {k : Ty2} → W k → L2 k → K2 k → K2 k
+end
+
+declare_dependent_fold W
+
+/-- The fixture algebra (a Nat-sum reader over the whole block; the
+    mangled row names are the record's own). -/
+def wAlg : WAlg (fun _ => Nat) (fun _ => Nat) (fun _ => Nat) where
+  wa n := n
+  ws a := a + 1
+  wl a := a + 2
+  wr a := a + 3
+  lnil := 0
+  lcons e p := e + p + 1
+  knil := 100
+  kcons ke ve p := ke + ve + p + 1
+
+-- the generated folds compute (kernel-visible, across the siblings)
+example : foldW wAlg .b0 (.wa 3) = 3 := rfl
+example : foldW wAlg (.b1 .b0) (.ws (.wa 3)) = 4 := rfl
+example : foldW wAlg (.b1 .b0) (.wl (.nil : L2 .b0)) = 2 := rfl
+example : foldW wAlg (.b1 .b0) (.wr (.nil : K2 .b0)) = 103 := rfl
+example : foldL2 wAlg (.nil : L2 .b0) = 0 := rfl
+example : foldL2 wAlg (.cons (.wa 1) (.nil : L2 .b0)) = 2 := rfl
+example : foldK2 wAlg (.nil : K2 .b0) = 100 := rfl
+example : foldK2 wAlg (.cons (.wa 1) (.nil : L2 .b0) (.nil : K2 .b0)) = 102 := rfl
+
+/-- The HAND half-walkers (the pre-generator shape, one per sibling;
+    each delegates the CROSS-SIBLING children to the generated fold —
+    the honest delegation shape, so every commutation row is `rfl`). -/
+def handW (alg : WAlg (fun _ => Nat) (fun _ => Nat) (fun _ => Nat)) :
+    (t : Ty2) → W t → Nat
+  | .b0, .wa n => alg.wa n
+  | .b1 t, .ws v => WAlg.ws (t := t) alg (handW alg t v)
+  | .b1 t, .wl l => WAlg.wl (t := t) alg (foldL2 alg l)
+  | .b1 k, .wr m => WAlg.wr (k := k) alg (foldK2 alg m)
+
+def handL2 (alg : WAlg (fun _ => Nat) (fun _ => Nat) (fun _ => Nat)) :
+    {t : Ty2} → L2 t → Nat
+  | t, .nil => WAlg.lnil (t := t) alg
+  | t, .cons v vs =>
+      WAlg.lcons (t := t) alg (foldW alg _ v) (handL2 alg vs)
+
+/-- THE MUTUAL MIGRATION PIN: the hand walker IS the generated fold —
+    THE INITIALITY THEOREM CITED, per sibling (the co-siblings'
+    motives are `True` in the rec application; every commutation row
+    is `rfl`; the law's index binders ride implicitly). -/
+theorem handW_eq (alg : WAlg (fun _ => Nat) (fun _ => Nat) (fun _ => Nat))
+    (t : Ty2) (x : W t) : handW alg t x = foldW alg t x :=
+  foldW_unique (f := handW alg)
+    (fun _ => rfl) (fun {_} _ => rfl) (fun {_} _ => rfl) (fun {_} _ => rfl)
+    x
+
+theorem handL2_eq (alg : WAlg (fun _ => Nat) (fun _ => Nat) (fun _ => Nat))
+    (t : Ty2) (l : L2 t) : handL2 alg l = foldL2 alg l :=
+  foldL2_unique (f := handL2 alg) (fun {_} => rfl) (fun {_} _ _ => rfl) l
+
+-- the generated equation lemmas: the runtime face (the hand walker's
+-- cons step IS the generated row application)
+example (t : Ty2) (v : W t) (vs : L2 t) :
+    handL2 wAlg (.cons v vs : L2 t)
+      = WAlg.lcons (t := t) wAlg (foldW wAlg t v) (foldL2 wAlg vs) := by
+  rw [handL2_eq, foldL2_cons]
+
+/-- info: 'foldW_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms foldW_unique
+
+/-- info: 'foldL2_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms foldL2_unique
+
+/-- info: 'foldK2_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms foldK2_unique
+
+/-! ### The TWO-ARG index-ctor fixture — the wall's fixture (the
+    `Value`-family shape: a constructor whose RESULT INDEX is a
+    TWO-ARGUMENT constructor application, `.result ok err` — the shape
+    whose generated fold-arm patterns died twice: the quotation route's
+    dotted-identifier wall and the hygienic-binder wall; the parse
+    route emits the hand spellings verbatim and both die). The index
+    universe mirrors `Ty`'s result/map rows: a one-arg wrapper and the
+    two-arg pair. -/
+
+inductive Ty3 where
+  | b0 : Ty3
+  | b1 : Ty3 → Ty3
+  | pair : Ty3 → Ty3 → Ty3
+
+inductive R3 : Ty3 → Type where
+  | ok : {a b : Ty3} → R3 a → R3 (.pair a b)
+  | err : {a b : Ty3} → R3 b → R3 (.pair a b)
+  | base : R3 .b0
+
+declare_dependent_fold R3
+
+/-- The fixture algebra (a Nat counter over the whole family; the
+    two-arg rows `ok`/`err` ride the record's implicit index binders —
+    named by the CONSTRUCTOR's own binder names, the hand rows'
+    `(k := k)`-named-argument face). -/
+def r3Alg : R3Alg (fun _ => Nat) where
+  ok a := a
+  err a := a
+  base := 7
+
+-- THE RFL TEETH: the generated fold kernel-reduces over the two-arg
+-- index ctor (the arms' patterns are ctor-headed in BOTH columns —
+-- the hand `.pair _ _, .ok v` spelling)
+example : foldR3 r3Alg .b0 .base = 7 := rfl
+example : foldR3 r3Alg (Ty3.pair .b0 .b0) (.ok .base) = 7 := rfl
+example : foldR3 r3Alg (Ty3.pair .b0 .b0) (.err .base) = 7 := rfl
+
+/-- The fixture algebra (the pin's shared value). -/
+def alg0 : R3Alg (fun _ => Nat) := r3Alg
+
+/-- The HAND half-walker (the pre-generator shape) — the migration's
+    other side. The row applications name the index slots (the two-arg
+    ctor's binders), the cross-ctor arm rides the row's named
+    arguments. -/
+def handR3 (alg : R3Alg (fun _ => Nat)) : (t : Ty3) → R3 t → Nat
+  | .b0, .base => alg.base
+  | .pair a b, .ok v => R3Alg.ok (a := a) (b := b) alg (handR3 alg _ v)
+  | .pair a b, .err v => R3Alg.err (a := a) (b := b) alg (handR3 alg _ v)
+
+/-- THE MIGRATION PIN: the hand walker IS the generated fold — THE
+    INITIALITY THEOREM CITED (one application; every commutation row
+    is `rfl`). -/
+theorem handR3_eq (t : Ty3) (x : R3 t) :
+    handR3 alg0 t x = foldR3 alg0 t x :=
+  foldR3_unique (f := handR3 alg0)
+    (h_ok := fun {_ _} v => rfl) (h_err := fun {_ _} v => rfl)
+    (h_base := rfl) x
+
+/-- info: 'foldR3_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms foldR3_unique
 
 /-! ### The bridge fixture — the generated iff over the combinator fragment -/
 
@@ -2151,7 +2399,7 @@ def sabExpCheck : BExp → (Nat → Bool) → Bool := BExp.check
 #guard_msgs in
 declare_fold notInd
 
-/-- error: [KD0002] error: declare_fold BadIdx: `BadIdx` is index (GADT)-indexed — the generator's scope is the SIMPLE closed inductives; the DEPENDENT fold (the motive riding the index, 06 §2) is the named extension — write it by hand (the `foldValue` shape) and cite this refusal -/
+/-- error: [KD0002] error: declare_fold BadIdx: `BadIdx` is index (GADT)-indexed — the generator's scope is the SIMPLE closed inductives; the DEPENDENT fold (the motive riding the index, 06 §2) is `Kit.Derive.DepFold`'s `declare_dependent_fold` for the one-index ctor-headed-index fragment — outside that fragment, write it by hand (the `foldValue` shape) and cite this refusal -/
 #guard_msgs in
 declare_fold BadIdx
 
@@ -2170,6 +2418,69 @@ declare_fold BadNested
 /-- error: [KD0007] error: declare_fold BadDep: constructor `BadDep.dep`'s argument 1 has a dependent type — the dependent-constructor fragment is out of scope -/
 #guard_msgs in
 declare_fold BadDep
+
+/-! ### The dependent fold's refusal fixtures (the GADT-side teeth: the
+    shapes OUTSIDE `declare_dependent_fold`'s fragment, each with its
+    named E-code) -/
+
+/-- bare-variable result index (the index STAYS an index because the
+    sibling ctor constrains it; a family whose EVERY ctor's index is a
+    bare variable never gets here — Lean promotes that index to a
+    parameter and the no-indices refusal names `declare_fold`'s
+    shape) -/
+inductive BadVarIdx : Ix → Type where
+  | a : BadVarIdx .zero
+  | b : (n : Ix) → BadVarIdx n
+
+/-- a constructor binder the result index does not determine -/
+inductive BadChild : Ix → Type where
+  | w : {n : Ix} → V2 n → BadChild .zero
+
+/-- implicit RECURSIVE argument (the child's index has no pattern slot) -/
+inductive BadImpl : Ix → Type where
+  | s : {n : Ix} → {v : BadImpl n} → BadImpl (.succ n)
+
+/-- multi-index family -/
+inductive BadMulti : Nat → Nat → Type where
+  | mk : BadMulti 0 0
+
+/-- Prop-sorted family (the algebras are `P : I → Type`-valued) -/
+inductive BadProp : Ix → Prop where
+  | mk : BadProp .zero
+
+/-- error: [KD0015] error: declare_dependent_fold Tree2: `Tree2` has no type indices — the index-free shape is `declare_fold`'s (Kit.Derive.Fold); the dependent generator is the indexed face -/
+#guard_msgs in
+declare_dependent_fold Tree2
+
+/-- error: [KD0015] error: declare_dependent_fold BadMulti: `BadMulti` has 2 indices — the fragment is the ONE-index family (`I → Type`); the multi-index shape is the named extension -/
+#guard_msgs in
+declare_dependent_fold BadMulti
+
+/-- error: [KD0016] error: declare_dependent_fold BadProp: `BadProp`'s sort is not `Type` — the fragment's algebras are `P : I → Type`-valued; the `Prop`/`Type u` families are the named extension -/
+#guard_msgs in
+declare_dependent_fold BadProp
+
+/-- error: [KD0017] error: declare_dependent_fold BadImpl: constructor `BadImpl.s`'s argument 1 is a RECURSIVE argument in an implicit binder — the generated pattern cannot name the child's index; the implicit-recursive fragment is the named extension -/
+#guard_msgs in
+declare_dependent_fold BadImpl
+
+/-- error: [KD0018] error: declare_dependent_fold BadChild: constructor `BadChild.w`'s implicit binder `n` is not determined by the result index — the generated fold arm can only name what the index pattern binds; the undetermined-binder fragment is the named extension -/
+#guard_msgs in
+declare_dependent_fold BadChild
+
+/-- error: [KD0019] error: declare_dependent_fold BadVarIdx: constructor `BadVarIdx.b`'s result index is a bare variable — the fragment's index patterns are constructor-headed or literal (a variable index forces the matcher to split and the rfl equations die); the variable-index shape is the named extension -/
+#guard_msgs in
+declare_dependent_fold BadVarIdx
+
+/-- error: [KD0003] error: declare_dependent_fold BadParam: `BadParam` has type parameters — the parameter-threaded fragment is the named extension; the dependent scope is the parameter-free family -/
+#guard_msgs in
+declare_dependent_fold BadParam
+
+/- The Prop-sorted tooth rides the SINGLE-family fixture (`BadProp`
+   above): Lean's same-universe rule makes a MIXED `Type`/`Prop` mutual
+   block undeclarable (the declaration itself, not the generator,
+   refuses it), so there is no mutual-block variant of the KD0016 row
+   to pin — the PASS-1 sort check is per-sibling code either way. -/
 
 /-- error: [KB0006] error: declare_bridge bt1: unknown row shape `leaves` (got: leaves) — valid: leaf, and, or, not — did you mean: leaf? -/
 #guard_msgs in
@@ -2245,6 +2556,8 @@ hs✝ : a1.Sem r
 ⊢ False
 ---
 error: `simp` made no progress
+---
+error: [KB0009] error: declare_bridge bt5: the generated theorem failed to elaborate — wrongness does not elaborate (a refused bridge commits nothing; Lean's sorry recovery never lands)
 -/
 #guard_msgs in
 declare_bridge bt5 := sabExpCheck, BExp.Sem where
@@ -2259,6 +2572,10 @@ declare_bridge bt5 := sabExpCheck, BExp.Sem where
 /-- info: 'foldTree2_unique' does not depend on any axioms -/
 #guard_msgs in
 #print axioms foldTree2_unique
+
+/-- info: 'foldV2_unique' does not depend on any axioms -/
+#guard_msgs in
+#print axioms foldV2_unique
 
 /-- info: 'bexpIff_iff' depends on axioms: [propext] -/
 #guard_msgs in
@@ -2381,6 +2698,508 @@ def deriveSpec : Spec :=
               the bridge's content is not load-bearing") ]
     4 42
 
+/-! ## Kit.Derive.Cascade — the `declare_cascade` generator (the audit's #7:
+    the `_eq_nil_iff` bridge cascade's generator face)
+
+The fixture cascade is the Keys lane's miniature, Kit-local: the
+match/if rungs are the domain's chunk laws (HAND — the
+`declare_bridge` leaf discipline; the generator composes them, it does
+not re-derive them), the walk rung's bridge is GENERATED per rung
+(`declare_cascade_walk`), and the flatMap/dup master's iff + the two
+projections are GENERATED (`declare_cascade`). The before-world's hand
+walk + hand master lemmas are kept as the migration's evidence: their
+full proofs died into the generated iff (the migration pins re-prove
+their statements in ONE citation each).
+
+The generator's gate row: the generated surface exercised at the value
+level, the refusal teeth (`#guard_msgs` over the curated Diags), the
+axiom pins (KitTests.Axioms), and the mandatory negative controls.
+-/
+
+open Kit.Derive.Cascade
+
+/-! ### The fixture domain (the Keys lane's miniature) -/
+
+/-- The mini field: name + the scalar-key discipline's gate bit. -/
+structure CascadeF where
+  name : String
+  scalar : Bool
+  deriving BEq, DecidableEq, Repr
+
+/-- The mini record: name + fields. -/
+structure CascadeR where
+  name : String
+  fields : List CascadeF
+  deriving BEq, DecidableEq, Repr
+
+/-- The mini key declaration: record + the stored field snapshot + key
+    + the foreign-key list. -/
+structure CascadeD where
+  record : String
+  fields : List CascadeF
+  key : String
+  foreign : List String
+  deriving BEq, DecidableEq, Repr
+
+/-! ### The rung checkers (the cascade's diagnostic authority) -/
+
+/-- The key-field rung (the find? + scalar-gate rung — HAND chunk law
+    below: the match content is the domain's). -/
+def fieldRung (fs : List CascadeF) (key : String) : List String :=
+  match fs.find? (fun f => f.name == key) with
+  | none => [s!"field `{key}` missing"]
+  | some f => if f.scalar then [] else [s!"field `{key}` not scalar"]
+
+/-- One foreign key against the records + declarations (the nested
+    find? rung — HAND chunk law). -/
+def foreignRung (rs : List CascadeR) (ds : List CascadeD) (fk : String) :
+    List String :=
+  match rs.find? (fun r => r.name == fk) with
+  | none => [s!"target `{fk}` not in the universe"]
+  | some r =>
+      match ds.find? (fun d => d.record == fk) with
+      | none => [s!"target `{fk}` has no declared key"]
+      | some d => fieldRung r.fields d.key
+
+/-- THE WALK RUNG: the foreign-key list walk (the generated bridge's
+    rung — the `foreignDiagsAll` shape). -/
+def foreignWalk (rs : List CascadeR) (ds : List CascadeD) :
+    List String → List String
+  | [] => []
+  | fk :: fks => foreignRung rs ds fk ++ foreignWalk rs ds fks
+
+/-- The resolved-record rung (the if-guard rung — HAND chunk law,
+    citing the key-field rung's law + the GENERATED walk bridge). -/
+def recordRung (rs : List CascadeR) (ds : List CascadeD)
+    (r : CascadeR) (d : CascadeD) : List String :=
+  if r.fields = d.fields then
+    fieldRung r.fields d.key ++ foreignWalk rs ds d.foreign
+  else [s!"stale field snapshot on `{d.record}`"]
+
+/-- One declaration (the find? + resolved rung — HAND chunk law). -/
+def checkRung (rs : List CascadeR) (ds : List CascadeD) (d : CascadeD) :
+    List String :=
+  match rs.find? (fun r => r.name == d.record) with
+  | none => [s!"record `{d.record}` not in the universe"]
+  | some r => recordRung rs ds r d
+
+/-- The dup scan (the Keys lane's `dupNames` — HAND chunk law). -/
+def dupRung : List String → List String
+  | [] => []
+  | n :: ns => if ns.contains n then n :: dupRung ns else dupRung ns
+
+/-- THE MASTER: all per-declaration diagnostics + the dup scan (the
+    flatMap + map master — the generated iff's rung list). -/
+def masterCheck (rs : List CascadeR) (ds : List CascadeD) : List String :=
+  ds.flatMap (checkRung rs ds)
+    ++ (dupRung (ds.map (fun d => d.record))).map
+      (fun n => s!"duplicate declaration for `{n}``")
+
+/-! ### The reasoning authority (the Prop side, rung by rung) -/
+
+def FieldOk (fs : List CascadeF) (key : String) : Prop :=
+  ∃ f, fs.find? (fun f => f.name == key) = some f ∧ f.scalar = true
+
+def ForeignOk (rs : List CascadeR) (ds : List CascadeD) (fk : String) : Prop :=
+  ∃ (r : CascadeR) (d : CascadeD),
+    rs.find? (fun r => r.name == fk) = some r
+    ∧ ds.find? (fun d => d.record == fk) = some d
+    ∧ FieldOk r.fields d.key
+
+def RecordOk (rs : List CascadeR) (ds : List CascadeD)
+    (r : CascadeR) (d : CascadeD) : Prop :=
+  r.fields = d.fields
+  ∧ FieldOk r.fields d.key
+  ∧ ∀ fk, fk ∈ d.foreign → ForeignOk rs ds fk
+
+def CheckOk (rs : List CascadeR) (ds : List CascadeD) (d : CascadeD) : Prop :=
+  ∃ r, rs.find? (fun r => r.name == d.record) = some r
+    ∧ RecordOk rs ds r d
+
+/-- THE MASTER RELATION (the def form — the componentwise `∧`-chain the
+    generated iff states inline). -/
+def MasterWf (rs : List CascadeR) (ds : List CascadeD) : Prop :=
+  (∀ d, d ∈ ds → CheckOk rs ds d)
+    ∧ (ds.map (fun d => d.record)).Nodup
+
+/-! ### The HAND chunk laws (the domain-content rungs — stay hand) -/
+
+theorem fieldRung_eq_nil_iff {fs : List CascadeF} {key : String} :
+    fieldRung fs key = [] ↔ FieldOk fs key := by
+  unfold fieldRung FieldOk
+  cases hx : fs.find? (fun f => f.name == key) with
+  | none => simp
+  | some f =>
+      by_cases hs : f.scalar = true
+      · exact ⟨fun _ => ⟨f, rfl, hs⟩, fun _ => by simp [hs]⟩
+      · simp [hs]
+
+theorem foreignRung_eq_nil_iff {rs : List CascadeR} {ds : List CascadeD}
+    {fk : String} :
+    foreignRung rs ds fk = [] ↔ ForeignOk rs ds fk := by
+  unfold foreignRung ForeignOk
+  cases hr : rs.find? (fun r => r.name == fk) with
+  | none => simp
+  | some r =>
+      cases hd : ds.find? (fun d => d.record == fk) with
+      | none => simp
+      | some d =>
+          rw [fieldRung_eq_nil_iff]
+          constructor
+          · rintro ⟨f, hf, hsc⟩; exact ⟨r, d, rfl, rfl, f, hf, hsc⟩
+          · rintro ⟨r', d', hr', hd', f, hf, hsc⟩
+            cases hr'
+            cases hd'
+            exact ⟨f, hf, hsc⟩
+
+theorem dupRung_eq_nil_iff {ns : List String} :
+    dupRung ns = [] ↔ ns.Nodup := by
+  induction ns with
+  | nil => simp [dupRung]
+  | cons n ns ih =>
+      by_cases hc : ns.contains n = true
+      · rw [dupRung, if_pos hc]
+        have hmem : n ∈ ns := List.contains_iff_mem.mp hc
+        simp [List.nodup_cons, hmem]
+      · rw [dupRung, if_neg hc, ih]
+        exact ⟨fun h => List.nodup_cons.mpr
+            ⟨fun hmem => hc (List.contains_iff_mem.mpr hmem), h⟩,
+          fun h => (List.nodup_cons.mp h).2⟩
+
+/-! ### The BEFORE-world (the hand proofs the generator replaces) -/
+
+/-- The hand walk bridge (the pre-generator shape: a 15-line
+    structural induction + the cons reshuffle — dies below). -/
+theorem handWalk_nil_iff (rs : List CascadeR) (ds : List CascadeD) :
+    ∀ (fks : List String),
+      foreignWalk rs ds fks = [] ↔ ∀ fk, fk ∈ fks → ForeignOk rs ds fk := by
+  intro fks
+  induction fks with
+  | nil => simp [foreignWalk]
+  | cons fk fks ih =>
+      rw [foreignWalk, List.append_eq_nil_iff, ih, foreignRung_eq_nil_iff]
+      constructor
+      · rintro ⟨h1, h2⟩ fk' hmem'
+        rcases List.mem_cons.mp hmem' with e | hmem2
+        · subst e; exact h1
+        · exact h2 fk' hmem2
+      · intro h
+        exact ⟨h fk List.mem_cons_self,
+          fun fk' hmem' => h fk' (List.mem_cons_of_mem _ hmem')⟩
+
+/-! ### The GENERATED cascade (the per-rung registration + the assembly) -/
+
+-- THE WALK RUNG's bridge, generated (the per-rung generation:
+-- the rung-N checker decomposes into the head element's check + the
+-- tail's walk; the bridge follows by the componentwise discipline).
+declare_cascade_walk foreignAll (rs : List CascadeR) (ds : List CascadeD) :=
+  foreignWalk rs ds, ForeignOk rs ds via foreignRung_eq_nil_iff
+
+-- The resolved-record rung's chunk law, COMPLETED by the generated
+-- walk bridge (the cascade's per-rung consumption: the rung's if-guard
+-- is the domain's content, the walk arm is the generator's).
+theorem recordRung_eq_nil_iff {rs : List CascadeR} {ds : List CascadeD}
+    {r : CascadeR} {d : CascadeD} :
+    recordRung rs ds r d = [] ↔ RecordOk rs ds r d := by
+  unfold recordRung RecordOk
+  by_cases hfs : r.fields = d.fields
+  · rw [if_pos hfs, List.append_eq_nil_iff, fieldRung_eq_nil_iff,
+      foreignAll_eq_nil_iff rs ds]
+    exact ⟨fun h => ⟨hfs, h.1, h.2⟩, fun h => ⟨h.2.1, h.2.2⟩⟩
+  · rw [if_neg hfs]
+    exact ⟨fun h => absurd h (by simp), fun h => absurd h.1 hfs⟩
+
+-- (the hand master's rung — the checkRung chunk law the BEFORE world
+-- needed; it survives: the match content is the domain's)
+theorem checkRung_eq_nil_iff {rs : List CascadeR} {ds : List CascadeD}
+    {d : CascadeD} :
+    checkRung rs ds d = [] ↔ CheckOk rs ds d := by
+  unfold checkRung CheckOk
+  cases h : rs.find? (fun r => r.name == d.record) with
+  | none => simp
+  | some r =>
+      rw [recordRung_eq_nil_iff]
+      constructor
+      · intro h1; exact ⟨r, rfl, h1⟩
+      · rintro ⟨r', hr, h1⟩; cases hr; exact h1
+
+/-- The hand master bridge (the pre-generator shape: the
+    flatMap/dup chase — dies below). -/
+theorem handMaster_nil_iff {rs : List CascadeR} {ds : List CascadeD} :
+    masterCheck rs ds = [] ↔ MasterWf rs ds := by
+  unfold masterCheck MasterWf
+  rw [List.append_eq_nil_iff, flatMap_nil_iff, List.map_eq_nil_iff,
+    dupRung_eq_nil_iff]
+  constructor
+  · rintro ⟨h1, h2⟩
+    exact ⟨fun d hd => checkRung_eq_nil_iff.mp (h1 d hd), h2⟩
+  · rintro ⟨h1, h2⟩
+    exact ⟨fun d hd => checkRung_eq_nil_iff.mpr (h1 d hd), h2⟩
+
+-- THE MASTER: the rung list + their relations → the full cascade's iff
+-- + the two projections, generated.
+declare_cascade miniKeys (rs : List CascadeR) (ds : List CascadeD) :=
+  masterCheck rs ds,
+  (∀ a, a ∈ ds → CheckOk rs ds a)
+    ∧ (ds.map (fun d => d.record)).Nodup
+  where
+  | perDecl := via checkRung_eq_nil_iff
+  | dups := via dupRung_eq_nil_iff
+
+/-! ### The migration pins (the hand proofs die into the generated iff) -/
+
+/-- THE MIGRATION PIN (the walk rung): the hand walk's 15-line
+    induction dies into the generated iff — ONE citation. -/
+theorem walkMigrated (rs : List CascadeR) (ds : List CascadeD) :
+    ∀ fks, foreignWalk rs ds fks = [] ↔ ∀ fk, fk ∈ fks → ForeignOk rs ds fk :=
+  fun fks => foreignAll_eq_nil_iff rs ds fks
+
+/-- THE MIGRATION PIN (the master): the hand master's flatMap/dup
+    chase dies into the generated iff — ONE citation. -/
+theorem masterMigrated (rs : List CascadeR) (ds : List CascadeD) :
+    masterCheck rs ds = [] ↔ MasterWf rs ds :=
+  miniKeys_eq_nil_iff rs ds
+
+/-! ### The record face (the EntityWf shape — the preset's cascade)
+
+The master relation as a STRUCTURE: the fields ARE the rung relations,
+in declaration order — one row per field, each row's bridge stating
+the rung's CHUNK iff (a flatMap/map rung's composite bridge composes
+the per-element face by hand — the record face's fixed simp set drops
+the flatMap/map decompositions). -/
+
+/-- The record-face relation: the preset's `EntityWf` miniature — the
+    two rungs as fields. -/
+structure RecWf (rs : List CascadeR) (ds : List CascadeD) : Prop where
+  perDeclOk : ∀ d, d ∈ ds → CheckOk rs ds d
+  dupsOk : (ds.map (fun d => d.record)).Nodup
+
+/-- The per-decl rung's chunk law (the per-element bridge + the
+    flatMap connect, composed once). -/
+theorem checkChunk_nil_iff (rs : List CascadeR) (ds : List CascadeD) :
+    ds.flatMap (checkRung rs ds) = [] ↔ ∀ d, d ∈ ds → CheckOk rs ds d := by
+  simp only [Kit.Derive.Cascade.flatMap_nil_iff, checkRung_eq_nil_iff]
+
+/-- The dup rung's chunk law at the chunk face (the map face's iff). -/
+theorem dupChunk_nil_iff (ds : List CascadeD) :
+    (dupRung (ds.map (fun d => d.record))).map
+        (fun n => s!"duplicate declaration for `{n}``") = []
+      ↔ (ds.map (fun d => d.record)).Nodup := by
+  simp only [List.map_eq_nil_iff, dupRung_eq_nil_iff]
+
+-- THE RECORD FACE's cascade: the fields are the rungs, generated.
+declare_cascade recKeys (rs : List CascadeR) (ds : List CascadeD) :=
+  masterCheck rs ds, RecWf rs ds where
+  | perDecl := via checkChunk_nil_iff
+  | dups := via dupChunk_nil_iff
+
+/-- THE MIGRATION PIN (the record face): the fields-are-the-rungs
+    cascade's iff — ONE citation. -/
+theorem recMasterMigrated (rs : List CascadeR) (ds : List CascadeD) :
+    masterCheck rs ds = [] ↔ RecWf rs ds :=
+  recKeys_eq_nil_iff rs ds
+
+/-- The record face's WRONG correspondence: the dup rung's relation
+    FIRST (the checker's decomposition has the per-decl rung first) —
+    the recSwap tooth's refusal producer. -/
+structure RecWfSwap (rs : List CascadeR) (ds : List CascadeD) : Prop where
+  dupsFirst : (ds.map (fun d => d.record)).Nodup
+  perDeclSecond : ∀ d, d ∈ ds → CheckOk rs ds d
+
+/-! ### The fixture data + the refusal fixtures -/
+
+/-- The clean universe: one record, one scalar key field, one
+    declaration with no foreign keys. -/
+def fId : CascadeF := { name := "id", scalar := true }
+def rAcct : CascadeR := { name := "acct", fields := [fId] }
+def dAcct : CascadeD :=
+  { record := "acct", fields := [fId], key := "id", foreign := [] }
+def cleanRs : List CascadeR := [rAcct]
+def cleanDs : List CascadeD := [dAcct]
+
+/-- The duplicate fixture: TWO declarations for one record — the dup
+    rung fires (the master refuses; the saboteur below does not). -/
+def dupDs : List CascadeD := [dAcct, { dAcct with foreign := [] }]
+
+/-- The master relation's proof for the clean fixture (the complete
+    direction's transport input). -/
+theorem cleanWf : MasterWf cleanRs cleanDs :=
+  ⟨fun d hd => by
+      rw [List.mem_singleton.mp hd]
+      exact ⟨rAcct, rfl, rfl, ⟨fId, rfl, rfl⟩,
+        fun fk hmem => absurd hmem (by simp [dAcct])⟩,
+    by decide⟩
+
+/-- NEGATIVE CONTROL's producer: the master check DROPPING the dup
+    rung (the anti-rung — the componentwise discipline's sabotage). -/
+def sabMasterCheck (rs : List CascadeR) (ds : List CascadeD) : List String :=
+  ds.flatMap (checkRung rs ds)
+
+/-- non-List-codomain master checker (KD0010's producer). -/
+def cascadeLen (rs : List CascadeR) (ds : List CascadeD) : Nat := rs.length
+
+/-! ### The teeth — the curated refusals, pinned verbatim (if the
+    generator stops refusing, the guard fails: the teeth cannot go
+    silent) -/
+
+/-- error: [KD0010] error: declare_cascade badCod: the master checker's codomain is `Nat` — the cascade's checker is a diagnostic authority, its codomain is the diag envelope's carrier (`List _`) -/
+#guard_msgs in
+declare_cascade badCod (rs : List CascadeR) (ds : List CascadeD) :=
+  cascadeLen rs ds, True where
+  | perDecl := via checkRung_eq_nil_iff
+
+/-- error: [KD0010] error: declare_cascade badAnon: the cascade's binders must be NAMED `(x : T)` binders — the generated theorems re-spell them (the anonymous fragments are the named extension) -/
+#guard_msgs in
+declare_cascade badAnon (_ : List CascadeR) (ds : List CascadeD) :=
+  masterCheck [] ds, True where
+  | perDecl := via checkRung_eq_nil_iff
+
+/-- error: [KD0011] error: declare_cascade badRel: the master relation's type is not a Prop — the cascade's reasoning authority is a Prop: the componentwise `∧`-chain of the rungs' relations -/
+#guard_msgs in
+declare_cascade badRel (rs : List CascadeR) (ds : List CascadeD) :=
+  masterCheck rs ds, rs where
+  | perDecl := via checkRung_eq_nil_iff
+
+/-- error: [KD0012] error: declare_cascade badBridge: the row `perDecl`'s bridge `noSuchBridge` does not resolve — the bridge is the rung's iff-valued lemma (`rungDiags = [] ↔ RungOk`) -/
+#guard_msgs in
+declare_cascade badBridge (rs : List CascadeR) (ds : List CascadeD) :=
+  masterCheck rs ds, MasterWf rs ds where
+  | perDecl := via noSuchBridge
+
+/-- error: [KD0013] error: declare_cascade_walk badWalk: the walk head's last domain is `String` — a walk checker takes the LIST as its last argument (`List α → List β`) -/
+#guard_msgs in
+declare_cascade_walk badWalk (rs : List CascadeR) (ds : List CascadeD) :=
+  foreignRung rs ds, ForeignOk rs ds via foreignRung_eq_nil_iff
+
+-- THE GATE TEETH: a decomposition the componentwise template cannot
+-- carry — the relation chain mis-ordered against the checker's append
+-- decomposition — refuses; a refused cascade commits nothing.
+/-- error: unsolved goals
+rs : List CascadeR
+ds : List CascadeD
+⊢ (∀ (a : CascadeD), a ∈ ds → CheckOk rs ds a) ∧ (List.map (fun d => d.record) ds).Nodup ↔
+    (List.map (fun d => d.record) ds).Nodup ∧ ∀ (a : CascadeD), a ∈ ds → CheckOk rs ds a
+---
+error: [KD0014] error: declare_cascade sabOrder: the generated theorem failed to elaborate — the master relation must be the componentwise `∧`-chain of the rungs' relations, nested like the checker's append decomposition (a refused cascade commits nothing; Lean's sorry recovery never lands)
+-/
+#guard_msgs in
+declare_cascade sabOrder (rs : List CascadeR) (ds : List CascadeD) :=
+  masterCheck rs ds,
+  (ds.map (fun d => d.record)).Nodup ∧ (∀ a, a ∈ ds → CheckOk rs ds a)
+  where
+  | perDecl := via checkRung_eq_nil_iff
+  | dups := via dupRung_eq_nil_iff
+
+-- THE GATE TEETH, walk-side: the element bridge mismatching the walk's
+-- element relation — the generated bridge's template leaves a residual
+-- goal and the gate refuses.
+/-- error: unsolved goals
+case cons
+rs : List CascadeR
+ds : List CascadeD
+fk✝ : String
+fks✝ : List String
+ih✝ : foreignWalk rs ds fks✝ = [] ↔ ∀ (x : String), x ∈ fks✝ → (fun x => True) x
+⊢ (ForeignOk rs ds fk✝ ∧ ∀ (x : String), x ∈ fks✝ → True) ↔ ∀ (x : String), x ∈ fk✝ :: fks✝ → True
+---
+error: [KD0014] error: declare_cascade_walk sabWalk: the generated bridge failed to elaborate — the walk head's body must be the componentwise walk (the head element's check ++ the tail's walk) and the element bridge must state its iff (a refused rung commits nothing; Lean's sorry recovery never lands)
+-/
+#guard_msgs in
+declare_cascade_walk sabWalk (rs : List CascadeR) (ds : List CascadeD) :=
+  foreignWalk rs ds, fun _ => True via foreignRung_eq_nil_iff
+
+/-! ### Kit.Derive.Cascade — the value-level pins -/
+
+def cascadeSpec : Spec :=
+  Spec.ofList "Kit.Derive.Cascade — the cascade generator's pins"
+    (fun _ => do
+      -- the generated master's known answers (kernel reduction)
+      assert (decide (masterCheck cleanRs cleanDs = [])) "cascade.masterCleanEmpty"
+      assert (decide (!(masterCheck cleanRs dupDs = []))) "cascade.masterDupRefuses"
+      -- THE GENERATED IFF's both directions, cited (the elaborator is
+      -- the gate: drop the generated lemmas, the pins have no proof)
+      assert (
+          let _sound := miniKeys_sound cleanRs cleanDs (by decide)
+          let _complete := miniKeys_complete cleanRs cleanDs cleanWf
+          true)
+        "cascade.bridgeBothDirectionsCited"
+      -- the generated walk bridge's transport (the per-rung
+      -- generation, used: the migration pin's statement rides it)
+      assert (
+          let _walk := walkMigrated cleanRs cleanDs []
+          true)
+        "cascade.walkBridgeCited"
+      -- the RECORD face's iff (the EntityWf shape — the preset's
+      -- cascade), cited
+      assert (
+          let _rec := recMasterMigrated cleanRs cleanDs
+          true)
+        "cascade.recordFaceCited")
+    [ ("sabotage: the dup-dropping master agrees on the duplicate fixture",
+        fun _ =>
+          assert (decide ((sabMasterCheck cleanRs dupDs = []) ==
+            (masterCheck cleanRs dupDs = [])))
+            "control fired: the dup rung's componentwise discipline is \
+              not load-bearing — the saboteur's verdict matched")
+    , ("sabotage: the trivial relation's walk bridge agrees",
+        fun _ =>
+          assert (decide (foreignWalk cleanRs dupDs ["nope"] = [] ↔ True))
+            "control fired: the trivially-true relation's bridge agreed \
+              with the walk — the bridge's content is not load-bearing") ]
+    4 42
+
+/-! ### The axiom pins (the generated bridges — the core triple at most) -/
+
+/-- info: 'foreignAll_eq_nil_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms foreignAll_eq_nil_iff
+
+/-- info: 'miniKeys_eq_nil_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms miniKeys_eq_nil_iff
+
+/-- info: 'miniKeys_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms miniKeys_sound
+
+/-- info: 'miniKeys_complete' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms miniKeys_complete
+
+/-- info: 'recKeys_eq_nil_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms recKeys_eq_nil_iff
+
+-- THE GATE TEETH, record face: the fields' declaration order
+-- DISAGREEING with the checker's append decomposition (the dup rung's
+-- relation first) — the generated transport leaves the field/
+-- correspondence mismatch and the gate refuses; a refused cascade
+-- commits nothing.
+/-- error: Application type mismatch: The argument
+  hChain.left
+has type
+  ∀ (d : CascadeD), d ∈ ds → CheckOk rs ds d
+but is expected to have type
+  (List.map (fun d => d.record) ds).Nodup
+in the application
+  RecWfSwap.mk hChain.left
+---
+error: Application type mismatch: The argument
+  hChain.dupsFirst
+has type
+  (List.map (fun d => d.record) ds).Nodup
+but is expected to have type
+  ∀ (d : CascadeD), d ∈ ds → CheckOk rs ds d
+in the application
+  And.intro hChain.dupsFirst
+---
+error: [KD0014] error: declare_cascade recSwap: the generated theorem failed to elaborate — the record face's rows must be the rung bridges at the chunk level, ONE PER FIELD in the fields' declaration order, and the checker's append decomposition must be LEFT-nested against them (a refused cascade commits nothing; Lean's sorry recovery never lands) -/
+#guard_msgs in
+declare_cascade recSwap (rs : List CascadeR) (ds : List CascadeD) :=
+  masterCheck rs ds, RecWfSwap rs ds where
+  | perDecl := via checkChunk_nil_iff
+  | dups := via dupChunk_nil_iff
+
 def main : IO UInt32 := do
   -- the emit driver's IO half: the artifact write + read-back (the
   -- result folds into `emitSpec` as the `emit.driverWrote` pin; the
@@ -2431,6 +3250,9 @@ def main : IO UInt32 := do
   -- never a Lean literal; the allocation tie rides this read)
   let committedCodeRegistry :=
     CodeRegistry.parse (← IO.FS.readFile "notes/code-registry.txt")
+  -- the Kit.Cli driver's IO half (the emitSpec pattern): the unknown
+  -- subcommand's curated exit + the help faces
+  let cliDriverOk ← KitTests.Cli.cliDriverPins
   TestingKit.mainOfSuites
     [ ("Kit.Correspondence", [correspondenceSpec])
     , ("Kit.Obligation", [obligationSpec])
@@ -2440,7 +3262,7 @@ def main : IO UInt32 := do
     , ("Kit.Emit binary lane", [emitBinarySpec binaryOk])
     , ("Kit.Ledger", [ledgerSpec ledgerRows])
     , ("Kit.Duel", [duelSpec duelOk])
-    , ("Kit.Diag/Suggest/FreshName", [diagSuggestSpec])
+    , ("Kit.Diag/Suggest", [diagSuggestSpec])
     , ("Kit.CodeRegistry", [codeRegistrySpec])
     , ("Kit.CodeRegistry coverage", [codeCoverageSpec committedCodeRegistry])
     , ("Kit.Change", [changeSpec])
@@ -2449,8 +3271,8 @@ def main : IO UInt32 := do
     , ("Kit.Correspondence bridge", [bridgeSpec])
     , ("Kit.Hyper", [hyperSpec])
     , ("Kit.Derive", [deriveSpec])
+    , ("Kit.Derive.Cascade", [cascadeSpec])
     , ("Kit.Derive.Evidence", [evidenceSpec])
     , ("Kit.Text", [textSpec])
     , ("Kit.Mangle", [mangleSpec])
-    , ("Kit.Json", [jsonSpec])
-    , ("Kit.Validation", [validationSpec]) ]
+    , ("Kit.Cli", [cliSpec cliDriverOk]) ]

@@ -23,7 +23,16 @@ The layout discipline (the bytes are the artifact's, verbatim):
   included: an empty record degrades to a bare blank line — the
   pre-AST emitter's shape, byte-preserved).
 
-Core-only (imports `Wit` only — the cone rule).
+The world case (grown with its first consumer, `Guest.Component`):
+`func`/`exportItem`/`importItem`/`world`/`worldFile` render the
+`Wit.World` carrier (the component boundary's contract). The world's
+PARSE-BACK is a NAMED follow-up (`Wit.World`'s header): the accepted
+language below stays the world-free package text, and `worldFile`'s
+image is deliberately outside it — the world artifact's tie is the
+render-side byte-tie (the committed bytes vs the fresh render), not a
+round-trip claim.
+
+Core-only (imports `Wit` + `Wit.World` only — the cone rule).
 
 The five questions (notes/v3/01-core.md):
 - root: Crossing — the WIT AST read into its text (the target
@@ -38,6 +47,7 @@ The five questions (notes/v3/01-core.md):
 -/
 
 import Wit
+import Wit.World
 
 namespace Wit.Render
 
@@ -106,5 +116,55 @@ def interfacesJoin : List Interface → String
 def package (p : Package) : String :=
   "package " ++ p.id ++ ";\n\n"
     ++ interfacesJoin p.interfaces
+
+/-! ## the world case (the component boundary's text face) -/
+
+/-- A world func's type text: `func(a: u64, b: u64) -> u64` (no
+    result omits the arrow). The params ride the `name: ty` shape
+    joined `, ` (NOT the record field's indented lines — a func's
+    params are inline). Total over the closed grammar. -/
+def funcParam (p : Field) : String :=
+  p.name ++ ": " ++ ty p.ty
+
+def func (f : Func) : String :=
+  "func(" ++ String.intercalate ", " (f.params.map funcParam) ++ ")"
+    ++ match f.result with
+       | some t => " -> " ++ ty t
+       | none => ""
+
+/-- One EXPORT item line (2-space indent, trailing semicolon). The
+    inline-func form carries the type; the interface form is
+    by-name. -/
+def exportItem (i : Item) : String :=
+  match i with
+  | .func f => "  export " ++ f.name ++ ": " ++ func f ++ ";\n"
+  | .iface i => "  export " ++ i.name ++ ";\n"
+
+/-- One IMPORT item line (the same shapes). -/
+def importItem (i : Item) : String :=
+  match i with
+  | .func f => "  import " ++ f.name ++ ": " ++ func f ++ ";\n"
+  | .iface i => "  import " ++ i.name ++ ";\n"
+
+/-- The items' concatenation (one line each, order preserved —
+    the explicit-fold form). -/
+def itemsJoin (r : Item → String) : List Item → String
+  | [] => ""
+  | i :: is => r i ++ itemsJoin r is
+
+/-- One world block: the imports, then the exports, then the
+    closing brace. Total; deterministic; the world lane's render
+    face. -/
+def world (w : World) : String :=
+  "world " ++ w.name ++ " {\n"
+    ++ itemsJoin importItem w.imports
+    ++ itemsJoin exportItem w.exports
+    ++ "}\n"
+
+/-- The world-file document: the package line + a blank line, then
+    the world block. The component lane's artifact of record's
+    render face (`gen/component-slice.wit`). -/
+def worldFile (id : String) (w : World) : String :=
+  "package " ++ id ++ ";\n\n" ++ world w
 
 end Wit.Render

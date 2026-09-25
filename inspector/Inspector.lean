@@ -18,6 +18,8 @@ importing:
   distribution, the kernel-check coverage, the duel rows' status.
 - `Inspector.WhatIf` — the what-if inspector: rewind/replay-with-
   modification over the journal (08 #20 — the divergence as data).
+- `Inspector.Explain` — the explain command: the explanations lane
+  rendered (02 §11 — why present / why absent / which change repairs).
 
 The five questions: answered per submodule; the umbrella answers none —
 it is the import point.
@@ -30,3 +32,5 @@ import Inspector.LedgerView
 import Inspector.Cites
 import Inspector.Trust
 import Inspector.WhatIf
+import Inspector.Explain
+import Inspector.DuelReplay

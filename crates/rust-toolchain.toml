@@ -1,0 +1,16 @@
+# THE RUST LANE'S NIGHTLY PIN (wave-30 C1 — the honest cost, surfaced).
+#
+# fast-observe is nightly-only (its own #![feature(error_generic_member_access,
+# error_iter)]); the GENERATED fault surface rides the macro's `Error::provide`
+# and needs `error_generic_member_access` in the consuming crate too. Every
+# consumer of the fault plane inherits the nightly requirement (design-faults
+# §7 R1 — the risk is pinned toolchains, not correctness; upstream
+# stabilization: rust-lang/rust#99301 moves the boundary).
+#
+# THE ACTUAL TOOLCHAIN: the build env has NO rustup — the devenv profile's
+# NIX-PINNED nightly (legacy/.devenv/profiles/wasm/profile/bin, verified
+# `cargo 1.100.0-nightly`) is what compiles. THIS file is the floor for
+# rustup environments (it is inert without rustup; it names the requirement,
+# it never hides it).
+[toolchain]
+channel = "nightly"

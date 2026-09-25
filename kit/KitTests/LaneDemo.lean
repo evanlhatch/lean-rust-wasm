@@ -23,16 +23,19 @@ def secondEntry : DemoLaneItem := { name := "second", weight := 2 }
 -- order, materialized into the registry (the fold hook fires).
 #eval show Lean.CoreM Unit from do
   let env ← Lean.getEnv
-  match demoLaneItemRegistry env with
+  match ← demoLaneItemRegistry env with
   | .error e => Lean.throwError s!"lane fold drifted: {e}"
   | .ok reg =>
-    if reg.items.length == 2
-        && reg.items[0]!.name == "first"
-        && reg.items[1]!.name == "second"
-        && (getDemoLaneItems env).length == 2 then
-      pure ()
-    else
-      Lean.throwError "lane replay drifted: wrong item count or order"
+    match ← getDemoLaneItems env with
+    | .error e => Lean.throwError s!"lane replay refused: {e}"
+    | .ok items =>
+      if reg.items.length == 2
+          && reg.items[0]!.name == "first"
+          && reg.items[1]!.name == "second"
+          && items.length == 2 then
+        pure ()
+      else
+        Lean.throwError "lane replay drifted: wrong item count or order"
 
 -- THE ENTOURAGE HOOKS (16-surface §3 at the lane face): the
 -- registration auto-filled the obligation view (the attests labels,
@@ -43,7 +46,7 @@ def secondEntry : DemoLaneItem := { name := "second", weight := 2 }
   let env ← Lean.getEnv
   let d := demoLaneItemLedgerDemand env
   if demoLaneItemObligationView env == ["first", "second"]
-      && d.collections == [Kit.Ledger.namesOf "KitTests.demoLaneItemExt"]
+      && d.collections == [Kit.Ledger.namesOf "Kit.Lane.laneLogExt"]
       && d.rows == [Kit.Ledger.namesOf "first", Kit.Ledger.namesOf "second"]
       && d.emitterRev == "register_lane" then
     pure ()
@@ -51,18 +54,17 @@ def secondEntry : DemoLaneItem := { name := "second", weight := 2 }
     Lean.throwError "lane entourage hooks drifted: the obligation view or \
       the ledger demand did not auto-fill"
 
-/- NEGATIVE CONTROL: a duplicate entry name is the closed-world
-    refusal (Kit.Diag's `closedWorld` — got + the taken names + the
-    ONE engine's did-you-mean). -/
-/-- error: [KL0001] error: @[demoLaneItem] dupEntry: `first` is already a registered item — names must be fresh (got: first) — valid: first, second — did you mean: first? -/
-#guard_msgs in
-@[demoLaneItem] def dupEntry : DemoLaneItem := { name := "first", weight := 3 }
+/- THE NEGATIVE CONTROLS, as the ONE teeth shape (Kit.Lane's
+    lane-teeth macro — the audit's E3): the control command is taken
+    VERBATIM (the #guard_msgs shape — nothing spliced); the expected
+    refusals are computed from the mount's own Diag constructors and
+    checked byte-for-byte; the dup tooth ALSO pins its valid-list
+    against the live registration state. -/
+lane_dup_tooth "first" ["first", "second"] in
+  @[demoLaneItem] def dupEntry : DemoLaneItem := { name := "first", weight := 3 }
 
-/- NEGATIVE CONTROL: the entry must be a `def` of the lane's item
-    type — the curated usage message (KL0003). -/
-/-- error: [KL0003] error: @[demoLaneItem] wrongEntry: the entry's type is not the lane's item type `DemoLaneItem` — valid usage: `@[demoLaneItem] def wrongEntry : DemoLaneItem := <value>` -/
-#guard_msgs in
-@[demoLaneItem] def wrongEntry : Nat := 5
+lane_wrong_tooth DemoLaneItem in
+  @[demoLaneItem] def wrongEntry : Nat := 5
 
 /- NEGATIVE CONTROL: the `naming` clause is required — the curated
     usage message (KL0006). -/

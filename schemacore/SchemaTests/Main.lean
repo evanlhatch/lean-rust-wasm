@@ -35,6 +35,12 @@ import SchemaTests.Migrate
 import SchemaTests.Commit
 import SchemaTests.EntityMachine
 import SchemaTests.Inc
+import SchemaTests.Confluence
+import SchemaTests.RustEmit
+import SchemaTests.TsEmit
+import SchemaTests.Witness
+import SchemaTests.Dependent
+import SchemaTests.DeltaLog
 
 open Kit SchemaCore TestingKit
 
@@ -314,6 +320,56 @@ def fBad : Ty → String
     does not paper over it. -/
 def witAlgBad : TyAlg String := { witAlg with option := fun _ => "u64" }
 
+/-! ### The DEPENDENT fold's pins (the `declare_dependent_fold Value`
+    migration: the mutual-sibling extension's live face) -/
+
+/-- The identity algebra: the fold computing the value back. -/
+def idValueAlg :
+    ValueAlg (fun t => Value t) (fun t => VList t) (fun k v => VMap k v) where
+  bool b := .bool b
+  u64 n := .u64 n
+  i64 n := .i64 n
+  string s := .string s
+  none := .none
+  some v := .some v
+  ok v := .ok v
+  err v := .err v
+  list vl := .list vl
+  map m := .map m
+  set vl := .set vl
+  bounded f := .bounded f
+  vnil := .nil
+  vcons v vs := .cons v vs
+  mnil := .nil
+  mcons kv vv m := .cons kv vv m
+
+/-- THE DEPENDENT INITIALITY LAW'S LIVE FACE: the identity fold IS the
+    identity — ONE mutual induction over the block (the generated
+    equation lemmas + the mutual recursor; the co-sibling motives ride
+    along — this is the proof the co-siblings' `True` motives in
+    `foldValue_unique` make unnecessary THERE, and its exercise HERE).
+    The container rows receive the ALREADY-FOLDED child (the
+    catamorphism's shape), so the identity rows close by the row's
+    projection delta + the ih. -/
+theorem foldValue_id (t : Ty) (v : Value t) : foldValue idValueAlg t v = v :=
+  Value.rec (motive_1 := fun t v => foldValue idValueAlg t v = v)
+    (motive_2 := fun t vl => foldVList idValueAlg vl = vl)
+    (motive_3 := fun k v m => foldVMap idValueAlg m = m)
+    (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+    (fun {_} => rfl)
+    (fun {_} _ ih => by rw [foldValue_some, ih]; rfl)
+    (fun {_ _} _ ih => by rw [foldValue_ok, ih]; rfl)
+    (fun {_ _} _ ih => by rw [foldValue_err, ih]; rfl)
+    (fun {_} _ ih => by rw [foldValue_list, ih]; rfl)
+    (fun {_ _} _ ih => by rw [foldValue_map, ih]; rfl)
+    (fun {_} _ ih => by rw [foldValue_set, ih]; rfl)
+    (fun {_} _ => rfl)
+    (fun {_} => rfl)
+    (fun {_} _ _ ih1 ih2 => by rw [foldVList_cons, ih1, ih2]; rfl)
+    (fun {_ _} => rfl)
+    (fun {_ _} _ _ _ ih1 ih2 ih3 => by rw [foldVMap_cons, ih1, ih2, ih3]; rfl)
+    v
+
 /-- The FUSION LAW's exercise: `String.length` DISTRIBUTES over the WIT
     rows (a concatenation's length is the sum of the parts), so the
     rendered length is itself a fold over the length algebra — the
@@ -371,6 +427,14 @@ def foldSpec : Spec :=
         && (tyRustPrim (.map .string .u64) == "Vec<(String, u64)>")
         && (tyRustPrim (.set .i64) == "Vec<i64>")
         && (tyRustPrim (.bounded 42) == "u64")
+      -- the DEPENDENT fold's runtime face: the identity law computes
+      -- (the generated `foldValue` round the value back)
+        && (foldValue idValueAlg .bool (.bool true) == .bool true)
+        && (foldValue idValueAlg (.option .u64) (.some (.u64 3))
+              == .some (.u64 3))
+        && (foldValue idValueAlg (.set .string)
+              (.set (.cons (.string "k") (.nil : VList .string)))
+              == .set (.cons (.string "k") (.nil : VList .string)))
       -- the FUSION law's runtime face: the length fold agrees with
       -- measuring the rendered text
         && ((renderTy (.option .u64)).length
@@ -456,35 +520,20 @@ def obligationSpec : Spec :=
         fun _ =>
           assert (¬(Kit.tierMismatch (fieldNodupObligation exItem)
             (Kit.Evidence.oracleRow "oracle-1")))
-          "control: an oracle-row evidence against decidableNow is a mis-wire") ]
-    4 42
-
-/-- The emitter's law: the closed-world naming precondition; the
-    certified lane emits iff the certificate holds. -/
-def lawSpec : Spec :=
-  Spec.ofList "the emitter's law is the registry's nodup"
-    (fun _ =>
-      match witEmitter.law with
-      | some L =>
-          assert (((witEmitter.runCertified exReg exReg.nodup).map (·.contents))
-            == ((witEmitter.run exReg).map (·.contents)))
-          "the law or the certified lane drifted"
-      | none => .error "the emitter lost its law")
-    [ ("the law covers field names too",
+          "control: an oracle-row evidence against decidableNow is a mis-wire")
+    , ("the law covers field names too",
         fun _ =>
-          -- The law is the ITEM-name precondition; the FIELD-name fact
-          -- rides the obligation row (a different invariant, a different
-          -- mount). This control asserts the INVERTED mount — the law
-          -- declaring the field-nodup fact false — and must FAIL (the
-          -- suite catches the false belief).
+          -- The emitter's (retired) law was the ITEM-name precondition;
+          -- the FIELD-name fact rides the obligation row (a different
+          -- invariant, a different mount). This control asserts the
+          -- INVERTED mount — the law declaring the field-nodup fact
+          -- false — and must FAIL (the suite catches the false belief).
+          -- Home: this spec (the obligation row's own suite) since the
+          -- inherited-correctness audit retired the vacuous emitter
+          -- law + its identity-assert suite.
           assert (decide ((exItem.fields.map (·.name)).Nodup) == false)
             "control fired: the field-nodup fact is TRUE — it rides the \
-             obligation row, not the emitter's naming law")
-    , ("law missing",
-        fun _ =>
-          match witEmitter.law with
-          | none => .ok ()
-          | some _ => .error "control fired: the law IS populated") ]
+             obligation row, not the emitter's naming law") ]
     4 42
 
 /-- The Value universe: the evaluator's total denotation + the beq/
@@ -1077,27 +1126,42 @@ def snapshotSpec : Spec :=
   Spec.ofList "the snapshot round-trips + canonicalizes"
     (fun _ => assert (
       -- the PROVED round-trip law, live on the fixture
-      (match parse (print [exItem]) with
-        | .ok its => its == [exItem]
+      (match parse (print ⟨[exItem], []⟩) with
+        | .ok u => u.items == [exItem]
         | .error _ => false)
       -- the empty universe IS the empty file
-      && (match parse (print []) with
-          | .ok its => its == []
+      && (match parse (print ⟨[], []⟩) with
+          | .ok u => u.items == []
           | .error _ => false)
       -- the CANONICALIZATION pin: print sorts
-      && (print [exItem, snapSecond]
-            == print [snapSecond, exItem])
+      && (print ⟨[exItem, snapSecond], []⟩
+            == print ⟨[snapSecond, exItem], []⟩)
       -- the two-item round trip (both rows survive the sort)
-      && (match parse (print [exItem, snapSecond]) with
-          | .ok its => its == [exItem, snapSecond]
+      && (match parse (print ⟨[exItem, snapSecond], []⟩) with
+          | .ok u => u.items == [exItem, snapSecond]
           | .error _ => false)
       -- the byte-pin (the committed baseline's shape)
-      && (print [exItem] == expectedSnapshot))
+      && (print ⟨[exItem], []⟩ == expectedSnapshot))
       "the snapshot drifted")
     [ ("a corrupted ty token parses",
         fun _ => match parse "item X field a u65\n" with
           | .ok _ => .ok ()
           | .error e => .error s!"control fired: the corrupt token was \
+refused ({e})")
+    , ("a truncated ty parses",
+        fun _ => match parse "item X field a option(u64\n" with
+          | .ok _ => .ok ()
+          | .error e => .error s!"control fired: the truncated ty was \
+refused ({e})")
+    , ("a non-canonical ty cap parses",
+        fun _ => match parse "item X field a bounded(042)\n" with
+          | .ok _ => .ok ()
+          | .error e => .error s!"control fired: the non-canonical cap was \
+refused ({e}) — the canonical-form guard is the tooth")
+    , ("a missing final newline parses",
+        fun _ => match parse "item X field a bool" with
+          | .ok _ => .ok ()
+          | .error e => .error s!"control fired: the unterminated line was \
 refused ({e})")
     , ("garbage parses",
         fun _ => match parse "hello world\n" with
@@ -1106,23 +1170,60 @@ refused ({e})")
     , ("a dropped field changes nothing",
         fun _ =>
           let dropped : Item := { exItem with fields := exampleCheckFields.drop 1 }
-          assert (print [dropped] == print [exItem])
+          assert (print ⟨[dropped], []⟩ == print ⟨[exItem], []⟩)
             "control fired: the dropped field's bytes are identical — the \n             round trip forgot it (the gate's byte-tie is the detector)")
     , ("a reordered registry prints differently",
         fun _ =>
-          assert (print [exItem, snapSecond]
-            != print [snapSecond, exItem])
+          assert (print ⟨[exItem, snapSecond], []⟩
+            != print ⟨[snapSecond, exItem], []⟩)
           "control fired: the canonical form depends on the input order")
     , ("a duplicate item name survives the registry",
         fun _ =>
           match parse
-              (print [exItem, exItem]) with
-          | .ok its =>
-              match registryOfItems its with
+              (print ⟨[exItem, exItem], []⟩) with
+          | .ok u =>
+              match registryOfItems u.items with
               | .error e => .error s!"control fired: the registry refused \
 the duplicate item names ({e})"
               | .ok _ => .ok ()
           | .error e => .error s!"control fired: the parse refused ({e})") ]
+    4 42
+
+/-- The graduations' live face (15-patterns #11 at the codec grade):
+    the snapshot's TWO image isos — `snapshotIso` (the item face) and
+    `universeIso` (the file grade, both sections) — round-trip on the
+    fixture, both directions. The laws themselves are the `Iso` law
+    fields (proved at the assembly); this pin is the decided-data face
+    + the negative control (a mangled raw decodes to a DIFFERENT
+    universe — the iso is not the constant map). -/
+def snapshotIsoSpec : Spec :=
+  Spec.ofList "the snapshot's image isos round-trip (the codec graduations)"
+    (fun _ => assert (
+      -- the item face: `to ∘ inv` and `inv ∘ to` on the fixture
+      (snapshotIso.to (snapshotIso.inv [exItem]) == [exItem])
+        && (snapshotIso.inv (snapshotIso.to (linesToRaw [exItem]))
+              == linesToRaw [exItem])
+      -- the file grade: the universe's both round trips (items + lanes)
+        && (let u : Universe := ⟨[exItem], [("laneB", "row1")]⟩
+            universeIso.to (universeIso.inv u) == u)
+        && (let u : Universe := ⟨[exItem], [("laneB", "row1")]⟩
+            universeIso.inv (universeIso.to
+              (linesToRaw u.items, laneLinesToRaw u.lanes))
+              == (linesToRaw u.items, laneLinesToRaw u.lanes)))
+      "the snapshot isos drifted")
+    [ ("a mangled raw maps to the same universe",
+        fun _ =>
+          let mangled : List (LineRaw × Unit) × List LaneRaw :=
+            (linesToRaw [exItem], laneLinesToRaw [("laneB", "OTHER")])
+          assert (universeIso.to mangled
+            == (⟨[exItem], [("laneB", "row1")]⟩ : Universe))
+            "control fired: the swapped lane row decoded identically — \
+              the iso forgot the data")
+    , ("a different item decodes identically",
+        fun _ =>
+          assert (snapshotIso.to (linesToRaw [snapSecond]) == [exItem])
+            "control fired: the second item's raw decoded to the first — \
+              the item face's iso forgot the data") ]
     4 42
 
 /-! ## The check lane (SchemaCore.Pred + SchemaCore.Check — the relational
@@ -1947,17 +2048,17 @@ def remedySpec : Spec :=
       -- the migration remedies exactly the widening change (right item,
       -- right field, exactly the found old/new types)
       && (widgetsWidening.remedies
-            (Change.changed "Widgets"
+            (CompatChange.changed "Widgets"
               [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]))
       -- field ADDITIONS ride along (no old data to map)
       && (widgetsWidening.remedies
-            (Change.changed "Widgets" [.fieldAdded "h"]))
+            (CompatChange.changed "Widgets" [.fieldAdded "h"]))
       -- REMOVALS ARE HONESTLY UNREMEDIED (no value-map target)
-      && !(widgetsWidening.remedies (Change.removed "Widgets"))
-      && !(widgetsWidening.remedies (Change.removed "Extras"))
+      && !(widgetsWidening.remedies (CompatChange.removed "Widgets"))
+      && !(widgetsWidening.remedies (CompatChange.removed "Extras"))
       -- the item name gates the remedy
       && !(widgetsWidening.remedies
-            (Change.changed "Other"
+            (CompatChange.changed "Other"
               [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]))))
       "the remedy's behavior drifted")
     [ ("a widened value changes the number",
@@ -1967,12 +2068,12 @@ def remedySpec : Spec :=
 number, or the soundness obligation is false")
     , ("a remedy with the wrong old type still remediess",
         fun _ => assert (nearMissMigration.remedies
-          (Change.changed "Widgets"
+          (CompatChange.changed "Widgets"
             [.fieldTypeChanged "b" (.bounded 42) (.bounded 100)]))
           "control fired: the remedy must match the found old AND new \
 types exactly — a near-miss migration is no evidence")
     , ("a removed item has a value-map target",
-        fun _ => assert (widgetsWidening.remedies (Change.removed "Widgets"))
+        fun _ => assert (widgetsWidening.remedies (CompatChange.removed "Widgets"))
           "control fired: removals are honestly UNREMEDIED — there is no \
 value-map target for gone data (the honest verdict, not an oversight)") ]
     4 42
@@ -1984,7 +2085,342 @@ example : verdictOf (diff [widgetsOld] [widgetsOld]) [] = .clean := rfl
 example : backwardCompatible [widgetsOld] [widgetsOld] = true := rfl
 example : backwardCompatible [extrasItem] [] = false := rfl
 
+/-! ## The writable-views lane (SchemaCore.View — 02 §7's relational lenses) -/
+
+/-- The account row fixture (the Violate fixture's schema). -/
+def vwAcct (i : UInt64) (o : String) (bal : Int64) : RowVals accountFields :=
+  .cons (.u64 i) (.cons (.string o) (.cons (.i64 bal) .nil))
+
+abbrev vwAcct1 : RowVals accountFields := vwAcct 1 "ann" 100
+abbrev vwAcct2 : RowVals accountFields := vwAcct 2 "bob" 50
+abbrev vwAccts : List (RowVals accountFields) := [vwAcct1, vwAcct2]
+
+abbrev vwKd : KeyDecl := { record := "account", fields := accountFields, key := "id" }
+
+/-- The balances view: the KEY-RESPECTING projection (id, balance) —
+    the owner column is the complement (03 §2: what the surface can't
+    express, the base retains). -/
+abbrev vwIdCol : ViewCol accountFields :=
+  { field := { name := "id", ty := .u64 }, path := .here }
+abbrev vwBalCol : ViewCol accountFields :=
+  { field := { name := "balance", ty := .i64 }
+    path := .there (.there .here) }
+abbrev balView : ViewDef accountFields :=
+  { name := "balances", cols := [vwIdCol, vwBalCol] }
+
+theorem balCoh : ViewCoherent vwKd balView where
+  fieldNodup := by decide
+  colNodup := by decide
+  keyMem := ⟨vwIdCol, List.mem_cons_self, rfl⟩
+  selKeyOnly := by
+    intro n hn
+    exact absurd hn (by simp [balView, Pred.reads])
+
+/-- The view row over the balances view. -/
+def balRow (i : UInt64) (b : Int64) : RowVals balView.vfields :=
+  .cons (.u64 i) (.cons (.i64 b) .nil)
+
+/-- THE WORKED EDIT: the balances view's row edited (balance 100 → 75).
+    The verdict: the base delta is the update lane's `RowDelta.update` of
+    the written row (the owner PRESERVED — the complement), the
+    post-state the keyed applicator's output. -/
+def vwEditVerdict := viewPut vwKd balView vwAccts (balRow 1 75)
+
+example : (match vwEditVerdict with
+    | .apply δ post =>
+        δ.length == 1
+          && (match δ with
+              | [RowDelta.update w] => rowBeq accountFields w (vwAcct 1 "ann" 75)
+              | _ => false)
+          && (match post with
+              | [r1, r2] =>
+                  rowBeq accountFields r1 (vwAcct 1 "ann" 75)
+                    && rowBeq accountFields r2 vwAcct2
+              | _ => false)
+    | _ => false) = true := by rfl
+
+/-- LAW 1's instance (read-after-write): the applied edit's view returns
+    the requested row. -/
+example : ∀ δ r', vwEditVerdict = ViewEditVerdict.apply δ r' →
+    balRow 1 75 ∈ balView.get r' :=
+  viewPut_get vwKd balView balCoh vwAccts (balRow 1 75)
+
+/-- LAW 2's instance (unchanged-view preservation): the edit that
+    writes back what the view read restores the table exactly. -/
+example : viewPut vwKd balView vwAccts
+    (vpick accountFields balView.cols vwAcct1)
+    = ViewEditVerdict.apply [RowDelta.update vwAcct1] vwAccts :=
+  viewPut_preserves vwKd balView balCoh vwAccts vwAcct1 (by decide)
+    List.mem_cons_self (by rfl)
+
+/-- The lens at the fixture (the assembled view/update pair). -/
+def vwLens : ViewLens vwKd balView := keyedViewLens vwKd balView
+
+/-- The lens's read IS the view's query (one carrier, two names). -/
+example : vwLens.get vwAccts = balView.get vwAccts := rfl
+
+/-- The non-key-respecting view: the owner column only (no key). -/
+abbrev vwOwnerCol : ViewCol accountFields :=
+  { field := { name := "owner", ty := .string }, path := .there .here }
+abbrev ownerView : ViewDef accountFields :=
+  { name := "owners", cols := [vwOwnerCol] }
+def ownerRow (o : String) : RowVals ownerView.vfields := .cons (.string o) .nil
+abbrev vwAnns : List (RowVals accountFields) :=
+  [vwAcct 1 "ann" 100, vwAcct 3 "ann" 7]
+
+/-- THE AMBIGUITY TEETH: the key-less projection's edit refuses over the
+    full-row fiber — TWO base rows read the same view row, and the
+    refusal names the count (the aggregate-edit-many-preimages case). -/
+example : (viewPut vwKd ownerView vwAnns (ownerRow "ann")).refusal?
+    = some (.ambiguous 2) := by rfl
+
+/-- An edit whose key image names no base row refuses, naming the key's
+    absence. -/
+example : (viewPut vwKd balView vwAccts (balRow 99 0)).refusal?
+    = some (.noPreimage ⟨.u64, .u64 99⟩) := by rfl
+
+/-- A violated `uniqueOn` makes the key no longer determine the row —
+    the keyed edit refuses with the preimage count. -/
+abbrev vwDups : List (RowVals accountFields) :=
+  [vwAcct 1 "a" 1, vwAcct 1 "b" 2]
+example : (viewPut vwKd balView vwDups (balRow 1 9)).refusal?
+    = some (.ambiguous 2) := by rfl
+
+/-- THE DELTA INTEGRATION: the view edit's base delta flows through the
+    landed machinery — the post-state is a Db, the violation lane
+    decides it. A sound edit keeps the world valid. -/
+def vwPost : List (RowVals accountFields) :=
+  match vwEditVerdict with
+  | .apply _ post => post
+  | .refuse _ => []
+def vwDb75 : Db := { accounts := vwPost, transfers := [] }
+example : (violations vwDb75).isEmpty = true := by rfl
+
+/-- ... and a view edit that drives the balance negative is CAUGHT by
+    the violation query — the proposed base delta validates through the
+    violation lane where the lanes compose honestly. -/
+def vwNegVerdict := viewPut vwKd balView vwAccts (balRow 1 (-5))
+def vwNegPost : List (RowVals accountFields) :=
+  match vwNegVerdict with
+  | .apply _ post => post
+  | .refuse _ => []
+def vwDbNeg : Db := { accounts := vwNegPost, transfers := [] }
+example : (match violations vwDbNeg with
+    | [Violation.negative r] => accBal r == (-5 : Int64)
+    | _ => false) = true := by rfl
+
+/-- The view suite. -/
+def viewSpec : Spec :=
+  Spec.ofList "the writable-views lane: the keyed writeback, the lens laws, the named ambiguity"
+    (fun _ => assert ((
+      -- the worked edit: the delta + the post-state, owner preserved
+      (match vwEditVerdict with
+        | .apply δ post =>
+            δ.length == 1
+              && (match δ with
+                  | [RowDelta.update w] => rowBeq accountFields w (vwAcct 1 "ann" 75)
+                  | _ => false)
+              && (match post with
+                  | [r1, r2] =>
+                      rowBeq accountFields r1 (vwAcct 1 "ann" 75)
+                        && rowBeq accountFields r2 vwAcct2
+                  | _ => false)
+        | _ => false)
+      -- read-after-write at the fixture (LAW 1's instance)
+      && (match vwEditVerdict with
+          | .apply _ post =>
+              (balView.get post).any (fun vr => rowBeq _ vr (balRow 1 75))
+          | _ => false)
+      -- unchanged-view preservation (LAW 2's instance)
+      && (match viewPut vwKd balView vwAccts
+              (vpick accountFields balView.cols vwAcct1) with
+          | .apply δ post =>
+              (match δ, post with
+                | [RowDelta.update w], [r1, r2] =>
+                    rowBeq accountFields w vwAcct1
+                      && rowBeq accountFields r1 vwAcct1
+                      && rowBeq accountFields r2 vwAcct2
+                | _, _ => false)
+          | _ => false)
+      -- the delta integration: the violation lane decides the post-state
+      && ((violations vwDb75).isEmpty)))
+      "the view lane drifted")
+    [ ("the key-less edit applies", fun _ =>
+        assert ((viewPut vwKd ownerView vwAnns (ownerRow "ann")).post?.isSome)
+          "control fired: the non-key-respecting projection's edit must \
+refuse with the named fiber count — many base preimages")
+    , ("the absent-key edit applies", fun _ =>
+        assert ((viewPut vwKd balView vwAccts (balRow 99 0)).post?.isSome)
+          "control fired: an edit whose key image names no base row must \
+refuse (noPreimage)")
+    , ("the violated-uniqueness edit applies", fun _ =>
+        assert ((viewPut vwKd balView vwDups (balRow 1 9)).post?.isSome)
+          "control fired: a violated uniqueOn makes the key no longer \
+determine the row — the aggregate-edit-many-preimages refusal")
+    , ("the write reaches the complement", fun _ =>
+        -- the owner is the complement: the writeback CANNOT touch it
+        assert ((match vwEditVerdict with
+          | .apply _ post =>
+              (match post with
+                | [r1, _] => rowBeq accountFields r1 (vwAcct 1 "eve" 75)
+                | _ => false)
+          | _ => false))
+          "control fired: the base retains what the view can't express — \
+the owner column survives the writeback (the complement lens)")
+    , ("the OLD view row survives the edit", fun _ =>
+        assert ((match vwEditVerdict with
+          | .apply _ post =>
+              (balView.get post).any (fun vr => rowBeq _ vr (balRow 1 100))
+          | _ => false))
+          "control fired: read-after-write — the requested view REPLACES \
+the old row's reading") ]
+    4 42
+
 /-! ## The driver -/
+
+/-! ## The functorial deepening (16-surface §4.4) — the ONE walk + the
+     ONE generic correctness theorem
+
+The deriving handlers are ALGEBRA VALUES over `Descr` (`DescrAlg` —
+one row per ctor + the field-sibling rows), the ONE walk is
+`foldDescr`/`foldFields`, and correctness claims are claim ALGEBRAS
+discharged by `law_of_rows` — the ONE induction, performed in the
+generic theorem, never per-handler. This suite pins: the handlers'
+behaviors (the byte faces, unchanged), the fold's kernel-visible
+equations, the generic theorem's FRESH exercise (a claim capability
+beyond the landed ones, rows only, no induction), and the mandatory
+negatives (a wrong claim is refutable — the theorem is not vacuous). -/
+
+-- the handlers' byte faces are the ONE walk's rows (kernel pins)
+example : deriveEnc (.product "p" [("x", .prim .u64)]) ((3 : UInt64), ())
+    = [3] := rfl
+example : deriveEnc (.option (.prim .u64)) (some (7 : UInt64))
+    = [1, 7] := rfl
+example : deriveDec (.option (.prim .u64)) [1, 7]
+    = some ((some (7 : UInt64)), []) := rfl
+example : tyOfDescr (.option (.list (.prim .i64)))
+    = some (.option (.list .i64)) := by decide
+
+-- the MOUNT byte-tie: the derived codec's bytes ARE the fold's rows
+-- (the WireCodec mount rides the ONE walk — nothing parallel)
+example : ∀ (r : ExampleRec),
+    ExampleRec.codec.encode r
+      = deriveEnc ExampleRec.descr (ExampleRec.tupleIso.to r) :=
+  fun _ => rfl
+
+-- the INSTANCE CITATIONS: the per-capability theorems are the generic
+-- theorem at their claim algebras — no induction of their own
+example : deriveCodec_correct = law_of_rows codecCorrectAlg := rfl
+example : deriveDec_eq = law_of_rows decEqAlg := rfl
+example : ∀ d, tyOfDescr_some d = law_of_rows coherenceAlg d := fun _ => rfl
+
+-- the generic theorem's FRESH EXERCISE: the suffix law (the decoder's
+-- remainder IS the appended suffix) as a NEW claim capability — the
+-- rows below are the whole proof content (leaf laws + composition,
+-- no `deriveCodec_correct` citation), the induction is the generic
+-- theorem's (a new handler = data + rows, 16-surface §4.4's
+-- "lands when the handlers multiply").
+open Kit.Varint in
+def suffixAlg :
+    DescrAlg
+      (P := fun d => ∀ (v : Descr.Ty d) (rest : List UInt8),
+        ∃ r, deriveDec d (deriveEnc d v ++ rest) = some (v, r) ∧ r = rest)
+      (Q := fun fs => ∀ (v : prodTyOf fs) (rest : List UInt8),
+        ∃ r, decProdOf? fs (encProdOf fs v ++ rest) = some (v, r) ∧ r = rest) where
+  prim t := fun v rest => ⟨rest, decNat?_encNat_append t v rest, rfl⟩
+  option d ih := by
+    intro v rest
+    cases v with
+    | none =>
+        exact ⟨rest, by simp [deriveEnc_option, deriveDec_option, decByte?_cons],
+          rfl⟩
+    | some x =>
+        obtain ⟨r, h1, h2⟩ := ih x rest
+        refine ⟨rest, ?_, rfl⟩
+        simp [deriveEnc_option, deriveDec_option, decByte?_cons, h1, h2]
+  list d ih := by
+    have hSome : ∀ (a : Descr.Ty d) (rest : List UInt8),
+        deriveDec d (deriveEnc d a ++ rest) = some (a, rest) := by
+      intro a rest
+      obtain ⟨r, h1, h2⟩ := ih a rest
+      subst h2
+      exact h1
+    intro v rest
+    cases v with
+    | nil =>
+        refine ⟨rest, ?_, rfl⟩
+        simp [deriveEnc_list, deriveDec_list, encList,
+          decVarNat?_encVarNat_append, decManyBind?]
+    | cons x xs =>
+        refine ⟨rest, ?_, rfl⟩
+        simp only [deriveEnc_list, deriveDec_list, encList, List.append_assoc,
+          decVarNat?_encVarNat_append,
+          decManyBind?_enc_append (deriveDec d) (deriveEnc d) hSome]
+  product _ _ ih := ih
+  pnil := by
+    intro v rest
+    cases v
+    exact ⟨rest, by simp [decProdOf?_nil, encProdOf_nil], rfl⟩
+  pcons fn d fs ih ihF := by
+    intro v rest
+    obtain ⟨x, xs⟩ := v
+    have hSome : ∀ (a : Descr.Ty d) (rest : List UInt8),
+        deriveDec d (deriveEnc d a ++ rest) = some (a, rest) := by
+      intro a rest
+      obtain ⟨r, h1, h2⟩ := ih a rest
+      subst h2
+      exact h1
+    have hSomeF : ∀ (w : prodTyOf fs) (rest : List UInt8),
+        decProdOf? fs (encProdOf fs w ++ rest) = some (w, rest) := by
+      intro w rest
+      obtain ⟨r, h1, h2⟩ := ihF w rest
+      subst h2
+      exact h1
+    refine ⟨rest, ?_, rfl⟩
+    rw [encProdOf_cons, List.append_assoc, decProdOf?_cons,
+      hSome x (encProdOf fs xs ++ rest)]
+    simp only [Option.bind_some, hSomeF xs rest]
+    rfl
+
+/-- The fresh capability, discharged: the suffix law at EVERY
+    description, by the ONE induction. -/
+theorem deriveSuffix_law (d : Descr) (v : Descr.Ty d) (rest : List UInt8) :
+    ∃ r, deriveDec d (deriveEnc d v ++ rest) = some (v, r) ∧ r = rest :=
+  law_of_rows suffixAlg d v rest
+
+/-- THE NEGATIVE (the theorem-not-vacuous control): the WRONG claim —
+    the suffix dropped — is refutable; a claim algebra with a false
+    row cannot discharge. -/
+theorem wrongSuffixClaim_refuted : ¬ (∀ (v : UInt64) (rest : List UInt8),
+    (decNat? .u64 (encNat .u64 v ++ rest)).map (·.2) = some []) := by
+  intro h
+  exact absurd (h 300 [7]) (by decide)
+
+/-- The deepening's suite: the one walk + the one generic theorem's
+    faces, with the wrong-claim negative. -/
+def deepeningSpec : Spec :=
+  Spec.ofList "the functorial deepening: the ONE walk, the ONE theorem"
+    (fun _ => do
+      -- the fresh capability's runtime face (the rows are live)
+      assert ((match deriveDec (.list (.prim .u64))
+        (deriveEnc (.list (.prim .u64)) [1, 2] ++ [9]) with
+        | some p => p.2 == [9]
+        | none => false))
+        "deepening.suffixLaw")
+    [ ("sabotage: the suffix law drops the suffix",
+        fun _ =>
+          assert ((match decNat? .u64 (encNat .u64 300 ++ [7]) with
+            | some p => p.2 == []
+            | none => true))
+            "control fired: the suffix survived — the wrong claim is \
+              refutable, the generic theorem is not vacuous")
+    , ("sabotage: the decoder accepts a bad tag",
+        fun _ =>
+          assert ((match deriveDec (.option (.prim .u64)) [2] with
+            | none => false
+            | some _ => true))
+            "control fired: the decoder decoded the unknown tag") ]
+    4 42
 
 def main : IO UInt32 :=
   TestingKit.mainOfSuites
@@ -1992,25 +2428,35 @@ def main : IO UInt32 :=
     , ("SchemaCore.Fold", [foldSpec])
     , ("SchemaCore.Value", [valueSpec])
     , ("SchemaCore.Codec", [codecGoldenSpec, codecRoundTripSpec, codecRefusalSpec])
-    , ("SchemaCore.Emit", [artifactSpec, lawSpec])
+    , ("SchemaCore.Emit", [artifactSpec])
     , ("SchemaCore.Item", [registrySpec, obligationSpec])
     , ("SchemaCore.RowVals", [rowSpec])
     , ("SchemaCore.Derive", [deriveSpec])
     , ("SchemaCore.DeriveMeta entourage", [entourageSpec])
-    , ("SchemaCore.Snapshot", [snapshotSpec])
+    , ("SchemaCore.Snapshot", [snapshotSpec, snapshotIsoSpec])
     , ("SchemaCore.Describe", [describeSpec])
+    , ("SchemaCore.Derive deepening", [deepeningSpec])
     , ("SchemaCore.Pred", [predSpec])
     , ("SchemaCore.Check", [checkSpec])
     , ("SchemaCore.Keys", [keysSpec])
     , ("SchemaCore.Update", [updateSpec])
+    , ("SchemaCore.View", [viewSpec])
     , ("SchemaCore.EventSourced", [eventSourcedSpec, esCodecSpec, esMigrationSpec])
+    , ("SchemaCore.DeltaLog", [SchemaTests.DeltaLog.deltaLogSpec])
     , ("SchemaCore.Migrate", [migrateSpec, migrateRefusalSpec])
+    , ("SchemaCore.Emit.Rust", [rustEmitSpec])
+    , ("SchemaCore.Emit.Ts", [tsEmitSpec])
     , ("SchemaCore.Profile", [profilePinSpec, profileSpec])
     , ("SchemaCore.EntityMachine", [entityMachineSpec])
     , ("SchemaCore.Diff", [diffSpec, verdictSpec, remedySpec])
     , ("SchemaCore.Violate+Commit", [commitFaceSpec, refuseFaceSpec,
         staleFaceSpec, duelSpec])
-    , ("SchemaCore.IncViolate", [incSpec, incFallbackSpec]) ]
+    , ("SchemaCore.IncViolate", [incSpec, incFallbackSpec])
+    , ("SchemaCore.Confluence", [confluenceSpec])
+    , ("SchemaCore.Witness", [witnessCheckerSpec, witnessObligationSpec,
+        witnessCodecSpec, witnessProducerSpec])
+    , ("SchemaCore.Dependent", [dependentSpec, dependentTypeSpec,
+        dependentRustSpec]) ]
 
 /-! ## The Rust lane (SchemaCore.Emit.Rust) — the differential's Lean side
 
@@ -2062,3 +2508,54 @@ example : SchemaCore.Emit.Rust.duelVectors.vectors.length = 10 := rfl
     (Kit.Duel's shape check — a manifest row over an absent vector is
     a generator bug, and the pin makes it a test verdict). -/
 example : Kit.Duel.expectsCovered SchemaCore.Emit.Rust.duelVectors = true := rfl
+
+/-! ### The JOURNAL DUEL's pins (SchemaCore.Emit.Journal — the Event
+    lane's vector set over the mandate-delta crate's documented
+    encR/encK instantiation) -/
+
+/-- THE JOURNAL DUEL VECTOR SET: nine vectors — five goldens (the
+    frames + the journals, the LANDED journal codec's bytes through
+    `SchemaCore.Emit.Journal.encDeltaJ`/`encJournalJ`) + four refusal
+    splices — never hand-composed. -/
+example : SchemaCore.Emit.Journal.journalDuel.vectors.length = 9 := rfl
+
+/-- The manifest's expectations cover exactly the emitted vectors
+    (Kit.Duel's shape check, duel-shaped). -/
+example : Kit.Duel.expectsCovered SchemaCore.Emit.Journal.journalDuel = true := rfl
+
+/-- The golden bytes are the kernel's: varint(3) + the three frames,
+    every atom a Codec.lean known-answer pin (u64 300 = AC 02;
+    "hi" = 02 68 69; "ho" = 02 68 6F; the tags in ctor order 0/1/2). -/
+example : SchemaCore.Emit.Journal.goldenJournalThree
+    = [3, 0, 2, 0xAC, 0x02, 2, 104, 105,
+       1, 2, 0xAC, 0x02, 2, 104, 111, 2, 0xAC, 0x02] := rfl
+
+/-- The frame goldens: the tag bytes + the self-delimiting payloads. -/
+example : SchemaCore.Emit.Journal.goldenFrameInsert
+    = [0, 2, 0xAC, 0x02, 2, 104, 105] := rfl
+example : SchemaCore.Emit.Journal.goldenFrameUpdate
+    = [1, 2, 0xAC, 0x02, 2, 104, 105] := rfl
+example : SchemaCore.Emit.Journal.goldenFrameRemove = [2, 0xAC, 0x02] := rfl
+example : SchemaCore.Emit.Journal.goldenJournalEmpty = [0] := rfl
+
+/-- THE NEGATIVE CONTROL's bytes: each splice is the out-of-policy
+    shape its name claims (tag outside the ctor image / a torn tail /
+    the non-canonical varint / the arity-skewed count). -/
+example : SchemaCore.Emit.Journal.refuseUnknownTag
+    = [1, 3, 2, 0xAC, 0x02, 2, 104, 105] := rfl
+example : SchemaCore.Emit.Journal.refuseTruncatedFrame
+    = [3, 0, 2, 0xAC, 0x02, 2, 104, 105, 1, 2, 0xAC, 0x02, 2, 104,
+       111, 2, 0xAC] := rfl
+example : SchemaCore.Emit.Journal.refuseNoncanonicalKey
+    = [2, 0x80, 0x00] := rfl
+example : SchemaCore.Emit.Journal.refuseRowCountSkew
+    = [0, 3, 0xAC, 0x02, 2, 104, 105] := rfl
+
+/-- NEGATIVE CONTROL (the shape check fires): a manifest row over an
+    ABSENT vector fails `expectsCovered` — a generator bug cannot hide
+    behind the coverage pin. -/
+example : Kit.Duel.expectsCovered
+    { SchemaCore.Emit.Journal.journalDuel with
+      expects := [("crates/mandate-delta/tests/duel/absent.bin", .refuse)]
+      expects_nodup := by decide }
+    = false := rfl
