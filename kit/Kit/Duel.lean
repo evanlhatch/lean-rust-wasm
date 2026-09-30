@@ -276,6 +276,124 @@ fn manifest_rows() -> Vec<" ++ rowTy ++ "> {
 
 "
 
+/-! ## The bench discipline (wave-30 C2: the flatland bench template) -/
+
+/-- The bench threshold policy — the acceptance band the pair's ratio
+    is judged against (the flatland discipline: a bench is a PAIR —
+    candidate vs baseline, the SAME seeded inputs — with a THRESHOLD
+    verdict; a lone number is telemetry). `noise` is the
+    measurement-noise band (2%); `fivePct` is the flatland drift
+    threshold (5% — the re-encode drift ceiling). -/
+inductive BenchThreshold where
+  | noise
+  | fivePct
+deriving BEq, DecidableEq, Repr
+
+/-- The policy's acceptance ceiling in per-mille (ratio = candidate /
+    baseline × 1000): the noise band accepts ≤ 2% over, the 5% band
+    ≤ 5% over. Per-mille, not floats — the verdict is decided in the
+    integer domain (the replay's determinism discipline). -/
+def BenchThreshold.ceilingPermille : BenchThreshold → Nat
+  | .noise => 1020
+  | .fivePct => 1050
+
+/-- Render the threshold as the manifest's row field (the closed
+    vocabulary the Rust consumer parses back). -/
+def BenchThreshold.render : BenchThreshold → String
+  | .noise => "within-noise"
+  | .fivePct => "within-5%"
+
+/-- The bench verdict (ctors, never strings — 04 §6, the verdict
+    vocabulary's bench face). The tiers are the ladder: at-or-under
+    baseline is `parity`, the noise band is `withinNoise`, the
+    threshold band (under the `fivePct` policy only) is `within5`, and
+    beyond the ceiling is `beyond` — carrying the per-mille ratio (the
+    factor a regression names, integer-rendered). -/
+inductive BenchVerdict where
+  | parity
+  | withinNoise
+  | within5
+  | beyond (permille : Nat)
+deriving DecidableEq, Repr
+
+/-- The per-mille ratio of candidate against baseline, floored (the
+    pessimistic face: rounding toward the baseline can only move the
+    verdict TOWARD a regression, never hide one). A zero baseline is
+    the degenerate spec bug (a bench spec pins rows ≥ 1, so a measured
+    baseline of zero is the caller's harness misfire) — it maps to
+    ratio 0, the verdict `parity`, so the harness misfire can never
+    fabricate a regression either.
+
+    Mirror: the generated benches compute the same quotient in u64
+    (`cand * 1000 / base`, wrapping-free at bench magnitudes) — the
+    verdict tiers are ONE vocabulary, two renderings. -/
+def BenchVerdict.permilleRatio (cand base : Nat) : Nat :=
+  if base = 0 then 0 else (cand * 1000) / base
+
+/-- The THRESHOLD verdict (Kit.Duel's bench discipline's ONE decision
+    walk): the floored per-mille ratio against the tier ladder —
+    ≤ 1000 parity, ≤ 1020 the noise band, then per the policy: the
+    `noise` ceiling IS the acceptance (over it, `beyond`), the `fivePct`
+    policy grants the 5% band before `beyond`. -/
+def benchVerdict (cand base : Nat) (t : BenchThreshold) : BenchVerdict :=
+  let r := BenchVerdict.permilleRatio cand base
+  if r ≤ 1000 then .parity
+  else if r ≤ 1020 then .withinNoise
+  else match t with
+    | .noise => .beyond r
+    | .fivePct => if r ≤ t.ceilingPermille then .within5 else .beyond r
+
+/-- Render the verdict as the harness's verdict LINE — the pair's
+    numbers AND the tier (a lone number is telemetry; the line is the
+    verdict's evidence face). The Rust harness renders the same shape. -/
+def BenchVerdict.render (cand base : Nat) (v : BenchVerdict) : String :=
+  let tier := match v with
+    | .parity => "parity"
+    | .withinNoise => "within-noise"
+    | .within5 => "within-5%"
+    | .beyond p => s!"beyond ({p}‰)"
+  s!"candidate {cand}ns/op vs baseline {base}ns/op — verdict: {tier}"
+
+/-- One bench row: the PAIR (candidate fn, baseline fn — both named,
+    the pair discipline IN THE SHAPE: a spec naming one side fails the
+    manifest's consumer walk), the SEEDED input (the LCG seed — same
+    seed, same bytes, pattern #14), the input size (rows), the
+    threshold policy, and the note (what the pair isolates). The
+    manifest discipline: the bench rows ride the duel's text lane
+    (`benchManifestRows` — the duel manifest's walk; the inspector's
+    duel replay is the consumer face that extends). -/
+structure BenchSpec where
+  /-- The bench's name (the manifest row's identity). -/
+  name : String
+  /-- The candidate face (the generated fn under measurement). -/
+  candidate : String
+  /-- The baseline face (the hand-rolled equivalent). -/
+  baseline : String
+  /-- The LCG seed (Knuth 64 — TestingKit's ONE recurrence).
+      -/
+  seed : Nat
+  /-- The input size in rows. -/
+  rows : Nat
+  /-- The acceptance band. -/
+  threshold : BenchThreshold
+  /-- What the pair isolates (the honest note). -/
+  note : String
+deriving DecidableEq, Repr
+
+/-- One bench row's manifest line (the ONE format, stated once):
+    `bench\t<name>\t<candidate>\t<baseline>\t<seed>\t<rows>\t<threshold>`. -/
+def BenchSpec.render (b : BenchSpec) : String :=
+  "bench\t" ++ b.name ++ "\t" ++ b.candidate ++ "\t" ++ b.baseline ++ "\t"
+    ++ toString b.seed ++ "\t" ++ toString b.rows ++ "\t" ++ b.threshold.render
+
+/-- The bench manifest's rows (the duel manifest's shape: the
+    generator provenance row, then one row per bench). The generated
+    benches read THIS (the consumer contract: the manifest is read,
+    never re-encoded — the pair + threshold live in ONE place). -/
+def benchManifestRows (generator : String) (benches : List BenchSpec) : String :=
+  "generator\t" ++ generator ++ "\n" ++
+  String.intercalate "\n" (benches.map (·.render)) ++ "\n"
+
 /-! ## The Lean-side vector generator (the seeded discipline) -/
 
 /-- Draw `n` LCG bytes from the tape (pattern #14: same seed, same

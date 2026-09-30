@@ -38,6 +38,7 @@ import Gates.Packages
 import Gates.Common
 import SchemaCore
 import SchemaCore.Emit.Witness
+import SchemaCore.Emit.Bench
 import Faults
 
 open Lean
@@ -149,8 +150,12 @@ unsafe def run : IO UInt32 := do
           IO.eprintln s!"audit: FAULTS REGEN FAILED — {e}"
           pure (0, true)
         | .ok modes => scan (Faults.faultsEmitter.run modes)
-      let scanned := s1 + s2 + s3
-      let failed := f1 || f2 || f3
+      -- THE BENCH/E2E LANE's artifacts (wave-30 C2 — the same ONE run
+      -- the writer + gen-check do): the benches + the validator ride
+      -- the banned-pattern sweep too (no unwrap(/dbg!/unsafe, never).
+      let (s4, f4) ← scan (SchemaCore.Emit.Bench.benchEmitter.run r.reg)
+      let scanned := s1 + s2 + s3 + s4
+      let failed := f1 || f2 || f3 || f4
       if failed then
         IO.eprintln "audit: VIOLATIONS — fix the generator (never hand-edit \
           the artifact), `just gen`, commit"

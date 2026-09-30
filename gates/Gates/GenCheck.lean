@@ -52,6 +52,7 @@ import Gates.Packages
 import Gates.Common
 import SchemaCore
 import SchemaCore.Emit.Witness
+import SchemaCore.Emit.Bench
 import WasmCore
 import ComponentTests.Pipeline
 import Faults
@@ -159,6 +160,11 @@ unsafe def run : IO UInt32 := do
               let ef := ComponentTests.Pipeline.edgeRows
                 ComponentTests.Pipeline.edgeSpec
               compFresh := (cf.1 ++ sf.1 ++ ef.1, cf.2 ++ sf.2 ++ ef.2)
+      -- THE BENCH/E2E LANE's regen (wave-30 C2 — the benches + the
+      -- validator are artifacts through the spine: the emitter's run
+      -- over the SAME replayed registry is the writer's (`just gen`)
+      -- and the gate's ONE copy).
+      let benchFresh := SchemaCore.Emit.Bench.benchEmitter.run r.reg
       -- the TEXT lane's walk (the shared artifact walk — the audit's
       -- skeleton) + compare: `Kit.Emit.tieText` IS the compare (the ONE
       -- text tie — `TestingKit.Golden.tie`'s artifact face, adopted;
@@ -167,7 +173,7 @@ unsafe def run : IO UInt32 := do
       let (_, textTied, failed') ← Gates.forDeclared "gen-check"
         "run `just gen` and commit"
         (r.files ++ wasmFresh.1 ++ duelFresh.1 ++ compFresh.1
-          ++ journalFresh.1 ++ witnessFresh.1 ++ faultsFresh)
+          ++ journalFresh.1 ++ witnessFresh.1 ++ faultsFresh ++ benchFresh)
         fun f committed => do
           match Kit.Emit.tieText committed f.contents with
           | .tied => return true
@@ -211,8 +217,8 @@ unsafe def run : IO UInt32 := do
       if failed then return 1
       IO.println s!"gen-check: clean — {tied} artifact(s) byte-tied \
         (text + binary lanes; the duel's manifest + vectors, the \
-        component lane's world text + bytes, and the faults lane's \
-        generated Rust included)"
+        component lane's world text + bytes, the faults lane's \
+        generated Rust, and the bench/e2e face included)"
       return 0
 
 end Gates.GenCheck

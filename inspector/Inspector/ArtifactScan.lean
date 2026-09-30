@@ -39,7 +39,9 @@ def scanRoots : List ScanRoot :=
   [ { dir := "gen", ext := "" }
   , { dir := "crates/schema-generated/src", ext := "rs" }
   , { dir := "crates/schema-generated/tests", ext := "rs" }
-  , { dir := "crates/mandate-faults/src", ext := "rs" } ]
+  , { dir := "crates/schema-generated/benches", ext := "rs" }
+  , { dir := "crates/mandate-faults/src", ext := "rs" }
+  , { dir := "crates/mandate-delta/benches", ext := "rs" } ]
 
 /-- The recursive directory walk, as an explicit worklist loop (the
     linter's noNewPartial rule: no new `partial` — the file-system

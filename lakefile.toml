@@ -48,18 +48,9 @@ name = "TextKitTests"
 srcDir = "textkit"
 root = "TextKitTests.Main"
 
-# ── Cli — the gates exe's argv parser (lean4-cli) ──────────────────────
-# v4.33.0 = the exact rev the legacy tree pinned (its manifest carried it
-# transitively through mathlib's closure).
-
-[[require]]
-name = "Cli"
-git = "https://github.com/leanprover/lean4-cli"
-rev = "6130a47896ce867c6a4a55373441e59e565bad0f"
-
 # ── lean4lean (the kernel-check gate's independent double-check) ───────
 # batteries at the TREE-compatible rev (v4.33.0 = 4488d40, what the legacy
-# tree's mathlib closure already vendored). This ROOT require deliberately
+# tree's mathlib closure already vendored). This ROOT require deliberately This ROOT require deliberately
 # overrides lean4lean's own batteries pin (v4.33.0-rc2): lean4lean builds
 # green under the v4.33.0 RELEASE toolchain with batteries v4.33.0
 # (probe-verified in the legacy tree; Gates/KernelCheck.lean's header).

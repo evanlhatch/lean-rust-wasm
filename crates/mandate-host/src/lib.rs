@@ -46,6 +46,7 @@ pub mod engine;
 pub mod lifecycle;
 pub mod live;
 pub mod persistence;
+pub mod triangle;
 
 pub use artifact::{GenSlice, bytes_hash};
 pub use mandate_faults::{ErrorCategory, FaultError};
@@ -67,6 +68,7 @@ pub use component::{
     STRING_GUEST_EXPORT,
 };
 pub use duel::{DuelReport, DuelRow, Expectation, RowVerdict, run_duel};
+pub use triangle::{TriangleReport, TriRow, TriVerdict, run_triangle};
 pub use engine::{GOLDEN_ANSWER, run_answer, run_slice};
 pub use lifecycle::{
     HostMachine, Phase, ModelTransition, MODEL_TRANS, EVENT_CALL, EVENT_INSTANTIATE, EVENT_LOAD,

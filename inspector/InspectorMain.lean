@@ -207,32 +207,138 @@ def runDuel (name : Option String) : IO UInt32 := do
             if !(rows.all (fun r => Inspector.DuelReplay.isAgree r.2)) then failed := true
       return if failed then 1 else 0
 
-unsafe def main (args : List String) : IO UInt32 := do
-  match args with
-  | ["ledger"] => runLedger
-  | ["ledger", "backward", path] => runLedgerBackward path
-  | ["ledger", "forward", name] => runLedgerForward name
-  | ["cites", thm] =>
-      withReplayed fun envs => runCites envs thm.toName
-  | ["uncited"] =>
-      withReplayed runUncited
-  | ["trust"] =>
-      withReplayed runTrust
-  | ["whatif"] => runWhatIf
-  | ["explain"] => runExplain
-  | ["duel"] => runDuel none
-  | ["duel", name] => runDuel (some name)
-  | ["why", label] =>
-      withReplayRows fun rows => do
-        IO.println (Inspector.why rows label)
-        return if Inspector.whyKnown rows label then 0 else 1
-  | ["report"] | [] =>
-      withReplayRows fun rows => do
-        IO.println (Inspector.report replayPkgsRender rows)
-        -- The sweep's teeth (09 §3): gaps + defects fail the run.
-        return if rows.any (fun r => !r.isClean) then 1 else 0
-  | _ =>
-      IO.eprintln "usage: lake exe inspector [why <label> | report | \
-        ledger [backward <path> | forward <name>] | cites <theorem> | \
-        uncited | trust | whatif | explain | duel [<name>]]"
-      return 1
+/-- The sweep (the `report` row AND the no-arg default — the old
+`["report"] | []` dispatch, byte-identical). -/
+unsafe def runReport : IO UInt32 :=
+  withReplayRows fun rows => do
+    IO.println (Inspector.report replayPkgsRender rows)
+    -- The sweep's teeth (09 §3): gaps + defects fail the run.
+    return if rows.any (fun r => !r.isClean) then 1 else 0
+
+/-- A row's extra-token refusal: the row's own spelling is the closed
+world (an unexpected argument is the curated miss, not a shrug). -/
+def extraArgs (row : String) (args : List String) : IO UInt32 := do
+  IO.eprintln (Kit.Diag.toString (Kit.Diag.closedWorld Kit.Cli.eCX0001
+    "unexpected argument for this subcommand" .error (args.headD "") [row]))
+  return Kit.Cli.Verdict.finding.exit
+
+/-- The no-arg report rows: the row's body, else the curated extra-token
+refusal (the old exact-match dispatch's exit-1 face, curated). -/
+unsafe def rowNoArgs (row : String) (body : IO UInt32) : List String → IO UInt32
+  | [] => body
+  | args => extraArgs row args
+
+/-- The `ledger backward` row. -/
+unsafe def runLedgerBackwardRow : List String → IO UInt32
+  | [path] => runLedgerBackward path
+  | args => extraArgs "ledger backward" args
+
+/-- The `ledger forward` row. -/
+unsafe def runLedgerForwardRow : List String → IO UInt32
+  | [name] => runLedgerForward name
+  | args => extraArgs "ledger forward" args
+
+/-- The `duel` row: no name = every registered duel. -/
+unsafe def runDuelRow : List String → IO UInt32
+  | [] => runDuel none
+  | [name] => runDuel (some name)
+  | args => extraArgs "duel [<name>]" args
+
+/-- The `uncited` row. -/
+unsafe def runUncitedRow : List String → IO UInt32 :=
+  rowNoArgs "uncited" (withReplayed runUncited)
+
+/-- The `trust` row. -/
+unsafe def runTrustRow : List String → IO UInt32 :=
+  rowNoArgs "trust" (withReplayed runTrust)
+
+/-- The `whatif` row. -/
+unsafe def runWhatIfRow : List String → IO UInt32 :=
+  rowNoArgs "whatif" runWhatIf
+
+/-- The `explain` row. -/
+unsafe def runExplainRow : List String → IO UInt32 :=
+  rowNoArgs "explain" runExplain
+
+/-- The `report` row. -/
+unsafe def runReportRow : List String → IO UInt32 :=
+  rowNoArgs "report" runReport
+
+/-- The `ledger` row: no args = the state report; an unknown query word
+is the curated miss (the two directions are the closed world). -/
+unsafe def runLedgerRow : List String → IO UInt32
+  | [] => runLedger
+  | args => do
+      IO.eprintln (Kit.Diag.toString (Kit.Diag.closedWorld Kit.Cli.eCX0001
+        "unknown ledger query" .error (args.headD "")
+        ["backward <artifact-path>", "forward <spec-name>"]))
+      return Kit.Cli.Verdict.finding.exit
+
+/-- The `cites` row: one theorem name. -/
+unsafe def runCitesRow : List String → IO UInt32
+  | [thm] => withReplayed fun envs => runCites envs thm.toName
+  | args => extraArgs "cites <theorem>" args
+
+/-- The `why` row: one obligation label (an unknown label exits 1). -/
+unsafe def runWhyRow : List String → IO UInt32
+  | [label] => withReplayRows fun rows => do
+      IO.println (Inspector.why rows label)
+      return if Inspector.whyKnown rows label then 0 else 1
+  | args => extraArgs "why <label>" args
+
+/-! ## THE TABLE (Kit.Cli's one driver; the help is generated from it) -/
+
+/-- The inspector's about line (the sweep is the no-arg default). -/
+def inspectorAbout : String :=
+  "The evidence-chain inspector — the obligation/ledger/cites/trust/duel \
+    surfaces over the replayed environments; the no-arg default is the \
+    sweep (`report`)."
+
+unsafe def inspectorSubs : List Kit.Cli.Sub :=
+  [ { name := "ledger backward"
+      summary := "one artifact's demand surface: `ledger backward <artifact-path>`; \
+an untracked path exits 1 (the loud miss)."
+      run := runLedgerBackwardRow }
+  , { name := "ledger forward"
+      summary := "what moves if this spec name changes: `ledger forward <spec-name>` — \
+always answers (an empty affected set is a legitimate answer)."
+      run := runLedgerForwardRow }
+  , { name := "ledger"
+      summary := "the provenance ledger's state report (`ledger [backward <path> | \
+forward <name>]`); ABSENT is the honest dormant face, orphan flags exit 1."
+      run := runLedgerRow }
+  , { name := "cites"
+      summary := "who cites this theorem: `cites <theorem>` — an unknown constant \
+exits 1 (the loud miss)."
+      run := runCitesRow }
+  , { name := "why"
+      summary := "one obligation's evidence chain: `why <label>` — an unknown label \
+exits 1 (the loud miss)."
+      run := runWhyRow }
+  , { name := "duel"
+      summary := "the committed duel vectors' REPLAY (the regression discipline): \
+`duel [<name>]` — no name = every registered duel; a divergence, a manifest \
+refusal, or an unknown duel name exits 1."
+      run := runDuelRow }
+  , { name := "uncited"
+      summary := "the zero-citation report over the replayed envs (report-only)."
+      run := runUncitedRow }
+  , { name := "trust"
+      summary := "the tree's trust surface: the axiom cones + the tiers' distribution \
++ the duel status (report-only)."
+      run := runTrustRow }
+  , { name := "whatif"
+      summary := "the what-if report over the committed fixture journal (08 #20) — \
+report-only, exit 0 (the divergence is the answer)."
+      run := runWhatIfRow }
+  , { name := "explain"
+      summary := "the explanations lane (02 §11): why present / why absent / which \
+change repairs — report-only, exit 0."
+      run := runExplainRow }
+  , { name := "report"
+      summary := "the full obligation sweep — the gates' future sweep, so it has teeth: \
+gaps/defects exit 1 (09 §3)."
+      run := runReportRow } ]
+
+unsafe def main (args : List String) : IO UInt32 :=
+  Kit.Cli.run "inspector" inspectorAbout inspectorSubs (some runReport) args

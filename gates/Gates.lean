@@ -114,6 +114,7 @@ inner-node hazard stays exclusive (its sweep's own discipline).
 import Gates.Packages
 import Gates.PackagesCheck
 import Gates.Common
+import Gates.ObligationView  -- B7: the gates' rows AS obligation values
 import Gates.Axioms
 import Gates.DocsCheck
 import Gates.GenCheck

@@ -37,6 +37,7 @@ import SchemaTests.EntityMachine
 import SchemaTests.Inc
 import SchemaTests.Confluence
 import SchemaTests.RustEmit
+import SchemaTests.Fuzz
 import SchemaTests.TsEmit
 import SchemaTests.Witness
 import SchemaTests.Dependent
@@ -2445,6 +2446,7 @@ def main : IO UInt32 :=
     , ("SchemaCore.DeltaLog", [SchemaTests.DeltaLog.deltaLogSpec])
     , ("SchemaCore.Migrate", [migrateSpec, migrateRefusalSpec])
     , ("SchemaCore.Emit.Rust", [rustEmitSpec])
+    , ("SchemaCore.Emit.Fuzz", [SchemaTests.Fuzz.fuzzEmitSpec])
     , ("SchemaCore.Emit.Ts", [tsEmitSpec])
     , ("SchemaCore.Profile", [profilePinSpec, profileSpec])
     , ("SchemaCore.EntityMachine", [entityMachineSpec])

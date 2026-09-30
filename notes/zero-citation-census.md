@@ -793,41 +793,69 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.opRow_wf
   WasmCore.completeCons
   WasmCore.args_i32_inv
+  WasmCore.WatParse.decTok_call
   WasmCore.lSize_cons
+  WasmCore.WatParse.decMem_spec
   WasmCore.finishRun_ok
+  WasmCore.WatParse.decTok_br
   WasmCore.zeroBudget_unknown
   WasmCore.stateWithL
+  WasmCore.WatParse.allMems_complete
+  WasmCore.Duel.sidecarPath_inj
+  WasmCore.WatParse.strW_cons
   WasmCore.stepFlag_if_
+  WasmCore.Duel.memPaths_nodup
+  WasmCore.Duel.wasmPath_ne_sidecar
   WasmCore.stackTys_cons_inv
   WasmCore.exec_step_det
+  WasmCore.WatParse.strW_ne
   WasmCore.memSig_covers
+  WasmCore.WatParse.decMem_self
+  WasmCore.Duel.opPaths_nodup
   WasmCore.unmodeled_ne_trap
   WasmCore.args_i32i32_inv
   WasmCore.execQuad_branchSome
+  WasmCore.WatParse.unescTo_close
   WasmCore.execQuad_branchNone
   WasmCore.execList_call
+  WasmCore.duel_opAdd_machine_run
+  WasmCore.Duel.familyPaths_ne_invalid
   WasmCore.exec_run_single_iff
+  WasmCore.WatParse.decTok_localget
   WasmCore.valDefault_typed
   WasmCore.semOp_spec
+  WasmCore.WatParse.decTok_drop
+  WasmCore.WatParse.quoteHead_cons
   WasmCore.stepTy_frameFalse
   WasmCore.semOp_typed
   WasmCore.stepFlag_sound
   WasmCore.exec_step_iff
+  WasmCore.Duel.scenTrapVecPath_ne
+  WasmCore.WatParse.decTok_return
+  WasmCore.Duel.duelBinOutputs_nodup
   WasmCore.localsMap_typed
+  WasmCore.WatParse.opName_inj
   WasmCore.foldl_poisoned
   WasmCore.refuted_witness
   WasmCore.opSig_covers
   WasmCore.execQuad_unmodeled
+  WasmCore.WatParse.quotedRestLen
   WasmCore.flat_step_iff
+  WasmCore.Duel.allOps_nodup
+  WasmCore.Duel.memTrapVecPath_inj
+  WasmCore.Duel.trapScenPaths_disj
+  WasmCore.Duel.nodup_map_inj
   WasmCore.flat_chk
   WasmCore.tyOf_i32
   WasmCore.args_i64i32_inv
   WasmCore.stackTys_length
   WasmCore.fold_of_checkBody
+  WasmCore.Duel.scenMemVecPath_ne
   WasmCore.step_ne_outOfFuel
   WasmCore.fold_popPush
   WasmCore.execList_callindirect
   WasmCore.stepTy_op_inv
+  WasmCore.WatParse.decTok_i64const
   WasmCore.popTys_of_stackTys
   WasmCore.step_store_oob_traps
   WasmCore.frame_dispatch
@@ -837,7 +865,11 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.stepFlag_block
   WasmCore.exec_typed
   WasmCore.stepTy_callindirect_inv
+  WasmCore.Duel.opMemVecPath_ne
+  WasmCore.Duel.scenarioPaths_nodup
+  WasmCore.WatParse.decTok_op
   WasmCore.localsDefault_typed
+  WasmCore.WatParse.decTok_localset
   WasmCore.stepTy_mem_inv
   WasmCore.step_mem_spec
   WasmCore.stepFlag_callindirect_shape
@@ -845,55 +877,89 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.execList_loop
   WasmCore.execQuad_outOfFuel
   WasmCore.flat_run_backwards
+  WasmCore.WatParse.decTok_brif
+  WasmCore.WatParse.opName_chars
+  WasmCore.WatParse.memName_inj
+  WasmCore.Duel.opMemPaths_disj
   WasmCore.predOr_demorgan
+  WasmCore.Duel.opTrapPaths_disj
   WasmCore.execQuad_structural
+  WasmCore.Duel.allMems_nodup
+  WasmCore.WatParse.allOps_complete
   WasmCore.stepFlag_flat_sound
   WasmCore.stepTy_call_inv
   WasmCore.step_mem_outcome
   WasmCore.stepFlag_drop_shape
+  WasmCore.Duel.opVecPath_inj
   WasmCore.checkBody_of_fold
   WasmCore.execQuad_trap
   WasmCore.runFunc_safe
   WasmCore.fenv_some
   WasmCore.checkBody_sound
   WasmCore.memRow_wf
+  WasmCore.WatParse.decTok_select
+  WasmCore.WatParse.decTok_i32const
   WasmCore.stepFlag_congr
   WasmCore.completeStop
   WasmCore.checkFlow_eq
   WasmCore.popPush_some
   WasmCore.flat_outOfFuel_honest
   WasmCore.getElem_congr
+  WasmCore.WatParse.strBeq_self
   WasmCore.stepTy_localset_inv
+  WasmCore.Duel.memTrapVecPath_ne
   WasmCore.popTys_typed
+  WasmCore.WatParse.decTok_mem
   WasmCore.map_snd_error
   WasmCore.tyOf_getD
+  WasmCore.opAddBody_pin
+  WasmCore.Duel.opScenPaths_disj
   WasmCore.checkBody_complete
+  WasmCore.WatParse.decOp_spec
   WasmCore.execList_if_
-  WasmCore.duel_arith_machine_run
+  WasmCore.Duel.familyPaths_nodup
   WasmCore.step_mem_preserves
+  WasmCore.Duel.memScenPaths_disj
+  WasmCore.Duel.duelPath_sidecar_disj
+  WasmCore.WatParse.strW_len
   WasmCore.flat_exec_tape
   WasmCore.consIh
-  WasmCore.arithBody_pin
   WasmCore.foldl_cons_step
   WasmCore.stateWith
   WasmCore.semOp_exists
   WasmCore.step_op_preserves
+  WasmCore.Duel.opTrapVecPath_ne
   WasmCore.step_structural_or_frame
+  WasmCore.WatParse.memName_chars
+  WasmCore.WatParse.decTok_localtee
   WasmCore.flat_run_other
+  WasmCore.Duel.duelPath_suffix
+  WasmCore.Duel.combined_disj_scen
+  WasmCore.Duel.memTrapPaths_nodup
   WasmCore.u32_toUInt8
   WasmCore.step_store_inBounds
   WasmCore.tyOf_i64
   WasmCore.step_preserves
+  WasmCore.WatParse.quotedScan_ok
   WasmCore.predOpLower?_covered
   WasmCore.flat_run_forwards
   WasmCore.checkFunc_complete
+  WasmCore.WatParse.decOp_self
+  WasmCore.Duel.opMemPaths_disj_trap
   WasmCore.stackTys_reverse
   WasmCore.stepTy_drop_inv
+  WasmCore.WatParse.decTok_unreachable
   WasmCore.flat_run_iff
+  WasmCore.WatParse.decTok_callindirect
   WasmCore.getD_append_val
+  WasmCore.WatParse.strEq_of_beq
+  WasmCore.Duel.memVecPath_inj
+  WasmCore.Duel.nodup_append'
   WasmCore.foldl_stopped
   WasmCore.execQuad_dead
   WasmCore.stepTy_brif_inv
+  WasmCore.Duel.scen_ne_invalid
+  WasmCore.Duel.scenOpVecPath_ne
 
 
 ## WasmCoreTestsLib

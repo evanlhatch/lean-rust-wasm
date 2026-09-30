@@ -86,6 +86,10 @@ def Flags.has (f : Flags) (name : String) : Bool := f.extra.any (fun r => r.1 ==
 def Flags.val (f : Flags) (name : String) : Option String :=
   (f.extra.filter (fun r => r.1 == name)).head?.map (·.2)
 
+/-- ALL of a repeatable extra flag's values, in order. -/
+def Flags.all (f : Flags) (name : String) : List String :=
+  (f.extra.filter (fun r => r.1 == name)).map (·.2)
+
 /-- The shared spellings — the flag closed world's constant half. -/
 def sharedFlags : List String := ["--package", "--write", "--accept-drift"]
 

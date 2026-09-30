@@ -365,7 +365,9 @@ def sigPinProp : Tape → CheckResult := fun _ => do
   assert (encodeInstr (.op .i64shru) == [0x88]) "i64shru opcode drifted"
   assert (encodeInstr (.op .i64extendi32u) == [0xAD]) "i64extendi32u opcode drifted"
   assert ((encodeInstr (.mem .i32load 0 none)).head? == some 0x28) "i32load opcode drifted"
-  assert ((encodeInstr (.mem .i64store8 0 (some 0))).head? == some 0x3B)
+  -- i64.store8 is 0x3C (0x3B is i32.store16 — the duel's byte-tie
+  -- against the real engines caught the old 0x3B row).
+  assert ((encodeInstr (.mem .i64store8 0 (some 0))).head? == some 0x3C)
     "i64store8 opcode drifted"
 
 def sigSpec : Spec :=
@@ -1040,13 +1042,35 @@ def duelRowsOk : List (String × Kit.Duel.Expect) :=
 def duelProp : Tape → CheckResult := fun _ => do
   assert (WasmCore.Duel.duelRowsCovered)
     "a duel manifest row names an absent vector (the generator bug)"
-  assert (duelRowsOk.length == 6) "the duel's row count drifted"
+  -- 1 slice + 19 generated op rows + 7 mem + 7 mem-trap + 3 scenarios
+  -- + 1 invalid control = 38.
+  assert (duelRowsOk.length == 38) "the duel's row count drifted"
+  -- THE COVERAGE AUDIT'S PINS: every op-table row's generated vector
+  -- is in the family (the C6 audit face, held for the closed
+  -- universes — the fold makes the coverage structural).
+  assert (WasmCore.WatParse.allOps.all WasmCore.Duel.opDuelCovered)
+    "a plain-op row lacks its generated duel vector"
+  assert (WasmCore.WatParse.allMems.all WasmCore.Duel.memDuelCovered)
+    "a mem row lacks its generated duel vector(s)"
   -- The slice row: the executor's computed expectation IS i64:42.
   assert (duelRowsOk.lookup (WasmCore.Duel.duelVecName "slice")
     == some (.run "i64:42")) "the slice row's computed expectation drifted"
-  -- The arithmetic row (6·7+8>>3, widened, ·36−174).
-  assert (duelRowsOk.lookup (WasmCore.Duel.duelVecName "arith")
-    == some (.run "i64:42")) "the arith row's computed expectation drifted"
+  -- The generated op rows (samples across the fold's faces: the wrap
+  -- overflow, the boundary-max add wrap, the shift count's mod, the
+  -- conversion seam — the executor's COMPUTED expectations, pinned).
+  assert (duelRowsOk.lookup (WasmCore.Duel.opVecPath Op.i32add)
+    == some (.run "i64:4294967294")) "the op-i32.add row's expectation drifted"
+  assert (duelRowsOk.lookup (WasmCore.Duel.opVecPath Op.i64add)
+    == some (.run "i64:-2")) "the op-i64.add row's expectation drifted"
+  assert (duelRowsOk.lookup (WasmCore.Duel.opVecPath Op.i32wrapi64)
+    == some (.run "i64:4294967295")) "the op-i32.wrap_i64 row's expectation drifted"
+  assert (duelRowsOk.lookup (WasmCore.Duel.opVecPath Op.i64shru)
+    == some (.run "i64:0")) "the op-i64.shr_u row's expectation drifted"
+  -- The generated mem rows (the store-read-back fold + the trap face).
+  assert (duelRowsOk.lookup (WasmCore.Duel.memVecPath MemOp.i32store8)
+    == some (.run "i64:255")) "the mem-i32.store8 row's expectation drifted"
+  assert (duelRowsOk.lookup (WasmCore.Duel.memTrapVecPath MemOp.i32load)
+    == some .trap) "the mem-i32.load trap row's expectation drifted"
   -- The control-flow row: the loop sums 5..1, the if_ selects 100.
   assert (duelRowsOk.lookup (WasmCore.Duel.duelVecName "control")
     == some (.run "i64:100")) "the control row's computed expectation drifted"
@@ -1094,6 +1118,75 @@ def duelSpec : Spec :=
     duelProp
     [ ("an unmodeled body produced an expectation", duelUnmodeled)
     , ("the fold lost the divergence", duelFoldLost) ]
+    1 42
+
+/-! ### The profile (WasmCore.Profile — the deterministic profile as data) -/
+
+/-- The profile's known rows: THE deterministic profile's axes, pinned
+    (the values both engines' appliers must read — a drifted axis is
+    the two-hand-synced-configs drift the module exists to close). -/
+def profileProp : Tape → CheckResult := fun _ => do
+  -- The axes' values (the closed field set — an added field forces
+  -- this pin to grow with it).
+  assert (WasmCore.Profile.theProfile.consumeFuel)
+    "the deterministic profile's fuel axis drifted off"
+  assert (WasmCore.Profile.theProfile.compilation
+    == WasmCore.Profile.CompilationMode.lazyTranslation)
+    "the deterministic profile's compilation pin drifted"
+  assert (!WasmCore.Profile.theProfile.floats)
+    "the deterministic profile's floats axis drifted on"
+  assert (!WasmCore.Profile.theProfile.memory64)
+    "the deterministic profile's memory64 axis drifted on"
+  assert (!WasmCore.Profile.theProfile.multiMemory)
+    "the deterministic profile's multi-memory axis drifted on"
+  assert (!WasmCore.Profile.theProfile.wideArithmetic)
+    "the deterministic profile's wide-arithmetic axis drifted on"
+  assert (!WasmCore.Profile.theProfile.customPageSizes)
+    "the deterministic profile's custom-page-sizes axis drifted on"
+  assert (!WasmCore.Profile.theProfile.simd)
+    "the deterministic profile's simd feature axis drifted on"
+  -- The rendered rows (the engines' vocabulary, pinned row-by-row —
+  -- the Rust readers parse THIS spelling).
+  let rs := WasmCore.Profile.theRows
+  assert (rs.length == 8) "the profile's row count drifted"
+  assert (rs.lookup "consume-fuel" == some "on") "the consume-fuel row drifted"
+  assert (rs.lookup "compilation" == some "lazy-translation")
+    "the compilation row drifted"
+  assert (rs.lookup "floats" == some "off") "the floats row drifted"
+  assert (rs.lookup "memory64" == some "off") "the memory64 row drifted"
+  assert (rs.lookup "multi-memory" == some "off") "the multi-memory row drifted"
+  assert (rs.lookup "wide-arithmetic" == some "off") "the wide-arithmetic row drifted"
+  assert (rs.lookup "custom-page-sizes" == some "off") "the custom-page-sizes row drifted"
+  assert (rs.lookup "simd" == some "off") "the simd row drifted"
+  -- The file body carries the generator provenance row (the manifest's
+  -- shape; the duel emitter writes it into gen/wasm-duel/profile.txt).
+  assert ((WasmCore.Profile.fileBody.splitOn "\n").head? == some "generator\tWasmCore.Profile")
+    "the profile file's generator row drifted"
+
+/-- NEGATIVE CONTROL (the deliberately-wrong probe): the flipped
+    profile's floats row asserted `off` — the renderer is the VALUE's
+    honest face, so the wrong pin FIRES (a renderer that ignored the
+    axis — a constant table — would let this control pass). -/
+def profileFlipProp : Tape → CheckResult := fun _ => do
+  let flipped := { WasmCore.Profile.theProfile with floats := true }
+  assert ((WasmCore.Profile.rows flipped).lookup "floats" == some "off")
+    "control fired: the renderer reflected the value's floats axis"
+
+/-- NEGATIVE CONTROL (the deliberately-wrong probe): the rendered keys
+    asserted to have COLLAPSED — the row fold is total over the eight
+    axes, so the wrong pin FIRES (a fold that dropped rows would let
+    this control pass, and the Rust readers' strict parser would then
+    refuse the profile at load). -/
+def profileKeysProp : Tape → CheckResult := fun _ => do
+  let keys := WasmCore.Profile.theRows.map (·.1)
+  assert (keys.eraseDups.length == 9)
+    "control fired: the profile's key set carried exactly the eight axes"
+
+def profileSpec : Spec :=
+  Spec.ofList "WasmCore.Profile — the deterministic profile as data"
+    profileProp
+    [ ("the renderer ignored the value's floats axis", profileFlipProp)
+    , ("the profile's key set grew an unknown axis", profileKeysProp) ]
     1 42
 
 /-! ### The type-safety theorem (the body-level induction + the module face) -/
@@ -1355,10 +1448,10 @@ def machineRun (m : Module) : Option State :=
     machine AND the ledger keeps the trap as data; the zero budget is
     the honest UNKNOWN, never a verdict). -/
 def machineProp : Tape → CheckResult := fun _ => do
-  assert (match machineRun WasmCore.Duel.arithModule with
-      | some s => WasmCore.Duel.resultNote s.stack == "i64:42"
+  assert (match machineRun (WasmCore.Duel.duelOpModule Op.i32add) with
+      | some s => WasmCore.Duel.resultNote s.stack == "i64:4294967294"
       | none => false)
-    "the arith machine run drifted from the duel row"
+    "the generated op-i32.add machine run drifted from the duel row"
   assert (match machineRun WasmCore.Duel.controlModule with
       | some s => WasmCore.Duel.resultNote s.stack == "i64:100"
       | none => false)
@@ -1367,12 +1460,13 @@ def machineProp : Tape → CheckResult := fun _ => do
       | some s => WasmCore.Duel.resultNote s.stack == "i64:305420151"
       | none => false)
     "the memory machine run drifted from the duel row"
-  -- the flat machine + the witness discipline: the arith body's run
-  -- has a witnessing Exec whose tape IS the instruction list
-  assert (match (flatMachine).run (duelInit WasmCore.Duel.arithModule) (bodyOf WasmCore.Duel.arithModule) with
-      | some s => s.stack == [Val.i64 42]
+  -- the flat machine + the witness discipline: the generated op
+  -- body's run has a witnessing Exec whose tape IS the instruction list
+  assert (match (flatMachine).run (duelInit (WasmCore.Duel.duelOpModule Op.i32add))
+      (bodyOf (WasmCore.Duel.duelOpModule Op.i32add)) with
+      | some s => s.stack == [Val.i64 4294967294]
       | none => false)
-    "the flat machine's arith run drifted"
+    "the flat machine's generated op run drifted"
   -- the trap row: the machine REFUSES (none) and the LEDGER keeps the
   -- trap — the witness is data, never laundered into a state
   assert (match machineRun WasmCore.Duel.trapModule with
@@ -1384,8 +1478,9 @@ def machineProp : Tape → CheckResult := fun _ => do
       | _ => false)
     "the trap verdict's witness drifted"
   -- the fuel honesty: budget 0 is the honest UNKNOWN, never a verdict
-  assert (match outcomeVerdict (execList WasmCore.Duel.arithModule 0 (duelInit WasmCore.Duel.arithModule)
-      (bodyOf WasmCore.Duel.arithModule)) with
+  assert (match outcomeVerdict (execList (WasmCore.Duel.duelOpModule Op.i32add) 0
+      (duelInit (WasmCore.Duel.duelOpModule Op.i32add))
+      (bodyOf (WasmCore.Duel.duelOpModule Op.i32add))) with
       | ExecVerdict.unknownFuel => true
       | _ => false)
     "the zero-budget verdict laundered"
@@ -1402,25 +1497,26 @@ def machineNegTrapLaundered : Tape → CheckResult := fun _ =>
 /-- The budget exhaustion claimed as a REFUTATION — the trichotomy's
     laundering (01-core §3: exhaustion is UNKNOWN, never a verdict). -/
 def machineNegFuelVerdict : Tape → CheckResult := fun _ =>
-  assert (match outcomeVerdict (execList WasmCore.Duel.arithModule 0 (duelInit WasmCore.Duel.arithModule)
-      (bodyOf WasmCore.Duel.arithModule)) with
+  assert (match outcomeVerdict (execList (WasmCore.Duel.duelOpModule Op.i32add) 0
+      (duelInit (WasmCore.Duel.duelOpModule Op.i32add))
+      (bodyOf (WasmCore.Duel.duelOpModule Op.i32add))) with
       | ExecVerdict.refuted _ => true | _ => false)
     "control fired: the budget exhaustion became a refutation"
 
 /-- The machine face drifted off the committed duel row (a wrong
     value accepted). -/
 def machineNegDuelDrift : Tape → CheckResult := fun _ =>
-  assert (match machineRun WasmCore.Duel.arithModule with
-      | some s => WasmCore.Duel.resultNote s.stack == "i64:43"
+  assert (match machineRun (WasmCore.Duel.duelOpModule Op.i32add) with
+      | some s => WasmCore.Duel.resultNote s.stack == "i64:4294967295"
       | none => false)
     "control fired: the drifted duel face was accepted"
 
 /-- The run tie blunted: a TRUNCATED tape still tying — the witness
     discipline's negative control. -/
 def machineNegShortTape : Tape → CheckResult := fun _ =>
-  assert (match (flatMachine).run (duelInit WasmCore.Duel.arithModule)
-      (bodyOf WasmCore.Duel.arithModule).dropLast with
-      | some s => s.stack == [Val.i64 42]
+  assert (match (flatMachine).run (duelInit (WasmCore.Duel.duelOpModule Op.i32add))
+      (bodyOf (WasmCore.Duel.duelOpModule Op.i32add)).dropLast with
+      | some s => s.stack == [Val.i64 4294967294]
       | none => false)
     "control fired: the truncated tape still tied"
 
@@ -1451,5 +1547,6 @@ def main : IO UInt32 :=
     , ("WasmCore.Exec/calls", [execCallSpec])
     , ("WasmCore.Exec/indirect", [indirectSpec, indirectTeethSpec])
     , ("WasmCore.Exec/type-safety", [typeSafetyTeethSpec])
+    , ("WasmCore.Profile", [profileSpec])
     , ("WasmCore.Duel", [duelSpec])
     , ("WasmCore.ExecMachine", [machineSpec]) ]

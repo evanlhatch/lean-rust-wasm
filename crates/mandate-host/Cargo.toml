@@ -9,6 +9,12 @@ license = "MIT OR Apache-2.0"
 # of SchemaCore's journal codec (the journal written on the component's
 # effects; the full lifecycle integration is a later order).
 mandate-delta = { path = "../mandate-delta" }
+# THE WASMI LEG (D1): the wasmi standalone runtime — the shared
+# deterministic profile's reader + the three-way duel's third engine.
+# The profile is parsed ONCE here (this crate's wasmtime applier and
+# mandate-rt's wasmi applier consume the SAME parsed value — never two
+# hand-synced configs).
+mandate-rt = { path = "../mandate-rt" }
 # The ATOM codec's single home (the generated crate, byte-tied to
 # SchemaCore.Codec by the gates + the duel vectors): the commit duel
 # decodes the Lean-emitted proposal vectors through IT, never a

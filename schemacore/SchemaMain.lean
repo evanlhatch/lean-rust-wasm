@@ -26,6 +26,7 @@ half), not a gate.
 import Lean
 import SchemaCore
 import SchemaCore.Emit.Witness
+import SchemaCore.Emit.Bench
 
 open SchemaCore
 
@@ -64,7 +65,16 @@ unsafe def main : IO UInt32 := do
        -- the TYPESCRIPT lane (the SECOND CodeTarget row — the JSON
        -- interop face's artifact rides the same regen + byte-tie)
        (SchemaCore.Emit.Ts.tsEmitter, r.reg),
-       (SchemaCore.Emit.Rust.commitSliceEmitter, r.reg)]
+       (SchemaCore.Emit.Rust.commitSliceEmitter, r.reg),
+       -- the FUZZ lane (wave-30 C3 — the contracts→fuzz face: the
+       -- generated Arbitrary face + the boundary properties, the same
+       -- regen + byte-tie)
+       (SchemaCore.Emit.Fuzz.fuzzGenEmitter, r.reg),
+       -- the BENCH/E2E lane (wave-30 C2 — the bench face: the codec
+       -- round-trip bench + the commit-path bench + the e2e
+       -- validator, the manifests the consumer contract's one copy;
+       -- the same regen + byte-tie)
+       (SchemaCore.Emit.Bench.benchEmitter, r.reg)]
       (fun _ f =>
         pure { items := r.reg.items.length, contentHash := f.contents.hash })
     -- The WITNESS REGISTRY's write (the producer face's table — the

@@ -914,6 +914,69 @@ def duelSpec (duelOk : Bool) : Spec :=
             "control fired: the duel verdict collapsed a divergence into agreement") ]
     4 42
 
+/-- The bench discipline's pins (wave-30 C2): the THRESHOLD verdict's
+    tier ladder + the manifest rows (the pair lives in the shape). -/
+def benchFaceSpec : Spec :=
+  Spec.ofList "Kit.Duel — the bench pair + threshold pins"
+    (fun _ => do
+      -- the tier ladder's known answers (per-mille ratios)
+      assert (decide (Kit.Duel.benchVerdict 1000 1000 .noise = .parity))
+        "bench.parityAtBaseline"
+      assert (decide (Kit.Duel.benchVerdict 1000 1000 .fivePct = .parity))
+        "bench.parityAtBaselineFivePct"
+      assert (decide (Kit.Duel.benchVerdict 1020 1000 .noise = .withinNoise))
+        "bench.noiseCeilingAccepts"
+      assert (decide (Kit.Duel.benchVerdict 1050 1000 .fivePct = .within5))
+        "bench.fivePctCeilingAccepts"
+      assert
+        (match Kit.Duel.benchVerdict 1021 1000 .noise with
+          | .beyond p => p == 1021 | _ => false)
+        "bench.noiseCeilingBeyondNamesRatio"
+      assert (decide (Kit.Duel.benchVerdict 1051 1000 .fivePct = .beyond 1051))
+        "bench.fivePctCeilingBeyond"
+      -- THE NEGATIVE CONTROLS: the faster-candidate face is parity
+      -- (never a regression), the floored ratio never hides a drift,
+      -- the degenerate zero baseline never fabricates a verdict tier.
+      assert (decide (Kit.Duel.benchVerdict 999 1000 .noise = .parity))
+        "bench.fasterIsParity"
+      assert
+        (match Kit.Duel.benchVerdict 9999999 10000000 .fivePct with
+          | .parity => true | _ => false)
+        "bench.floorRoundsTowardRegression"
+      assert (decide (Kit.Duel.BenchVerdict.permilleRatio 5 0 = 0))
+        "bench.zeroBaselineDegenerate"
+      assert (decide (Kit.Duel.benchVerdict 5 0 .noise = .parity))
+        "bench.zeroBaselineNeverFabricates"
+      -- the verdict LINE names the pair (a lone number is telemetry)
+      assert ((Kit.Duel.BenchVerdict.render 412 405 .withinNoise).contains
+        "candidate 412ns/op vs baseline 405ns/op")
+        "bench.verdictLineNamesPair"
+      -- the manifest rows: the generator provenance + the bench row's
+      -- seven columns (the consumer contract's data)
+      let bs : Kit.Duel.BenchSpec :=
+        { name := "codec-round-trip", candidate := "generated codec"
+        , baseline := "hand Vec", seed := 42, rows := 64
+        , threshold := .fivePct, note := "the wire's round trip" }
+      assert ((Kit.Duel.benchManifestRows "KitTests" [bs]).contains
+        "generator\tKitTests")
+        "bench.manifestNamesGenerator"
+      assert ((Kit.Duel.benchManifestRows "KitTests" [bs]).contains
+        "bench\tcodec-round-trip\tgenerated codec\thand Vec\t42\t64\twithin-5%")
+        "bench.manifestRowShape")
+    [ ("the sabotaged ladder agrees",
+        fun _ =>
+          assert (decide (Kit.Duel.benchVerdict 1051 1000 .fivePct = .within5))
+            "control fired: the ladder collapsed a beyond-5% ratio into the band")
+    , ("the one-sided pair's row parses",
+        fun _ =>
+          -- a spec missing its baseline renders a 6-column row; the
+          -- consumer walk splits on the tab and requires 7 — the
+          -- one-sided pair REFUSES (the assert fires on the malformed
+          -- row's column count)
+          assert (((("bench\tname\tcand\t".splitOn "\t").length == 7)))
+            "control fired: the one-sided pair's 6-column row parsed as a bench row") ]
+    4 42
+
 def diagSuggestSpec : Spec :=
   Spec.ofList "Kit.Diag / Suggest — the error-surface pins"
     (fun _ => do
@@ -3252,7 +3315,7 @@ def main : IO UInt32 := do
     CodeRegistry.parse (← IO.FS.readFile "notes/code-registry.txt")
   -- the Kit.Cli driver's IO half (the emitSpec pattern): the unknown
   -- subcommand's curated exit + the help faces
-  let cliDriverOk ← KitTests.Cli.cliDriverPins
+  let cliDriverOk ← cliDriverPins
   TestingKit.mainOfSuites
     [ ("Kit.Correspondence", [correspondenceSpec])
     , ("Kit.Obligation", [obligationSpec])
@@ -3262,6 +3325,7 @@ def main : IO UInt32 := do
     , ("Kit.Emit binary lane", [emitBinarySpec binaryOk])
     , ("Kit.Ledger", [ledgerSpec ledgerRows])
     , ("Kit.Duel", [duelSpec duelOk])
+    , ("Kit.Duel bench", [benchFaceSpec])
     , ("Kit.Diag/Suggest", [diagSuggestSpec])
     , ("Kit.CodeRegistry", [codeRegistrySpec])
     , ("Kit.CodeRegistry coverage", [codeCoverageSpec committedCodeRegistry])

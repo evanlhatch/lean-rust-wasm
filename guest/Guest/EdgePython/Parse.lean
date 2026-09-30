@@ -22,13 +22,17 @@ over the SAME combinators, fuel-bounded total. The fuel is a model
 artifact (every recursive hop consumes input); exhaustion is a parse
 refusal, never divergence.
 
-## The accepted language (the honest fragment)
+## The accepted language (the honest fragment — E6's productive face)
 
 Modules of `def f(x, y):` functions; statements `return e`, `x = e`,
-`if c:` / `else:`, `while c:` with INDENTED block bodies (spaces only —
-a tab is a refusal), blank lines free; expressions `+ - *`, `<`, `==`,
-integer literals, `True`/`False`, calls, parens. Whitespace BETWEEN
-tokens = spaces (no line continuations); expressions are single-line.
+`if c:` / `else:`, `while c:`, `for x in xs:` with INDENTED block bodies
+(spaces only — a tab is a refusal), blank lines free; expressions with
+the FULL precedence ladder `or < and < not < cmp < add < mul < unary -
+< postfix-index < atom`: `+ - *`, `< <= > >= == !=`, `and or not`,
+unary minus, integer literals, `True`/`False`, tuple literals
+`(a, b, …)`, list literals `[a, b, …]`, constant index `t[i]`, calls,
+parens. Whitespace BETWEEN tokens = spaces (no line continuations);
+expressions are single-line.
 
 NO ROUND-TRIP LAW: the legacy lane has NO printer for the Py surface
 (it compiled straight to the WAT AST), so the round-trip law's
@@ -37,9 +41,10 @@ printer would carry the `Wit.Parse`-style law pair).
 
 The parse-time refusals keep their teeth: trailing bytes
 (`parseProgram`'s full-consumption check), the keyword reservations
-(`if`/`else`/`while`/`def`/`return`/`True`/`False` are not identifiers),
-and the excluded operators (`>`/`<=`/`>=`/`!=`/unary minus) fail loudly
-at the statement level.
+(`if`/`else`/`while`/`for`/`in`/`and`/`or`/`not`/`def`/`return`/
+`True`/`False` are not identifiers — the `kw` combinator's word
+boundary: a keyword PREFIX of an identifier (`ifx`) is an identifier),
+and the excluded forms (strings, `%`, augmented assignment) fail loudly.
 
 The five questions (notes/v3/01-core.md):
 
@@ -90,7 +95,17 @@ def blanks : GParser Unit := do
 /-- The reserved words — never identifiers (the parse refusals'
     positive face). -/
 def keywords : List String :=
-  ["def", "return", "if", "else", "while", "True", "False"]
+  ["def", "return", "if", "else", "while", "for", "in",
+   "and", "or", "not", "True", "False"]
+
+/-- The KEYWORD token: the literal + the word boundary — the next
+    character must not be an identifier char (`ifx` is an identifier;
+    `tok` alone is a plain prefix match and would split it). -/
+def kw (s : String) : GParser Unit := do
+  let _t ← tok s
+  match ← peek with
+  | some c => if TextKit.isIdentChar c then failure else pure ()
+  | none => pure ()
 
 /-- An identifier: alpha head, ident-chars after, NOT a keyword. -/
 def identP : GParser String := label "identifier" do
@@ -99,8 +114,10 @@ def identP : GParser String := label "identifier" do
   let s := String.ofList (c :: cs)
   if keywords.contains s then failure else pure s
 
-/-- An integer literal: one-or-more digits (the legacy's NONNEGATIVE
-    literal discipline; negatives arise as values via `0 - n`). -/
+/-- An integer literal: one-or-more digits (the machine's face:
+    literals at/above 2^64 refuse at CHECK — the model's face is
+    Python's unbounded literal, the compiled surface's is the u64
+    ring). -/
 def natP : GParser Nat := label "integer" do
   let ds ← some (satisfy "digit" Char.isDigit)
   pure (ds.foldl (fun a d => a * 10 + (d.toNat - '0'.toNat)) 0)
@@ -118,25 +135,76 @@ def nextIs (s : String) : GParser Bool :=
     lookAhead (tok s) >>= fun _ => pure true)
   <|> pure false
 
-/-! ## The expression grammar (the precedence ladder) -/
+/-- The comma separator (with the surrounding spaces). -/
+def commaP : GParser Unit := do
+  let _c1 ← ws
+  let _comma ← tok ","
+  let _c2 ← ws
+  pure ()
+
+/-! ## The expression grammar (the precedence ladder — the FULL set) -/
 
 mutual
-/-- comparison level: `add (`<`|`==`) add` — ONLY the two rows the
-    IR's op surface supports (the frozen Binop set; `>`/`<=`/`>=`/`!=`
-    refuse). -/
+/-- or level: `and (`or` and)…` left-folded (the lowest precedence). -/
+def orP : Nat → GParser Expr
+  | 0 => failure
+  | fuel+1 => do
+      let l ← andP fuel
+      let rs ← many do
+        let _o ← kw "or"
+        let _w ← ws
+        let r ← andP fuel
+        GParser.result r
+      pure (rs.foldl (fun acc r => .bin .or acc r) l)
+
+/-- and level: `not (`and` not)…` left-folded. -/
+def andP : Nat → GParser Expr
+  | 0 => failure
+  | fuel+1 => do
+      let l ← notP fuel
+      let rs ← many do
+        let _o ← kw "and"
+        let _w ← ws
+        let r ← notP fuel
+        GParser.result r
+      pure (rs.foldl (fun acc r => .bin .and acc r) l)
+
+/-- not level: `not not | cmp` (binds tighter than `and`/`or`). -/
+def notP : Nat → GParser Expr
+  | 0 => failure
+  | fuel+1 =>
+      (do
+        let _o ← kw "not"
+        let _w ← ws
+        let e ← notP fuel
+        GParser.result (.un .not e))
+      <|> cmpP fuel
+
+/-- comparison level: ONE optional compare over add (no chaining —
+    Python's `a < b < c` is the named exclusion). The LONGER tokens
+    (`<=` `>=` `!=` `==`) try before the bare `<` `>` — `tok` is a
+    plain prefix match. -/
 def cmpP : Nat → GParser Expr
   | 0 => failure
   | fuel+1 => do
       let l ← addP fuel
       let cmp? ← TextKit.optional do
-        let op ← (tok "==" <|> tok "<")
+        let op ← (tok "==" <|> tok "!=" <|> tok "<=" <|> tok ">="
+                  <|> tok "<" <|> tok ">")
         let _w ← ws
         let r ← addP fuel
         GParser.result (op, r)
       match cmp? with
       | Option.none => GParser.result l
       | Option.some (op, r) =>
-          GParser.result (.cmp (if op == "==" then .eq else .lt) l r)
+          let cop : CmpOp :=
+            if op == "==" then .eq
+            else if op == "!=" then .ne
+            else if op == "<=" then .le
+            else if op == ">=" then .ge
+            else if op == "<" then .lt
+            else .gt
+          GParser.result (.cmp cop l r)
 
 /-- addition level: `mul (+|-) mul …` left-folded. -/
 def addP : Nat → GParser Expr
@@ -157,15 +225,45 @@ def addP : Nat → GParser Expr
 def mulP : Nat → GParser Expr
   | 0 => failure
   | fuel+1 => do
-      let l ← atomP fuel
+      let l ← unaryP fuel
       let rs ← many do
         let _op ← tok "*"
         let _w ← ws
-        let r ← atomP fuel
+        let r ← unaryP fuel
         GParser.result r
       pure (rs.foldl (fun acc r => .bin .mul acc r) l)
 
-/-- the atom: literal | True | False | call | var | parens. -/
+/-- unary minus level: `- unary` → `0 - e` (the machine ring's
+    spelling; binds tighter than `*`). -/
+def unaryP : Nat → GParser Expr
+  | 0 => failure
+  | fuel+1 =>
+      (do
+        let _o ← tok "-"
+        let _w ← ws
+        let e ← unaryP fuel
+        GParser.result (.un .neg e))
+      <|> postfixP fuel
+
+/-- postfix level: the atom + the index suffixes `t[i]` (the checker
+    pins `i` to an int literal). -/
+def postfixP : Nat → GParser Expr
+  | 0 => failure
+  | fuel+1 => do
+      let a ← atomP fuel
+      let ixs ← many do
+        let _o ← tok "["
+        let _w ← ws
+        let i ← exprP fuel
+        let _w2 ← ws
+        let _c ← tok "]"
+        let _w3 ← ws
+        GParser.result i
+      pure (ixs.foldl (fun acc i => .idx acc i) a)
+
+/-- the atom: literal | True | False | tuple | list | call | var |
+    parens. The tuple's face: `(e)` is the paren expression, `(e, …)`
+    the tuple (a SINGLETON tuple refuses — the named simplification). -/
 def atomP : Nat → GParser Expr
   | 0 => failure
   | fuel+1 =>
@@ -174,23 +272,45 @@ def atomP : Nat → GParser Expr
         let _w ← ws
         GParser.result (.int n))
       <|> (do
-        let _t ← tok "True"
+        let _t ← kw "True"
         let _w ← ws
         GParser.result (.boolV true))
       <|> (do
-        let _t ← tok "False"
+        let _t ← kw "False"
         let _w ← ws
         GParser.result (.boolV false))
+      <|> (do
+        let _o ← tok "["
+        let _w ← ws
+        let es ← sepBy (exprP fuel) commaP
+        let _w2 ← ws
+        let _c ← tok "]"
+        let _w3 ← ws
+        GParser.result (.listLit es))
+      <|> (do
+        let _o ← tok "("
+        let _w ← ws
+        let e1 ← exprP fuel
+        let _w2 ← ws
+        (do
+          let _c ← tok ")"
+          let _w3 ← ws
+          GParser.result e1)
+        <|> (do
+          let _comma ← tok ","
+          let _w4 ← ws
+          let es ← sepBy (exprP fuel) commaP
+          let _w5 ← ws
+          let _c ← tok ")"
+          let _w6 ← ws
+          if es.isEmpty then failure else  -- the singleton-tuple refusal
+            GParser.result (.tup (e1 :: es))))
       <|> (do
         let f ← identP
         let _w ← ws
         let _o ← tok "("
         let _w2 ← ws
-        let args ← sepBy (exprP fuel) (do
-          let _c1 ← ws
-          let _comma ← tok ","
-          let _c2 ← ws
-          pure ())
+        let args ← sepBy (exprP fuel) commaP
         let _w3 ← ws
         let _c ← tok ")"
         let _w4 ← ws
@@ -199,21 +319,13 @@ def atomP : Nat → GParser Expr
         let x ← identP
         let _w ← ws
         GParser.result (.var x))
-      <|> (do
-        let _o ← tok "("
-        let _w1 ← ws
-        let e ← exprP fuel
-        let _w2 ← ws
-        let _c ← tok ")"
-        let _w3 ← ws
-        GParser.result e)
 
 /-- the expression entry (the ladder's top; a mutual member so `atomP`
     can call it — the explicit match arms give the termination
     inference its latching point). -/
 def exprP : Nat → GParser Expr
   | 0 => failure
-  | fuel+1 => cmpP fuel
+  | fuel+1 => orP fuel
 end
 
 /-! ## The statement/block zone (the guarded hand zone — the
@@ -228,13 +340,13 @@ def stmtP (col : Nat) : Nat → GParser Stmt
   | 0 => failure
   | fuel+1 =>
       (do
-        let _k ← tok "return"
+        let _k ← kw "return"
         let _w ← ws
         let e ← exprP fuel
         let _e ← eol
         GParser.result (.ret e))
       <|> (do
-        let _k ← tok "if"
+        let _k ← kw "if"
         let _w ← ws
         let c ← exprP fuel
         let _w2 ← ws
@@ -244,7 +356,7 @@ def stmtP (col : Nat) : Nat → GParser Stmt
         let elseB ← optElse col fuel
         GParser.result (.ifelse c thenB elseB))
       <|> (do
-        let _k ← tok "while"
+        let _k ← kw "while"
         let _w ← ws
         let c ← exprP fuel
         let _w2 ← ws
@@ -252,6 +364,19 @@ def stmtP (col : Nat) : Nat → GParser Stmt
         let _n ← nl
         let body ← blockP col fuel
         GParser.result (.while c body))
+      <|> (do
+        let _k ← kw "for"
+        let _w ← ws
+        let x ← identP
+        let _w2 ← ws
+        let _in ← kw "in"
+        let _w3 ← ws
+        let xs ← exprP fuel
+        let _w4 ← ws
+        let _co ← tok ":"
+        let _n ← nl
+        let body ← blockP col fuel
+        GParser.result (.forIn x xs body))
       <|> (do
         let x ← identP
         let _w ← ws
@@ -271,7 +396,7 @@ def optElse (col : Nat) : Nat → GParser (List Stmt)
         let c ← peekIndent
         if c == col then pure () else failure
         let _w ← ws
-        let _e ← tok "else"
+        let _e ← kw "else"
         let _w2 ← ws
         let _co ← tok ":"
         let _n ← nl
@@ -312,17 +437,13 @@ end
 def funcP : Nat → GParser Fn
   | 0 => failure
   | fuel+1 => do
-      let _k ← tok "def"
+      let _k ← kw "def"
       let _w ← ws
       let name ← identP
       let _w2 ← ws
       let _o ← tok "("
       let _w3 ← ws
-      let params ← sepBy identP (do
-        let _c1 ← ws
-        let _comma ← tok ","
-        let _c2 ← ws
-        pure ())
+      let params ← sepBy identP commaP
       let _w4 ← ws
       let _c ← tok ")"
       let _w5 ← ws

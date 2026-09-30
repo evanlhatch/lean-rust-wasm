@@ -30,14 +30,6 @@ import Gates
 
 open Lean LintKit
 
-/-- The CLI surface: lint flags + module roots (`none` = the gated
-packages, the table's fold) + the child dispatch (`--package=<dir>`:
-one gated package, the shard's own process). -/
-private structure Cli where
-  cfg : DriverConfig
-  mods : Option (Array Name)
-  pkg : Option String
-
 /-- The gated source mounts, DERIVED from Gates.Packages' table (the
 single source — never a parallel copy; `gates packages-check` guards
 the table against the lakefile both directions). -/
@@ -45,41 +37,46 @@ def Cli.defaultSrcRoots : Array (Name × String) :=
   (Gates.gatedPackages.toList.flatMap fun p =>
     p.roots.toList.map fun r => (r, p.srcDir)).toArray
 
-def Cli.parse (args : List String) : Cli := Id.run do
+/-- The CLI surface: lint flags + module roots (`none` = the gated
+packages, the table's fold) + the child dispatch (`--package=<dir>`:
+one gated package, the shard's own process). The PARSE is Kit.Cli's
+(C7's one driver): the shared `--package` + the lint extras; an
+unknown `--…` token refuses through the closed-world Diag (the
+did-you-mean — the old parse silently swallowed it as a module name). -/
+def Cli.parse (args : List String) :
+    Except Kit.Diag (DriverConfig × Option (Array Name) × Option String) := do
+  let f ← Kit.Cli.parseFlags ["disable", "enable", "extra-prefix", "src-root"] args
   let mut cfg : DriverConfig := { srcRoots := Cli.defaultSrcRoots }
-  let mut mods : Array Name := #[]
-  let mut pkg : Option String := none
-  for a in args do
-    if let some n := a.dropPrefix? "--disable=" then
-      cfg := { cfg with overrides := cfg.overrides.insert n.toString.toName false }
-    else if let some n := a.dropPrefix? "--enable=" then
-      cfg := { cfg with overrides := cfg.overrides.insert n.toString.toName true }
-    else if let some p := a.dropPrefix? "--extra-prefix=" then
-      cfg := { cfg with extraPrefixes :=
-        if cfg.extraPrefixes.isEmpty then p.toString
-        else cfg.extraPrefixes ++ "," ++ p.toString }
-    else if let some d := a.dropPrefix? "--package=" then
-      pkg := some d.toString
-    else if let some rs := a.dropPrefix? "--src-root=" then
-      -- repeatable `--src-root=<module-root>=<dir>`: extra source mounts
-      -- for the text lints (non-gated roots linted by hand)
-      match rs.toString.splitOn "=" with
-      | [r, dir] => cfg := { cfg with srcRoots := cfg.srcRoots.push (r.toName, dir) }
-      | _ => pure ()  -- malformed flag: ignored (the usage line documents the shape)
-    else
-      mods := mods.push a.toName
-  let roots := if mods.isEmpty then none else some mods
-  return { cfg, mods := roots, pkg := pkg }
+  -- the repeatable `--src-root=<module-root>=<dir>`: extra source mounts
+  -- for the text lints (non-gated roots linted by hand)
+  for rs in f.all "src-root" do
+    match rs.splitOn "=" with
+    | [r, d] => cfg := { cfg with srcRoots := cfg.srcRoots.push (r.toName, d) }
+    | _ => pure ()  -- malformed: ignored (the usage line documents the shape)
+  for n in f.all "disable" do
+    cfg := { cfg with overrides := cfg.overrides.insert n.toName false }
+  for n in f.all "enable" do
+    cfg := { cfg with overrides := cfg.overrides.insert n.toName true }
+  for p in f.all "extra-prefix" do
+    cfg := { cfg with extraPrefixes :=
+      if cfg.extraPrefixes.isEmpty then p
+      else cfg.extraPrefixes ++ "," ++ p }
+  let mods := if f.rest.isEmpty then none else some (f.rest.map (·.toName)).toArray
+  return (cfg, mods, f.pkg)
 
 -- The one-package lint fold (the shard body) is `LintKit.lintShard`
 -- (Runner) — shared verbatim with the lint gate row (`Gates.Lint`); the
 -- explicit mode's fold below is its roots-generalization, kept there.
 
 unsafe def main (args : List String) : IO UInt32 := do
-  let parsed := Cli.parse args
-  let cfg := parsed.cfg
+  let (cfg, mods, pkg) ←
+    match Cli.parse args with
+    | .error d =>
+        IO.eprintln (Kit.Diag.toString d)
+        return 1
+    | .ok p => pure p
   LintKit.initLintSearchPath
-  match parsed.pkg with
+  match pkg with
   | some dir =>
       -- THE SHARD: one gated package, this process's ONLY env (the
       -- runAll/per-gate RSS discipline: libgc's conservative stack scan
@@ -100,7 +97,7 @@ unsafe def main (args : List String) : IO UInt32 := do
               let mods := String.intercalate " " (pkg.roots.map toString).toList
               return if ← LintKit.lintShard s!"{pkg.dir} ({mods})" pkg.roots cfg env
                 then 1 else 0
-  | none => match parsed.mods with
+  | none => match mods with
   | some mods =>
       -- the explicit mode: ONE env over the given modules (the caller's
       -- own scope; a cross-package decl-name collision refuses loudly —

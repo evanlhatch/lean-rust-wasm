@@ -36,3 +36,14 @@ description = "Host-side persistence for SchemaCore's delta/journal model: appen
 schema-generated = { path = "../schema-generated" }
 
 [dev-dependencies]
+# The bench face (wave-30 C2): divan + mimalloc — the flatland
+# invariants (harness = false, the pair shares ONE allocator). The
+# commit-path bench's profiled seam is NAMED in the bench file (the
+# delta crate has no fast-observe dep yet). On-demand (`just bench`),
+# never CI — CI runs the e2e validator.
+divan = "0.1"
+mimalloc = "0.1"
+
+[[bench]]
+name = "commit_path"
+harness = false

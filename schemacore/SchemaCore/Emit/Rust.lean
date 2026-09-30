@@ -349,10 +349,11 @@ pub fn dec_byte(bs: &mut &[u8]) -> Result<u8, CodecError> {
     Ok(b)
 }
 
-/// The canonical minimal varint: a continuation group whose remaining
-/// value is zero refuses (0x80 0x00 is NEVER accepted); beyond 10
-/// groups the value refuses (see the header note — Lean's unbounded-Nat
-/// decoder refuses the same bytes downstream).
+/// The canonical minimal varint: the FINAL group's payload zero in a
+/// multi-group form refuses (0x80 0x00, 0x80 0x81 0x00 — any redundant
+/// trailing zero group — NEVER accepted); beyond 10 groups the value
+/// refuses (see the header note — Lean's unbounded-Nat decoder refuses
+/// the same bytes downstream).
 #[rustfmt::skip]
 pub fn dec_varint(bs: &mut &[u8]) -> Result<u128, CodecError> {
     let mut result: u128 = 0;
@@ -364,7 +365,7 @@ pub fn dec_varint(bs: &mut &[u8]) -> Result<u128, CodecError> {
         let b = dec_byte(bs)?;
         result |= ((b & 0x7f) as u128) << (7 * groups);
         if b < 128 {
-            if groups > 0 && (result >> 7) == 0 {
+            if groups > 0 && (b & 0x7f) == 0 {
                 return Err(CodecError::NonCanonicalVarint);
             }
             return Ok(result);

@@ -151,6 +151,18 @@ def allOps : List Op :=
 def allMems : List MemOp :=
   [.i32load8u, .i32load, .i64load, .i32store, .i64store, .i32store8, .i64store8]
 
+/-- THE EXHAUSTIVENESS TOOTH (07-extensibility R6's duel face — C6's
+    generated rows fold THESE lists): a new `Op` ctor missing from
+    `allOps` is a BUILD FAILURE here, and the duel's generated family
+    (`WasmCore.Duel.duelOpFamily`) rides the list — an op outside it
+    gets no duel vector, so the list's completeness IS the coverage
+    guarantee. -/
+theorem allOps_complete : ∀ o : Op, o ∈ allOps := by
+  intro o; cases o <;> simp [allOps]
+
+theorem allMems_complete : ∀ m : MemOp, m ∈ allMems := by
+  intro m; cases m <;> simp [allMems]
+
 /-- The op spellings are pairwise distinct (the closed table's
     decide-level pin — the decode's uniqueness face). -/
 theorem opName_inj : ∀ (o o' : Op), opName o = opName o' → o = o' := by

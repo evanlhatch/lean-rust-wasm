@@ -66,25 +66,32 @@ fn retarget(scratch_gen: &Path, path: &str, new: &str) {
 fn the_duel_agrees() {
     let report = run_duel(&mandate_host::repo_gen_dir()).expect("the duel runs");
     assert_eq!(report.generator, "WasmCore.Duel");
-    assert_eq!(report.rows.len(), 6, "the slice + 4 family + the control");
+    // 1 slice + 19 generated op rows + 7 mem + 7 mem-trap + 3
+    // scenarios + 1 invalid control = 38.
+    assert_eq!(report.rows.len(), 38, "the slice + 33 generated + 3 scenarios + the control");
     for row in &report.rows {
         assert!(matches!(row.verdict, RowVerdict::Agree), "{:?}", row);
     }
-    // The rows' identities, in order (the manifest's shape).
+    // The rows' identities, in order (the manifest's shape): the seed,
+    // then the op-table fold's rows (allOps order, then the mem rows'
+    // normal + trap pairs), then the scenarios, the control last.
     let names: Vec<&str> = report.rows.iter().map(|r| r.path.as_str()).collect();
-    assert_eq!(names, [
-        "gen/wasm-duel/slice.wasm",
-        "gen/wasm-duel/arith.wasm",
-        "gen/wasm-duel/control.wasm",
-        "gen/wasm-duel/memory.wasm",
-        "gen/wasm-duel/trap.wasm",
-        "gen/wasm-duel/invalid.wasm",
-    ]);
+    assert_eq!(names[0], "gen/wasm-duel/op-i64.add.wasm");
+    assert_eq!(names[18], "gen/wasm-duel/op-i64.extend_i32_u.wasm");
+    assert_eq!(names[19], "gen/wasm-duel/mem-i32.load8_u.wasm");
+    assert_eq!(names[25], "gen/wasm-duel/mem-i64.store8.wasm");
+    assert_eq!(names[26], "gen/wasm-duel/trap-mem-i32.load8_u.wasm");
+    assert_eq!(names[32], "gen/wasm-duel/trap-mem-i64.store8.wasm");
+    assert_eq!(names[33], "gen/wasm-duel/slice.wasm");
+    assert_eq!(names[34], "gen/wasm-duel/control.wasm");
+    assert_eq!(names[35], "gen/wasm-duel/memory.wasm");
+    assert_eq!(names[36], "gen/wasm-duel/trap.wasm");
+    assert_eq!(names[37], "gen/wasm-duel/invalid.wasm");
     // The expected vocabularies actually crossed (a duel whose rows
     // all collapsed to one kind would be vacuous coverage).
-    assert_eq!(report.rows[0].expectation, Expectation::Run("i64:42".into()));
-    assert_eq!(report.rows[4].expectation, Expectation::Trap);
-    assert_eq!(report.rows[5].expectation, Expectation::Refuse);
+    assert_eq!(report.rows[33].expectation, Expectation::Run("i64:42".into()));
+    assert_eq!(report.rows[36].expectation, Expectation::Trap);
+    assert_eq!(report.rows[37].expectation, Expectation::Refuse);
     // The fold: all-agree IS agree.
     assert_eq!(report.verdict(), RowVerdict::Agree);
     // THE TIER HONESTY: the report says TESTED AGREEMENT, never proof.
@@ -94,20 +101,20 @@ fn the_duel_agrees() {
 }
 
 /// TAMPER TOOTH (the deliberate-wrong-expectation control): the
-/// arithmetic row's committed expectation `run i64:42` doctored to 43
-/// — the host reports the DIVERGENCE with the witness: the row AND
-/// both values.
+/// GENERATED `op-i32.add` row's committed expectation
+/// `run i64:4294967294` doctored to 43 — the host reports the
+/// DIVERGENCE with the witness: the row AND both values.
 #[test]
 fn tampered_expectation_diverges_with_witness() {
     let gdir = scratch("tampered-expectation");
-    retarget(&gdir, "gen/wasm-duel/arith.wasm", "run i64:43");
+    retarget(&gdir, "gen/wasm-duel/op-i32.add.wasm", "run i64:43");
 
     let report = run_duel(&gdir).expect("the duel still runs");
     match report.verdict() {
         RowVerdict::Diverge { loc, lhs, rhs } => {
-            assert_eq!(loc, "gen/wasm-duel/arith.wasm");
+            assert_eq!(loc, "gen/wasm-duel/op-i32.add.wasm");
             assert_eq!(lhs, "run i64:43", "lhs names the tampered expectation");
-            assert_eq!(rhs, "i64:42", "rhs names the engine's true observation");
+            assert_eq!(rhs, "i64:4294967294", "rhs names the engine's true observation");
         }
         other => panic!("expected the divergence witness, got {other:?}"),
     }
@@ -180,7 +187,7 @@ fn run_expectation_against_a_refusal_diverges() {
 #[test]
 fn tampered_vector_refuses_on_the_sidecar_tie() {
     let gdir = scratch("tampered-vector");
-    let vp = gdir.join("wasm-duel").join("arith.wasm");
+    let vp = gdir.join("wasm-duel").join("op-i32.add.wasm");
     let mut wasm = fs::read(&vp).expect("read");
     let last = wasm.len() - 1;
     wasm[last] ^= 0xff;

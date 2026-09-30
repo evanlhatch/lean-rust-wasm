@@ -96,7 +96,8 @@ def gatedPackages : Array PkgSpec := #[
     -- acceptance fixture (a NEW lane = one row + one reader over the
     -- ONE log; the pair is LaneReg2 → LaneDemo2).
     roots := #[`KitTests.Main, `KitTests.Axioms, `KitTests.LaneReg,
-               `KitTests.LaneDemo, `KitTests.LaneReg2, `KitTests.LaneDemo2] },
+               `KitTests.LaneDemo, `KitTests.LaneReg2, `KitTests.LaneDemo2,
+               `KitTests.Cli] },
   { dir := "TextKit", srcDir := "textkit", roots := #[`TextKit] },
   { dir := "TestingKit", srcDir := "testingkit", roots := #[`TestingKit] },
   { dir := "LintKit", srcDir := "lintkit", roots := #[`LintKit] },

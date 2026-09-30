@@ -134,7 +134,10 @@ def memRow : MemOp → MemRow
       some "pop a (address), v (value); store v's 64 bits at ea = a + offset (trap if out of bounds)"⟩
   | .i32store8 => ⟨"i32.store8", 0x3A, 0, ([.i32, .i32], []), 1,
       some "pop a (address), v (value); store v's low 8 bits at ea = a + offset (trap if out of bounds)"⟩
-  | .i64store8 => ⟨"i64.store8", 0x3B, 0, ([.i64, .i32], []), 1,
+  -- i64.store8 is 0x3C (0x3B is i32.store16; 0x38/0x39 are f32/f64.store —
+  -- the duel byte-tie caught this row: the real engines decode
+  -- the byte; the AST-level executor cannot see it).
+  | .i64store8 => ⟨"i64.store8", 0x3C, 0, ([.i64, .i32], []), 1,
       some "pop a (address), v (value); store v's low 8 bits at ea = a + offset (trap if out of bounds)"⟩
 
 /-! ## The R6 pins (decide over the closed universe) -/

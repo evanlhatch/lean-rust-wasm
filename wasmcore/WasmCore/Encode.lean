@@ -81,6 +81,36 @@ def slebGo : Nat → Nat → List UInt8
     divides by 128; the `0`-quotient tail costs one extra group). -/
 def sleb (n : Nat) : List UInt8 := slebGo (n + 2) n
 
+/-- Signed LEB128 of an Int (possibly negative), on an explicit fuel
+    (each step shifts right by 7; a 64-bit two's-complement value
+    costs at most 10 groups). The stop condition emits the final group
+    when the remaining value fits a sign-extended 7-bit group. -/
+def slebIGo : Nat → Int → List UInt8
+  | 0, _ => []
+  | k + 1, v =>
+      if v ≥ -64 && v ≤ 63 then [(((v % 128) + 128) % 128).toNat.toUInt8]
+      else
+        -- the continuation group carries the 0x80 more-groups bit
+        let b := ((((v % 128) + 128) % 128) + 128).toNat.toUInt8
+        b :: slebIGo k ((v - ((b.toNat % 128) : Int)) / 128)
+
+/-- The signed encoder over Int: 12 groups bound any 64-bit value. -/
+def slebI (v : Int) : List UInt8 := slebIGo 12 v
+
+/-- The `i32.const` wire value: the AST's Nat carries the BIT PATTERN
+    (the executor wraps); the wire's immediate is the SIGNED 32-bit
+    two's-complement value — a pattern with the high bit set encodes
+    as its negative (the canonical form; wasmtime's decoder refuses
+    the unsigned reading with `integer too large`). -/
+def i32ConstWire (n : Nat) : Int :=
+  let w := n % 4294967296
+  if w < 2147483648 then w else w - 4294967296
+
+/-- The `i64.const` wire value (the same fold at 64 bits). -/
+def i64ConstWire (n : Nat) : Int :=
+  let w := n % 18446744073709551616
+  if w < 9223372036854775808 then w else w - 18446744073709551616
+
 /-! ## The wire maps (explicit arms — design doc R7) -/
 
 /-- The value types' byte codes. -/
@@ -100,8 +130,8 @@ def encodeFuncType (ft : FuncType) : List UInt8 :=
 mutual
 /-- ONE instruction → its bytes. Total, structural, explicit arms. -/
 def encodeInstr : Instr → List UInt8
-  | .i32const n => 0x41 :: sleb n
-  | .i64const n => 0x42 :: sleb n
+  | .i32const n => 0x41 :: slebI (i32ConstWire n)
+  | .i64const n => 0x42 :: slebI (i64ConstWire n)
   | .localget n => 0x20 :: encVarNat n
   | .localset n => 0x21 :: encVarNat n
   | .localtee n => 0x22 :: encVarNat n

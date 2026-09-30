@@ -1,0 +1,29 @@
+[package]
+name = "mandate-rt"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata.notes]
+scope = "the wasmi standalone runtime — the duel's third leg (D1); the deterministic profile's wasmi face"
+
+# THE DEPENDENCY DISPOSITION (D1's check-first rule): wasmi 2.0.0 and its
+# full transitive closure (wasmi_collections/wasmi_core/wasmi_ir 2.0.0,
+# wasmparser 0.228, spin 0.9, hashbrown 0.15, string-interner 0.19, libm
+# 0.2.16) are in the build env's cargo registry cache — offline builds
+# work (CARGO_NET_OFFLINE=true; the legacy workspace's Cargo.lock is the
+# version evidence).
+#
+# THE SIMD AXIS IS A FEATURE AXIS, NOT A CONFIG KNOB (WasmCore.Profile's
+# note): wasmi's simd support is this compile-time crate feature — the
+# deterministic profile carries `simd off`, and its ENFORCEMENT here is
+# the DEPENDENCY EDGE: default features do NOT enable simd, so the
+# engine CANNOT translate simd (check the lockfile, not the config).
+# Do not add `features = ["simd"]`.
+[dependencies]
+wasmi = "2.0"
+
+[dev-dependencies]
+# The three-way duel's fixtures read the COMMITTED duel vectors +
+# profile through the emit spine's consumer contract (no re-encode);
+# no serde needed — the profile is a line format.

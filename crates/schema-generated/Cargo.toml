@@ -22,6 +22,8 @@
 #   path as the name source). NIGHTLY: fast-observe is nightly-only —
 #   crates/rust-toolchain.toml pins the lane.
 # - `serde_json` (dev-only): the round-trip tests' JSON reader.
+# - dev-only fast-observe (feature `bench`) + mimalloc: the bench face
+#   (wave-30 C2) — see the dev-dependencies note below.
 #
 # The wire is SchemaCore.Codec's (Lean) — the differential over that wire
 # lives in tests/differential.rs.
@@ -54,3 +56,15 @@ serde_json = "1"
 # codec) is the dependency graph's honest shape: the tests consume
 # the contract, the codec stays the generated one.
 mandate-delta = { path = "../mandate-delta" }
+# The bench face (wave-30 C2): divan rides fast-observe's re-export
+# (feature `bench` implies `instant`; the attribute macro goes through
+# the `crate = fast_observe::bench::divan` option — divan is never a
+# direct dep of THIS crate); mimalloc = the flatland's allocator
+# invariant (the bench pair shares ONE allocator). On-demand
+# (`just bench`), never CI — CI runs the e2e validator.
+fast-observe = { path = "../../../fast-observe", features = ["bench"] }
+mimalloc = "0.1"
+
+[[bench]]
+name = "codec_round_trip"
+harness = false

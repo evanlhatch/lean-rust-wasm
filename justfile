@@ -25,6 +25,17 @@ rust:
 	cd crates/mandate-faults && cargo test
 	cd crates/mandate-host && cargo test
 
+# The bench face (wave-30 C2 — the flatland discipline: a bench is a
+# PAIR — candidate vs baseline, the same seeded inputs — with a
+# THRESHOLD verdict: parity/within-noise/within-5%; a lone number is
+# telemetry). ON-DEMAND, never CI: CI runs the e2e validator (the
+# determinism face — `just rust` runs it); the benches are the perf
+# face, run deliberately — shared-machine noise makes CI timing a
+# lie. Each bench prints the pair + the verdict line from its main.
+bench:
+	cd crates/schema-generated && cargo bench --bench codec_round_trip
+	cd crates/mandate-delta && cargo bench --bench commit_path
+
 # The linter driver over the gated roots (LintKit + Gates).
 lint:
 	lake exe lintkit

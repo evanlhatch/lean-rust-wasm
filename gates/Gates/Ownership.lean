@@ -65,6 +65,8 @@ import Gates.Packages
 import Gates.Common
 import SchemaCore
 import SchemaCore.Emit.Witness
+import SchemaCore.Emit.Fuzz
+import SchemaCore.Emit.Bench
 import WasmCore
 import Guest.Component
 import Faults
@@ -84,7 +86,13 @@ namespace Gates.Ownership
 def realEmitters : List (Kit.Emit.Emitter (DataRegistry Item)) :=
   [SchemaCore.witEmitter, SchemaCore.Emit.Rust.rustEmitter,
    SchemaCore.Emit.Ts.tsEmitter,
-   SchemaCore.Emit.Rust.commitSliceEmitter]
+   SchemaCore.Emit.Rust.commitSliceEmitter,
+   -- the fuzz lane's row (wave-30 C3): the generated Arbitrary face +
+   -- the boundary properties — the `just gen` write path's artifacts
+   SchemaCore.Emit.Fuzz.fuzzGenEmitter,
+   -- the bench/e2e lane's row (wave-30 C2): the two benches + the
+   -- validator + the manifests — the `just gen` write path's artifacts
+   SchemaCore.Emit.Bench.benchEmitter]
 
 /-- The SNAPSHOT writer (the universe snapshot's emitter row — the
     spec is the routed Universe since wave-30 A2: the snapshot covers

@@ -37,6 +37,12 @@ re-exported — this module re-exports by importing):
   trichotomy face, the witness/observer disciplines applied, and the
   duel's restatement as a machine simulation (`execSelfSim` + the
   carrier-as-graph bridge).
+- `WasmCore.Profile` — the deterministic profile AS DATA (D1): the ONE
+  profile table (fuel on, floats off, the memory axes off, the
+  simd feature axis off, lazy-translation pinned) both engines'
+  configs ride — the rendered rows committed through the duel
+  emitter's text lane (`gen/wasm-duel/profile.txt`), byte-tied by
+  `gates gen-check`.
 - `WasmCore.WitnessFragment` — the witness checker's guest-compile
   judgment (SchemaCore.Witness's follow-up order's substrate): the
   claim language's op surface judged op-by-op against the ONE op
@@ -65,6 +71,7 @@ import WasmCore.Encode
 import WasmCore.Wat
 import WasmCore.Slice
 import WasmCore.Exec
+import WasmCore.Profile
 import WasmCore.Duel
 import WasmCore.ExecMachine
 import WasmCore.WitnessFragment

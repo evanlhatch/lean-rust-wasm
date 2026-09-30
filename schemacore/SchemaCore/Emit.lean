@@ -101,6 +101,7 @@ import SchemaCore.Item
 import SchemaCore.Register
 import SchemaCore.Emit.Rust
 import SchemaCore.Emit.Ts
+import SchemaCore.Emit.Fuzz
 
 open Kit
 
@@ -362,7 +363,11 @@ def regenOfItems (items : List Item) : Except String Regen := do
     -- the COMMIT-SLICE consumer (the duel's Rust side, ONE emitter —
     -- never a golden rope crack; its byte-tie rides THIS files list,
     -- the gen-check compare — a mirror fix regens through here)
-    Emit.Rust.commitSliceEmitter.run reg
+    Emit.Rust.commitSliceEmitter.run reg ++
+    -- the FUZZ lane (wave-30 C3 — the contracts→fuzz face): the
+    -- generated Arbitrary face + the boundary properties, the same
+    -- ONE-regen rule (the writer `schema` + gen-check fold this list)
+    Emit.Fuzz.fuzzGenEmitter.run reg
   return { reg := reg, files := files }
 
 /-- The ONE regen semantics, over a replayed environment: route the ONE

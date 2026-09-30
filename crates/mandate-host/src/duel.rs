@@ -204,7 +204,7 @@ impl DuelReport {
 /// `<path>\t<expectation>` row per vector. The structural walk is the
 /// SHARED parser's (the manifest module — every duel lane consumes it);
 /// the expectation vocabulary is THIS lane's.
-fn parse_manifest(text: &str) -> Result<(String, Vec<(String, Expectation)>), HostError> {
+pub(crate) fn parse_manifest(text: &str) -> Result<(String, Vec<(String, Expectation)>), HostError> {
     let parsed = mandate_delta::parse_duel_manifest(text, Expectation::parse)
         .map_err(|e| HostError::DuelManifest(e.reason))?;
     Ok((
@@ -220,7 +220,7 @@ fn parse_manifest(text: &str) -> Result<(String, Vec<(String, Expectation)>), Ho
 /// Runs ONE module's exported function (`() -> i64`) in a fresh
 /// engine. The outcome is the engine's OBSERVATION — a value, the
 /// typed wasm trap, or a typed refusal — never a panic (12 §8).
-fn observe(wasm: &[u8]) -> Result<Result<i64, Trap>, HostError> {
+pub(crate) fn observe(wasm: &[u8]) -> Result<Result<i64, Trap>, HostError> {
     let (_engine, mut store, instance) = instantiate_core_module(wasm)?;
     // The duel's convention: the module's ONE export is the entry —
     // discovered off the instance's own export face.
@@ -339,7 +339,7 @@ fn run_row(
 /// Resolves a manifest row's repo-root-relative vector path against
 /// the repo root (the duel directory is `gen/wasm-duel` — one
 /// directory per duel, the committed convention).
-fn resolve_vector(root: &Path, path: &str) -> Result<PathBuf, HostError> {
+pub(crate) fn resolve_vector(root: &Path, path: &str) -> Result<PathBuf, HostError> {
     if !path.starts_with("gen/") {
         return Err(HostError::DuelManifest(format!(
             "{path}: the vector path is not repo-root-relative under gen/"

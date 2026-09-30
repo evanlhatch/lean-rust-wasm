@@ -51,6 +51,7 @@ over the pure faces — the core triple or zero, or the build fails.
 -/
 
 import Gates
+import Gates.ObligationView
 import Gates.Impact
 import Gates.Lint
 import Gates.LegacyHash
@@ -762,6 +763,87 @@ def auditSpecs : List Spec :=
             "the control demands the banned pattern to pass")
       ] 1 42 ]
 
+/-! ## The gates-as-obligation teeth (B7: the self-application) —
+    the gate rows AS Kit.Obligation values: the run = the discharge
+    attempt, the baseline = the discharged certificate, DRIFT = the
+    stale certificate, the re-baseline discipline = the replay
+    discipline, the trichotomy (N9) on the gates' own state. -/
+
+/-- The fixture gate row: an obligation value over the fixture gate's
+    OWN claim (the type index). -/
+def b7Row : Kit.Obligation String
+    (Gates.ObligationView.GateClaim "b7-fixture") :=
+  Gates.ObligationView.gateObligation "b7-fixture"
+    "the committed baseline replays against the fresh render"
+
+/-- The fixture certificate: the committed baseline IS the artifact. -/
+def b7Cert : Kit.Evidence :=
+  Gates.ObligationView.certificate "gen/b7-fixture.txt" "checkB7"
+
+/-- The trichotomy's three renders (pinned distinct below). -/
+def b7Actions : List Gates.ObligationView.GateAction :=
+  [.command, .delta, .event]
+
+def obligationSpecs : List Spec :=
+  [ Spec.ofList "the gate row rides the obligation substrate (B7: the\n      self-application)"
+      (fun _ => do
+        -- the row's pins: the computed tier is the gates' OWN rung
+        assert (b7Row.tier == .generatedCheck)
+          "a gate row's tier is not generated-check (the IO-shaped check\n            honestly occupies only that rung)"
+        assert (b7Row.label == "gate/b7-fixture")
+          "the row lost its gate-namespaced label"
+        -- the certificate: the closed set's existing .generatedCheck
+        -- ctor, tier-matched (no mis-wire)
+        assert (b7Cert.tier == b7Row.tier)
+          "the certificate's tier does not match the row (mis-wired)"
+        assert (!Kit.tierMismatch b7Row b7Cert)
+          "the tier mismatch check failed to see the match"
+        -- the RUN = the discharge attempt: in sync → discharged, and
+        -- the mint SUCCEEDS (the negative control: a clean row passes)
+        match Gates.ObligationView.certify b7Row
+            (Gates.ObligationView.attempt .inSync b7Cert) with
+        | none => assert false "an in-sync row failed to mint its certificate"
+        | some d =>
+            assert (d.evidence == b7Cert)
+              "the minted certificate lost the evidence"
+            assert (!Gates.ObligationView.undischarged
+                (Gates.ObligationView.attempt .inSync b7Cert))
+              "an in-sync (discharged) row reported undischarged"
+        -- the discharged row is QUIET (no finding exists)
+        assert ((Gates.ObligationView.verdictDiag "b7-fixture"
+            (Gates.ObligationView.attempt .inSync b7Cert)).isNone)
+          "a discharged row produced a finding"
+        -- the trichotomy pins (N9): three distinct actions
+        assert ((b7Actions.map Gates.ObligationView.GateAction.render).eraseDups.length == 3)
+          "the trichotomy collapsed (a run, a re-baseline, and an audit\n            entry must render distinctly)")
+      [ ("the stale certificate must pass (a LIE — caught)", fun _ => do
+          -- the LIE: a drifted baseline read as discharged. The teeth
+          -- catch it: the attempt reports undischarged, the mint
+          -- refuses, and the finding names the replay discipline.
+          let v := Gates.ObligationView.attempt .drifted b7Cert
+          assert (!Gates.ObligationView.undischarged v)
+            "the control demands the stale certificate pass"
+          assert ((Gates.ObligationView.certify b7Row v).isSome)
+            "the control demands the stale certificate mint"
+          assert ((Gates.ObligationView.verdictDiag "b7-fixture" v).isNone)
+            "the control demands the stale certificate stay SILENT")
+      , ("the absent certificate must pass (a LIE — caught)", fun _ => do
+          let v := Gates.ObligationView.attempt .absent b7Cert
+          assert (!Gates.ObligationView.undischarged v)
+            "the control demands the absent certificate pass"
+          assert ((Gates.ObligationView.certify b7Row v).isSome)
+            "the control demands the absent certificate mint")
+      , ("the mis-wired evidence must mint a certificate (a LIE — caught)",
+          fun _ => do
+          -- the LIE: a .decided verdict filed on a gate row (the closed
+          -- set's WRONG kind) mints a gate certificate.
+          let v : Gates.ObligationView.Verdict :=
+            .discharged (.decided true)
+          assert ((Gates.ObligationView.certify b7Row v).isSome)
+            "the control demands the mis-wired evidence mint")
+      ]
+    1 42 ]
+
 /-! ## The driver -/
 
 unsafe def main : IO UInt32 := do
@@ -775,7 +857,8 @@ unsafe def main : IO UInt32 := do
     , ("the gen-check tie's sabotage teeth (the enforcement wave's gap 6)", genTieSpecs)
     , ("the legacy-hash row's sabotage teeth (B4: the read-only tooth)", legacyHashSpecs)
     , ("the feasibility row's sabotage teeth (B2: the spec-sanity census)", feasSpecs)
-    , ("the audit gate's coverage-row teeth (wave-30 C1)", auditSpecs) ]
+    , ("the audit gate's coverage-row teeth (wave-30 C1)", auditSpecs)
+    , ("the gates-as-obligation teeth (B7: the self-application)", obligationSpecs) ]
   if code != 0 then return code
   -- the live pool teeth: the pure battery's one IO exception (above)
   match ← livePoolTeeth with

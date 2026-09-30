@@ -385,36 +385,34 @@ theorem execSelfSim_toRel (m : Module) (fi : Nat × List Instr) (a b : State) :
     (execSelfSim m fi).toRel a b ↔ Kit.Rel.refl State a b :=
   Kit.Simulation.toRel_refl State (fun a b => (execMachine m).step a fi b) a b
 
-/-- The duel's arithmetic row's body (the committed module's function
-    body, extracted — the ONE copy; `arithBody_pin` pins the
-    extraction in values). -/
-def arithBody : List Instr :=
-  match WasmCore.Duel.arithModule.funcs[0]? with
+/-- The duel's GENERATED op row's body (the C6 fold's output for the
+    `i32.add` row — the ONE copy; `opAddBody_pin` pins the extraction
+    in values). -/
+def opAddBody : List Instr :=
+  match (WasmCore.Duel.duelOpModule Op.i32add).funcs[0]? with
   | some f => f.body
   | none => []
 
-/-- The extraction pin: the body is the committed twelve-instruction
-    arithmetic chain (the duel family's spec, in values). -/
-theorem arithBody_pin :
-    arithBody = [ .i32const 6, .i32const 7, .op .i32mul
-                , .i32const 8, .op .i32add
-                , .i32const 3, .op .i32shru
-                , .op .i64extendi32u
-                , .i64const 36, .op .i64mul
-                , .i64const 174, .op .i64sub ] := rfl
+/-- The extraction pin: the body is the generated row's canonical
+    vector in values — the boundary-max operands, the op, the i64
+    adapter (the fold's shape, kernel-reduced). -/
+theorem opAddBody_pin :
+    opAddBody = [ .i32const 2147483647, .i32const 2147483647
+                , .op .i32add, .op .i64extendi32u ] := rfl
 
 /-- THE DUEL'S MACHINE FACE (kernel-checked): the executor machine's
-    single-tape run of the committed arithmetic row — at ANY budget
-    the body needs — lands exactly on the duel's expectation value 42
-    on the stack, from ANY init state (the body touches only the
-    operand stack). The machine reading and the committed duel row are
-    byte-identical executions. -/
-theorem duel_arith_machine_run (init : State) (fuel : Nat) (hf : 12 < fuel) :
-    (execMachine WasmCore.Duel.arithModule).run init [(fuel, arithBody)]
-      = some { init with stack := Val.i64 42 :: init.stack } := by
-  have hflat : ∀ i ∈ arithBody, FlatForm i := by
+    single-tape run of the GENERATED `i32.add` row — at ANY budget the
+    body needs — lands exactly on the generated row's committed
+    expectation (the boundary-max wrap 0x7FFFFFFF + 0x7FFFFFFF =
+    0xFFFFFFFE, extended), from ANY init state (the body touches only
+    the operand stack). The machine reading and the committed duel row
+    are byte-identical executions. -/
+theorem duel_opAdd_machine_run (init : State) (fuel : Nat) (hf : 4 < fuel) :
+    (execMachine (WasmCore.Duel.duelOpModule Op.i32add)).run init [(fuel, opAddBody)]
+      = some { init with stack := Val.i64 4294967294 :: init.stack } := by
+  have hflat : ∀ i ∈ opAddBody, FlatForm i := by
     intro i hi
-    rw [arithBody_pin] at hi
+    rw [opAddBody_pin] at hi
     simp only [List.mem_cons] at hi
     rcases hi with rfl | hi
     · exact ⟨rfl, by simp, by simp⟩
@@ -424,28 +422,12 @@ theorem duel_arith_machine_run (init : State) (fuel : Nat) (hf : 12 < fuel) :
     · exact ⟨rfl, by simp, by simp⟩
     rcases hi with rfl | hi
     · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
-    rcases hi with rfl | hi
-    · exact ⟨rfl, by simp, by simp⟩
     exact absurd hi (by simp)
-  have hrun : (flatMachine).run init arithBody
-      = some { init with stack := Val.i64 42 :: init.stack } := rfl
-  have hlen : arithBody.length = 12 := by rw [arithBody_pin]; rfl
+  have hrun : (flatMachine).run init opAddBody
+      = some { init with stack := Val.i64 4294967294 :: init.stack } := rfl
+  have hlen : opAddBody.length = 4 := by rw [opAddBody_pin]; rfl
   rw [exec_run_single_iff]
-  exact (flat_run_iff WasmCore.Duel.arithModule arithBody fuel init _ hflat).mpr
+  exact (flat_run_iff (WasmCore.Duel.duelOpModule Op.i32add) opAddBody fuel init _ hflat).mpr
     ⟨by omega, hrun⟩
 
 end WasmCore
