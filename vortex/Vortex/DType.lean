@@ -71,9 +71,30 @@ message structure this file's types already carry.
 
 Core-only (imports Kit + SchemaCore.Ty — the cone rule).
 -/
+module
 
-import Kit
-import SchemaCore.Ty
+public import Kit.Correspondence
+public import Kit.Relation
+public import Kit.Hyper
+public import Kit.Obligation
+public import Kit.Registry
+public import Kit.CheckedProp
+public import Kit.Emit
+public import Kit.Suggest
+public import Kit.Diag
+public import Kit.Cli
+public import Kit.CodeRegistry
+public import Kit.Change
+public import Kit.Observer
+public import Kit.Varint
+public import Kit.Proto
+public import Kit.Duel
+public import Kit.Mangle
+-- the Kit barrel itself stays pre-module (Kit.Lane/Kit.Text are the
+-- named stays); the module-only members are imported directly
+public import SchemaCore.Ty
+@[expose] public section
+
 
 open Kit SchemaCore
 
@@ -681,3 +702,5 @@ theorem dtypeWireTag_kind_injective (d d' : DType)
     | (exfalso; omega)
 
 end Vortex
+
+end -- public section

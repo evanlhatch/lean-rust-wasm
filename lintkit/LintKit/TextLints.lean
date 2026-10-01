@@ -178,6 +178,13 @@ The rows' written reasons (the totality rule, 09 §1 — each site's doc
 names its own):
 - `SchemaCore/Describe.lean` 3: the `Expr` subterm walks are not
   structural (the totality engine cannot see the term's size).
+- `Kit/Derive/DepFold.lean` 3: the SAME reason at the derive face —
+  `collectFVarIds` / `checkIdxPattern` / `renderExprS` are `Expr`
+  subterm walks (the totality engine cannot see the term's size),
+  inside `declare_dependent_fold`'s elaborator, where the meta zone's
+  own discipline is the correctness story (the elaborator refuses —
+  `eKD0019`/`eKD0009` — every shape outside the fragment it renders;
+  partiality here cannot reach a kernel theorem).
 - `Gates/KernelCheck.lean` 1: `walkOleans` — the directory-tree
   recursion terminates by the FS's finiteness, not a structural
   measure. (The sweep's poll loop was made TOTAL at the lint's
@@ -192,6 +199,7 @@ names its own):
   paper over it. -/
 def partialAllowance : List (String × Nat) :=
   [("SchemaCore/Describe.lean", 3),
+   ("Kit/Derive/DepFold.lean", 3),
    ("Gates/KernelCheck.lean", 1),
    ("Gates/Common.lean", 1)]
 

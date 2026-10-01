@@ -54,6 +54,7 @@ import Gates
 import Gates.ObligationView
 import Gates.Impact
 import Gates.Lint
+import Gates.Nanoda
 import Gates.LegacyHash
 import Gates.NolintCensus
 import Gates.Feasibility
@@ -62,6 +63,8 @@ import LintKitFixtures.Clean
 import Kit.Ledger
 import TestingKit.Harness
 import GatesTests.Axioms
+import GatesTests.Config
+import GatesTests.Baselines
 
 open TestingKit
 
@@ -468,31 +471,46 @@ def rssSpecs : List Spec :=
 /-- The LIVE pool teeth (the pure battery's ONE IO face — queueing
     needs a real child process): 4 sleep-tasks under a budget that
     admits ONE 4096MB lane must QUEUE — serial wall (≥ the sum of the
-    sleeps), every task completes with exit 0 (queued, never dropped,
-    never OOM'd); the control runs the same tasks at a tiny per-lane
-    cost — the 8 count-cap lanes go parallel, wall strictly under the
-    serial bound. Returns none on pass, the failure's evidence on
-    fail. -/
+    sleeps), every task completes (queued, never dropped, never
+    OOM'd); the control runs the same tasks at a tiny per-lane cost —
+    the 8 count-cap lanes go parallel, wall strictly under the serial
+    bound. Rides `poolEngine` DIRECTLY now (the warm-server redesign
+    deleted `pkgPool` — the engine's remaining consumer is the
+    kernel-check leaf pool, so the teeth ride that spine). Returns
+    none on pass, the failure's evidence on fail. -/
 def livePoolTeeth : IO (Option String) := do
-  let tasks : Array Gates.PkgSpec :=
-    Array.replicate 4 { dir := "t", srcDir := ".", roots := #[] }
+  let tasks : Array Nat := Array.range 4
+  let sleepChild : Nat → IO (IO.Process.Child 
+      { stdin := .inherit, stdout := .piped, stderr := .inherit :
+        IO.Process.StdioConfig } × Unit) := fun _ => do
+    let c ← IO.Process.spawn
+      { cmd := "sleep", args := #["0.3"], stdin := .inherit
+      , stdout := .piped, stderr := .inherit }
+    return (c, ())
+  let reap : Nat → IO.Process.Child
+      { stdin := .inherit, stdout := .piped, stderr := .inherit :
+        IO.Process.StdioConfig } → Unit →
+      IO (Sum Unit (UInt32 × String)) := fun _ c _ => do
+    match ← c.tryWait with
+    | some code => return .inr (code, ← c.stdout.readToEnd)
+    | none => return .inl ()
   -- the over-budget run: one lane → serial
   let t0 ← IO.monoMsNow
-  let outs ← Gates.pkgPool (fun _ => "sleep") (fun _ => #["0.3"])
-    tasks 8 4096 5000 512
+  let outs ← Gates.poolEngine (T := Nat) (S := Unit) (R := UInt32 × String)
+    tasks sleepChild reap 8 4096 5000 512 (pure ())
   let serialMs := (← IO.monoMsNow) - t0
   if outs.size != 4 then return some s!"task count {outs.size} ≠ 4 (a task dropped)"
-  for (code, _) in outs do
+  for (_, (code, _)) in outs do
     if code != 0 then return some s!"a queued task failed (exit {code})"
   if serialMs < 1100 then
     return some s!"the over-budget pool ran in parallel ({serialMs}ms) — no queueing, the OOM shape"
   -- the control: tiny per-lane cost → parallel
   let t1 ← IO.monoMsNow
-  let outs ← Gates.pkgPool (fun _ => "sleep") (fun _ => #["0.3"])
-    tasks 8 1 5000 512
+  let outs ← Gates.poolEngine (T := Nat) (S := Unit) (R := UInt32 × String)
+    tasks sleepChild reap 8 1 5000 512 (pure ())
   let parMs := (← IO.monoMsNow) - t1
   if outs.size != 4 then return some s!"control task count {outs.size} ≠ 4"
-  for (code, _) in outs do
+  for (_, (code, _)) in outs do
     if code != 0 then return some s!"a control task failed (exit {code})"
   if parMs ≥ 1100 then
     return some s!"the under-budget pool serialized ({parMs}ms) — the admission is fiction"
@@ -844,6 +862,161 @@ def obligationSpecs : List Spec :=
       ]
     1 42 ]
 
+/-! ## 8. The nanoda lane's teeth (the kernel-check row's second lane) -/
+
+/-- The PURE pins: the ONE allowlist's generation tooth (the config's
+    rows are allowlist rows — the ONE-table discipline), the config
+    render's faces (sorryAx stays unpermitted — a sorry USE must error
+    the run), and the format pin's parse (the real meta line's shape
+    accepts, ANY drift or missing field refuses — fail-closed). -/
+def nanodaSpecs : List Spec :=
+  [ Spec.ofList "the nanoda lane's pins (one allowlist, the config face, the format pin)"
+      (fun _ => do
+        assert Gates.Nanoda.axiomRowsAllowlisted
+          "the nanoda config's axiom rows drifted LintKit.AxiomAllowlist"
+        let cfg := Gates.Nanoda.renderConfig "x.ndjson" Gates.Nanoda.axiomRows false
+        match Gates.Nanoda.jsonStrAfter cfg "propext" with
+        | some _ => assert true ""
+        | none => assert false "the config render lost the core triple"
+        match Gates.Nanoda.jsonStrAfter cfg "sorryAx" with
+        | none => assert true ""
+        | some _ => assert false "sorryAx must stay UNPERMITTED in the config"
+        let metaJson := "{\"meta\":{\"exporter\":{\"name\":\"lean4export\",\"version\":\"3.1.0\"},\"format\":{\"version\":\"3.1.0\"},\"lean\":{\"githash\":\"d8b18978322de05a8f3dba51ef03cf5461676c17\",\"version\":\"4.33.0\"}}}"
+        assert (Gates.Nanoda.formatOf metaJson == some ("3.1.0", "4.33.0"))
+          "the real meta line must parse to the pinned pair"
+        assert (Gates.Nanoda.formatPinned metaJson)
+          "the real meta line must pass the pin check"
+        -- the drift tooth: another format, another toolchain, a bare
+        -- meta line — ALL refuse (fail-closed)
+        assert (!(Gates.Nanoda.formatPinned
+          "{\"meta\":{\"format\":{\"version\":\"3.2.0\"},\"lean\":{\"version\":\"4.33.0\"}}}"))
+          "a format drift must refuse"
+        assert (!(Gates.Nanoda.formatPinned
+          "{\"meta\":{\"format\":{\"version\":\"3.1.0\"},\"lean\":{\"version\":\"4.34.0\"}}}"))
+          "a toolchain drift must refuse"
+        assert (!(Gates.Nanoda.formatPinned "{\"meta\":{}}"))
+          "a field-free meta line must refuse (fail-closed)")
+      [ ("a field-free meta line passes the pin check (the sabotage)", fun _ => do
+          -- the LIE: the pin check accepts anything. The fail-closed
+          -- refusal refutes it (the caught face).
+          if Gates.Nanoda.formatPinned "{\"meta\":{}}" then
+            assert true ""
+          else
+            assert false "the fail-closed refusal caught the sabotage")
+      , ("sorryAx is an allowlist row (the sabotage)", fun _ => do
+          -- the LIE: the generator could emit sorryAx as a permitted
+          -- row. The ONE allowlist's predicate refutes it (the caught
+          -- face) — the tooth's all-check would fail the lane.
+          if LintKit.isAllowedAxiom `sorryAx then
+            assert true ""
+          else
+            assert false "the allowlist predicate caught the sabotage")
+      ] 1 42 ]
+
+/-- The LIVE teeth (the nanoda@pin binary, if built): the planted
+    axiom MUST be refused and the permitted twin MUST pass — the lane's
+    self-test replayed against the REAL binary. Absent tools = the
+    honest skip (none), never a laundered pass. -/
+def nanodaLiveTeeth : IO (Option String) := do
+  unless ← Gates.Nanoda.nanodaPath.pathExists do
+    IO.println "GatesTests: the nanoda LIVE teeth SKIPPED — the pinned \
+      tools are absent (NOT a pass; `just tools-nanoda` builds them)"
+    return none
+  if ← Gates.Nanoda.runTeeth Gates.Nanoda.nanodaPath.toString then
+    return none
+  else
+    return some "the planted-axiom teeth did not fire correctly"
+
+/-! ## The warm-server's teeth (the redesign: the classes + the cache) -/
+
+/-- The row classes' + the cache's PURE teeth. The live cache face is
+    `warmCacheTeeth` (below) — it touches the cache root. -/
+def warmSpecs : List Spec :=
+  [ Spec.ofList "the three row classes partition the registry (the dispatch's closed world)"
+      (fun _ => do
+        -- every registry row is exactly one class — a row in no class
+        -- would SILENTLY skip in `all` (the dispatch's one hazard)
+        for n in Gates.gateNames do
+          assert (Gates.gateClassified n) s!"{n} is not exactly one row class"
+        -- the classes' rows are registry rows (no phantoms)
+        for n in Gates.warmGateNames do
+          assert (Gates.gateNames.contains n) s!"warm row {n} outside the registry"
+        for n in Gates.childGateNames do
+          assert (Gates.gateNames.contains n) s!"child row {n} outside the registry"
+        -- the partition's sum: artifact = the complement, no overlap
+        assert (Gates.artifactGateNames.length
+          + Gates.warmGateNames.length
+          + Gates.childGateNames.length == Gates.gateNames.length)
+          "the classes do not sum to the registry")
+    [ ("a row lands in NO class (the sabotage)", fun _ => do
+        assert (Gates.gateNames.all fun n => !Gates.gateClassified n)
+          "every row classified — the sweep caught nothing")
+    , ("a double-classed row slips through (the sabotage)", fun _ => do
+        assert (Gates.warmGateNames.any fun n => Gates.childGateNames.contains n)
+          "no row is double-classed — the sweep caught nothing")
+    ] 1 42
+  , Spec.ofList "the --cold closed world (the fallback's refusal face)"
+      (fun _ => do
+        -- a warm row IS cold-runnable (the fallback's whole point)
+        assert (Gates.coldRefusal? ["axioms"] |>.isNone)
+          "the warm row --cold=axioms was refused — no fallback face"
+        assert (Gates.coldRefusal? [] |>.isNone)
+          "the empty cold list refused — all would fall back")
+    [ ("an unknown cold name accepted (the sabotage)", fun _ => do
+        assert (Gates.coldRefusal? ["not-a-gate"] |>.isNone)
+          "the unknown cold name was refused — the control caught nothing")
+    , ("a child row accepted as cold (the sabotage)", fun _ => do
+        assert (Gates.coldRefusal? ["kernel-check"] |>.isNone)
+          "the already-child row was refused — the control caught nothing")
+    ] 1 42
+  , Spec.ofList "the verdict cache's key sensitivity (the content-addressing)"
+      (fun _ => do
+        -- each input class moves the key: env, gate, code version, baseline
+        let k0 := Gates.warmCacheKey 7 "axioms" 0
+        assert (Gates.warmCacheKey 8 "axioms" 0 != k0)
+          "the env digest did not move the key — a stale env would hit"
+        assert (Gates.warmCacheKey 7 "lint" 0 != k0)
+          "the gate name did not move the key — cross-gate hits"
+        assert (Gates.warmCacheKey 7 "axioms" 9 != k0)
+          "the baseline digest did not move the key — a drifted baseline would hit"
+        -- the digest's determinism (the same inputs, the same key)
+        assert (Gates.warmCacheKey 7 "axioms" 0 == k0)
+          "the key is not a function of its inputs")
+    [ ("the keys collide (the sabotage)", fun _ => do
+        assert (Gates.warmCacheKey 7 "axioms" 0 == Gates.warmCacheKey 8 "lint" 9)
+          "distinct inputs collided into one key")
+    , ("the digest ignores its input (the sabotage)", fun _ => do
+        assert (Gates.fnv1a "ab" == Gates.fnv1a "ba")
+          "the digest collapsed distinct inputs")
+    ] 1 42 ]
+
+/-- The verdict cache's LIVE teeth (the stale-cache refusal face): a
+    hit replays the stored exit; a CORRUPT cache file is a refusal
+    (a miss, never a wrong verdict). Uses a unique key, cleans up. -/
+def warmCacheTeeth : IO (Option String) := do
+  let key := Gates.fnv1a "GatesTests.warmCacheTeeth"
+  let path := Gates.warmCacheDir / s!"{Gates.hexOf key}"
+  -- cleanup guard (a stale tooth's file from an earlier run)
+  let _ ← (IO.FS.removeFile path |>.toBaseIO)
+  -- 1. the absent entry: a miss (never a fabricated verdict)
+  match ← Gates.warmCacheRead key with
+  | none => pure ()
+  | some _ => return some "the absent cache entry read as a hit"
+  -- 2. the round trip: the stored exit comes back
+  Gates.warmCacheWrite key 1
+  match ← Gates.warmCacheRead key with
+  | some 1 => pure ()
+  | v => return some s!"the stored exit replayed as {v} — the round trip broke"
+  -- 3. THE STALE-CACHE REFUSAL: a corrupt file is a MISS, never a verdict
+  IO.FS.writeFile path "garbage not a verdict"
+  match ← Gates.warmCacheRead key with
+  | none => pure ()
+  | some _ => return some "the corrupt cache entry read as a verdict — the refusal failed"
+  -- cleanup
+  let _ ← (IO.FS.removeFile path |>.toBaseIO)
+  IO.println "GatesTests: warm cache teeth — absent-miss, round-trip, corrupt-refusal verified"
+  return none
+
 /-! ## The driver -/
 
 unsafe def main : IO UInt32 := do
@@ -853,22 +1026,47 @@ unsafe def main : IO UInt32 := do
     , ("the gate-row honesty scan's teeth (the D33 durable fix)", gateRowSpecs)
     , ("the kernel-check verdict classifier's teeth (the budget discipline)", classifySpecs)
     , ("the RSS-bounded pool's teeth (the wave-30 admission discipline)", rssSpecs)
+    , ("the warm-server's teeth (the classes, the cold fallback, the verdict cache)", warmSpecs)
     , ("the lint gate's sabotage teeth (the enforcement wave)", nolintScanSpecs)
     , ("the gen-check tie's sabotage teeth (the enforcement wave's gap 6)", genTieSpecs)
     , ("the legacy-hash row's sabotage teeth (B4: the read-only tooth)", legacyHashSpecs)
     , ("the feasibility row's sabotage teeth (B2: the spec-sanity census)", feasSpecs)
     , ("the audit gate's coverage-row teeth (wave-30 C1)", auditSpecs)
-    , ("the gates-as-obligation teeth (B7: the self-application)", obligationSpecs) ]
+    , ("the gates-as-obligation teeth (B7: the self-application)", obligationSpecs)
+    , ("the nanoda lane's teeth (the second kernel lane)", nanodaSpecs)
+    , ("the gates' config-face teeth (C4: the knobs' dogfood)", [GatesTests.Config.configFaceSpec])
+    , ("the baselines' grammar-layer teeth (B3: the flat shape, the
+      bytes, the drift)", [GatesTests.Baselines.baselinesSpec]) ]
   if code != 0 then return code
+  -- the baselines' LIVE byte-tie (B3: the committed files parse through
+  -- their grammars and print back to their own bytes)
+  match ← GatesTests.Baselines.liveTeeth with
+  | none => pure ()
+  | some e =>
+      IO.eprintln s!"GatesTests: the baselines' live byte-tie FAILED — {e}"
+      return 1
   -- the live pool teeth: the pure battery's one IO exception (above)
   match ← livePoolTeeth with
   | none => pure ()
   | some e =>
       IO.eprintln s!"GatesTests: the live pool teeth FAILED — {e}"
       return 1
+  -- the warm cache's live teeth (the stale-refusal face)
+  match ← warmCacheTeeth with
+  | none => pure ()
+  | some e =>
+      IO.eprintln s!"GatesTests: the warm cache teeth FAILED — {e}"
+      return 1
   -- the lint gate's live sabotage (the enforcement wave)
   match ← lintGateTeeth with
+  | none => pure ()
+  | some e =>
+      IO.eprintln s!"GatesTests: the lint gate's live sabotage FAILED — {e}"
+      return 1
+  -- the nanoda lane's live teeth (the second kernel lane; absent tools
+  -- = the honest skip above)
+  match ← nanodaLiveTeeth with
   | none => return 0
   | some e =>
-      IO.eprintln s!"GatesTests: the live pool teeth FAILED — {e}"
+      IO.eprintln s!"GatesTests: the nanoda live teeth FAILED — {e}"
       return 1

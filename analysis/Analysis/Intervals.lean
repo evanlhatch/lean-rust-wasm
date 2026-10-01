@@ -66,7 +66,12 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Analysis.Basic
+
+module
+
+public import Analysis.Basic
+
+@[expose] public section
 
 namespace Analysis
 
@@ -282,3 +287,6 @@ theorem width_bounds {B : Int} {a : Iv} (hne : a.lo ≤ a.hi)
   exact ⟨by omega, by omega⟩
 
 end Analysis
+
+
+end -- public section

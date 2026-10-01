@@ -134,7 +134,8 @@ pub(crate) fn export_i64(
     let func = instance
         .get_func(&mut *store, name)
         .ok_or_else(|| HostError::MissingExport(name.to_string()))?;
-    func.typed::<(), i64>(store).map_err(|_| HostError::Signature)
+    func.typed::<(), i64>(store)
+        .map_err(|_| HostError::Signature)
 }
 
 /// The golden: the checked module's `answer` runs to `i64 42`. This is

@@ -28,10 +28,16 @@ byte-tie + axioms.
 Core-only.
 -/
 
-import Kit
-import SchemaCore.Ty
+module
+
+public import Kit.Registry
+public import Kit.Obligation
+public import Kit.Mangle
+public import SchemaCore.Ty
 
 open Kit
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -118,3 +124,5 @@ def dischargeFieldNodup (item : Item) : Option Evidence :=
   (fieldNodupObligation item).decideDischarge
 
 end SchemaCore
+
+end -- public section

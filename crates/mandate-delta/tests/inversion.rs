@@ -3,7 +3,7 @@
 //! the negative controls (a lying witness refuses — in the log's own
 //! rewind face too).
 
-use mandate_delta::delta::{invert_w, valid_wb, witnessed_apply, witness_of, Delta, WDelta};
+use mandate_delta::delta::{Delta, WDelta, invert_w, valid_wb, witness_of, witnessed_apply};
 use mandate_delta::log::{DeltaLog, MemBackend, TailPolicy};
 use mandate_delta::schema::fixtures::{fixture, fixture_row};
 use mandate_delta::value::Value;
@@ -44,7 +44,8 @@ fn rewind_to_every_prefix() {
     // Rewind to EVERY prefix; the result is the prefix replay, and the
     // log's frames are untouched (append-only is literal).
     for k in 0..=log.len() {
-        log.rewind_to(k).unwrap_or_else(|e| panic!("rewind_to({k}): {e}"));
+        log.rewind_to(k)
+            .unwrap_or_else(|e| panic!("rewind_to({k}): {e}"));
         assert_eq!(*log.state(), log.state_at(k), "rewind_to({k}) diverged");
         assert_eq!(log.len(), 6, "rewind_to({k}) touched the log");
     }
@@ -58,7 +59,8 @@ fn rewind_refuses_a_skewed_witness() {
     let schema = fixture_schema();
     let mut log = DeltaLog::open_with(MemBackend::new(), schema, TailPolicy::Recover)
         .unwrap_or_else(|e| panic!("open: {e}"));
-    log.append(Delta::Insert(fixture_row(1, "a"))).unwrap_or_else(|e| panic!("{e}"));
+    log.append(Delta::Insert(fixture_row(1, "a")))
+        .unwrap_or_else(|e| panic!("{e}"));
     // Skew the recorded witness (simulate internal-state skew): the
     // recorded old row must be the absent marker for this insert.
     log.witnesses_mut()[0] = WDelta {
@@ -67,7 +69,10 @@ fn rewind_refuses_a_skewed_witness() {
         new: Some(fixture_row(1, "a")),
     };
     // The rewind's checked patches REFUSE (the delta does not lie).
-    assert!(log.rewind_to(0).is_err(), "a lying witness must refuse the rewind");
+    assert!(
+        log.rewind_to(0).is_err(),
+        "a lying witness must refuse the rewind"
+    );
 }
 
 /// The inversion's four cases at the witnessed-delta level, composed
@@ -92,7 +97,8 @@ fn inverse_journal_round_trip() {
     let mut witnesses = Vec::new();
     for d in &journal {
         let w = witness_of(&schema, d, &state);
-        state = witnessed_apply(&state, std::slice::from_ref(&w)).unwrap_or_else(|| panic!("witness"));
+        state =
+            witnessed_apply(&state, std::slice::from_ref(&w)).unwrap_or_else(|| panic!("witness"));
         witnesses.push(w);
     }
     // The inverse journal: reverse + old/new swap — applied through the

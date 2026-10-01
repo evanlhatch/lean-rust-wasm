@@ -46,7 +46,11 @@ The five questions (notes/v3/01-core.md):
   consumes `Inspector.report` (09 §3) as the next order's row.
 -/
 
-import Kit.Obligation
+module
+
+public import Kit.Obligation
+
+@[expose] public section
 
 namespace Inspector
 

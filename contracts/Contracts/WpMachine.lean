@@ -78,10 +78,13 @@ cannot); the nested-loop discipline waits for its first consumer.
 Core-only: imports `Contracts.Wp` + `Machines.Basic` +
 `Kit.Correspondence` (the cone rule; no mathlib, no Batteries).
 -/
+module
 
-import Contracts.Wp
-import Machines.Basic
-import Kit.Correspondence
+public import Contracts.Wp
+public import Machines.Basic
+public import Kit.Correspondence
+@[expose] public section
+
 
 namespace Contracts
 
@@ -354,3 +357,5 @@ theorem loopvc_exit_machine (P Q : State → Prop) (w : While) (v : LoopVCs P Q 
           exact hrun
 
 end Contracts
+
+end -- public section

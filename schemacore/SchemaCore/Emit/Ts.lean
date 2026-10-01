@@ -52,6 +52,7 @@ The five questions (notes/v3/01-core.md):
 -/
 
 import SchemaCore.Emit.Spine
+import SchemaCore.Emit.Profiles
 import SchemaCore.Item
 import Kit.Mangle
 import Kit.Text
@@ -272,8 +273,10 @@ def tsUniverseTypes : Text :=
 // carried in TS's types, the Rust lane's universe block mirrored).
 
 /// The closed Profile enum (SchemaCore.Profile — WHICH semantic a
-/// scalar carries). CLOSED: the tags are the LEAN ctor names.
-export type Profile = \"plain\" | \"deterministic\";
+/// scalar carries). CLOSED over the three slots: the tags are the
+/// LEAN ctor names; `fast` is the hardware-float trade (its forfeits
+/// are named in the model, never hidden).
+export type Profile = \"plain\" | \"deterministic\" | \"fast\";
 
 /// The closed scalar sub-universe (SchemaCore.Ty's KeyTy — the
 /// map/set keys + the declared keys' admitted materials).
@@ -380,7 +383,7 @@ def tsTarget : Spine.CodeTarget where
   encAlg := encTsAlg
   decAlg := decTsAlg
   prelude := tsPrelude
-  universeTypes := tsUniverseTypes
+  universeTypes := Text.cat [tsUniverseTypes, Emit.Profiles.profilePhantomTs]
   faces := [{ name := "builder", render := renderBuilderTs }]
   faceNames := ["builder"]
   renderRecord := tsRenderRecord

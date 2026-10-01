@@ -35,9 +35,15 @@ The five questions (notes/v3/01-core.md):
   behavior.
 -/
 
-import Lean
-import Kit.Correspondence
-import TextKit.Suggest
+
+module
+
+public import Lean
+public import Kit.Correspondence
+public import TextKit.Suggest
+
+@[expose] public section
+
 
 namespace Kit
 
@@ -223,3 +229,5 @@ class DisjointCommute (S L Mut : Type) where
       ∀ (s : S), apply (apply s m₁) m₂ = apply (apply s m₂) m₁
 
 end Kit
+
+end -- @[expose] public section

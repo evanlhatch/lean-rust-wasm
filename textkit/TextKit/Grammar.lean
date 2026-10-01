@@ -7,16 +7,16 @@ ONE `Grammar α` value drives the derived parser + printer
 (`TextKit/Grammar/Check.lean`), and the round-trip laws
 (`TextKit/Grammar/Laws.lean`) — per-format work becomes rows.
 
-MODULE FORM (the placement note): this is a NON-`module` file — the
-`rel` node rides `Kit.Codec` (design §0.1: parse∘print needs
-`decode (encode x) = some x`, Codec's law exactly; `Kit.Retraction` was
-rejected — its `inv` is total but the real semantic mappings are
-partial), and a `module` file cannot import the pre-`module` Kit files
-(probe-verified). The textkit→kit direction is build-impossible for
-`module` files; a NON-module file in textkit/ imports both TextKit's
-modules and Kit's pre-module files, so the layer lives at
-`TextKit/Grammar*.lean` in this form. Consequence: the umbrella
-`TextKit.lean` (a `module` file) does not re-export it — consumers
+MODULE FORM (the placement note, UPDATED by the kit wave): originally a
+NON-`module` file — the `rel` node rides `Kit.Codec` (design §0.1:
+parse∘print needs `decode (encode x) = some x`, Codec's law exactly;
+`Kit.Retraction` was rejected — its `inv` is total but the real
+semantic mappings are partial), and at the time a `module` file could
+not import the pre-`module` Kit files. The kit conversion wave removed
+that wall (Kit.Correspondence is a `module` file now; pre→module is
+the legal direction), so this file is a `module` — the probe's §4
+mechanical shape, `@[expose] public section` as the idiom. Consequence:
+the umbrella `TextKit.lean` still does not re-export it — consumers
 `import TextKit.Grammar` directly.
 
 THE RECURSION SCHEME (the senior reformulation — this wave's delta):
@@ -79,9 +79,13 @@ Core-only (no mathlib/Batteries). The five questions (notes/v3/01-core.md):
   certificate's teeth (the sabotage negative controls).
 -/
 
-import TextKit.Error
-import TextKit.Combinators
-import Kit.Correspondence
+module
+
+public import TextKit.Error
+public import TextKit.Combinators
+public import Kit.Correspondence
+
+@[expose] public section
 
 namespace TextKit
 
@@ -871,3 +875,5 @@ theorem GrammarE.tailOkE_tok_irrel {R : Type} (m : R → Nat) (sb : GrammarE R R
     (Grammar.fix m body dec).valueOk x = Grammar.fixValueOk m body dec x := rfl
 
 end TextKit
+
+end -- public section

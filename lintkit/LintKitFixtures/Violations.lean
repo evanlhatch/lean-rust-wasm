@@ -14,6 +14,7 @@ Evidence, not architecture.
 -/
 import LintKit
 import Kit.Correspondence
+import Kit.Obligation
 
 -- The census linters are turned ON for this module at ELABORATION time
 -- (the documented per-decl snapshot mechanism): the planted violations
@@ -24,6 +25,7 @@ set_option linter.guestlang.recursiveSimpEqns true
 set_option linter.guestlang.decideFirst true
 set_option linter.guestlang.graduation true
 set_option linter.guestlang.zeroCitation true
+set_option linter.guestlang.evidenceRedundancy true
 
 namespace LintKitFixtures.Violations
 
@@ -102,5 +104,36 @@ def parityCodec : Kit.Codec Nat Nat where
     split at h
     · have h2 := Option.some.inj h; omega
     · exact absurd h (by simp)
+
+/-- evidenceRedundancy CLASS A POSITIVE: the statement is the codec's
+own `decode_encode` law — the construction CARRIES it — and the proof
+is a re-proof (no `Kit.Codec.decode_encode` citation in the term).
+Fires. Also a zeroCitation finding (uncited) — both rows expected. -/
+def violCodec : Kit.Codec Nat Nat where
+  encode a := a + 1 - 1
+  decode a := some a
+  policy a := ∀ n : Nat, n = n  -- undecidable: no instance (the graduation gap)
+  decode_encode := fun _ => rfl
+  decode_some_policy := fun _ _ _ _ => rfl
+
+/-- evidenceRedundancy CLASS A POSITIVE: the re-proof face. Fires. -/
+theorem violRoundtrip : ∀ (b : Nat), violCodec.decode (violCodec.encode b) = some b := by
+  intro b; rfl
+
+/-- evidenceRedundancy CLASS B POSITIVE: a sweep-tiered obligation over
+a claim the KERNEL decides — the weakest sufficient tier is
+`decidableNow`. Fires. -/
+def violSweepObl : Kit.Obligation Nat (1 < 2) :=
+  { label := "viol/sweep-over-decidable"
+    tier := .oracleSwept
+    payload := 0
+    provenance := `LintKitFixtures.Violations }
+
+/-- evidenceRedundancy CLASS B POSITIVE: the discharge face of the same
+redundancy — an `.oracleRow` evidence over a kernel-decidable claim.
+Fires. -/
+def violSweepDischarged : Kit.Discharged Nat (1 < 2) :=
+  { obligation := violSweepObl
+    evidence := .oracleRow "viol: the sweep over a kernel-decidable claim" }
 
 end LintKitFixtures.Violations

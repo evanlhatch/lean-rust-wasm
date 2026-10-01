@@ -28,9 +28,18 @@ doctrine's, verbatim (05 §4).
 
 Core-only (no mathlib/Batteries). Five questions (notes/v3/01-core.md):
 answered at the home module; this shim adds nothing but the namespace.
--/
 
-import TextKit.Diag
+MODULE face (the convergence wave): the module consumers (Cli, Derive)
+cannot import a pre-`module` file, so the shim itself is a `module`
+now — the plain-side `import Kit.Diag` consumers keep working (plain →
+module is the proven direction), the module-side get the public
+surface. -/
+
+module
+
+public import TextKit.Diag
+
+@[expose] public section
 
 namespace Kit
 

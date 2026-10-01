@@ -70,9 +70,13 @@ Five questions (notes/v3/01-core.md):
   the initiality citation + the refusal teeth + the negative controls).
 -/
 
-import Lean
-import Kit.Diag
-import Kit.Derive.Common
+module
+
+public meta import Lean
+public meta import Kit.Diag
+public meta import Kit.Derive.Common
+
+public meta section
 
 namespace Kit.Derive.Fold
 
@@ -510,3 +514,5 @@ def elabDeclareFold : CommandElab
   | _ => Elab.throwUnsupportedSyntax
 
 end Kit.Derive.Fold
+
+end -- public meta section

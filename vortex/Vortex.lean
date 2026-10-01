@@ -42,9 +42,13 @@ nested-array DATA lanes (list/map/result columns fall back to
 `identity`; their data rides `SchemaCore.Codec`'s proven wire), the
 regen driver + the GenCheck/Ownership gate rows (the write path).
 -/
+module
 
-import Vortex.Encoding
-import Vortex.Emit
-import Vortex.Codecs
-import Vortex.Compute
-import Vortex.DTypeProto
+public import Vortex.Encoding
+public import Vortex.Emit
+public import Vortex.Codecs
+public import Vortex.Compute
+public import Vortex.DTypeProto
+@[expose] public section
+
+end -- public section

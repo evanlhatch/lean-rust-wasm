@@ -25,6 +25,14 @@ non-commutative observable orders (the TraceModel crossing), the
 Kripke-style stateful cost relation.
 -/
 
-import Cost.Basic
-import Cost.Expr
-import Cost.Budget
+
+module
+
+public import Cost.Basic
+public import Cost.Expr
+public import Cost.Budget
+
+@[expose] public section
+
+
+end -- public section

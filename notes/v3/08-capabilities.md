@@ -31,7 +31,7 @@ citation is a finding. The table:
 | 7 | LANDED | `replayEvents` | | the event sourcing (the generated replay/inversion/codec laws) |
 | 8 | PARTIAL | `Effect` | | the closed lattice + the footprint laws landed; "effect rows derive from registry items" is the lane's named exclusion |
 | 9 | LANDED | `Session` | | the dual-checked sessions (`Machines.Session`) |
-| 10 | PARTIAL | `Verdict` | `until` `eventually` `alwaysEventually` | the bounded exploration landed (`Machines.Explore`); the liveness ops exist nowhere in the tree — SPEC |
+| 10 | LANDED | `Verdict` | `until` | the bounded exploration (`Machines.Explore`) + the liveness vocabulary and the coinductive foundation (`Machines.Live`: `Eventually`, `Fairness` as data, `AlwaysEventually`/`InfOften`, `InfRun`); `until` stays excluded (its bounded-B face is an inductive fixpoint — lands with its first consumer) |
 | 11 | LANDED | `ShrinkerV` | | the shrinking (`TestingKit`'s validity-preserving shrinkers) |
 | 12 | SPEC | | | the relational spec layer (02 §1) |
 | 13 | LANDED | `IsBag` | | the weighted relations — the ℤ instance; the provenance-polynomial weight kind stays SPEC (the lane's named exclusion) |
@@ -55,10 +55,11 @@ citation is a finding. The table:
 | 31 | SPEC | | | the dependency injection |
 | 32 | SPEC | | | the transport semantics |
 | 33 | SPEC | | | the caching |
-| 34 | SPEC | | | the configuration |
+| 34 | LANDED | `ConfigSchema` `applySources` `lowerPair` | | the configuration (the face: the schema record + the override ORDER as data — the noncommutative fold, the CF refusals; the sources' text formats are TextKit.ConfigFormat's grammar values; the dogfood is the gates' knobs — Gates.Common's `gatesItem`/`knobOf`/`knobsOfText`) |
 | 35 | SPEC | | | the property taxonomy |
 | 36 | LANDED | `wp` | | the contracts (`requires`/`ensures` with wp-composition) |
 | 37 | SPEC | | | the systems observability lane |
+| 38 | LANDED | `Profiled` `Fixed` | | the semantic-profiles lane (16 §4.5 + D24/D38: the phantom-indexed scalar semantics — `Profile`'s closed `plain`/`deterministic`/`fast` slots; the deterministic fixed-point carrier with exact checked add, named floor rounding, total order, codec legality; the fast hop's forfeits as theorems + the exactness tooth; the erasure proved — `Profiled.erase`/`Profiled.iso`, the f64/2^53 hazard's profile law; the codegen face rides `Emit.Profiles` into the Rust const-generic phantom + the TS brand) |
 
 The WATCH entries carry no decl (one line + its trigger, unchanged
 below).
@@ -108,6 +109,20 @@ below).
     (proved / refuted / unknown-with-reason; budget exhaustion is
     UNKNOWN). Guard: finite only; the TraceModel's heavy half (POR,
     vector clocks) follows its first genuinely-concurrent consumer.
+    LANDED (`Machines.Live`): `Eventually` (the finite face) +
+    `Fairness` — the environment assumption AS DATA, never derived
+    (01 §3's correction; `Fairness.infRun`: assuming fairness IS
+    assuming the infinite run) + `AlwaysEventually`/`InfOften` (the
+    coinductive infinite face) + `InfRun` — the `coinductive` command's
+    greatest-fixed-point infinite execution, zero kernel extensions
+    (the axiom surface stays the core triple, pinned in
+    MachinesTests.Live). The landed finality (`Machines.Coalg`, finite
+    observations) meets the infinite face in the bridges:
+    `states_fires_of_infRun`/`infRun_of_states_fires` (the never-refusing
+    unfold IS the infinite run) and `InfRun.of_explore` (the bounded
+    exploration's PROVED face crosses to the infinite run; the UNKNOWN
+    face bridges to NOTHING). `until` remains excluded (its bounded-B
+    face is an inductive fixpoint — lands with its first consumer).
 11. **Shrinking** — failing sweeps report the minimal counterexample +
     the shrink path; validity-preserving shrinkers for refined types
     (shrinking `Packet.length` without `bytes` is malformed, not
@@ -192,9 +207,18 @@ below).
     the journal + idempotency-key row, never asserted bare.
 33. **Caching** — the coherence obligation (`lookup c k = some v →
     compute k = v`) per cache, discharged at the appropriate tier.
-34. **Configuration** — a config = a schema record + the override ORDER
-    (last-wins is NOT a semilattice — noncommutative; sparse overrides
-    merge optional fields; document which) + the schema's own validation.
+34. **Configuration** (LANDED: `SchemaCore.Config`) — a config = a
+    schema record + the override ORDER (last-wins is NOT a semilattice
+    — noncommutative; sparse overrides merge per-field via the update
+    lane's ColPath write spine; the append law is the honest
+    associativity, the noncommutation + the disjoint commutation are
+    theorems) + the schema's own validation (the check rows). The
+    sources' text formats are `TextKit.ConfigFormat`'s grammar values
+    (file/env/CLI, the proved round trips); the refusals ride the CF
+    E-code family. FIRST CONSUMER: the gates' own knobs (the C4
+    dogfood — `Gates.Common`'s `gatesItem` schema, the config file the
+    validated base layer, the env vars the override source with the
+    envNat semantics preserved).
 
 ## The systems-semantics stratum
 

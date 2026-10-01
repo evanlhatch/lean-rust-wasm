@@ -8,7 +8,7 @@
 //! registry (no fabricated entry), the codes are pairwise distinct.
 
 use mandate_faults::{
-    init_host, ContentHashMismatch, FaultError, LifecycleIllegalTransition, WasmTrap,
+    ContentHashMismatch, FaultError, LifecycleIllegalTransition, WasmTrap, init_host,
 };
 
 /// The four declared rows' spellings (the persisted allocation, pinned
@@ -51,7 +51,11 @@ fn each_variant_reports_its_allocated_code_category_and_advice() {
             "FT0133",
             fast_observe::ErrorCategory::Content,
         ),
-        (FaultError::JournalCorrupt, "FT0134", fast_observe::ErrorCategory::Content),
+        (
+            FaultError::JournalCorrupt,
+            "FT0134",
+            fast_observe::ErrorCategory::Content,
+        ),
         (
             FaultError::LifecycleIllegalTransition(LifecycleIllegalTransition {
                 phase: "Loaded".to_string(),
@@ -61,7 +65,9 @@ fn each_variant_reports_its_allocated_code_category_and_advice() {
             fast_observe::ErrorCategory::Invariant,
         ),
         (
-            FaultError::WasmTrap(WasmTrap { detail: "x".to_string() }),
+            FaultError::WasmTrap(WasmTrap {
+                detail: "x".to_string(),
+            }),
             "FT0136",
             fast_observe::ErrorCategory::Fatal,
         ),

@@ -58,10 +58,13 @@ observer; every equivalence claim here carries one, as data).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Basic
-import Kit.Observer
-import Kit.Correspondence
+public import Machines.Basic
+public import Kit.Observer
+public import Kit.Correspondence
+@[expose] public section
+
 
 namespace Machines
 
@@ -338,3 +341,5 @@ theorem runnableTapes_iff (m : Machine S I) (start : S) (ht : RunnableTapes m st
 end Exec
 
 end Machines
+
+end -- public section

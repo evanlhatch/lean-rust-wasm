@@ -16,8 +16,9 @@
 //! - the registry table re-encodes byte-identically (the differential's
 //!   both directions).
 
-use schema_generated::{dec_bool, dec_byte, dec_string, dec_u64, dec_varint,
-  enc_str, enc_varint, CodecError};
+use schema_generated::{
+    CodecError, dec_bool, dec_byte, dec_string, dec_u64, dec_varint, enc_str, enc_varint,
+};
 
 /// The generated registry (tests/witness_check/witnesses_generated.rs —
 /// the emitted table; never hand-edited, `just gen` restores).
@@ -160,8 +161,7 @@ fn check_witness(fuel: u64, claim: &Pred, proof: &WProof, row: &Row) -> bool {
         WProof::Verdict(b) => pred_check(claim, row) && *b,
         WProof::Conj(pp, pq) => match claim {
             Pred::And(p, q) => {
-                check_witness(fuel - 1, p, pp, row)
-                    && check_witness(fuel - 1, q, pq, row)
+                check_witness(fuel - 1, p, pp, row) && check_witness(fuel - 1, q, pq, row)
             }
             _ => false,
         },
@@ -344,7 +344,12 @@ fn dec_witness(version_gate: u64, bs: &mut &[u8]) -> Result<Witness, WitnessErro
     let claim = dec_pred(bs.len() as u32 + 1, bs)?;
     let proof = dec_proof(bs.len() as u32 + 1, bs)?;
     let fuel = dec_u64(bs)?;
-    Ok(Witness { label, claim, proof, fuel })
+    Ok(Witness {
+        label,
+        claim,
+        proof,
+        fuel,
+    })
 }
 
 fn enc_witness(version: u64, w: &Witness, out: &mut Vec<u8>) {
@@ -368,9 +373,7 @@ const CRATE_PREFIX: &str = "crates/schema-generated/";
 
 /// Re-base a manifest row's repo-root-relative path to the crate root.
 fn crate_path(row_path: &str) -> &str {
-    row_path
-        .strip_prefix(CRATE_PREFIX)
-        .unwrap_or(row_path)
+    row_path.strip_prefix(CRATE_PREFIX).unwrap_or(row_path)
 }
 
 /// One parsed manifest row: the vector path + the expectation (the
@@ -398,7 +401,10 @@ fn manifest_rows() -> Vec<DuelRow> {
     .unwrap_or_else(|e| panic!("manifest: {e}"))
     .rows
     .into_iter()
-    .map(|r| DuelRow { path: r.path, accept: r.expectation })
+    .map(|r| DuelRow {
+        path: r.path,
+        accept: r.expectation,
+    })
     .collect()
 }
 
@@ -444,8 +450,7 @@ fn registry_round_trip_and_accept() {
     for r in WITNESS_REGISTRY {
         assert_eq!(r.version, WITNESS_VERSION, "the registry's pinned version");
         let mut bs = r.bytes;
-        let w = dec_witness(r.version, &mut bs)
-            .expect("the registry witness must decode");
+        let w = dec_witness(r.version, &mut bs).expect("the registry witness must decode");
         assert!(bs.is_empty(), "trailing bytes refuse: {}", r.label);
         assert_eq!(w.label, r.label, "the label survives the wire");
         assert_eq!(w.fuel, r.fuel, "the pinned fuel survives the wire");
@@ -469,8 +474,7 @@ fn registry_round_trip_and_accept() {
 fn duel_manifest() {
     let row = fixture_row();
     for r in manifest_rows() {
-        let bytes = std::fs::read(crate_path(&r.path))
-            .expect("the duel vector file exists");
+        let bytes = std::fs::read(crate_path(&r.path)).expect("the duel vector file exists");
         let verdict = witness_verdict(&bytes, &row);
         match (&r.accept, &verdict) {
             (true, Verdict::Accepted) => {}

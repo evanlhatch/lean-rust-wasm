@@ -59,14 +59,18 @@ Consumer trail: rides `Kit.CheckedProp` (pattern #1's carrier),
 `WasmCore.Instr`, `WasmCore.OpTable` (the ONE op table's sig
 projections), `WasmCore.Module`. Core-only.
 -/
+module
 
-import Kit.CheckedProp
-import Kit.Diag
-import WasmCore.Types
-import WasmCore.Instr
-import WasmCore.OpTable
-import WasmCore.Module
 
+public import Kit.CheckedProp
+public import Kit.Diag
+public import WasmCore.Types
+public import WasmCore.Instr
+public import WasmCore.OpTable
+public import WasmCore.Module
+
+
+@[expose] public section
 namespace WasmCore
 
 /-! ## The pop/push discipline -/
@@ -1259,7 +1263,11 @@ end
 def entryBounded (m : Module) : List Nat → Except ValidateError Unit
   | [] => .ok ()
   | fn :: rest =>
-      match m.funcs[fn]? with
+      -- THE IMPORT FACE's bound: the table's entries are ABSOLUTE
+      -- function indices — an entry may name an imported function
+      -- (the identity table's sib-index discipline covers the
+      -- imports too); the resolution is `Module.funcAt`'s ONE face.
+      match m.funcAt fn with
       | none => .error (.tableEntryRange fn)
       | some _ => entryBounded m rest
 
@@ -1282,13 +1290,29 @@ def checkTables (m : Module) : Except ValidateError Unit :=
   else
     checkEntries m m.tables
 
+/-- THE IMPORT FACE's static check: every import's declared type
+    index resolves (a dangling import type is the drift class a
+    dangling func type is — the `typeIndexRange` refusal, the
+    import's position in the payload). The provision row is RUNTIME
+    data (the host's linker provision; the model's `Import.impl`) —
+    nothing static to check there. -/
+def checkImports (m : Module) : Except ValidateError Unit :=
+  match m.imports.zipIdx.find? (fun p => m.typeAt p.1.tyIdx |>.isNone) with
+  | some p => .error (.typeIndexRange p.2 p.1.tyIdx)
+  | none => .ok ()
+
 /-- The module-level driver: the table discipline first (the
-    indirect-call lane's static face), then every function's body
-    validates against its (resolved) signature, indices included. -/
+    indirect-call lane's static face), then every import's type index
+    resolves (THE IMPORT FACE's static tooth), then every function's
+    body validates against its (resolved) signature, indices
+    included. -/
 def checkModule (m : Module) : Except ValidateError Unit :=
   match checkTables m with
   | .error e => .error e
-  | .ok () => checkFuncs m 0 m.funcs
+  | .ok () =>
+      match checkImports m with
+      | .error e => .error e
+      | .ok () => checkFuncs m 0 m.funcs
 
 /-- The module check's PER-FUNCTION resolution: a module that checks
     resolves every function's type index and validates its body
@@ -1324,3 +1348,6 @@ theorem checkFuncs_some (m : Module) :
               · next hc => simp at hchk
 
 end WasmCore
+
+end -- public section
+

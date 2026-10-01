@@ -56,6 +56,11 @@ Core-only: no mathlib, no Batteries (the cone rule); the group laws
 are discharged by `omega` over the prelude integers.
 -/
 
+
+
+module
+
+@[expose] public section
 namespace Kit
 
 /-! ## Rung 1 — Applicable (a patch that applies) -/
@@ -513,3 +518,5 @@ theorem fieldSet_notReversible :
       cases f <;> simp [fieldSetApply] at h0 h1 <;> omega
 
 end Kit
+
+end -- @[expose] public section

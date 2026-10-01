@@ -36,7 +36,8 @@ duel of design-forward-surface §3.2 — is the THEOREM SET:
 - `qEval_agree_iff`: both directions — the two evaluators agree at the
   set level over Bool weights (`evalQ_true_iff` is the lift).
 
-THE TWO NAMED WALLS — ONE DISSOLVED, ONE THE NAMED REFUSAL:
+THE TWO NAMED WALLS — BOTH DISSOLVED (the keep witness's pattern
+applied twice; the residue lives in the named narrowings):
 
 - **`project` DISSOLVED**: `Substrait.Typed` grew `Rel.keep` — the
   DROP projection (the caller-spelled output schema tied to the input
@@ -53,22 +54,32 @@ THE TWO NAMED WALLS — ONE DISSOLVED, ONE THE NAMED REFUSAL:
   narrowing (the wire's project node appends; the emit lane's
   spelling); `colsSub` is total, the narrowing lives in the SURFACE's
   elaboration (Query.QLang's QL0004), not in a partial bridge.
-- **`join` REFUSES (QL0001)** — the honest disposition after two
-  defeat attempts: (a) `Typed.Rel.join` reads a DOUBLED stream (the
-  reader-splitting convention) — expressing the query lane's
-  shared-base reading needs per-node stream replication; it is
-  EXPRESSIBLE (`Row.append`-built doubled readers, the halves
-  recovered by the `splitLeft`/`splitRight` laws) but the replication
-  is EXPONENTIAL in join depth and the agreement's reader becomes a
-  per-rel construction — the stream-convention change is the named
-  follow-up; (b) the deeper blocker: `select`-OVER-join —
-  `Typed.Rel.filter` is ENDO BY THE WIRE (`Proto.Rel.width`'s filter
-  row: width = input.width; a non-endo filter breaks the width law,
-  and Proto is outside this slice's zone) — so a general Q-lowering
-  covering `select (join …)` cannot type. The bridge refuses the join
-  arm with the registry's QL0001 (never a stub, never a fabricated
-  lowering); the query lane's equijoin reading stays pinned by
-  `QSat.join` + `evalJoinPairs_ok_sound` at both carriers.
+- **`join` DISSOLVED (the wave-30 F2 disposition)**: the two defeat
+  attempts named the wall precisely — (a) `Typed.Rel.join` reads a
+  DOUBLED stream (the reader-splitting convention); (b) the schema
+  mismatch `fieldsSchema ga ++ fieldsSchema gb` vs `fieldsSchema
+  (ga ++ gb)` is NOT defeq, so a lowering through the doubled-stream
+  join needs a rel-term schema cast, killing `evalRel`'s definitional
+  reductions. The dissolve: `Substrait.Typed` grew `Rel.join'` — the
+  SHARED-BASE join (both children read the SAME stream, the query
+  lane's reading) whose output index is the CALLER'S SPELLING carried
+  by the concatenation witness `AppendCols` (the Keep pattern's data
+  face — never a transport; the evaluator's walk is `Row.appendW`,
+  and its bridge is `appendW_colsAppend`: the walked pair IS the
+  query lane's joined row's typed image). The join condition is BUILT
+  (`joinCond`: the left key resolved in the LEFT schema, the right in
+  the RIGHT, at the common first-name-match type, lifted by
+  `HasCol.atLeft`/`atRight` — the type disagreement IS the resolution
+  failure, no transport) and its agreement is `joinCond_ok` (the
+  built condition evaluates to exactly `onEq`'s verdict). The pair
+  walk's completeness (`evalJoinPairs_ok_complete`) landed as the
+  mirror of the seed's soundness pin. The dissolve's residue (QL0001,
+  the named narrowings): an unresolvable key column, a key type the
+  two sides disagree on, and a key type outside the comparison-kernel
+  fragment (u64, string — the same atoms `Pred` compares); the INNER
+  reading only (the Q equijoin is the inner join; the outer rows'
+  padding is the named follow-up); and the WIRE spelling (the emit
+  lane ports with its consumer — the keep precedent).
 
 THE qlang! SURFACE (landed, `Query.QLang`): the term-elab macro
 elaborates the Lean-embedded pipeline directly to the typed `Q` —
@@ -260,6 +271,61 @@ def resolveCol : (s : Schema) → (name : String) → (t : Ty) → (n : Bool) �
         match resolveCol rest name t n with
         | some h => some { index := h.index + 1, resolves := h.resolves }
         | none => none
+
+/-- THE ONE RESOLVER's data walk (the ordinal face, type-erased): the
+    FIRST name-match decides — its ordinal, type, and nullability. The
+    dependent resolver above is this walk WITH the type-checked index:
+    a name match DECIDES (the type/nullability check is the refusal
+    gate at that ordinal, never a keep-searching), so `resolveCol`'s
+    index field IS this walk's ordinal (`resolveCol_index_colWalk?`).
+    The two data spellings consume the walk directly, never a
+    re-spelled recursion: the QLang face (`QLang.findCol` — the
+    elaboration-time ordinal + type) and the join-key spelling
+    (`fieldTy?` — the lowering's type lookup). One resolver, three
+    faces, zero re-walks. -/
+def colWalk? : Schema → String → Option (Nat × Ty × Bool)
+  | [], _ => none
+  | (name', t', n') :: rest, name =>
+      if name' = name then some (0, t', n')
+      else (colWalk? rest name).map (fun p => (p.1 + 1, p.2.1, p.2.2))
+
+/-- THE ORDINAL TIE (the derivation witness): whenever the dependent
+    resolver discharges at `hc`, the data walk returns the SAME ordinal
+    and the SAME (type, nullability) — the index `resolveCol` projects
+    is `colWalk?`'s. This is what makes the three faces ONE resolver:
+    the data spellings cannot drift off the dependent walk's ordinals. -/
+theorem resolveCol_index_colWalk? :
+    ∀ (s : Schema) (name : String) (t : Ty) (n : Bool)
+        (hc : HasCol s name t n),
+      resolveCol s name t n = some hc →
+      colWalk? s name = some (hc.index, t, n) := by
+  intro s
+  induction s with
+  | nil =>
+      intro name t n hc h
+      exact absurd h (by simp [resolveCol])
+  | cons c rest ih =>
+      intro name t n hc h
+      simp only [resolveCol] at h
+      split at h
+      · next h1 =>
+          split at h
+          · next h2 =>
+              injection h with hEq
+              have hi : hc.index = 0 := by rw [← hEq]; rfl
+              simp only [colWalk?]
+              rw [if_pos h1, hi]
+              exact congrArg _ (by simp [h2.1, h2.2])
+          · exact absurd h (by simp)
+      · next h1 =>
+          split at h
+          · next h' heq =>
+              injection h with hEq
+              have hi : hc.index = h'.index + 1 := by rw [← hEq]; rfl
+              simp only [colWalk?]
+              rw [if_neg h1, hi, ih name t n h' heq]
+              rfl
+          · exact absurd h (by simp)
 
 /-- THE COLUMN-READ ROW: a bridged resolution reads the typed row at
     exactly the query lane's projected value — the field read's
@@ -579,7 +645,7 @@ theorem predToExpr_ok {fs : List Field} (p : Pred fs) :
           simp only [Pred.check, Expr.evalCell, Args.eval, h1, evalFunc_not]
           rfl
 
-/-! ## The named refusal (the join wall's disposition) -/
+/-! ## The join refusals (the wall-2 dissolve's named narrowings) -/
 
 /-- The QL family — the qlang/bridge E-codes, allocated from the
     PERSISTED registry (`notes/code-registry.txt`, the spec of record).
@@ -589,19 +655,339 @@ theorem predToExpr_ok {fs : List Field} (p : Pred fs) :
     scan ties every spelling to its allocated live row. -/
 def eQL0001 : Kit.ECode := ⟨"QL0001"⟩
 
-/-- THE JOIN REFUSAL (the wall-2 disposition, the header's item): the
-    typed join's doubled-stream convention + the wire's endo filter
-    make a general Q-lowering of the equijoin unhonest here — the
-    refusal is the NAMED extension point, rendered through the one
-    Diag envelope. -/
-def joinRefusal : String :=
+/-- THE JOIN KEY REFUSALS (the wall-2 dissolve's residue): the shared-
+    base join (`Typed.Rel.join'`) lowers the equijoin itself; what still
+    refuses is the KEY — a key column that does not resolve
+    (first-name-match, per side), a key type the two sides disagree on,
+    or a key type outside the comparison-kernel fragment (u64, string —
+    the same atoms `Pred` compares; the bool/i64 kernel rows port with
+    their consumer). Rendered through the one Diag envelope. -/
+def joinKeyRefusal (why : String) : String :=
   Kit.Diag.toString
     { code := eQL0001
-      message := "typed-bridge: the equijoin refuses — the typed join's \
-        doubled-stream convention needs per-node stream replication, and \
-        the typed layer's filter is endo by the wire (select-over-join has \
-        no spelling); the stream-convention lowering is the named follow-up"
+      message := s!"typed-bridge: the equijoin's key refuses — {why}"
       severity := .error }
+
+/-! ## The join lowering (wall 2's dissolve) -/
+
+/-- The key column's type lookup (first-name-match — the query lane's
+    `RowVals.project?` discipline at the lowering): the ONE resolver's
+    data walk (`colWalk?`), the type projection — never a re-spelled
+    recursion (the ordinal-tie theorem keeps it off `resolveCol`'s
+    index). -/
+def fieldTy? (fs : List Field) (n : String) : Option Ty :=
+  (colWalk? (fieldsSchema fs) n).map (fun p => p.2.1)
+
+/-- The appended output schema's canonical concatenation witness: the
+    equijoin's result schema IS the left bridge's elementwise append of
+    the right — total over `ga`, the `(f :: rest) ++ gb` and
+    `List.map`-cons reductions carry it definitionally (the Keep-
+    witness discipline: the Type-sorted data face, the spelled index —
+    never a transport). -/
+def colsAppendCols : (ga gb : List Field) →
+    AppendCols (fieldsSchema ga) (fieldsSchema gb) (fieldsSchema (ga ++ gb))
+  | [], _ => .wnil
+  | f :: rest, gb => .wcons (fieldToCol f) (colsAppendCols rest gb)
+
+/-- THE APPEND-WALK BRIDGE (the wall-2 dissolve's teeth — the
+    `toTypedRow_keep` sibling): over the canonical witness, the typed
+    evaluator's appended-pair re-index IS the query lane's joined row's
+    typed image. This is what buys the agreement theorems' join case:
+    the walked pair decodes to exactly `QSat.join`'s appended row. NOTE
+    the two append faces are NOT defeq — `fieldsSchema ga ++
+    fieldsSchema gb` vs `fieldsSchema (ga ++ gb)` is the wall's own
+    tooth (the cast this whole dissolve refuses to take) — the WITNESS
+    WALK is the honest crossing, exactly the Keep discipline. -/
+theorem appendW_colsAppend : ∀ (ga gb : List Field) (la : RowVals ga) (rb : RowVals gb),
+    Substrait.Typed.Row.appendW (colsAppendCols ga gb)
+        (Substrait.Typed.Row.append (toTypedRow ga la) (toTypedRow gb rb))
+      = toTypedRow (ga ++ gb) (Query.Row.append la rb) := by
+  intro ga gb
+  induction ga with
+  | nil => intro la rb; cases la; rfl
+  | cons f rest ih =>
+      intro la rb
+      cases la with
+      | cons v vs =>
+          show Substrait.Typed.Row.cons (some v)
+              (Substrait.Typed.Row.appendW (colsAppendCols rest gb)
+                (Substrait.Typed.Row.append (toTypedRow rest vs) (toTypedRow gb rb)))
+            = Substrait.Typed.Row.cons (some v)
+                (toTypedRow (rest ++ gb) (Query.Row.append vs rb))
+          rw [ih vs rb]
+
+/-- A left-schema key read, lifted into the appended pair's row, reads
+    the query lane's projected value (`typedGet_project`'s face at the
+    left side — the index is unchanged by the left lift). -/
+theorem appendPair_get_left {ga gb : List Field} (la : RowVals ga) (rb : RowVals gb)
+    (n : String) (t : Ty) (hc : HasCol (fieldsSchema ga) n t false)
+    (hrc : resolveCol (fieldsSchema ga) n t false = some hc) :
+    ∃ v : Value t,
+      (Substrait.Typed.Row.append (toTypedRow ga la) (toTypedRow gb rb)).get
+          (HasCol.atLeft (fieldsSchema ga) hc (fieldsSchema gb)).index
+        = some (Sigma.mk t (some v))
+      ∧ RowVals.project? ga la n = some { ty := t, val := v } := by
+  obtain ⟨v, hget, hproj⟩ := typedGet_project ga la n t hc hrc
+  refine ⟨v, ?_, hproj⟩
+  rw [HasCol.atLeft_index hc (fieldsSchema gb),
+    Substrait.Typed.Row.get_append_left _ _ _ (Schema.get?_lt _ _ _ hc.resolves)]
+  exact hget
+
+/-- A right-schema key read, lifted into the appended pair's row, reads
+    the query lane's projected value (the right lift's index is the
+    left schema's length plus the column's own ordinal). -/
+theorem appendPair_get_right {ga gb : List Field} (la : RowVals ga) (rb : RowVals gb)
+    (n : String) (t : Ty) (hc : HasCol (fieldsSchema gb) n t false)
+    (hrc : resolveCol (fieldsSchema gb) n t false = some hc) :
+    ∃ v : Value t,
+      (Substrait.Typed.Row.append (toTypedRow ga la) (toTypedRow gb rb)).get
+          (HasCol.atRight (fieldsSchema ga) (fieldsSchema gb) hc).index
+        = some (Sigma.mk t (some v))
+      ∧ RowVals.project? gb rb n = some { ty := t, val := v } := by
+  obtain ⟨v, hget, hproj⟩ := typedGet_project gb rb n t hc hrc
+  refine ⟨v, ?_, hproj⟩
+  rw [HasCol.atRight_index (fieldsSchema ga) hc,
+    Substrait.Typed.Row.get_append_right _ _ _]
+  exact hget
+
+/-- The shared-key condition's kernel face: the two lifted field reads
+    at the COMMON key type — the comparison kernels' dispatch (u64,
+    string; any other key type refuses — the comparison-kernel
+    fragment's boundary, the named narrowing). One NAME per argument
+    type, so the dispatch is injective in the key's type. -/
+def joinCondOf {ga gb : List Field} (ln rn : String) :
+    (t : Ty) → HasCol (fieldsSchema ga) ln t false →
+      HasCol (fieldsSchema gb) rn t false →
+      Except String (Expr (fieldsSchema ga ++ fieldsSchema gb) .bool false)
+  | .u64, hl, hr =>
+      .ok (Expr.call u64EqSig (Args.cons .u64 false
+        (Expr.field ln .u64 false (HasCol.atLeft (fieldsSchema ga) hl (fieldsSchema gb)))
+        (Args.cons .u64 false
+          (Expr.field rn .u64 false (HasCol.atRight (fieldsSchema ga) (fieldsSchema gb) hr))
+          Args.nil)))
+  | .string, hl, hr =>
+      .ok (Expr.call strEqSig (Args.cons .string false
+        (Expr.field ln .string false (HasCol.atLeft (fieldsSchema ga) hl (fieldsSchema gb)))
+        (Args.cons .string false
+          (Expr.field rn .string false (HasCol.atRight (fieldsSchema ga) (fieldsSchema gb) hr))
+          Args.nil)))
+  | _, _, _ =>
+      .error (joinKeyRefusal "the key columns' common type is outside the \
+        comparison-kernel fragment (u64, string)")
+
+/-- THE JOIN CONDITION BUILDER (the wall-2 dissolve's face): the
+    equijoin's ON as a typed Bool expression over the appended output
+    schemas — the left key resolved IN the left schema (lifted left),
+    the right key resolved IN the right schema at the LEFT key's type
+    (so a type disagreement IS the resolution failure — no transport),
+    first-name-match per side. A missing key, a type disagreement, or a
+    key type outside the kernel fragment refuses (QL0001 — the named
+    narrowing; the query lane's missing-key reading is the no-match
+    semantics, the lowering refuses the QUERY — the predToExpr
+    discipline). -/
+def joinCond (ga gb : List Field) (ln rn : String) :
+    Except String (Expr (fieldsSchema ga ++ fieldsSchema gb) .bool false) :=
+  match fieldTy? ga ln with
+  | some t =>
+      match resolveCol (fieldsSchema ga) ln t false with
+      | some hl =>
+          match resolveCol (fieldsSchema gb) rn t false with
+          | some hr => joinCondOf ln rn t hl hr
+          | none => .error (joinKeyRefusal "the right key column does not resolve \
+            at the left key's type (first-name-match, per side)")
+      | none => .error (joinKeyRefusal "the left key column does not resolve \
+        at its first-name-match type")
+  | none => .error (joinKeyRefusal "the left key column does not resolve \
+    at its first-name-match type")
+
+/-- THE JOIN CONDITION ROW (the per-key agreement — `predToExpr_ok`'s
+    sibling): the built condition evaluates over the TYPED appended
+    pair (the cond's own schema — `l' ++ r'`, the evaluator's pair
+    shape) to exactly the query lane's `onEq` verdict — the lifted
+    reads and the kernels read the SAME projected values. -/
+theorem joinCond_ok {ga gb : List Field} (ln rn : String)
+    (la : RowVals ga) (rb : RowVals gb)
+    (e : Expr (fieldsSchema ga ++ fieldsSchema gb) .bool false)
+    (h : joinCond ga gb ln rn = .ok e) :
+    e.evalCell (Substrait.Typed.Row.append (toTypedRow ga la) (toTypedRow gb rb))
+      = .ok (some (.bool (onEq ga gb ln rn la rb))) := by
+  simp only [joinCond] at h
+  cases hf : fieldTy? ga ln with
+  | none => rw [hf] at h; simp at h
+  | some t =>
+      simp only [hf] at h
+      cases hrc1 : resolveCol (fieldsSchema ga) ln t false with
+      | none => rw [hrc1] at h; simp at h
+      | some hl =>
+          simp only [hrc1] at h
+          cases hrc2 : resolveCol (fieldsSchema gb) rn t false with
+          | none => rw [hrc2] at h; simp at h
+          | some hr =>
+              simp only [hrc2] at h
+              cases t with
+              | u64 =>
+                  simp only [joinCondOf] at h
+                  injection h with h'
+                  subst h'
+                  obtain ⟨a, hgetL, hprojL⟩ :=
+                    appendPair_get_left la rb ln .u64 hl hrc1
+                  obtain ⟨b, hgetR, hprojR⟩ :=
+                    appendPair_get_right la rb rn .u64 hr hrc2
+                  cases a with | u64 a0 => cases b with | u64 b0 =>
+                  simp only [Expr.evalCell, Args.eval, hgetL, hgetR, castVal_self,
+                    evalFunc_u64equal, onEq, hprojL, hprojR]
+                  rfl
+              | string =>
+                  simp only [joinCondOf] at h
+                  injection h with h'
+                  subst h'
+                  obtain ⟨a, hgetL, hprojL⟩ :=
+                    appendPair_get_left la rb ln .string hl hrc1
+                  obtain ⟨b, hgetR, hprojR⟩ :=
+                    appendPair_get_right la rb rn .string hr hrc2
+                  cases a with | string a0 => cases b with | string b0 =>
+                  simp only [Expr.evalCell, Args.eval, hgetL, hgetR, castVal_self,
+                    evalFunc_strequal, onEq, hprojL, hprojR]
+                  rfl
+              | _ => simp [joinCondOf] at h
+
+/-- The built condition's evaluation is TOTAL over any appended pair
+    of the children's rows (the field reads are proved, the kernels
+    are total at the two-argument arity) — the refusals live in the
+    builder, never in the walk. -/
+theorem fieldRead_total {s : Schema} {name : String} {t : Ty} {nul : Bool}
+    (hc : HasCol s name t nul) (row : Row s) :
+    ∃ v, (Expr.field name t nul hc).evalCell row = .ok v := by
+  obtain ⟨c0, hc0⟩ := Substrait.Typed.Row.get_resolves hc row
+  cases c0 with
+  | none => exact ⟨none, by simp only [Expr.evalCell, hc0]⟩
+  | some w => exact ⟨some w, by simp only [Expr.evalCell, hc0, castVal_self]⟩
+
+/-- The comparison kernels are TOTAL at the two-argument arity (the
+    binKernel's NULL face — a missing operand is `.ok none`, the SQL
+    refusal reading, never an error). -/
+theorem evalFunc_u64equal_total (v1 v2 : Option (Value .u64)) :
+    ∃ v, evalFunc u64EqSig [Sigma.mk .u64 v1, Sigma.mk .u64 v2] = .ok v := by
+  cases v1 with
+  | none => exact ⟨none, rfl⟩
+  | some w =>
+      cases w with
+      | u64 x =>
+          cases v2 with
+          | none => exact ⟨none, rfl⟩
+          | some w2 =>
+              cases w2 with
+              | u64 y => exact ⟨some (Value.bool (x == y)), rfl⟩
+
+theorem evalFunc_strequal_total (v1 v2 : Option (Value .string)) :
+    ∃ v, evalFunc strEqSig [Sigma.mk .string v1, Sigma.mk .string v2] = .ok v := by
+  cases v1 with
+  | none => exact ⟨none, rfl⟩
+  | some w =>
+      cases w with
+      | string x =>
+          cases v2 with
+          | none => exact ⟨none, rfl⟩
+          | some w2 =>
+              cases w2 with
+              | string y => exact ⟨some (Value.bool (x == y)), rfl⟩
+
+/-- The call-face totality: a call evaluates when the args' spine
+    evaluates and the kernel answers (the engine's dispatch — the
+    `hfun` hypothesis carries the per-sig face). -/
+theorem evalCell_call_total {s : Schema} (sig : FunctionSig)
+    (args : Args s sig.args) (row : Row s)
+    (hargs : ∃ vs, args.eval row = .ok vs)
+    (hfun : ∀ vs, args.eval row = .ok vs → ∃ v, evalFunc sig vs = .ok v) :
+    ∃ v, (Expr.call sig args).evalCell row = .ok v := by
+  obtain ⟨vs, hvs⟩ := hargs
+  have hunfold : (Expr.call sig args).evalCell row
+      = match args.eval row with
+        | .ok vs' => evalFunc sig vs'
+        | .error e => .error e := rfl
+  rw [hunfold, hvs]
+  exact hfun vs hvs
+
+theorem joinCondOf_evalCell_total {ga gb : List Field} (ln rn : String)
+    (t : Ty) (hl : HasCol (fieldsSchema ga) ln t false)
+    (hr : HasCol (fieldsSchema gb) rn t false)
+    (e : Expr (fieldsSchema ga ++ fieldsSchema gb) .bool false)
+    (h : joinCondOf ln rn t hl hr = .ok e)
+    (l : Substrait.Typed.Row (fieldsSchema ga))
+    (r : Substrait.Typed.Row (fieldsSchema gb)) :
+    ∃ v, e.evalCell (Substrait.Typed.Row.append l r) = .ok v := by
+  cases t with
+  | u64 =>
+      simp only [joinCondOf] at h
+      injection h with h'
+      subst h'
+      obtain ⟨v1, hv1⟩ := fieldRead_total
+        (HasCol.atLeft (fieldsSchema ga) hl (fieldsSchema gb))
+        (Substrait.Typed.Row.append l r)
+      obtain ⟨v2, hv2⟩ := fieldRead_total
+        (HasCol.atRight (fieldsSchema ga) (fieldsSchema gb) hr)
+        (Substrait.Typed.Row.append l r)
+      refine evalCell_call_total u64EqSig _ _
+        ⟨[Sigma.mk .u64 v1, Sigma.mk .u64 v2], ?_⟩ (fun vs hvs => ?_)
+      · simp only [Args.eval, hv1, hv2]
+      · simp only [Args.eval, hv1, hv2] at hvs
+        injection hvs with hvs'
+        subst hvs'
+        exact evalFunc_u64equal_total v1 v2
+  | string =>
+      simp only [joinCondOf] at h
+      injection h with h'
+      subst h'
+      obtain ⟨v1, hv1⟩ := fieldRead_total
+        (HasCol.atLeft (fieldsSchema ga) hl (fieldsSchema gb))
+        (Substrait.Typed.Row.append l r)
+      obtain ⟨v2, hv2⟩ := fieldRead_total
+        (HasCol.atRight (fieldsSchema ga) (fieldsSchema gb) hr)
+        (Substrait.Typed.Row.append l r)
+      refine evalCell_call_total strEqSig _ _
+        ⟨[Sigma.mk .string v1, Sigma.mk .string v2], ?_⟩ (fun vs hvs => ?_)
+      · simp only [Args.eval, hv1, hv2]
+      · simp only [Args.eval, hv1, hv2] at hvs
+        injection hvs with hvs'
+        subst hvs'
+        exact evalFunc_strequal_total v1 v2
+  | _ => simp [joinCondOf] at h
+
+/-- The built condition's `condHolds` is total (the totality face the
+    join walk's totality consumes). -/
+theorem joinCond_holds_total {ga gb : List Field} (ln rn : String)
+    (c : Expr (fieldsSchema ga ++ fieldsSchema gb) .bool false)
+    (h : joinCond ga gb ln rn = .ok c)
+    (l : Substrait.Typed.Row (fieldsSchema ga))
+    (r : Substrait.Typed.Row (fieldsSchema gb)) :
+    ∃ b, condHolds c l r = .ok b := by
+  have hstruct : ∃ (t : Ty) (hl : HasCol (fieldsSchema ga) ln t false)
+      (hr : HasCol (fieldsSchema gb) rn t false),
+      joinCondOf ln rn t hl hr = .ok c := by
+    simp only [joinCond] at h
+    cases hf : fieldTy? ga ln with
+    | none => rw [hf] at h; simp at h
+    | some t =>
+        simp only [hf] at h
+        cases hrc1 : resolveCol (fieldsSchema ga) ln t false with
+        | none => rw [hrc1] at h; simp at h
+        | some hl =>
+            simp only [hrc1] at h
+            cases hrc2 : resolveCol (fieldsSchema gb) rn t false with
+            | none => rw [hrc2] at h; simp at h
+            | some hr =>
+                simp only [hrc2] at h
+                cases t with
+                | u64 => exact ⟨.u64, hl, hr, h⟩
+                | string => exact ⟨.string, hl, hr, h⟩
+                | _ => simp [joinCondOf] at h
+  obtain ⟨t, hl, hr, hjoin⟩ := hstruct
+  obtain ⟨v, hv⟩ := joinCondOf_evalCell_total ln rn t hl hr c hjoin l r
+  unfold condHolds
+  rw [hv]
+  cases v with
+  | none => exact ⟨false, rfl⟩
+  | some s => cases s with | bool b => exact ⟨b, rfl⟩
 
 /-! ## The keep-pick bridge (the wall-1 dissolve's teeth) -/
 
@@ -659,13 +1045,22 @@ theorem toTypedRow_keep : ∀ (fs : List Field) (c : Cols fs) (r' : RowVals fs),
 def qRelBase : String := "query.base"
 
 /-- THE LOWERING (design note §3.2's `qlangToRel`, now over the FULL
-    join-free fragment): the `table` / `select` / `project` / `union`
-    arms lower to the typed layer's relations; the `join` arm is the
-    NAMED REFUSAL (`joinRefusal`, QL0001). Never lossy, never cast:
-    every arm produces a `Rel` whose indices are DEFEQ the bridge's
-    schema (the project arm's output index IS the Q fragment's own
-    `c.fields gs` computation — the keep-pick discipline), so
-    `evalRel`'s definitional reductions survive (06's discipline). -/
+    fragment INCLUDING the equijoin — wall 2's dissolve): the `table` /
+    `select` / `project` / `union` arms lower as before; the `join` arm
+    lowers to the typed layer's SHARED-BASE JOIN (`Rel.join'` — both
+    children read the same stream, the query lane's reading; the output
+    index is the caller's spelling carried by the concatenation
+    witness `colsAppendCols`, so NO transport). Never lossy, never
+    cast: every arm produces a `Rel` whose indices are DEFEQ the
+    bridge's schema (the project arm's output index IS the Q fragment's
+    own `c.fields gs` computation; the join arm's IS the Q fragment's
+    own `fieldsSchema (ga ++ gb)` — the keep-pick discipline), so
+    `evalRel`'s definitional reductions survive (06's discipline). The
+    join arm's residual refusals are the KEY's (joinKeyRefusal, QL0001:
+    unresolvable key, type disagreement, key type outside the
+    comparison-kernel fragment — the named narrowings) plus the inner
+    reading (the Q fragment's equijoin is the inner join; the outer
+    rows' padding is the named follow-up). -/
 def qToRel {fs gs : List Field} (q : Q fs gs) :
     Except String (Rel (fieldsSchema fs) (fieldsSchema gs)) :=
   match q with
@@ -684,12 +1079,18 @@ def qToRel {fs gs : List Field} (q : Q fs gs) :
       | .ok r1, .ok r2 => .ok (.set .unionAll r1 r2)
       | .error e, _ => .error e
       | _, .error e => .error e
-  | .join _ _ _ _ => .error joinRefusal
+  | @Q.join _ _ _ ln rn q1 q2 =>
+      match qToRel q1, qToRel q2, joinCond _ _ ln rn with
+      | .ok r1, .ok r2, .ok c =>
+          .ok (.join' r1 r2 (colsAppendCols _ _) c .inner)
+      | .error e, _, _ => .error e
+      | _, .error e, _ => .error e
+      | _, _, .error e => .error e
 
 /-- The bridge reader: responds to EVERY name with the base rows'
     typed images (the lowering emits one fixed name — `qRelBase`; the
-    join's reader-splitting never occurs in the lowered fragment — the
-    join arm refuses, QL0001). -/
+    shared-base join feeds BOTH children this reader directly — no
+    reader-splitting ever occurs in the lowered fragment). -/
 def bridgeReader {fs : List Field} (rows : List (RowVals fs)) :
     Reader (fieldsSchema fs) :=
   fun _ => .ok (rows.map (toTypedRow fs))
@@ -780,10 +1181,63 @@ theorem qEval_sound {fs : List Field} :
               obtain ⟨r', hq', htr⟩ := ih rq hqr rows input in' hin r₀ hm
               refine ⟨c.pick _ r', QSat.project hq' rfl, ?_⟩
               rw [hrEq, ← htr, toTypedRow_keep]
-  | join _ _ _ _ =>
-      intro rel h rows input out hok _ _
+  | join ln rn q1 q2 ih1 ih2 =>
+      intro rel h rows input out hok r hr
       simp only [qToRel] at h
-      simp at h
+      cases hr1 : qToRel q1 with
+      | error e => rw [hr1] at h; simp at h
+      | ok r1 =>
+          rw [hr1] at h
+          cases hr2 : qToRel q2 with
+          | error e => rw [hr2] at h; simp at h
+          | ok r2 =>
+              rw [hr2] at h
+              cases hc : joinCond _ _ ln rn with
+              | error e => rw [hc] at h; simp at h
+              | ok c =>
+                  rw [hc] at h
+                  simp only [Except.ok.injEq] at h
+                  obtain rfl := h
+                  simp only [evalRel] at hok
+                  cases hin1 : evalRel (bridgeReader rows) r1 input with
+                  | error e => rw [hin1] at hok; simp at hok
+                  | ok lrows =>
+                      rw [hin1] at hok
+                      cases hin2 : evalRel (bridgeReader rows) r2 input with
+                      | error e => rw [hin2] at hok; simp at hok
+                      | ok rrows =>
+                          rw [hin2] at hok
+                          simp only [evalJoin] at hok
+                          cases hp : evalJoinPairs c lrows rrows with
+                          | error e => rw [hp] at hok; simp at hok
+                          | ok inner =>
+                              rw [hp] at hok
+                              cases hul : unmatchedLeft c lrows rrows with
+                              | error e => rw [hul] at hok; simp at hok
+                              | ok ul =>
+                                  rw [hul] at hok
+                                  cases hur : unmatchedRight c rrows lrows with
+                                  | error e => rw [hur] at hok; simp at hok
+                                  | ok ur =>
+                                      rw [hur] at hok
+                                      simp only [Except.ok.injEq] at hok
+                                      obtain rfl := hok
+                                      obtain ⟨x, hxin, hrx⟩ := List.mem_map.mp hr
+                                      obtain ⟨la, rb, hxe, hla, hrb, hcond⟩ :=
+                                        evalJoinPairs_ok_sound c lrows rrows inner hp x hxin
+                                      obtain ⟨la', hq1, htr1⟩ :=
+                                        ih1 r1 hr1 rows input lrows hin1 la hla
+                                      obtain ⟨rb', hq2, htr2⟩ :=
+                                        ih2 r2 hr2 rows input rrows hin2 rb hrb
+                                      have hon : onEq _ _ ln rn la' rb' = true := by
+                                        unfold condHolds at hcond
+                                        rw [← htr1, ← htr2,
+                                          joinCond_ok ln rn la' rb' c hc] at hcond
+                                        simpa using hcond
+                                      exact ⟨Query.Row.append la' rb',
+                                        QSat.join hq1 hq2 hon rfl,
+                                        by rw [← hrx, hxe, ← htr1, ← htr2,
+                                          appendW_colsAppend]⟩
   | union q1 q2 ih1 ih2 =>
       intro rel h rows input out hok r hr
       simp only [qToRel] at h
@@ -871,10 +1325,30 @@ theorem qEval_total {fs : List Field} :
           obtain ⟨in', hin⟩ := ih rq hqr rows input
           refine ⟨evalKeepW (colsKeep _ c) in', ?_⟩
           simp only [evalRel, hin]
-  | join _ _ _ _ =>
+  | join ln rn q1 q2 ih1 ih2 =>
       intro rel h rows input
       simp only [qToRel] at h
-      simp at h
+      cases hr1 : qToRel q1 with
+      | error e => rw [hr1] at h; simp at h
+      | ok r1 =>
+          rw [hr1] at h
+          cases hr2 : qToRel q2 with
+          | error e => rw [hr2] at h; simp at h
+          | ok r2 =>
+              rw [hr2] at h
+              cases hc : joinCond _ _ ln rn with
+              | error e => rw [hc] at h; simp at h
+              | ok c =>
+                  rw [hc] at h
+                  simp only [Except.ok.injEq] at h
+                  obtain rfl := h
+                  obtain ⟨lrows, hl1⟩ := ih1 r1 hr1 rows input
+                  obtain ⟨rrows, hr2'⟩ := ih2 r2 hr2 rows input
+                  have htot : ∀ (l : Substrait.Typed.Row _) (r' : Substrait.Typed.Row _),
+                      ∃ b, condHolds c l r' = .ok b := joinCond_holds_total _ _ c hc
+                  obtain ⟨t, ht⟩ := evalJoin_ok_exists .inner c htot lrows rrows
+                  exact ⟨t.map (fun x => Substrait.Typed.Row.appendW (colsAppendCols _ _) x),
+                    by simp only [evalRel, hl1, hr2', ht]⟩
   | union q1 q2 ih1 ih2 =>
       intro rel h rows input
       simp only [qToRel] at h
@@ -968,7 +1442,47 @@ theorem qEval_complete {fs : List Field} (rows : List (RowVals fs)) :
   | @join ga gb ln rn q1 q2 la rb r h1 h2 h3 h4 ih1 ih2 =>
       intro rel h
       simp only [qToRel] at h
-      simp at h
+      cases hr1 : qToRel q1 with
+      | error e => rw [hr1] at h; simp at h
+      | ok r1 =>
+          rw [hr1] at h
+          cases hr2 : qToRel q2 with
+          | error e => rw [hr2] at h; simp at h
+          | ok r2 =>
+              rw [hr2] at h
+              cases hc : joinCond _ _ ln rn with
+              | error e => rw [hc] at h; simp at h
+              | ok c =>
+                  rw [hc] at h
+                  obtain rfl := Except.ok.inj h
+                  obtain ⟨lrows, hl1, hla⟩ := ih1 r1 hr1
+                  obtain ⟨rrows, hr2', hrb⟩ := ih2 r2 hr2
+                  have hc2 : condHolds c (toTypedRow ga la) (toTypedRow gb rb)
+                      = .ok true := by
+                    unfold condHolds
+                    rw [joinCond_ok ln rn la rb c hc]
+                    simpa using h3
+                  have htot : ∀ (l : Substrait.Typed.Row _) (r' : Substrait.Typed.Row _),
+                      ∃ b, condHolds c l r' = .ok b := joinCond_holds_total _ _ c hc
+                  obtain ⟨p, hp⟩ := evalJoinPairs_ok_exists c htot lrows rrows
+                  obtain ⟨ul, hul⟩ := unmatchedWith_ok_exists (anyMatch c)
+                    (fun x t => anyMatchOn_ok_exists (condHolds c) htot x t) lrows rrows
+                  obtain ⟨ur, hur⟩ := unmatchedWith_ok_exists (anyMatchR c)
+                    (fun x t => anyMatchOn_ok_exists
+                      (fun fixed walked => condHolds c walked fixed)
+                      (fun y x => htot x y) x t) rrows lrows
+                  have hjoin' : evalJoin .inner c lrows rrows = .ok p := by
+                    simp only [evalJoin, unmatchedLeft, unmatchedRight,
+                      hp, hul, hur]
+                  refine ⟨p.map (fun x => Substrait.Typed.Row.appendW (colsAppendCols _ _) x),
+                    ?_, ?_⟩
+                  · simp only [evalRel, hl1, hr2', hjoin']
+                  · rw [List.mem_map]
+                    refine ⟨Substrait.Typed.Row.append (toTypedRow ga la)
+                      (toTypedRow gb rb), ?_, ?_⟩
+                    · exact evalJoinPairs_ok_complete c lrows rrows p hp
+                        _ hla _ hrb hc2
+                    · rw [appendW_colsAppend, ← h4]
   | @unionL g q1 q2 r h1 ih =>
       intro rel h
       simp only [qToRel] at h

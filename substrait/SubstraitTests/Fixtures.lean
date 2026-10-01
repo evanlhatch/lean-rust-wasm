@@ -96,3 +96,15 @@ def joinCond : Expr (sa ++ sb) .bool false :=
 
 def demoJoin : Rel (sa ++ sb) (sa ++ sb) :=
   .join (.read "a" sa) (.read "b" sb) joinCond .inner
+
+/-- the CROSS rel: the condition-free join of the two single-column
+    reads (the wire's CrossRel face; the evaluator rides `evalJoin` at
+    the always-true cond). -/
+def crossRel : Rel (sa ++ sb) (sa ++ sb) :=
+  .cross (.read "a" sa) (.read "b" sb)
+
+/-- the WRITE rel: insert the units read into the named table (the
+    written table's schema IS the input's output schema — the
+    alignment by construction). -/
+def writeRel : Rel units units :=
+  .write ["mydb", "units"] .insert readUnits

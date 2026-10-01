@@ -4,7 +4,7 @@ LintKit — the minimal linter engine (notes/v3/09-gates-ops.md §3's
 discipline + the env-linters (axiom allowlist, package namespace,
 duplicate def bodies incl. the upstream extension, bare checker, verdict
 constructors, recursive-simp census, guest ban + the `@[guest]`/
-`@[guest_std]` gate) + the text lints (no-new-partial, nolint reason,
+`@[guest_std]` gate, the evidence-redundancy census) + the text lints (no-new-partial, nolint reason,
 codec registration, did-you-mean) + the runner the `lintkit` exe drives.
 Core-only: no LSpec/mathlib, so any package may import it.
 
@@ -24,4 +24,5 @@ public import LintKit.GuestGate
 public import LintKit.DecideFirst
 public import LintKit.Graduation
 public import LintKit.ZeroCitation
+public import LintKit.EvidenceRedundancy
 public import LintKit.Runner

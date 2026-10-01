@@ -35,8 +35,12 @@ Five questions (notes/v3/01-core.md):
   pins cannot drift).
 -/
 
-import Lean
-import Kit.Diag
+module
+
+public meta import Lean
+public meta import Kit.Diag
+
+public meta section
 
 namespace Kit.Derive.Common
 
@@ -126,3 +130,5 @@ def checkScope (ii : InductiveVal)
     throwDiag rMutual.code rMutual.message
 
 end Kit.Derive.Common
+
+end -- public meta section

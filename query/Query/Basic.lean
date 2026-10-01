@@ -49,10 +49,13 @@ The five questions (notes/v3/01-core.md):
 Core-only (imports SchemaCore + ZSet.Basic — the cone rule; no
 mathlib, no Batteries).
 -/
+module
 
-import SchemaCore.RowVals
-import SchemaCore.Codec
-import ZSet.Basic
+public import SchemaCore.RowVals
+public import SchemaCore.Codec
+public import ZSet.Basic
+@[expose] public section
+
 
 namespace Query
 
@@ -269,3 +272,5 @@ instance instCanonKeyRowVals (fs : List Field) : ZSet.CanonKey (RowVals fs) wher
       · exact Or.inr (Or.inr h)
 
 end Query
+
+end -- public section

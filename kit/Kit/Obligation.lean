@@ -45,7 +45,11 @@ The five questions (notes/v3/01-core.md):
 
 -/
 
-import Lean
+module
+
+public import Lean
+
+@[expose] public section
 
 namespace Kit
 
@@ -206,3 +210,5 @@ theorem Obligation.decideDischarge_of_claim {α : Type} {P : Prop}
   exact decideEvidence_of_claim hc
 
 end Kit
+
+end -- @[expose] public section

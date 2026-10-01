@@ -46,9 +46,12 @@ mathlib semiring (no `one`, no `mul_assoc`/`mul_comm`, core-only).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Kit.Change
-import Kit.Correspondence
+public import Kit.Change
+public import Kit.Correspondence
+@[expose] public section
+
 
 /-! ## The key ordering (core-only, minimal) -/
 
@@ -1231,3 +1234,5 @@ def weightFnIso {K Row : Type} [wk : WKind K] [ck : CanonKey Row] [DecidableEq R
   inv_to m := rfl
 
 end ZSet
+
+end -- public section

@@ -157,3 +157,5 @@ import SchemaCore.Confluence
 import SchemaCore.Witness
 import SchemaCore.WitnessGen
 import SchemaCore.Dependent
+import SchemaCore.Config
+import SchemaCore.Surface

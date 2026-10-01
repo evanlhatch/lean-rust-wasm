@@ -22,6 +22,9 @@ The five questions (notes/v3/01-core.md):
 - gate row: the ownership gate's on-disk set + the ledger report's
   artifact count ride THIS enumeration (never a second walk).
 -/
+module
+
+@[expose] public section
 
 namespace Inspector.ArtifactScan
 

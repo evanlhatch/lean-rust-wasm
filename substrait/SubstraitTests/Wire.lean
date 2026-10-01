@@ -82,11 +82,11 @@ def drawRead (t : Tape) : (Rel × Tape) :=
   else
     (.read (.namedTable nms) none, t)
 
-/-- The rel drawer: all EIGHT arms, at a bounded depth. -/
+/-- The rel drawer: all TEN arms, at a bounded depth. -/
 def drawRel : Nat → Tape → (Rel × Tape)
   | 0, t => drawRead t
   | depth + 1, t =>
-      let (k, t) := t.below 8
+      let (k, t) := t.below 10
       match k with
       | 0 => drawRead t
       | 1 =>
@@ -125,11 +125,28 @@ def drawRel : Nat → Tape → (Rel × Tape)
             if ho == 1 then let (v, t) := t.below 100; (some v, t) else (none, t)
           let (i, t) := drawRel depth t
           (.fetch lim off i, t)
-      | _ =>
+      | 7 =>
           let (so, t) := t.below 2
           let (l, t) := drawRel depth t
           let (r, t) := drawRel depth t
           (.set (if so == 0 then .unionAll else .unionDistinct) l r, t)
+      | 8 =>
+          let (l, t) := drawRel depth t
+          let (r, t) := drawRel depth t
+          (.cross l r, t)
+      | _ =>
+          -- the write rel: named table + op + table schema (fields
+          -- drawn from the narrow type set) + the input rel
+          let (nn, t) := t.below 3
+          let (nms, t) := drawMany nn drawString t
+          let (o, t) := t.below 4
+          let (nt, t) := t.below 3
+          let (tys, t) := drawMany nt drawPTy t
+          let (nc, t) := t.below 3
+          let (cols, t) := drawMany nc drawString t
+          let (i, t) := drawRel depth t
+          (.write nms ((writeOpOfNum? o).getD .insert)
+            { fields := tys, names := cols } i, t)
 
 def drawPlanRel (depth : Nat) (t : Tape) : (PlanRel × Tape) :=
   let (k, t) := t.below 2
@@ -215,6 +232,129 @@ def negWireTargetRow (_t : Tape) : CheckResult := do
   assert ((planWireTarget.offDomain.map inDomainPlan).all (· = true))
     "the WireTarget row's off-domain control is in-domain"
 
+/-! ## the shrinker (the Shrink discipline's first consumer over the
+    drawn plans; testingkit/TestingKit/Shrink.lean) -/
+
+/-- The rel's structural size: one per node (the shrinker's measure's
+    summand — removals of a sub-rel strictly shorten). -/
+def relSize : Rel → Nat
+  | .read _ _ => 1
+  | .filter _ r => 1 + relSize r
+  | .project _ r => 1 + relSize r
+  | .join _ l r _ => 1 + relSize l + relSize r
+  | .aggregate _ _ r => 1 + relSize r
+  | .sort _ r => 1 + relSize r
+  | .fetch _ _ r => 1 + relSize r
+  | .set _ l r => 1 + relSize l + relSize r
+  | .cross l r => 1 + relSize l + relSize r
+  | .write _ _ _ r => 1 + relSize r
+
+/-- The plan-rel's size (the root's own node counts). -/
+def planRelSize : PlanRel → Nat
+  | .rel r => relSize r
+  | .root _ r => 1 + relSize r
+
+/-- The plan's size: the function rows + the relation nodes. -/
+def planSize (p : Plan) : Nat :=
+  p.functions.length + (p.relations.map planRelSize).sum
+
+theorem relSize_pos : ∀ r : Rel, 0 < relSize r := by
+  intro r; cases r <;> simp only [relSize] <;> omega
+
+theorem planRelSize_pos : ∀ pr : PlanRel, 0 < planRelSize pr := by
+  intro pr; cases pr with
+  | rel r => simp only [planRelSize]; exact relSize_pos r
+  | root _ r => simp only [planRelSize]; have h := relSize_pos r; omega
+
+/-- Removing an element from a list strictly shrinks the mapped sum
+    when every element's size is positive (the removals shrinker's
+    `smaller` obligation, at the sum-of-sizes measure). -/
+theorem sum_removals_lt : ∀ (xs : List α) (f : α → Nat), (∀ x, 0 < f x) →
+    ∀ r, r ∈ removals xs → (r.map f).sum < (xs.map f).sum
+  | [], _, _, r, hr => absurd hr (by simp [removals])
+  | x :: xs, f, hpos, r, hr => by
+      simp only [removals, List.mem_cons] at hr
+      rcases hr with h1 | h'
+      · subst h1
+        simp only [List.map_cons, List.sum_cons]
+        have h0 := hpos x
+        omega
+      · obtain ⟨r', hr', rfl⟩ := List.mem_map.mp h'
+        simp only [List.map_cons, List.sum_cons]
+        have h := sum_removals_lt xs f hpos r' hr'
+        omega
+
+theorem sum_ones (xs : List α) : (xs.map (fun _ => 1)).sum = xs.length := by
+  induction xs with
+  | nil => rfl
+  | cons _ _ ih =>
+      simp only [List.map_cons, List.sum_cons, List.length_cons, ih]
+      omega
+
+/-- The PLAN shrinker: single-relation removals + single-function
+    removals, on the structural-size measure. The plan's fields are
+    INDEPENDENT (no coupled re-derivation — the dependent-pair
+    anti-pattern does not apply; the coupling combinator's discipline
+    is for Σ-types), so the field-wise candidate families are valid
+    here; validity is trivial (any plan is a plan). -/
+def shrinkPlan : ShrinkerV (α := Plan) (fun _ => True) where
+  shrink p :=
+    (removals p.relations).map (fun rs => { p with relations := rs })
+      ++ (removals p.functions).map (fun fs => { p with functions := fs })
+  measure p := planSize p
+  smaller p c hc := by
+    rcases List.mem_append.mp hc with h | h
+    · obtain ⟨rs, hr, rfl⟩ := List.mem_map.mp h
+      have hlt := sum_removals_lt p.relations planRelSize planRelSize_pos rs hr
+      simp only [planSize] at hlt ⊢
+      simpa using hlt
+    · obtain ⟨fs, hf, rfl⟩ := List.mem_map.mp h
+      have hlt := sum_removals_lt p.functions (fun _ => 1)
+        (fun _ => Nat.zero_lt_succ 0) fs hf
+      simp only [planSize, sum_ones] at hlt ⊢
+      simpa using hlt
+  valid := fun _ _ _ => trivial
+
+/-- The wire prop's content at the drawn plan ALONE (the attachment's
+    `fails`: tape-free — the in-domain gate + the full round trip at
+    the law's fuel; the truncation/sub-rel faces are the sweep's
+    other teeth, not the plan's content). -/
+def wireFails (p : Plan) : Bool :=
+  !(inDomainPlan p = true
+    && decPlan? ((encPlan p).length + 1) (encPlan p) == some p)
+
+/-- The drawn plan's render (the failure evidence's face). -/
+def renderPlan (p : Plan) : String :=
+  s!"plan(size {planSize p}, {p.relations.length} rels, {p.functions.length} fns)"
+
+/-- THE SHRINK PIN's fixture: the SABOTAGED twin sweep — claims a
+    drawn plan never carries two relations (it fails exactly there) —
+    with the SAME attachment shape. Its failure evidence MUST carry
+    the shrunk counterexample + the path; the wire spec's control
+    below fires iff it does. -/
+def wireSabFails (p : Plan) : Bool := p.relations.length ≥ 2
+
+def wireSabSpec : Spec :=
+  Spec.ofList "sabotaged: the drawn plan stays under two relations"
+    (fun t => assert (!wireSabFails (drawPlan t).1) "sabotaged: the plan grew two relations")
+    [ ("truncated-plan-refusal", truncationProp)
+    , ("off-domain-plan-refusal", negOffDomain) ]
+    8 20260929
+    (shrunk := some ⟨Plan, fun _ => True, fun t => (drawPlan t).1,
+                     renderPlan, wireSabFails, shrinkPlan⟩)
+
+/-- THE SHRINK PIN (the discipline's tooth): the sabotaged twin's
+    failure evidence reports the SHRUNK counterexample + the path.
+    The control asserts the evidence is ABSENT — it must FAIL (be
+    caught); a dead attachment leaves it uncaught → VACUOUS, louder
+    than passing. -/
+def wireNegNoShrinkEvidence : Tape → CheckResult := fun _ =>
+  match wireSabSpec.run with
+  | .fail .prop _ _ m =>
+      assert (!((m.splitOn "shrunk: minimal").length > 1))
+        s!"control fired: the shrink evidence WAS present: {m}"
+  | _ => assert false "the sabotaged sweep did not fail"
+
 /-! ## the suite -/
 
 def wireSpec : Spec :=
@@ -223,5 +363,8 @@ def wireSpec : Spec :=
     [ ("truncated-plan-refusal", truncationProp)
     , ("off-domain-plan-refusal", negOffDomain)
     , ("trailing-byte-refusal", negTrailingByte)
-    , ("wire-target-row-pins", negWireTargetRow) ]
+    , ("wire-target-row-pins", negWireTargetRow)
+    , ("shrink evidence absent", wireNegNoShrinkEvidence) ]
     32 20260929
+    (shrunk := some ⟨Plan, fun _ => True, fun t => (drawPlan t).1,
+                     renderPlan, wireFails, shrinkPlan⟩)

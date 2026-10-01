@@ -27,6 +27,7 @@ import TextKit
 import TestingKit.Harness
 import TextKitTests.Axioms
 import TextKitTests.GrammarSlice
+import TextKitTests.ConfigFormat
 import TextKitTests.Lexemes
 
 open TextKit
@@ -258,9 +259,53 @@ def grammarSpec : Spec :=
             "control fired: the coherence-false grammar is exactness-false") ]
     4 42
 
+/-! ## the grammar kit's own drawn-token sweep (08 §11 over the slice;
+    the shrink attachment rides the drawn token LIST — `shrinkList`'s
+    single-element removals, the measured loop's discipline) -/
+
+/-- The drawn token list (the sweep's structured input). -/
+def drawToks (t : Tape) : List Bool × Tape :=
+  let (n, t1) := t.below 8
+  drawMany n (fun t => let (b, t2) := t.below 2; (b == 1, t2)) t1
+
+/-- The round-trip re-test at the drawn token list ALONE (the
+    attachment's `fails`: tape-free — law 1's executable face). -/
+def toksFails (vs : List Bool) : Bool :=
+  match Grammar.run GrammarSlice.flatGrammar
+      (Grammar.print GrammarSlice.flatGrammar vs) with
+  | .ok vs' => vs' != vs
+  | .error _ => true
+
+/-- The drawn-token sweep: the grammar kit's print parses back to
+EXACTLY the drawn tokens (law 1 over the drawn fragment — the same
+draw the prop performs, so the shrink walks the VALUE, not the tape,
+#14), the print is one char per token, and every verdict is
+structured (the `.ok` value or the `ParseError` envelope). -/
+def toksSpec : Spec :=
+  Spec.ofList "the grammar's drawn-token sweep: the print parses back to the drawn tokens"
+    (fun t => do
+      let (vs, _) := drawToks t
+      let text := Grammar.print GrammarSlice.flatGrammar vs
+      assert (text.length == vs.length) "the print is not one char per token"
+      match Grammar.run GrammarSlice.flatGrammar text with
+      | .ok vs' => assert (vs' == vs) "the printed tokens parsed back wrong"
+      | .error e => assert false s!"the printed tokens refused: {e.message}")
+    [ ("sabotaged: the print drops a token (caught)",
+        fun _ => assert (Grammar.print GrammarSlice.flatGrammar [true] == "x")
+          "control fired: the print is not one char per token")
+    , ("sabotaged: the junk token parses (caught)",
+        fun _ => assert
+          (match Grammar.run GrammarSlice.flatGrammar "z" with
+            | .ok _ => true | .error _ => false)
+          "control fired: the junk token parsed") ]
+    32 42
+    (shrunk := some ⟨List Bool, fun _ => True, fun t => (drawToks t).1,
+                     toString, toksFails, shrinkList⟩)
+
 def main : IO UInt32 := do
   TestingKit.mainOfSuites
     [ ("TextKit.scanners", [scannerSpec])
     , ("TextKit.combinators", [combinatorSpec])
-    , ("TextKit.grammar", [grammarSpec])
-    , ("TextKit.lexemes", [LexemesSlice.lexemesSpec]) ]
+    , ("TextKit.grammar", [grammarSpec, toksSpec])
+    , ("TextKit.lexemes", [LexemesSlice.lexemesSpec])
+    , ("TextKit.configFormats", [TextKitTests.ConfigFormat.configFormatSpec]) ]

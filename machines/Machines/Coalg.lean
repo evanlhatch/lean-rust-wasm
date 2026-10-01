@@ -88,11 +88,14 @@ machines are step?-functional, so the stream is the honest carrier.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Basic
-import Machines.Stream
-import Kit.Observer
-import Kit.Relation
+public import Machines.Basic
+public import Machines.Stream
+public import Kit.Observer
+public import Kit.Relation
+@[expose] public section
+
 
 namespace Machines
 
@@ -383,3 +386,5 @@ theorem comp {S I O : Type} {c₁ c₂ c₃ : Coalgebra S I O} {R₁ R₂ : Kit.
 end Refines
 
 end Machines
+
+end -- public section

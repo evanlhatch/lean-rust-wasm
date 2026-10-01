@@ -66,9 +66,13 @@ the refusal matrix) + the axiom report.
 Core-only (imports SchemaCore.Value only — the cone rule).
 -/
 
-import SchemaCore.Value
-import SchemaCore.Fold
-import Kit.Varint
+module
+
+public import SchemaCore.Value
+public import SchemaCore.Fold
+public import Kit.Varint
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -1111,3 +1115,5 @@ def valCodec (t : Ty) : Kit.Codec (List UInt8) (Value t) where
         exact ⟨p.1, p.2, encVal_decVal_eq t bs p.1 p.2 hd⟩
 
 end SchemaCore
+
+end -- public section

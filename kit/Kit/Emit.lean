@@ -91,10 +91,14 @@ The five questions (notes/v3/01-core.md):
   generated artifacts (SchemaCore's emitter is the first consumer).
 -/
 
-import Lean
-import TestingKit.Lcg
-import TestingKit.Golden
-import Kit.Ledger
+module
+
+public import Lean
+public import TestingKit.Lcg
+public import TestingKit.Golden
+public import Kit.Ledger
+
+@[expose] public section
 
 namespace Kit.Emit
 
@@ -393,3 +397,5 @@ def writeLedger (path : String) (rows : List Ledger.LedgerRow) : IO Unit := do
   IO.FS.rename (path ++ ".tmp") path
 
 end Kit.Emit
+
+end -- public section

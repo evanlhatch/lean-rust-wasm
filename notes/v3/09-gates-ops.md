@@ -48,7 +48,11 @@ whose expiry is an UNKNOWN with a named report, never a hang),
 ownership, breaking, decide-first-census + zero-citation-census (the
 §8 promotion: the proof-hygiene censuses as BASELINED report-gates —
 the findings are data, drift flagged — landed at the first adjudicated
-nonempty run), nolint-census (the `@[nolint]` opt-out rows'
+nonempty run) + evidence-redundancy-census (B6; D37's teeth — the
+entourage's first question at the hand-written face, the same census
+discipline; the first fold's buildable-tree result: the carried-law
+fields' own sites, refined away; the baseline lands at the green
+re-baseline), nolint-census (the `@[nolint]` opt-out rows'
 per-(linter, file) counts, baselined; a new silenced site is a
 deliberate re-baseline diff) — each a row, each with teeth.
 
@@ -131,6 +135,25 @@ output committed, drift flagged, findings are DATA never failures):
   census-grade: every NEW uncited theorem surfaces as a deliberate
   re-baseline diff naming it (fixed, consumed, or the reasoned
   opt-out).
+- `evidence-redundancy` (B6; D37's teeth) — the entourage's first
+  question ("does the type already carry it?") as an env linter over
+  the HAND-written face: carried-law re-proofs (the
+  Codec.decode_encode / Iso.to_inv / Iso.inv_to statement shapes,
+  same instance both sides, proof not citing the field) +
+  weaker-than-kernel obligation rows (a closed Decidable claim with a
+  literal `oracleSwept`/`generatedCheck`/`guestVerified` tier). The
+  first fold over the BUILDABLE packages (the tree was red in
+  WasmCore.Decode — another lane's in-flight work — during the
+  landing): exactly 3 findings, ALL one false-positive class — the
+  carried-law fields' own declaration sites (the field decl IS the
+  construction; refined away by the name exemption). Class B's fold
+  was empty — the honest zero (the generator-level waste the audit
+  named is prevented by the entourage's own computation; the fixture
+  teeth prove both classes fire). Promoted as `gates
+  evidence-redundancy-census` (notes/evidence-redundancy-census.md);
+  the baseline's first write lands at the green re-baseline — the
+  load-failed packages' sections (the WasmCore-dependent lanes) are
+  the blocked first run's named remainder.
 
 (The close-out audit's "measured ZERO census findings" claim did NOT
 survive the fresh fold — the earlier `--enable` runs died mid-fold;

@@ -56,10 +56,13 @@ The five questions (notes/v3/01-core.md):
 
 Core-only (imports ZSet + ZSet.Circuit — the cone rule).
 -/
+module
 
-import ZSet.Circuit
-import ZSet
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+public import ZSet.Circuit
+public import ZSet
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 namespace Circuit
 
@@ -103,3 +106,5 @@ theorem compile_ok (q : ZSet.Query α) (m : ZSet α) :
       rw [ih, ZSet.evaluate]
 
 end Circuit
+
+end -- public section

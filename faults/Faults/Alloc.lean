@@ -46,6 +46,7 @@ Five questions (notes/v3/01-core.md):
 
 import Kit.CodeRegistry
 import Kit.Lane
+import Kit.Mangle  -- the module wave: dupNames no longer arrives transitively
 import Faults.Item
 
 namespace Faults

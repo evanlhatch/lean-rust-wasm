@@ -26,7 +26,9 @@ fn append_replay_state_faces_agree() {
         Delta::Remove(Value::U64(2)),
     ];
     for (i, d) in deltas.iter().enumerate() {
-        let seq = log.append(d.clone()).unwrap_or_else(|e| panic!("append {i}: {e}"));
+        let seq = log
+            .append(d.clone())
+            .unwrap_or_else(|e| panic!("append {i}: {e}"));
         assert_eq!(seq, i as u64);
     }
     assert_eq!(log.len(), 4);
@@ -51,9 +53,12 @@ fn journal_wire_round_trip() {
     let schema = fixture_schema();
     let mut log = DeltaLog::open_with(MemBackend::new(), schema.clone(), TailPolicy::Recover)
         .unwrap_or_else(|e| panic!("open: {e}"));
-    log.append(Delta::Insert(fixture_row(1, "a"))).unwrap_or_else(|e| panic!("{e}"));
-    log.append(Delta::Update(fixture_row(1, "b"))).unwrap_or_else(|e| panic!("{e}"));
-    log.append(Delta::Remove(Value::U64(1))).unwrap_or_else(|e| panic!("{e}"));
+    log.append(Delta::Insert(fixture_row(1, "a")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    log.append(Delta::Update(fixture_row(1, "b")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    log.append(Delta::Remove(Value::U64(1)))
+        .unwrap_or_else(|e| panic!("{e}"));
 
     let wire = log.journal_bytes();
     let from_wire = DeltaLog::from_journal_bytes(schema.clone(), &wire)
@@ -62,7 +67,11 @@ fn journal_wire_round_trip() {
     assert_eq!(from_wire.state(), log.state());
     // Witnesses re-derive identically (the inversion's data).
     for seq in 0..log.len() {
-        assert_eq!(from_wire.witness(seq), log.witness(seq), "witness {seq} diverged");
+        assert_eq!(
+            from_wire.witness(seq),
+            log.witness(seq),
+            "witness {seq} diverged"
+        );
     }
     // Re-encoding the decoded journal is byte-identical (both
     // directions of the wire).
@@ -81,19 +90,22 @@ fn frames_reopen_identically() {
     let schema = fixture_schema();
     let mut backend = MemBackend::new();
     {
-        let mut log =
-            DeltaLog::open_with(&mut backend, schema.clone(), TailPolicy::Recover)
-                .unwrap_or_else(|e| panic!("open: {e}"));
-        log.append(Delta::Insert(fixture_row(7, "x"))).unwrap_or_else(|e| panic!("{e}"));
-        log.append(Delta::Remove(Value::U64(7))).unwrap_or_else(|e| panic!("{e}"));
+        let mut log = DeltaLog::open_with(&mut backend, schema.clone(), TailPolicy::Recover)
+            .unwrap_or_else(|e| panic!("open: {e}"));
+        log.append(Delta::Insert(fixture_row(7, "x")))
+            .unwrap_or_else(|e| panic!("{e}"));
+        log.append(Delta::Remove(Value::U64(7)))
+            .unwrap_or_else(|e| panic!("{e}"));
     }
     // Reopen over the same bytes.
-    let reopened =
-        DeltaLog::open_with(&mut backend, schema, TailPolicy::Recover)
-            .unwrap_or_else(|e| panic!("reopen: {e}"));
+    let reopened = DeltaLog::open_with(&mut backend, schema, TailPolicy::Recover)
+        .unwrap_or_else(|e| panic!("reopen: {e}"));
     assert_eq!(reopened.len(), 2);
     assert_eq!(reopened.entry(0), Some(&Delta::Insert(fixture_row(7, "x"))));
     assert_eq!(reopened.entry(1), Some(&Delta::Remove(Value::U64(7))));
     assert!(reopened.state().rows().is_empty());
-    assert!(reopened.recovery().is_none(), "a clean journal reports no recovery");
+    assert!(
+        reopened.recovery().is_none(),
+        "a clean journal reports no recovery"
+    );
 }

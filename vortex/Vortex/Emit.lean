@@ -43,10 +43,31 @@ emitter IS an interpretation — 01 §5); ladder rung = the fold is
 structural/total, the law is a cited instance; gate row = the
 in-test golden (above) + the axiom report.
 -/
+module
 
-import Kit
-import SchemaCore.Item
-import Vortex.Encoding
+public import Kit.Correspondence
+public import Kit.Relation
+public import Kit.Hyper
+public import Kit.Obligation
+public import Kit.Registry
+public import Kit.CheckedProp
+public import Kit.Emit
+public import Kit.Suggest
+public import Kit.Diag
+public import Kit.Cli
+public import Kit.CodeRegistry
+public import Kit.Change
+public import Kit.Observer
+public import Kit.Varint
+public import Kit.Proto
+public import Kit.Duel
+public import Kit.Mangle
+-- the Kit barrel itself stays pre-module (Kit.Lane/Kit.Text are the
+-- named stays); the module-only members are imported directly
+public import SchemaCore.Item
+public import Vortex.Encoding
+@[expose] public section
+
 
 open Kit
 
@@ -119,3 +140,5 @@ def layoutEmitter : Kit.Emit.Emitter (DataRegistry SchemaCore.Item) where
   law := some layoutLaw
 
 end Vortex
+
+end -- public section

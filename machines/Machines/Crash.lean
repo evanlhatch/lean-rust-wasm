@@ -108,10 +108,13 @@ The teeth are real: the refinement's premise is load-bearing.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Coalg
-import Machines.Fusion
-import Kit.Observer
+public import Machines.Coalg
+public import Machines.Fusion
+public import Kit.Observer
+@[expose] public section
+
 
 namespace Machines
 
@@ -476,3 +479,5 @@ theorem beh_eq_journal (vp : Int × List Int) (hvp : journalF vp)
 end Crash.Journal
 
 end Machines
+
+end -- public section

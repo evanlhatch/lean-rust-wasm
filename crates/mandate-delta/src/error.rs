@@ -63,7 +63,10 @@ impl fmt::Display for DeltaError {
                 write!(f, "journal wire: trailing bytes at {offset}")
             }
             Self::CompactRange { seqno, len } => {
-                write!(f, "compact seqno {seqno} past the log's end ({len} entries)")
+                write!(
+                    f,
+                    "compact seqno {seqno} past the log's end ({len} entries)"
+                )
             }
         }
     }

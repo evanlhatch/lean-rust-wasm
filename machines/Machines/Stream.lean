@@ -53,9 +53,12 @@ happened) is exercised as the mandatory control in MachinesTests.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Kit.Change
-import Kit.Correspondence
+public import Kit.Change
+public import Kit.Correspondence
+@[expose] public section
+
 
 namespace Machines
 
@@ -137,3 +140,5 @@ def dI (g : Kit.Additive A A) : Kit.Iso (Stream A) (Stream A) :=
   Kit.Iso.mk (I g) (D g) (I_D g) (D_I g)
 
 end Machines
+
+end -- public section

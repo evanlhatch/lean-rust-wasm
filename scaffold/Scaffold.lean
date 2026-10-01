@@ -25,6 +25,10 @@ elaboration of the generated registration module + the curated-failure
 teeth + the mandatory negative controls).
 -/
 
-import Scaffold.Spec
-import Scaffold.Generate
-import Scaffold.Specs
+module
+
+public import Scaffold.Spec
+public import Scaffold.Generate
+public import Scaffold.Specs
+
+@[expose] public section

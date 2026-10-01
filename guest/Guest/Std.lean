@@ -25,5 +25,10 @@ The five questions (notes/v3/01-core.md): answered per submodule; the
 umbrella is the import point and answers none.
 -/
 
-import Guest.Std.StrOps
-import Guest.Std.ListOps
+module
+
+public import Guest.Std.StrOps
+public import Guest.Std.ListOps
+
+
+@[expose] public section

@@ -12,11 +12,14 @@
 //! fault (the envelope honesty), and the declared faults' codes are
 //! pairwise distinct (the allocation's collision tooth, pinned).
 
-use mandate_host::{ErrorCategory, FaultError, HostError, GOLDEN_ANSWER};
+use mandate_host::{ErrorCategory, FaultError, GOLDEN_ANSWER, HostError};
 
 #[test]
 fn content_hash_mismatch_maps_to_its_declared_fault() {
-    let e = HostError::ContentHashMismatch { declared: 1, computed: 2 };
+    let e = HostError::ContentHashMismatch {
+        declared: 1,
+        computed: 2,
+    };
     let f = e.fault().expect("the declared fault");
     assert_eq!(f.code(), "FT0133");
     assert_eq!(f.category(), ErrorCategory::Content);
@@ -38,7 +41,10 @@ fn content_hash_mismatch_maps_to_its_declared_fault() {
 
 #[test]
 fn lifecycle_refusal_maps_to_its_declared_fault() {
-    let e = HostError::Lifecycle { from: "Loaded", event: "answer" };
+    let e = HostError::Lifecycle {
+        from: "Loaded",
+        event: "answer",
+    };
     let f = e.fault().expect("the declared fault");
     assert_eq!(f.code(), "FT0135");
     assert_eq!(f.category(), ErrorCategory::Invariant);
@@ -62,8 +68,10 @@ fn wasm_trap_maps_to_its_declared_fault() {
     // returns the trap itself; `run_answer`'s call path reports it
     // textually today — the fast-observe integration reroutes both (the
     // named follow-up). The mapping is the unit under test here.
-    let trap = wasmtime::Trap::from_u8(9).expect("code 9 is the \
-        unreachable trap (the encoding's 10th variant)");
+    let trap = wasmtime::Trap::from_u8(9).expect(
+        "code 9 is the \
+        unreachable trap (the encoding's 10th variant)",
+    );
     let e = HostError::WasmTrap(trap);
     let f = e.fault().expect("the declared fault");
     assert_eq!(f.code(), "FT0136");
@@ -78,14 +86,20 @@ fn the_declared_faults_codes_are_pairwise_distinct() {
     // the allocation's collision tooth, pinned at the consumer: four
     // declared faults, four distinct E-codes.
     let codes: Vec<&str> = vec![
-        HostError::ContentHashMismatch { declared: 0, computed: 0 }
-            .fault()
-            .expect("declared")
-            .code(),
-        HostError::Lifecycle { from: "New", event: "stop" }
-            .fault()
-            .expect("declared")
-            .code(),
+        HostError::ContentHashMismatch {
+            declared: 0,
+            computed: 0,
+        }
+        .fault()
+        .expect("declared")
+        .code(),
+        HostError::Lifecycle {
+            from: "New",
+            event: "stop",
+        }
+        .fault()
+        .expect("declared")
+        .code(),
     ];
     assert_eq!(codes.first(), codes.first());
     assert_ne!(codes[0], codes[1]);
@@ -104,8 +118,11 @@ fn the_journal_refusal_maps_to_its_declared_fault() {
         .join("journal");
     let e = mandate_host::Journal::open(&path, mandate_host::ledger_schema())
         .expect_err("the journal's io failure refuses");
-    assert!(matches!(e, HostError::Journal(_)), "the io failure is the \
-        journal variant");
+    assert!(
+        matches!(e, HostError::Journal(_)),
+        "the io failure is the \
+        journal variant"
+    );
     let f = e
         .fault()
         .expect("the journal's refusals are declared faults");
@@ -121,7 +138,9 @@ fn undeclared_surfaces_report_no_fault() {
     assert!(e.fault().is_none());
     let e = HostError::Incomplete("test");
     assert!(e.fault().is_none());
-    let e = HostError::AnswerMismatch { got: GOLDEN_ANSWER + 1 };
+    let e = HostError::AnswerMismatch {
+        got: GOLDEN_ANSWER + 1,
+    };
     assert!(e.fault().is_none());
     let e = HostError::DuelManifest("test".to_string());
     assert!(e.fault().is_none());
@@ -137,9 +156,14 @@ fn undeclared_surfaces_report_no_fault() {
     assert!(e.fault().is_none());
     let e = HostError::ComponentSignature("test");
     assert!(e.fault().is_none());
-    let e = HostError::ComponentAnswerMismatch { got: 0, expected: 0 };
+    let e = HostError::ComponentAnswerMismatch {
+        got: 0,
+        expected: 0,
+    };
     assert!(e.fault().is_none());
     let e = HostError::LiveState("test".to_string());
+    assert!(e.fault().is_none());
+    let e = HostError::WitnessRefused { code: 1 };
     assert!(e.fault().is_none());
     let e = HostError::Io {
         what: "test",

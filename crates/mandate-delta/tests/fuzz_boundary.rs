@@ -16,10 +16,10 @@
 //! case's evidence is the seed). 512 iterations, fixed — never a time
 //! bound (design-bolero-integration §5's seeds law).
 
-use mandate_delta::delta::{dec_delta, dec_journal, Delta, enc_delta, enc_journal};
+use mandate_delta::delta::{Delta, dec_delta, dec_journal, enc_delta, enc_journal};
 use mandate_delta::schema::fixtures::fixture;
-use mandate_delta::schema::{dec_row, enc_row, Row};
-use mandate_delta::value::{enc_value, Ty, Value};
+use mandate_delta::schema::{Row, dec_row, enc_row};
+use mandate_delta::value::{Ty, Value, enc_value};
 
 /// The sweep's size (deterministic, fixed — the generated face's own
 /// constant, mirrored here so the two faces' budgets agree).
@@ -181,7 +181,10 @@ fn fuzz_dec_delta_and_journal_floor_never_panics() {
         if let Ok(d) = dec_delta(&schema, &mut bs) {
             if bs.is_empty() {
                 let mut out = Vec::new();
-                assert!(enc_delta(&schema, &d, &mut out), "seed {seed}: encode refused");
+                assert!(
+                    enc_delta(&schema, &d, &mut out),
+                    "seed {seed}: encode refused"
+                );
                 assert_eq!(out, bytes, "seed {seed}: the frame re-encode drifted");
             }
         }
@@ -222,7 +225,10 @@ fn fuzz_row_delta_journal_round_trip() {
         // The frame face.
         let d = arbitrary_delta(&mut t, &schema);
         let mut frame = Vec::new();
-        assert!(enc_delta(&schema, &d, &mut frame), "seed {seed}: encode refused");
+        assert!(
+            enc_delta(&schema, &d, &mut frame),
+            "seed {seed}: encode refused"
+        );
         let mut bs: &[u8] = &frame;
         let back = dec_delta(&schema, &mut bs)
             .unwrap_or_else(|e| panic!("seed {seed}: the delta round trip refused: {e:?}"));
@@ -238,7 +244,10 @@ fn fuzz_row_delta_journal_round_trip() {
         let back = dec_journal(&schema, &mut bs)
             .unwrap_or_else(|e| panic!("seed {seed}: the journal round trip refused: {e:?}"));
         assert_eq!(back, log, "seed {seed}: the journal round trip drifted");
-        assert!(bs.is_empty(), "seed {seed}: the journal decode left a suffix");
+        assert!(
+            bs.is_empty(),
+            "seed {seed}: the journal decode left a suffix"
+        );
     }
 }
 
@@ -307,7 +316,10 @@ fn negative_control_the_floor_catches_a_sabotaged_subject() {
             let _ = sabotaged.dec_row(&schema, &mut bs);
         }
     }));
-    assert!(caught.is_err(), "control NOT caught — the fuzz layer proves nothing");
+    assert!(
+        caught.is_err(),
+        "control NOT caught — the fuzz layer proves nothing"
+    );
 }
 
 /// The atom-value floor over the scalar universe directly: `enc_value`
@@ -322,10 +334,14 @@ fn fuzz_atom_values_round_trip() {
             let mut wire = Vec::new();
             enc_value(&v, &mut wire);
             let mut bs: &[u8] = &wire;
-            let back = mandate_delta::value::dec_value(ty, &mut bs)
-                .unwrap_or_else(|e| panic!("seed {seed} {ty:?}: the atom round trip refused: {e:?}"));
+            let back = mandate_delta::value::dec_value(ty, &mut bs).unwrap_or_else(|e| {
+                panic!("seed {seed} {ty:?}: the atom round trip refused: {e:?}")
+            });
             assert_eq!(back, v, "seed {seed} {ty:?}: the atom round trip drifted");
-            assert!(bs.is_empty(), "seed {seed} {ty:?}: the atom decode left a suffix");
+            assert!(
+                bs.is_empty(),
+                "seed {seed} {ty:?}: the atom decode left a suffix"
+            );
         }
     }
 }

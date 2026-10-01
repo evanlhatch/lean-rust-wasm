@@ -60,8 +60,13 @@ Core-only: no mathlib, no Batteries (the cone rule). Imports Kit.Change
 (read-only — the monus cite).
 -/
 
-import Kit.Change
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+module
+
+public import Kit.Change
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+@[expose] public section
 
 namespace Effects.Resource
 
@@ -240,3 +245,6 @@ attribute [nolint linter.guestlang.zeroCitation "public API: the discipline's Pr
   Ctx.nodup Handle.live
 
 end Effects.Resource
+
+
+end -- public section

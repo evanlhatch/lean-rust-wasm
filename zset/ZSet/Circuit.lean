@@ -72,9 +72,12 @@ The five questions (notes/v3/01-core.md):
 
 Core-only (imports ZSet — the cone rule; no mathlib, no Batteries).
 -/
+module
 
-import ZSet
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+public import ZSet
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 namespace Circuit
 
@@ -407,3 +410,5 @@ theorem Ckt.recursive_opt_ok (c : Ckt α) : c.recursiveOpt.denote = c.denote := 
       rw [ih]
 
 end Circuit
+
+end -- public section

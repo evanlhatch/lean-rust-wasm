@@ -37,6 +37,11 @@ The five questions (notes/v3/01-core.md):
   COLLIDING negative control) are the standing evidence.
 -/
 
+
+
+module
+
+@[expose] public section
 /-! ## The word splitter + the per-target conventions -/
 
 namespace Kit
@@ -206,3 +211,5 @@ def mangleWf (mangle : String → String) (ns : List String) : Bool :=
   (collDiags mangle ns).isEmpty
 
 end Kit
+
+end -- @[expose] public section

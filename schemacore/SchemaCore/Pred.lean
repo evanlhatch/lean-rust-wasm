@@ -61,7 +61,13 @@ predSpec pins + the axiom report.
 Core-only (imports SchemaCore.RowVals only — the cone rule).
 -/
 
-import SchemaCore.RowVals
+module
+
+public import SchemaCore.RowVals
+public import Kit.Correspondence
+public import Kit.CheckedProp
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -295,8 +301,10 @@ def Pred.renderRow : (fs : List Field) → RowVals fs → String
 
 /-! ## The coverage pins (the fragment reduces — kernel-visible) -/
 
-/-- The Example-shaped two-field row fixture, local to the pins. -/
-private def pinFields : List Field :=
+/-- The Example-shaped two-field row fixture, local to the pins. (Was
+    `private`; the module system cannot resolve `private` decls inside
+    an `@[expose] public section` — widened, the Grammar-layer delta.) -/
+def pinFields : List Field :=
   [ { name := "ready", ty := .bool }, { name := "count", ty := .u64 } ]
 
 example : Pred.check (fs := pinFields) (.u64EqLit "count" 0)
@@ -321,3 +329,5 @@ example : Pred.violations (fs := pinFields) (.u64GtLit "count" 0)
   = [.cons (.bool true) (.cons (.u64 0) .nil)] := rfl
 
 end SchemaCore
+
+end -- public section

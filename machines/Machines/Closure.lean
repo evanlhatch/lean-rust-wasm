@@ -101,10 +101,13 @@ Machines. Core-only: no mathlib, no Batteries (the cone rule).
   rung-3 computes.
 - **Gate rows**: the axiom report pins in MachinesTests.Axioms.
 -/
+module
 
-import Machines.Basic
-import Machines.Testing
-import Datalog.Semantics
+public import Machines.Basic
+public import Machines.Testing
+public import Datalog.Semantics
+@[expose] public section
+
 
 namespace Machines.Closure
 
@@ -392,3 +395,5 @@ theorem inv_of_eval [DecidableEq S] [DecidableEq I] [Inhabited S]
       hr))
 
 end Machines.Closure
+
+end -- public section

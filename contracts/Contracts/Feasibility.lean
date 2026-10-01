@@ -44,10 +44,13 @@ The five questions (notes/v3/01-core.md):
 
 Core-only: imports Contracts.Wp + Kit.Obligation only (the cone rule).
 -/
+module
 
-import Contracts.Wp
-import Contracts.Contract
-import Kit.Obligation
+public import Contracts.Wp
+public import Contracts.Contract
+public import Kit.Obligation
+@[expose] public section
+
 
 namespace Contracts
 
@@ -110,8 +113,11 @@ inductive Feas.Verdict where
 deriving BEq, Repr, Inhabited
 
 /-- The verdict's honesty face: checked = the row answers the
-feasibility obligation (witness or declared emptiness). -/
-def Feas.Verdict.checked : Feas.Verdict → Bool
+feasibility obligation (witness or declared emptiness). A Bool
+PROJECTION over the enumerated verdict (the census's fold face),
+not a verdict — the verdict itself is the constructor; the name
+lives OUTSIDE the `Verdict` namespace for exactly that reason. -/
+def Feas.isChecked : Feas.Verdict → Bool
   | .feasible _ => true
   | .declaredEmpty _ => true
   | .unchecked => false
@@ -210,3 +216,5 @@ theorem vacuousC_no_witness : ¬ ∃ s : State, vacuousC.requires s := by
   omega
 
 end Contracts
+
+end -- public section

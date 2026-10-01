@@ -93,6 +93,7 @@ pub use log::{Backend, DeltaLog, FsBackend, MemBackend};
 pub use manifest::{DuelManifest, DuelRow, ManifestError, parse_duel_manifest};
 pub use schema::{Field, Row, Schema};
 pub use scratch::ScratchDir;
-pub use snapshot::{FallbackReason, SnapshotError, SnapshotMeta, SnapshotReport,
-    snapshot_path_for};
+pub use snapshot::{
+    FallbackReason, SnapshotError, SnapshotMeta, SnapshotReport, snapshot_path_for,
+};
 pub use value::{Ty, Value};

@@ -79,11 +79,16 @@ Cost.Basic (the cost model — the second reading rides it),
 Kit.Relation + Kit.Observer (the agreement's faces).
 -/
 
-import Effects.Footprint
-import Cost.Basic
-import Kit.Observer
-import Kit.Relation
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+module
+
+public import Effects.Footprint
+public import Cost.Basic
+public import Kit.Observer
+public import Kit.Relation
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+@[expose] public section
 
 namespace Effects.Signature
 
@@ -392,3 +397,6 @@ theorem perf_sees_cost {S : Type} (sig : Signature S) (c : OpCost) (s : S)
   omega
 
 end Effects.Signature
+
+
+end -- public section

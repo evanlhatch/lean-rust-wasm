@@ -24,7 +24,7 @@
 //! encodings, never asserted.
 
 use crate::error::{DecodeFail, DeltaError};
-use crate::value::{dec_value, enc_value, Ty, Value};
+use crate::value::{Ty, Value, dec_value, enc_value};
 
 /// One field: a name + its boundary type (`SchemaCore.Field`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,8 +194,14 @@ pub mod fixtures {
     pub fn fixture() -> Schema {
         Schema::build(
             vec![
-                Field { name: "id".into(), ty: Ty::U64 },
-                Field { name: "name".into(), ty: Ty::Str },
+                Field {
+                    name: "id".into(),
+                    ty: Ty::U64,
+                },
+                Field {
+                    name: "name".into(),
+                    ty: Ty::Str,
+                },
             ],
             "id",
         )
@@ -244,7 +250,13 @@ pub(crate) mod tests {
             Err(DecodeFail::Corrupt("row field count disagrees with schema"))
         );
         // Ill-typed row refuses at construction.
-        assert!(Row::build(&schema, vec![Value::Str("x".into()), Value::Str("y".into())]).is_err());
+        assert!(
+            Row::build(
+                &schema,
+                vec![Value::Str("x".into()), Value::Str("y".into())]
+            )
+            .is_err()
+        );
         assert!(Row::build(&schema, vec![Value::U64(1)]).is_err());
     }
 

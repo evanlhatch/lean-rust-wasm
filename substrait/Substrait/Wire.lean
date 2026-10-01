@@ -103,10 +103,14 @@ The five questions (notes/v3/01-core.md):
   carries the round-trip sweeps + the negative controls + the
   composition pin.
 -/
+module
 
-import Substrait.Proto
-import Kit.Proto
 
+public import Substrait.Proto
+public import Kit.Proto
+
+
+@[expose] public section
 namespace Substrait.Wire
 
 open Substrait.Proto
@@ -179,6 +183,27 @@ def setOpOfNum? : Nat → Option SetOp
 
 theorem setOpOfNum?_self (op : SetOp) :
     setOpOfNum? (setOpNum op) = some op := by
+  cases op <;> rfl
+
+/-- The write op's wire number (the upstream `WriteRel.WriteOp`
+    values: UNSPECIFIED = 0 is never written — the typed layer's
+    explicit-enum discipline). -/
+def writeOpNum : WriteOp → Nat
+  | .insert => 1
+  | .delete => 2
+  | .update => 3
+  | .ctas => 4
+
+/-- The write op's read-back. -/
+def writeOpOfNum? : Nat → Option WriteOp
+  | 1 => some .insert
+  | 2 => some .delete
+  | 3 => some .update
+  | 4 => some .ctas
+  | _ => none
+
+theorem writeOpOfNum?_self (op : WriteOp) :
+    writeOpOfNum? (writeOpNum op) = some op := by
   cases op <;> rfl
 
 /-! ## the type wire (the Type kind oneof) -/
@@ -422,6 +447,9 @@ def inDomainRel : Rel → Bool
       (limit.all (· < 9223372036854775808))
         && (offset.all (· < 9223372036854775808)) && inDomainRel i
   | .set _ l r => inDomainRel l && inDomainRel r
+  | .cross l r => inDomainRel l && inDomainRel r
+  | .write nms _ ts i =>
+      inDomainStrs nms && inDomainStrs ts.names && inDomainRel i
 
 /-- The plan relation's gate. -/
 def inDomainPlanRel : PlanRel → Bool
@@ -697,12 +725,14 @@ theorem decExpressionBody?_law : ∀ (fuel : Nat),
             have hd2 : inDomainExprs args = true := by
               have h := hd; simp [inDomainExpr] at h; exact h.2
             -- the fuel bookkeeping: the wraps' ≥2-byte costs, chained
+            -- (the length-level arithmetic by `grind` (06 §12) — the
+            -- `encLenBytes_ge` family named, the List-length normals
+            -- named, the goal facts kept in context)
             have hpayLen : (encLenBytes 9 (encStr nm) ++ encLenBytes 3 (encPTypeBody out)
                   ++ encArgs args).length
                 = (encLenBytes 9 (encStr nm)).length
                   + ((encLenBytes 3 (encPTypeBody out)).length + (encArgs args).length) := by
-              simp only [List.length_append]
-              omega
+              grind [List.length_append]
             have h1 : (encLenBytes 3 (encLenBytes 9 (encStr nm)
                     ++ encLenBytes 3 (encPTypeBody out) ++ encArgs args)
                   ++ rest).length + 1 ≤ f + 1 := hfuel
@@ -714,24 +744,12 @@ theorem decExpressionBody?_law : ∀ (fuel : Nat),
             have hw9 := encLenBytes_ge 9 (encStr nm)
             have hw3 := encLenBytes_ge 3 (encPTypeBody out)
             have hout : (encPTypeBody out ++ []).length + 1 ≤ f := by
-              have hb := encLenBytes_ge 3 (encLenBytes 9 (encStr nm)
-                    ++ encLenBytes 3 (encPTypeBody out) ++ encArgs args)
-              have hb9 := encLenBytes_ge 9 (encStr nm)
-              have hb3 := encLenBytes_ge 3 (encPTypeBody out)
-              have hdec : (encPTypeBody out ++ []).length = (encPTypeBody out).length := by
-                simp
-              omega
+              grind [encLenBytes_ge, List.length_append, List.append_nil]
             have hargs : ∀ x ∈ args, (encExpressionBody x).length + 1 ≤ f := by
               intro x hx
               have hmem := encRep_mem_le encArgElem args x hx
               rw [← encArgs_eq_encRep] at hmem
-              have hArgElem : (encExpressionBody x).length + 4
-                  ≤ (encArgElem x).length := by
-                    have hwA := encLenBytes_ge 4 (encLenBytes 3 (encExpressionBody x))
-                    have hwB := encLenBytes_ge 3 (encExpressionBody x)
-                    simp only [encArgElem]
-                    omega
-              omega
+              grind [encLenBytes_ge, encArgElem, List.length_append]
             have hend2 : decArgElem? f rest = some (Step.stop rest) := by
               simp only [decArgElem?]
               rw [hend]
@@ -928,12 +946,7 @@ theorem decNamedStructBody?_encNamedStructBody_append : ∀ (fuel : Nat) (ns : N
           [] (by rfl) _ fields
           (fun t ht => by
             have hmem := encRep_mem_le (fun t => encLenBytes 1 (encPTypeBody t)) fields t ht
-            have hwT := encLenBytes_ge 1 (encPTypeBody t)
-            have hwF := encLenBytes_ge 2
-              (encRep (fun t => encLenBytes 1 (encPTypeBody t)) fields)
-            have hbody := hfuel
-            simp only [encNamedStructBody, List.length_append] at hbody ⊢
-            omega)
+            grind [encLenBytes_ge, encNamedStructBody, List.length_append])
           (by simp)
       rw [htypes]
 
@@ -1240,6 +1253,24 @@ def encSetBody (op : SetOp) (l r : List UInt8) : List UInt8 :=
   encLenBytes 2 l ++ encLenBytes 2 r
     ++ encVarField 3 (setOpNum op)
 
+-- The CrossRel frame: the two inputs (fields 2, 3 — the upstream
+-- `CrossRel { left = 2, right = 3 }`); no condition, no type field.
+def encCrossBody (l r : List UInt8) : List UInt8 :=
+  encLenBytes 2 l ++ encLenBytes 3 r
+
+-- The WriteRel frame: the named table (field 1, whose payload is the
+-- repeated field-1 names — the `NamedObjectWrite { names = 1 }` face)
+-- + the table schema (field 3, the NamedStruct) + the op (field 4,
+-- the enum) + the input (field 5 — the upstream `WriteRel {
+-- named_table = 1, table_schema = 3, op = 4, input = 5 }`). The
+-- canonical order: the field numbers ascending.
+def encWriteBody (nms : List String) (op : WriteOp) (ts : NamedStruct)
+    (inner : List UInt8) : List UInt8 :=
+  encLenBytes 1 (encRep (fun n => encLenBytes 1 (encStr n)) nms)
+    ++ encLenBytes 3 (encNamedStructBody ts)
+    ++ encVarField 4 (writeOpNum op)
+    ++ encLenBytes 5 inner
+
 /-- The Rel body: the rel_type ONEOF at the upstream Rel fields
     (read = 1, filter = 2, fetch = 3, aggregate = 4, sort = 5, join = 6,
     project = 7, set = 8) — each arm's payload is that arm's frame over
@@ -1258,6 +1289,9 @@ def encRelBody : Rel → List UInt8
   | .join jt l r c => encLenBytes 6 (encJoinBody jt (encRelBody l) (encRelBody r) c)
   | .project es input => encLenBytes 7 (encProjectBody (encRelBody input) es)
   | .set op l r => encLenBytes 8 (encSetBody op (encRelBody l) (encRelBody r))
+  | .cross l r => encLenBytes 12 (encCrossBody (encRelBody l) (encRelBody r))
+  | .write nms op ts input =>
+      encLenBytes 19 (encWriteBody nms op ts (encRelBody input))
 def decNatLit? (fuel : Nat) (payload : List UInt8) : Option Nat :=
   match decOneof? payload with
   | some (7, pl, rest') =>
@@ -1448,6 +1482,43 @@ def decRelBody? : Nat → List UInt8 → Option (Step Rel)
                   | _ => none
               | _ => none
           | _ => none
+      | some (12, payload, rest) =>
+          match decLenField? 2 payload with
+          | some (Step.more pll rest1) =>
+              match decRelBody? f pll with
+              | some (Step.more l []) =>
+                  match decLenField? 3 rest1 with
+                  | some (Step.more plr []) =>
+                      match decRelBody? f plr with
+                      | some (Step.more r []) =>
+                          some (Step.more (.cross l r) rest)
+                      | _ => none
+                  | _ => none
+              | _ => none
+          | _ => none
+      | some (19, payload, rest) =>
+          match decLenField? 1 payload with
+          | some (Step.more pl1 rest1) =>
+              match decRep? (decFieldStr? 1) (pl1.length + 1) pl1 with
+              | some (nms, []) =>
+                  match decLenField? 3 rest1 with
+                  | some (Step.more pl3 rest2) =>
+                      match decNamedStructBody? f pl3 with
+                      | some (Step.more ts []) =>
+                          match decEnumField? 4 writeOpOfNum? rest2 with
+                          | some (Step.more op rest3) =>
+                              match decLenField? 5 rest3 with
+                              | some (Step.more pl5 rest4) =>
+                                  match decRelBody? f pl5 with
+                                  | some (Step.more r []) =>
+                                      some (Step.more (.write nms op ts r) rest)
+                                  | _ => none
+                              | _ => none
+                          | _ => none
+                      | _ => none
+                  | _ => none
+              | _ => none
+          | _ => none
       | _ => none
 
 /-! ## the relation law (ONE fuel induction, the two faces together) -/
@@ -1548,10 +1619,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
               decRep?_encExprElem_nil f ((encRep encExprElem es).length + 1) es
                 (fun e he => ⟨inDomainExprs_self es e he hde, by
                   have hmem := encRep_mem_le encExprElem es e he
-                  have hw := encLenBytes_ge 3 (encExpressionBody e)
-                  have hjk : (encExprElem e).length
-                      = (encLenBytes 3 (encExpressionBody e)).length := rfl
-                  omega⟩)
+                  grind [encLenBytes_ge, encExprElem, List.length_append]⟩)
                 (by omega)]
         | join jt l r c =>
             have hd3 : inDomainRel l = true := by
@@ -1565,8 +1633,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                   + ((encLenBytes 3 (encRelBody r)).length
                     + ((encLenBytes 4 (encExpressionBody c)).length
                       + (encVarField 6 (joinTypeNum jt)).length)) := by
-              simp only [encJoinBody, List.length_append]
-              omega
+              grind [encJoinBody, List.length_append]
             have hW := encLenBytes_ge 6 (encJoinBody jt (encRelBody l) (encRelBody r) c)
             have h1 : (encLenBytes 6 (encJoinBody jt (encRelBody l) (encRelBody r) c)
                 ++ rest).length + 1 ≤ f + 1 := hfuel
@@ -1597,8 +1664,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                 = (encLenBytes 2 (encRelBody input)).length
                   + ((encRep encExprElem gs).length
                     + (encRep encMeasureElem ms).length) := by
-              simp only [encAggregateBody, List.length_append]
-              omega
+              grind [encAggregateBody, List.length_append]
             have hW := encLenBytes_ge 4 (encAggregateBody (encRelBody input) gs ms)
             have h1 : (encLenBytes 4 (encAggregateBody (encRelBody input) gs ms)
                 ++ rest).length + 1 ≤ f + 1 := hfuel
@@ -1625,18 +1691,12 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                 gs
                 (fun e he => ⟨inDomainExprs_self gs e he hde, by
                   have hmem := encRep_mem_le encExprElem gs e he
-                  have hw := encLenBytes_ge 3 (encExpressionBody e)
-                  have hjk : (encExprElem e).length
-                      = (encLenBytes 3 (encExpressionBody e)).length := rfl
-                  omega⟩)
+                  grind [encLenBytes_ge, encExprElem, List.length_append]⟩)
                 (by omega),
               decRep?_encMeasureElem_nil f ((encRep encMeasureElem ms).length + 1) ms
                 (fun e he => ⟨inDomainExprs_self ms e he hdm, by
                   have hmem := encRep_mem_le encMeasureElem ms e he
-                  have hw := encLenBytes_ge 4 (encExpressionBody e)
-                  have hjk : (encMeasureElem e).length
-                      = (encLenBytes 4 (encExpressionBody e)).length := rfl
-                  omega⟩)
+                  grind [encLenBytes_ge, encMeasureElem, List.length_append]⟩)
                 (by omega)]
         | sort ks input =>
             have hdk : inDomainSortFields ks = true := by
@@ -1660,10 +1720,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
               decRep?_encSortElem_nil f ((encRep encSortElem ks).length + 1) ks
                 (fun k hk => ⟨inDomainSortFields_self ks k hk hdk, by
                   have hmem := encRep_mem_le encSortElem ks k hk
-                  have hw := encLenBytes_ge 3 (encSortFieldBody k)
-                  have hjk : (encSortElem k).length
-                      = (encLenBytes 3 (encSortFieldBody k)).length := rfl
-                  omega⟩)
+                  grind [encLenBytes_ge, encSortElem, List.length_append]⟩)
                 (by omega)]
         | fetch limit offset input =>
             cases limit with
@@ -1694,7 +1751,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                   have hF : (encFetchBody (encRelBody input) none (some o)).length
                       = (encLenBytes 2 (encRelBody input)).length
                         + (encLenBytes 5 (encNatLit o)).length := by
-                    simp only [encFetchBody, List.append_nil, List.length_append]
+                    grind [encFetchBody, List.append_nil, List.length_append]
                   have hW := encLenBytes_ge 3
                     (encFetchBody (encRelBody input) none (some o))
                   have h1 : (encLenBytes 3 (encFetchBody (encRelBody input) none (some o))
@@ -1721,7 +1778,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                   have hF : (encFetchBody (encRelBody input) (some l) none).length
                       = (encLenBytes 2 (encRelBody input)).length
                         + (encLenBytes 6 (encNatLit l)).length := by
-                    simp only [encFetchBody, List.append_nil, List.length_append]
+                    grind [encFetchBody, List.append_nil, List.length_append]
                   have hW := encLenBytes_ge 3
                     (encFetchBody (encRelBody input) (some l) none)
                   have h1 : (encLenBytes 3 (encFetchBody (encRelBody input) (some l) none)
@@ -1750,8 +1807,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                       = (encLenBytes 2 (encRelBody input)).length
                         + ((encLenBytes 5 (encNatLit o)).length
                           + (encLenBytes 6 (encNatLit l)).length) := by
-                    simp only [encFetchBody, List.append_nil, List.length_append]
-                    omega
+                    grind [encFetchBody, List.append_nil, List.length_append]
                   have hW := encLenBytes_ge 3
                     (encFetchBody (encRelBody input) (some l) (some o))
                   have h1 : (encLenBytes 3
@@ -1783,8 +1839,7 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
                 = (encLenBytes 2 (encRelBody l)).length
                   + ((encLenBytes 2 (encRelBody r)).length
                     + (encVarField 3 (setOpNum op)).length) := by
-              simp only [encSetBody, List.length_append]
-              omega
+              grind [encSetBody, List.length_append]
             have hW := encLenBytes_ge 8 (encSetBody op (encRelBody l) (encRelBody r))
             have h1 : (encLenBytes 8 (encSetBody op (encRelBody l) (encRelBody r))
                 ++ rest).length + 1 ≤ f + 1 := hfuel
@@ -1800,11 +1855,88 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
               ih2 r hd4 hr,
               decEnumField?_encVarField 3 setOpOfNum? setOpNum
                 setOpOfNum?_self op]
+        | cross l r =>
+            have hd3 : inDomainRel l = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.1
+            have hd4 : inDomainRel r = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.2
+            have hF : (encCrossBody (encRelBody l) (encRelBody r)).length
+                = (encLenBytes 2 (encRelBody l)).length
+                  + (encLenBytes 3 (encRelBody r)).length := by
+              simp only [encCrossBody, List.length_append]
+            have hW := encLenBytes_ge 12 (encCrossBody (encRelBody l) (encRelBody r))
+            have h1 : (encLenBytes 12 (encCrossBody (encRelBody l) (encRelBody r))
+                ++ rest).length + 1 ≤ f + 1 := hfuel
+            have hA := encLenBytes_ge 2 (encRelBody l)
+            have hB := encLenBytes_ge 3 (encRelBody r)
+            simp only [List.length_append] at h1 hW hF hA hB
+            have hl : (encRelBody l).length + 1 ≤ f := by omega
+            have hr : (encRelBody r).length + 1 ≤ f := by omega
+            simp only [encRelBody, encCrossBody, decRelBody?, List.append_assoc,
+              decOneof?_encLenBytes_append,
+              decLenField?_encLenBytes_append,
+              decLenField?_encLenBytes 3 (encRelBody r),
+              ih2 l hd3 hl,
+              ih2 r hd4 hr]
+        | write nms op ts input =>
+            -- the write arm's gate: `inDomainRel`'s write row is the
+            -- LEFT-assoc `&&`-chain, so the accessors are h.1.1/h.1.2/h.2
+            have hd1 : inDomainStrs nms = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.1.1
+            have hd2 : inDomainNamedStruct ts = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.1.2
+            have hd3 : inDomainRel input = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.2
+            have hF : (encWriteBody nms op ts (encRelBody input)).length
+                = (encLenBytes 1 (encRep (fun n => encLenBytes 1 (encStr n)) nms)).length
+                  + ((encLenBytes 3 (encNamedStructBody ts)).length
+                    + ((encVarField 4 (writeOpNum op)).length
+                      + (encLenBytes 5 (encRelBody input)).length)) := by
+              grind [encWriteBody, List.length_append]
+            have hW := encLenBytes_ge 19 (encWriteBody nms op ts (encRelBody input))
+            have h1 : (encLenBytes 19 (encWriteBody nms op ts (encRelBody input))
+                ++ rest).length + 1 ≤ f + 1 := hfuel
+            have hA := encLenBytes_ge 1 (encRep (fun n => encLenBytes 1 (encStr n)) nms)
+            have hB := encLenBytes_ge 3 (encNamedStructBody ts)
+            have hD := encLenBytes_ge 5 (encRelBody input)
+            simp only [List.length_append] at h1 hW hF hA hB hD
+            -- the named-struct law's NIL face (the payload's own end)
+            have hns : (encNamedStructBody ts ++ []).length + 1 ≤ f := by
+              grind [List.append_nil]
+            have hin : (encRelBody input).length + 1 ≤ f := by omega
+            -- the struct's read-back at the goal's exact shape (the
+            -- read arm's hns' pattern: re-insert the `++ []` face)
+            have hnsr : decNamedStructBody? f (encNamedStructBody ts)
+                = some (Step.more ts []) := by
+              rw [← List.append_nil (encNamedStructBody ts)]
+              exact decNamedStructBody?_encNamedStructBody_append f ts [] hd2 hns
+            -- the names' rep, at the goal's exact shape (the read
+            -- arm's hrep pattern)
+            have hrer : decRep? (decFieldStr? 1)
+                ((encRep (fun n => encLenBytes 1 (encStr n)) nms).length + 1)
+                (encRep (fun n => encLenBytes 1 (encStr n)) nms)
+                = some (nms, []) := by
+              rw [← List.append_nil (encRep (fun n => encLenBytes 1 (encStr n)) nms)]
+              exact decRep?_encRep_append (decFieldStr? 1)
+                (fun n => encLenBytes 1 (encStr n))
+                (fun n => inDomainStr n = true)
+                (fun n r' h => decFieldStr?_encLenBytes_append 1 n r' h)
+                (fun n => encLenBytes_pos 1 _)
+                [] (by rfl) _ nms
+                (fun n hn => inDomainStrs_self nms n hn hd1)
+                (by simp only [List.length_append, List.append_nil]; omega)
+            simp only [encRelBody, encWriteBody, decRelBody?, List.append_assoc,
+              decOneof?_encLenBytes_append,
+              decLenField?_encLenBytes_append,
+              hrer,
+              hnsr,
+              decEnumField?_encVarField_append 4 writeOpOfNum? writeOpNum
+                writeOpOfNum?_self op (encLenBytes 5 (encRelBody input)),
+              decLenField?_encLenBytes 5 (encRelBody input),
+              ih2 input hd3 hin]
       exact ⟨part1, fun r hd hb => by
         rw [← List.append_nil (encRelBody r)]
-        exact part1 r [] hd (by
-          have hx : (encRelBody r ++ []).length = (encRelBody r).length := by simp
-          omega)⟩
+        exact part1 r [] hd (by grind [List.append_nil])⟩
 
 /-! ## the plan wire (the PlanRel elements + the Plan container) -/
 
@@ -1892,9 +2024,9 @@ theorem decPlanRelElem?_encPlanRelElem_append : ∀ (fuel : Nat) (pr : PlanRel)
         have h2 := encLenBytes_fuel_budget_at fuel 2
           (encRep (fun n => encLenBytes 2 (encStr n)) nms
             ++ encLenBytes 1 (encRelBody r)) (Nat.le_of_succ_le h3)
-        have hw1 := encLenBytes_ge 1 (encRelBody r)
-        simp only [List.length_append] at h2 hw1 ⊢
-        omega
+        -- the wrap-peel arithmetic by `grind` (06 §12): the closed-ground
+        -- length bookkeeping — `encLenBytes_ge` named, the budgets in context
+        grind [encLenBytes_ge, List.length_append]
       have hend : decFieldStr? 2 (encLenBytes 1 (encRelBody r))
           = some (Step.stop (encLenBytes 1 (encRelBody r))) := by
         simp only [decFieldStr?]
@@ -1959,12 +2091,9 @@ theorem decPlanBody?_encPlanBody_append : ∀ (fuel : Nat) (p : Plan) (rest : Li
   have hfuel' : (encRep encPlanRelElem p.relations).length
       + ((encRep (fun n => encLenBytes 100 (encStr n)) p.functions ++ rest).length + 1)
       ≤ fuel := by
-    have h1 : (encPlanBody p ++ rest).length
-        = (encRep encPlanRelElem p.relations).length
-          + (encRep (fun n => encLenBytes 100 (encStr n)) p.functions ++ rest).length := by
-      simp only [encPlanBody, List.append_assoc, List.length_append]
-    have h2 : (encPlanBody p ++ rest).length + 1 ≤ fuel := hfuel
-    omega
+    -- the two-rep budget split by `grind` (06 §12): closed-ground length
+    -- bookkeeping — the body's def equation + append assoc/norms named
+    grind [encPlanBody, List.append_assoc, List.length_append]
   have hendRels : decPlanRelElem? fuel
       (encRep (fun n => encLenBytes 100 (encStr n)) p.functions ++ rest)
       = some (Step.stop
@@ -1987,8 +2116,7 @@ theorem decPlanBody?_encPlanBody_append : ∀ (fuel : Nat) (p : Plan) (rest : Li
     p.relations
     (fun pr hpr => ⟨hdr pr hpr, by
       have hmem := encRep_mem_le encPlanRelElem p.relations pr hpr
-      have hw := encLenBytes_ge 3 (encPlanRelBody pr)
-      omega⟩)
+      grind [encLenBytes_ge, encPlanRelElem, encPlanRelBody, List.length_append]⟩)
     (by omega)]
   simp only [decRep?_encRep_append (decFieldStr? 100) (fun n => encLenBytes 100 (encStr n))
     (fun n => inDomainStr n = true)
@@ -2049,3 +2177,6 @@ def planWireTarget : WireTarget Plan where
   entourage := { vectors := true, goldens := true, controls := true, ifaceRow := "substrait.wire.plan" }
 
 end Substrait.Wire
+
+end -- public section
+

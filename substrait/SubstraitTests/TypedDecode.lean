@@ -89,6 +89,19 @@ theorem setRoundTrip :
     decTypedRel? (wireOf setRel) = .ok (AnyRel.mk units units setRel) :=
   decTypedRel?_ok setRel _ rfl ⟨trivial, trivial⟩
 
+/-- The CROSS arm's instance (no condition to decode — the CrossRel
+    face). -/
+theorem crossRoundTrip :
+    decTypedRel? (wireOf crossRel)
+      = .ok (AnyRel.mk (sa ++ sb) (sa ++ sb) crossRel) :=
+  decTypedRel?_ok crossRel _ rfl ⟨trivial, trivial⟩
+
+/-- The WRITE arm's instance (the alignment: the written table schema
+    is the lowering's echo of the input's output schema). -/
+theorem writeRoundTrip :
+    decTypedRel? (wireOf writeRel) = .ok (AnyRel.mk units units writeRel) :=
+  decTypedRel?_ok writeRel _ rfl (by simp only [writeRel, readUnits, Rel.decodable])
+
 /-- The decoded rels' schema face (the Bool echo of the law instances:
     every worked rel decodes .ok with its indices preserved). -/
 def decFace (p : Proto.Rel) : Option (Nat × Nat) :=
@@ -166,6 +179,8 @@ def typedDecodeSpec : Spec :=
           && decFace (wireOf sortRel) == some (2, 2)
           && decFace (wireOf fetchRel) == some (2, 2)
           && decFace (wireOf setRel) == some (2, 2)
+          && decFace (wireOf crossRel) == some (2, 2)
+          && decFace (wireOf writeRel) == some (2, 2)
           -- the full circle's byte leg: the plan encodes and the wire
           -- decodes the bytes back to the plan (the wire law's face)
           && Substrait.Wire.inDomainPlan circPlan
@@ -246,7 +261,14 @@ def typedDecodeSpec : Spec :=
           (decCode (.aggregate [] [.literal { literalType := .i64 0 }]
               (wireOf readUnits))
             == none)
-          "the non-invocation measure decoded") ]
+          "the non-invocation measure decoded")
+    , ("SS0012: the decode accepts a drifted write table schema (caught)",
+        fun _ => assert
+          (decCode (.write ["t"] .insert
+              { fields := [ptI64], names := ["a"] }
+              (wireOf readUnits))
+            == none)
+          "the drifted write schema decoded") ]
     1 42
 
 end TypedDecodeTests

@@ -200,7 +200,10 @@ impl fmt::Display for SnapshotReport {
         match self {
             Self::Absent => write!(f, "snapshot: none present (full replay)"),
             Self::Applied { seqno } => {
-                write!(f, "snapshot applied at seqno {seqno} (tail replayed on top)")
+                write!(
+                    f,
+                    "snapshot applied at seqno {seqno} (tail replayed on top)"
+                )
             }
             Self::FellBack(reason) => match reason {
                 FallbackReason::Torn { offset } => {
@@ -269,13 +272,18 @@ fn snap_fail(e: crate::error::DecodeFail, offset: u64) -> SnapshotError {
 /// # Errors
 /// [`SnapshotError::Torn`] for the torn-write shape,
 /// [`SnapshotError::Corrupt`] for complete-but-invalid bytes.
-pub fn decode_snapshot(schema: &Schema, bytes: &[u8]) -> Result<(SnapshotMeta, Table), SnapshotError>
-{
+pub fn decode_snapshot(
+    schema: &Schema,
+    bytes: &[u8],
+) -> Result<(SnapshotMeta, Table), SnapshotError> {
     if bytes.len() < MAGIC.len() {
         return Err(SnapshotError::Torn { offset: 0 });
     }
     if bytes[..MAGIC.len()] != MAGIC {
-        return Err(SnapshotError::Corrupt { offset: 0, reason: "snapshot magic" });
+        return Err(SnapshotError::Corrupt {
+            offset: 0,
+            reason: "snapshot magic",
+        });
     }
     let mut rest = &bytes[MAGIC.len()..];
     let at = |rest: &[u8]| (bytes.len() - rest.len()) as u64;
@@ -317,7 +325,11 @@ pub fn decode_snapshot(schema: &Schema, bytes: &[u8]) -> Result<(SnapshotMeta, T
         });
     }
     Ok((
-        SnapshotMeta { seqno, prefix_hash, tail_head_hash },
+        SnapshotMeta {
+            seqno,
+            prefix_hash,
+            tail_head_hash,
+        },
         state,
     ))
 }
@@ -359,15 +371,20 @@ pub fn write_snapshot_atomic(path: &Path, raw: &[u8]) -> Result<(), DeltaError> 
 /// `[0..seqno)`: the prefix bytes (exactly the log file's first
 /// `prefix_len` bytes — the journal wire IS the frames' concatenation,
 /// the round-trip law's identity), the tail-head hash, and the seqno.
-pub fn compact_meta(schema: &Schema, frames: &[crate::Delta], seqno: u64)
-    -> Result<(SnapshotMeta, usize), DeltaError>
-{
+pub fn compact_meta(
+    schema: &Schema,
+    frames: &[crate::Delta],
+    seqno: u64,
+) -> Result<(SnapshotMeta, usize), DeltaError> {
     let s = usize::try_from(seqno).map_err(|_| DeltaError::CompactRange {
         seqno,
         len: frames.len() as u64,
     })?;
     if s > frames.len() {
-        return Err(DeltaError::CompactRange { seqno, len: frames.len() as u64 });
+        return Err(DeltaError::CompactRange {
+            seqno,
+            len: frames.len() as u64,
+        });
     }
     // The log FILE is the frames' CONCATENATION (self-delimiting
     // frames, no header — the open's walk starts at byte 0), so the
@@ -395,13 +412,20 @@ pub fn compact_meta(schema: &Schema, frames: &[crate::Delta], seqno: u64)
         // The empty tail's head is the empty bytes' fold (the seed).
         None => bytes_hash(&[]),
     };
-    Ok((SnapshotMeta { seqno, prefix_hash: bytes_hash(&prefix), tail_head_hash }, prefix.len()))
+    Ok((
+        SnapshotMeta {
+            seqno,
+            prefix_hash: bytes_hash(&prefix),
+            tail_head_hash,
+        },
+        prefix.len(),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delta::{Delta, enc_journal, witnessed_apply, witness_of};
+    use crate::delta::{Delta, enc_journal, witness_of, witnessed_apply};
     use crate::schema::fixtures::{fixture, fixture_row};
     use crate::value::Value;
 
@@ -410,7 +434,9 @@ mod tests {
     #[test]
     fn bytes_hash_known_answers() {
         fn lcg(h: u64) -> u64 {
-            h.wrapping_add(0).wrapping_mul(LCG_MULT).wrapping_add(LCG_INC)
+            h.wrapping_add(0)
+                .wrapping_mul(LCG_MULT)
+                .wrapping_add(LCG_INC)
         }
         assert_eq!(bytes_hash(&[]), LCG_SEED);
         assert_eq!(bytes_hash(&[0]), lcg(LCG_SEED));
@@ -425,14 +451,18 @@ mod tests {
         let schema = fixture();
         let mut state = Table::new();
         state.apply(&schema, &Delta::Insert(fixture_row(300, "hi")));
-        let meta = SnapshotMeta { seqno: 5, prefix_hash: 0x0102030405060708, tail_head_hash: 99 };
+        let meta = SnapshotMeta {
+            seqno: 5,
+            prefix_hash: 0x0102030405060708,
+            tail_head_hash: 99,
+        };
         let raw = encode_snapshot(&meta, &state);
         assert_eq!(
             raw,
             [
                 b'M', b'D', b'L', b'1', //
-                5, // seqno varint
-                1, // row count varint
+                5,    // seqno varint
+                1,    // row count varint
                 2, 0xAC, 0x02, 2, 104, 105, // enc_row
                 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, // prefix hash LE
                 99, 0, 0, 0, 0, 0, 0, 0, // tail-head hash LE
@@ -443,8 +473,7 @@ mod tests {
             .collect::<Vec<u8>>()
         );
         // And the decoder takes it back exactly.
-        let (meta2, state2) =
-            decode_snapshot(&schema, &raw).unwrap_or_else(|e| panic!("{e}"));
+        let (meta2, state2) = decode_snapshot(&schema, &raw).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(meta2, meta);
         assert_eq!(state2, state);
     }
@@ -457,7 +486,11 @@ mod tests {
         let schema = fixture();
         let mut state = Table::new();
         state.apply(&schema, &Delta::Insert(fixture_row(300, "hi")));
-        let meta = SnapshotMeta { seqno: 1, prefix_hash: 7, tail_head_hash: 9 };
+        let meta = SnapshotMeta {
+            seqno: 1,
+            prefix_hash: 7,
+            tail_head_hash: 9,
+        };
         let raw = encode_snapshot(&meta, &state);
 
         // Every prefix is Torn — the torn write's shape.
@@ -473,14 +506,20 @@ mod tests {
         let mid = raw.len() / 2;
         bad[mid] ^= 0x01;
         match decode_snapshot(&schema, &bad) {
-            Err(SnapshotError::Corrupt { reason: "content hash mismatch", .. }) => {}
+            Err(SnapshotError::Corrupt {
+                reason: "content hash mismatch",
+                ..
+            }) => {}
             other => panic!("flipped byte: expected hash refusal, got {other:?}"),
         }
         // Bad magic (complete file) refuses.
         let mut bad = raw.clone();
         bad[0] = b'X';
         match decode_snapshot(&schema, &bad) {
-            Err(SnapshotError::Corrupt { offset: 0, reason: "snapshot magic" }) => {}
+            Err(SnapshotError::Corrupt {
+                offset: 0,
+                reason: "snapshot magic",
+            }) => {}
             other => panic!("bad magic: expected refusal, got {other:?}"),
         }
         // Trailing bytes refuse (a whole-file artifact is not a suffix
@@ -488,7 +527,10 @@ mod tests {
         let mut bad = raw.clone();
         bad.push(0);
         match decode_snapshot(&schema, &bad) {
-            Err(SnapshotError::Corrupt { reason: "trailing bytes", .. }) => {}
+            Err(SnapshotError::Corrupt {
+                reason: "trailing bytes",
+                ..
+            }) => {}
             other => panic!("trailing: expected refusal, got {other:?}"),
         }
         // NON-CONTROL: the honest bytes decode (the negative controls
@@ -543,11 +585,18 @@ mod tests {
         let schema = fixture();
         let mut state = Table::new();
         state.apply(&schema, &Delta::Insert(fixture_row(1, "a")));
-        let meta = SnapshotMeta { seqno: 1, prefix_hash: 7, tail_head_hash: 9 };
+        let meta = SnapshotMeta {
+            seqno: 1,
+            prefix_hash: 7,
+            tail_head_hash: 9,
+        };
         let raw = encode_snapshot(&meta, &state);
         let (_, decoded) = decode_snapshot(&schema, &raw).unwrap_or_else(|e| panic!("{e}"));
         // The tail: update then remove — the checked patches accept.
-        let tail = vec![Delta::Update(fixture_row(1, "b")), Delta::Remove(Value::U64(1))];
+        let tail = vec![
+            Delta::Update(fixture_row(1, "b")),
+            Delta::Remove(Value::U64(1)),
+        ];
         let mut ws = Vec::new();
         let mut st = decoded;
         for d in &tail {

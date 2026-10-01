@@ -131,7 +131,7 @@ globs = ["Gates", "Gates.+"]
 [[lean_lib]]
 name = "GatesTestsLib"
 srcDir = "gates"
-roots = ["GatesTests.Main", "GatesTests.Axioms"]
+roots = ["GatesTests.Main", "GatesTests.Axioms", "GatesTests.Config", "GatesTests.Baselines"]
 
 [[lean_exe]]
 name = "GatesTests"
@@ -357,7 +357,7 @@ globs = ["ZSet", "ZSet.+"]
 name = "ZSetTestsLib"
 srcDir = "zset"
 roots = ["ZSetTests.Main", "ZSetTests.Axioms",
-         "ZSetTests.Circuit", "ZSetTests.CircuitAxioms"]
+         "ZSetTests.Circuit", "ZSetTests.CircuitAxioms", "ZSetTests.Optimizer"]
 
 [[lean_exe]]
 name = "ZSetTests"
@@ -573,7 +573,7 @@ globs = ["Query", "Query.+"]
 [[lean_lib]]
 name = "QueryTestsLib"
 srcDir = "query"
-roots = ["QueryTests.Main", "QueryTests.Axioms", "QueryTests.ExplainSpecs", "QueryTests.Bridge", "QueryTests.QLangSpecs"]
+roots = ["QueryTests.Main", "QueryTests.Axioms", "QueryTests.ExplainSpecs", "QueryTests.Bridge", "QueryTests.QLangSpecs", "QueryTests.Optimize"]
 
 [[lean_exe]]
 name = "QueryTests"
@@ -787,7 +787,9 @@ name = "ComponentTestsLib"
 srcDir = "guest"
 roots = ["ComponentTests.Main", "ComponentTests.Fixture", "ComponentTests.Axioms",
          "ComponentTests.StringFixture", "ComponentTests.EdgeFixture",
-         "ComponentTests.Pipeline",
+         "ComponentTests.FaultFixture", "ComponentTests.WitFixture",
+         "ComponentTests.ImportFixture", "ComponentTests.AsyncFixture",
+         "ComponentTests.StreamFixture", "ComponentTests.Pipeline",
          "ComponentTests.Gen", "ComponentTests.GenFixture"]
 
 [[lean_exe]]

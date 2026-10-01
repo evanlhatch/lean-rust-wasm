@@ -65,7 +65,9 @@ pub fn parse_duel_manifest<E>(
     text: &str,
     parse_expect: impl Fn(&str) -> Option<E>,
 ) -> Result<DuelManifest<E>, ManifestError> {
-    let err = |reason: &str| ManifestError { reason: reason.to_string() };
+    let err = |reason: &str| ManifestError {
+        reason: reason.to_string(),
+    };
     let mut generator: Option<String> = None;
     let mut rows = Vec::new();
     let mut header_seen = false;
@@ -112,7 +114,10 @@ pub fn parse_duel_manifest<E>(
         if parts.next().is_some() {
             return Err(err(&format!("{first}: extra columns")));
         }
-        rows.push(DuelRow { path: first.to_string(), expectation });
+        rows.push(DuelRow {
+            path: first.to_string(),
+            expectation,
+        });
     }
     let generator = generator.ok_or_else(|| err("no generator row"))?;
     if rows.is_empty() {

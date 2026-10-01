@@ -57,7 +57,11 @@ The five questions (notes/v3/01-core.md):
   sweeps + the negative controls.
 -/
 
-import Kit.Varint
+module
+
+public import Kit.Varint
+
+@[expose] public section
 
 namespace Kit.Proto
 
@@ -920,3 +924,5 @@ structure WireTarget (A : Type) where
   entourage : WireEntourage
 
 end Kit.Proto
+
+end -- public section

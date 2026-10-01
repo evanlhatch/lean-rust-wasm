@@ -35,6 +35,7 @@ modules under test.
 import Scaffold
 import TestingKit.Harness
 import TestingKit.Golden
+import DemoApp.Flow
 import DemoApp.Tests
 import LedgerApp.Tests
 import LedgerApp.Flow
@@ -87,6 +88,9 @@ def adoptedSuiteFailures : List (String × Option String) :=
   , ("LedgerApp", match ledgerAppItemSpec.run with
       | .pass _ => none
       | v => some s!"the adopted LedgerApp suite did not pass: {v}")
+  , ("DemoApp flow", match DemoApp.demoAppItemFlowSpec.run with
+      | .pass _ => none
+      | v => some s!"the adopted DemoApp flow suite did not pass: {v}")
   , ("LedgerApp flow", match LedgerApp.ledgerAppItemFlowSpec.run with
       | .pass _ => none
       | v => some s!"the adopted LedgerApp flow suite did not pass: {v}") ]

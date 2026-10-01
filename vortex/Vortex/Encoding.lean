@@ -89,13 +89,34 @@ path's named follow-up) + the axiom report.
 Core-only (imports Kit + Kit.Correspondence + SchemaCore.{Ty,Item,Fold}
 — the cone rule).
 -/
+module
 
-import Kit
-import Kit.Correspondence
-import SchemaCore.Ty
-import SchemaCore.Item
-import SchemaCore.Fold
-import LintKit.Basic  -- the nolint opt-out attribute's reason-string form (LintKit is core-only: any package may import it)
+public import Kit.Correspondence
+public import Kit.Relation
+public import Kit.Hyper
+public import Kit.Obligation
+public import Kit.Registry
+public import Kit.CheckedProp
+public import Kit.Emit
+public import Kit.Suggest
+public import Kit.Diag
+public import Kit.Cli
+public import Kit.CodeRegistry
+public import Kit.Change
+public import Kit.Observer
+public import Kit.Varint
+public import Kit.Proto
+public import Kit.Duel
+public import Kit.Mangle
+-- the Kit barrel itself stays pre-module (Kit.Lane/Kit.Text are the
+-- named stays); the module-only members are imported directly
+public import Kit.Correspondence
+public import SchemaCore.Ty
+public import SchemaCore.Item
+public import SchemaCore.Fold
+public import LintKit.Basic  -- the nolint opt-out attribute's reason-string form (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 open Kit SchemaCore
 
@@ -486,3 +507,5 @@ theorem constRead_constEncode [DecidableEq α] (v : α) (vs : List α)
       rw [List.replicate_succ, hws]
 
 end Vortex
+
+end -- public section

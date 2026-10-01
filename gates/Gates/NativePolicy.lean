@@ -43,7 +43,7 @@ open Lean
 
 namespace Gates.NativePolicy
 
-open Gates (PkgSpec gatedPackages)
+open Gates (PkgSpec gatedPackages pkgIsTestLib testLibPackages)
 
 /-- The committed allowlist: the disclosed native_decide trust bases,
     at (package dir, defining module) granularity. ADDITIVE ONLY, with
@@ -88,14 +88,44 @@ unsafe def analyzePkg (base : SearchPath) (pkg : PkgSpec) : IO PkgReport := do
   | .inr (decls, native) =>
     return { dir := pkg.dir, decls := decls.size, native := native }
 
-/-- The gate, ONE package per process (the shard): flag every decl on
-    the native_decide trust base outside the allowlist (fail-closed),
-    and check this package's allowlist entries for staleness
-    (fail-closed the other way — a done exile must be removed). Exit 0
-    iff clean. The SHARD exists for the same reason as the lint
-    driver's: libgc's conservative stack scan retains each dropped env
-    — folding all 37 gated packages' envs in one process peaked past
-    the OOM line (observed, SIGTERM) once the table completed. -/
+/-- One package's verdict over its report (the shard's AND the warm
+fold's shared body): flag every decl on the native_decide trust base
+outside the allowlist (fail-closed), and check this package's
+allowlist entries for staleness (fail-closed the other way — a done
+exile must be removed). Returns whether it failed; the faces stream
+live. -/
+def verdictPkg (pkg : PkgSpec) (r : PkgReport) : IO Bool := do
+  let mut failed := false
+  let mut totalNative := 0
+  -- this package's allowlist slice: an entry no scan matches
+  -- survives here and fails the row
+  let mut stale : Array (String × Name) :=
+    allowlistedNative.filter fun (d, _) => d == pkg.dir
+  for (m, d) in r.native do
+    totalNative := totalNative + 1
+    if allowlistedNative.contains (pkg.dir, m) then
+      stale := stale.erase (pkg.dir, m)
+      IO.println s!"{pkg.dir}: {d} — on the native_decide trust base, \
+        DISCLOSED ({m} is an allowlisted exile)"
+    else
+      IO.eprintln s!"{pkg.dir}: VIOLATION — {d} (module {m}) depends on \
+        the native_decide trust base outside the allowlist"
+      failed := true
+  unless stale.isEmpty do
+    failed := true
+    IO.eprintln "native-policy: STALE allowlist entries — these modules no \
+      longer depend on native_decide; remove the entries (the exile was re-proved):"
+    for (d, m) in stale do
+      IO.eprintln s!"  {d}/{m}"
+  unless failed do
+    IO.println s!"native-policy: {pkg.dir} — {r.decls} decls checked, \
+      {totalNative} native_decide dependency(ies), allowlist clean"
+  return failed
+
+/-- ONE package's shard face (in-process, its own env): the debug face
+    `--package=<dir>` runs. The shard's OLD reason (libgc's conservative
+    stack scan retaining each dropped env) is the warm discipline's
+    gone root — one shared env now, nothing dropped. -/
 unsafe def runPackage (pkg : PkgSpec) : IO UInt32 := do
   Lean.initSearchPath (← Lean.findSysroot)
   let base ← Lean.searchPathRef.get
@@ -104,47 +134,43 @@ unsafe def runPackage (pkg : PkgSpec) : IO UInt32 := do
   | some e =>
       IO.println s!"{pkg.dir}: LOAD FAILED — {e}"
       return 1
-  | none =>
-    let mut failed := false
-    let mut totalNative := 0
-    -- this package's allowlist slice: an entry no scan matches
-    -- survives here and fails the shard
-    let mut stale : Array (String × Name) :=
-      allowlistedNative.filter fun (d, _) => d == pkg.dir
-    for (m, d) in r.native do
-      totalNative := totalNative + 1
-      if allowlistedNative.contains (pkg.dir, m) then
-        stale := stale.erase (pkg.dir, m)
-        IO.println s!"{pkg.dir}: {d} — on the native_decide trust base, \
-          DISCLOSED ({m} is an allowlisted exile)"
-      else
-        IO.eprintln s!"{pkg.dir}: VIOLATION — {d} (module {m}) depends on \
-          the native_decide trust base outside the allowlist"
-        failed := true
-    unless stale.isEmpty do
-      failed := true
-      IO.eprintln "native-policy: STALE allowlist entries — these modules no \
-        longer depend on native_decide; remove the entries (the exile was re-proved):"
-      for (d, m) in stale do
-        IO.eprintln s!"  {d}/{m}"
-    unless failed do
-      IO.println s!"native-policy: {pkg.dir} — {r.decls} decls checked, \
-        {totalNative} native_decide dependency(ies), allowlist clean"
-    return if failed then 1 else 0
+  | none => return if ← verdictPkg pkg r then 1 else 0
 
-/-- The gate: per gated package, one CHILD process (the shard above;
-    the same shape `Gates.runAll` uses for the gate rows), stdio
-    inherited so the findings stream live; first failure fails the
-    fold. Exit 0 iff every shard is clean. -/
+/-- The WARM face, TWO LEGS (the Axioms twin's shape): the LIBRARY
+rows fold against the shared warm env in registry order — the
+analysis is per-decl kernel data (`collectAxioms` + the module
+index), so the fold's verdicts are the shards' byte for byte; the
+TESTS-LIB rows ride `Gates.testLibPool` (one child shard per row —
+the root-`main` collision bars them from the warm env), their
+captured stdout re-printed per package (the verdict lines' bytes
+unchanged, batched at completion). -/
+unsafe def runWarm (env : Environment) : IO UInt32 := do
+  let ctx : Lean.Core.Context :=
+    { fileName := "<gates-native-policy>", fileMap := default }
+  let mut failed := false
+  for pkg in gatedPackages do
+    unless pkgIsTestLib pkg do
+      -- no per-package load face on the warm leg: the warm env is
+      -- all-or-nothing upstream (the loud WARM LOAD FAILED line)
+      let ((decls, native), _) ←
+        (analyzeEnv (pkg.roots.map (·.getRoot))).toIO ctx { env }
+      let r : PkgReport :=
+        { dir := pkg.dir, decls := decls.size, native := native }
+      if ← verdictPkg pkg r then failed := true
+  for (_, code, out) in ← Gates.testLibPool "native-policy" do
+    IO.print out
+    if code != 0 then failed := true
+  if failed then return 1
+  IO.println s!"native-policy: clean — every gated package's decls \
+    inside the allowlist ({gatedPackages.size} package(s); the ratchet \
+    is live)"
+  return 0
+
+/-- The gate: without `--package`, the WARM fold (the tree's env loaded
+once, every package in-process); with it, ONE package's shard face
+in-process (the debug face). Exit 0 iff clean. -/
 unsafe def run (package : Option String) : IO UInt32 :=
-  Gates.shardDispatch "native-policy" package runPackage fun outs => do
-    let mut failed := false
-    for (code, _) in outs do
-      if code != 0 then failed := true
-    if failed then return 1
-    IO.println s!"native-policy: clean — every gated package's decls \
-      inside the allowlist ({gatedPackages.size} shard(s); the ratchet \
-      is live)"
-    return 0
+  Gates.gateDispatch "native-policy" package runPackage
+    (Gates.withWarmEnv "native-policy" runWarm)
 
 end Gates.NativePolicy

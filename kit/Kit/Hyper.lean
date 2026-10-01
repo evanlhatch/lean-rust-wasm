@@ -36,7 +36,14 @@ What lands here:
 
 Boundary (16 §4.3, kept): schedule-independence and the other named
 hyperproperties land with their first consumer — the substrate makes
-them STATABLE, it does not preempt their shapes.
+them STATABLE, it does not preempt their shapes. UPDATE (wave-30 E5):
+the schedule-independence boundary is DISSOLVED — the first consumer
+landed (`Machines.Async.watch_schedule_independent`: the watch
+channel's coalescing as a `Noninterfering` instance over execution
+pairs, riding `noninterfering_of_factor` — no new machinery here).
+This substrate is now CONSUMED; the security-facing lane claim (the
+noninterference citation a lanes' claim will ride) remains the named
+future consumer for the rest of the surface.
 
 The five questions (notes/v3/01-core.md):
 - root: TraceModel — the behavior side: the quantified object is the
@@ -60,19 +67,23 @@ The five questions (notes/v3/01-core.md):
   The schedule-independence boundary note above is the named
   first-consumer rule for the rest.
 - the consumer deadline (07's parked-table discipline, comment-level):
-  the NAMED candidate consumer is the asyncband models'
-  schedule-independence claim (16 §4.3's lane — the two-run carrier is
-  exactly its shape). DEADLINE: a KEPT row that outlives its SECOND
-  phase boundary without that consumer (or a named successor) is a
-  finding — the parked table's own rule fires, wire or delete, in the
-  boundary's commit. The boundary audits read this header, not the
-  table alone.
+  the NAMED candidate consumer was the asyncband models'
+  schedule-independence claim — it FIRED at wave-30 E5
+  (`Machines.Async.watch_schedule_independent`, the substrate's first
+  consumer). The deadline is met; the row's discipline now tracks the
+  security-facing lane claim (08 §35) as the named successor.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Kit.Relation
-import Kit.Observer
+
+module
+
+public import Kit.Relation
+public import Kit.Observer
+
+@[expose] public section
+
 
 namespace Kit
 
@@ -307,3 +318,5 @@ theorem leakExec_notNoninterfering :
   simp [apiObs, leakExec, secEx1, secEx2, agreeOn] at h0
 
 end Kit
+
+end -- @[expose] public section

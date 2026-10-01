@@ -19,8 +19,12 @@
 #   - NO mathlib (the tree is core-only; Cli + batteries + lean4lean are
 #     the only requires) — no cachix olean fetch step exists; the first
 #     build compiles the small dep closure from source.
-#   - cargo: the ubuntu-latest runner ships a Rust toolchain; the crates
-#     (schema-generated, mandate-delta, mandate-host) need nothing else.
+#   - cargo: the ubuntu-latest runner ships a Rust toolchain; the SIX crates
+#     (schema-generated, mandate-delta, mandate-faults, mandate-rt,
+#     mandate-host, mandate-store — exactly the justfile's `rust` row) need
+#     nightly (fast-observe's error_generic_member_access + error_iter),
+#     served by the runner's rustup honoring crates/rust-toolchain.toml's
+#     dated pin on each crates/* cargo invocation.
 #   - The elab-watch row inside `just gates`: its committed baseline
 #     (notes/elab-baseline.tsv) carries the REFERENCE calibration — the
 #     module/reference ratio divides out CI-vs-local machine speed, so a
@@ -40,6 +44,16 @@ on:
         branches: [main]
     pull_request:
     workflow_dispatch:
+        inputs:
+            run_nanoda:
+                description: also run the nanoda second lane (the pinned external kernel's agreement face)
+                type: boolean
+                default: false
+    schedule:
+        # the nanoda lane's WAVE cadence (weekly): a root's export is
+        # ~772MB / ~100s + the ~116s check — too honest a cost for the
+        # every-push battery, which stays exactly `just ci`
+        - cron: "0 6 * * 1"
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,6 +62,9 @@ concurrency:
 jobs:
     ci:
         name: the full battery (build + tests + gates + rust — `just ci`)
+        # the weekly schedule runs ONLY the nanoda lane (below); every
+        # push/PR runs the full battery, unchanged
+        if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
         timeout-minutes: 240
         steps:
@@ -89,7 +106,7 @@ jobs:
                       ~/.cargo/registry
                       ~/.cargo/git
                       target
-                  key: rust-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+                  key: rust-v1-${{ runner.os }}-${{ hashFiles('crates/*/Cargo.lock') }}
                   restore-keys: |
                       rust-v1-${{ runner.os }}-
 
@@ -98,3 +115,47 @@ jobs:
             # report discipline), never a bare failure.
             - name: just ci (build + test + gates + rust)
               run: just ci
+
+    # The kernel-check row's SECOND lane (Gates.Nanoda): the gated
+    # content re-checked by nanoda (ammkrn/nanoda_lib — a Rust kernel
+    # from a DIFFERENT implementation lineage) over lean4export NDJSON,
+    # the permitted_axioms generated FROM LintKit.AxiomAllowlist. Wave
+    # cadence ONLY: weekly + manual dispatch (run_nanoda: true) — the
+    # ~772MB/~4min per-root cost keeps it out of the every-push battery
+    # (the additive-lane discipline: the lean4lean lane stays the
+    # per-run face). The lane SKIPS with the honest note (never a
+    # laundered pass) if the pinned tools are absent; `just
+    # tools-nanoda` builds them at the recorded pins (the three-way pin
+    # nanoda ↔ format-3.1.0 ↔ v4.33.0 — a drift is the gate's loud
+    # refusal).
+    nanoda:
+        name: the nanoda second lane (the external kernel's agreement — `just tools-nanoda` + the kernel-check --nanoda row)
+        runs-on: ubuntu-latest
+        timeout-minutes: 120
+        if: github.event_name == 'schedule' || inputs.run_nanoda == true
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: install just
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: just
+
+            - name: install elan + the pinned toolchain (lean-toolchain)
+              run: |
+                  set -euo pipefail
+                  [ -x "$HOME/.elan/bin/elan" ] || \
+                    curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y \
+                      --default-toolchain leanprover/lean4:v4.33.0
+                  echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+                  elan show
+                  test -d "$HOME/.elan/toolchains/leanprover--lean4---v4.33.0/bin"
+
+            - name: just build (the oleans the lane replays)
+              run: just build
+
+            - name: just tools-nanoda (clone-at-pin + build the pinned pair)
+              run: just tools-nanoda
+
+            - name: the nanoda lane's live run over ONE library (the run of record)
+              run: just gates-kernel-check-nanoda-kit

@@ -60,6 +60,13 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
+
+
+
+module
+
+
+@[expose] public section
 namespace Kit
 
 /-! ## The relation family -/
@@ -283,3 +290,5 @@ presumes it.
 abbrev Kripke (σ V₁ V₂ : Type) : Type := σ → Rel V₁ V₂
 
 end Kit
+
+end -- @[expose] public section

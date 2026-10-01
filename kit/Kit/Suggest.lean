@@ -32,7 +32,11 @@ The five questions (notes/v3/01-core.md):
   (KitTests: known-answer + ordering pins + the negative control).
 -/
 
-import TextKit.Suggest
+module
+
+public import TextKit.Suggest
+
+@[expose] public section
 
 namespace Kit
 
@@ -64,3 +68,5 @@ def suggestFor (got : String) (valid : List String) (maxDist : Nat := 3) :
   TextKit.suggestFor got valid maxDist
 
 end Kit
+
+end -- @[expose] public section

@@ -19,10 +19,7 @@ fn committed_duel_dir() -> PathBuf {
 /// copy of the committed duel directory (the manifest + the vectors +
 /// their sidecars). Returns the scratch GEN dir (run_duel's input).
 fn scratch(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
-        "mandate-duel-{}-{name}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("mandate-duel-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let duel = root.join("gen").join("wasm-duel");
     fs::create_dir_all(&duel).expect("scratch duel dir");
@@ -68,7 +65,11 @@ fn the_duel_agrees() {
     assert_eq!(report.generator, "WasmCore.Duel");
     // 1 slice + 19 generated op rows + 7 mem + 7 mem-trap + 3
     // scenarios + 1 invalid control = 38.
-    assert_eq!(report.rows.len(), 38, "the slice + 33 generated + 3 scenarios + the control");
+    assert_eq!(
+        report.rows.len(),
+        38,
+        "the slice + 33 generated + 3 scenarios + the control"
+    );
     for row in &report.rows {
         assert!(matches!(row.verdict, RowVerdict::Agree), "{:?}", row);
     }
@@ -89,7 +90,10 @@ fn the_duel_agrees() {
     assert_eq!(names[37], "gen/wasm-duel/invalid.wasm");
     // The expected vocabularies actually crossed (a duel whose rows
     // all collapsed to one kind would be vacuous coverage).
-    assert_eq!(report.rows[33].expectation, Expectation::Run("i64:42".into()));
+    assert_eq!(
+        report.rows[33].expectation,
+        Expectation::Run("i64:42".into())
+    );
     assert_eq!(report.rows[36].expectation, Expectation::Trap);
     assert_eq!(report.rows[37].expectation, Expectation::Refuse);
     // The fold: all-agree IS agree.
@@ -114,7 +118,10 @@ fn tampered_expectation_diverges_with_witness() {
         RowVerdict::Diverge { loc, lhs, rhs } => {
             assert_eq!(loc, "gen/wasm-duel/op-i32.add.wasm");
             assert_eq!(lhs, "run i64:43", "lhs names the tampered expectation");
-            assert_eq!(rhs, "i64:4294967294", "rhs names the engine's true observation");
+            assert_eq!(
+                rhs, "i64:4294967294",
+                "rhs names the engine's true observation"
+            );
         }
         other => panic!("expected the divergence witness, got {other:?}"),
     }
@@ -212,7 +219,10 @@ fn tampered_sidecar_refuses() {
     // Decrement the declared hash's last digit (a parseable but WRONG
     // value — the tie must name the DRIFT, never a malformed field).
     let start = sidecar.find("content hash ").expect("the field") + "content hash ".len();
-    let digits: &str = sidecar[start..].split(|c: char| !c.is_ascii_digit()).next().unwrap();
+    let digits: &str = sidecar[start..]
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap();
     assert!(!digits.is_empty(), "the committed sidecar names a hash");
     let last = digits.chars().last().unwrap().to_digit(10).unwrap();
     let rolled = (last + 9) % 10;
@@ -243,4 +253,71 @@ fn mangled_manifest_refuses() {
     fs::write(&mpath, "not a manifest\n").expect("write");
     let err = run_duel(&gdir).expect_err("the mangled manifest refuses");
     assert!(matches!(err, HostError::DuelManifest(_)), "{err:?}");
+}
+
+// ── THE THREE-WAY DUEL (D1's triangle: Lean exec ≡ wasmtime ≡ wasmi) ──
+
+use mandate_host::{TriVerdict, run_triangle};
+
+/// THE TRIANGLE PIN: all 38 rows agree on BOTH engine legs — the Lean
+/// executor's computed expectations match wasmtime's AND wasmi's
+/// observations over the whole family (the rt-conformance face: the
+/// portability proof, both engines riding the ONE committed profile).
+#[test]
+fn the_triangle_agrees() {
+    let report = run_triangle(&mandate_host::repo_gen_dir()).expect("the triangle runs");
+    assert_eq!(report.generator, "WasmCore.Duel");
+    assert_eq!(report.rows.len(), 38, "the same 38 vectors, both legs");
+    for row in &report.rows {
+        assert!(matches!(row.verdict, TriVerdict::Agree), "{:?}", row);
+    }
+    // The fold: all-agree IS agree; the tier sentence is part of the
+    // report (TESTED AGREEMENT, never a theorem).
+    assert_eq!(report.verdict(), TriVerdict::Agree);
+    let rendered = report.render();
+    assert!(rendered.contains("TESTED AGREEMENT"), "{rendered}");
+    assert!(rendered.contains("never a theorem"), "{rendered}");
+}
+
+/// THE TRIANGLE'S REFUSAL CONTROL: the invalid control refuses on
+/// BOTH legs (wasmtime's compiler AND wasmi's validator under the
+/// shared profile — the negative control passing engine-portably).
+#[test]
+fn the_triangle_refuse_row_agrees_on_both_legs() {
+    let report = run_triangle(&mandate_host::repo_gen_dir()).expect("the triangle runs");
+    let invalid = report
+        .rows
+        .iter()
+        .find(|r| r.path == "gen/wasm-duel/invalid.wasm")
+        .expect("the invalid control row");
+    assert_eq!(invalid.expectation, Expectation::Refuse);
+    assert_eq!(invalid.verdict, TriVerdict::Agree);
+}
+
+/// THE TRIANGLE TOOTH: a doctored expectation diverges WITH THE
+/// WITNESS naming the row (the wasmtime leg's true observation in the
+/// wasmtime face — the scratch copy, never the committed universe).
+#[test]
+fn the_triangle_tamper_tooth_diverges_with_witness() {
+    let gdir = scratch("triangle-tamper");
+    retarget(&gdir, "gen/wasm-duel/op-i32.add.wasm", "run i64:43");
+
+    let report = run_triangle(&gdir).expect("the triangle still runs");
+    match report.verdict() {
+        TriVerdict::Diverge {
+            loc,
+            lhs,
+            wasmtime,
+            wasmi,
+        } => {
+            assert_eq!(loc, "gen/wasm-duel/op-i32.add.wasm");
+            assert_eq!(lhs, "run i64:43", "lhs names the tampered expectation");
+            assert_eq!(
+                wasmtime, "i64:4294967294",
+                "the wasmtime leg's true observation"
+            );
+            assert_eq!(wasmi, "i64:4294967294", "the wasmi leg's true observation");
+        }
+        other => panic!("expected the divergence witness, got {other:?}"),
+    }
 }

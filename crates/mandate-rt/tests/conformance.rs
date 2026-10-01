@@ -17,12 +17,8 @@ use mandate_rt::{invoke_core, invoke_core_fueled, parse_profile};
 
 /// The committed duel vector bytes.
 fn committed(path: &str) -> Vec<u8> {
-    std::fs::read(
-        mandate_rt::repo_gen_dir()
-            .join("wasm-duel")
-            .join(path),
-    )
-    .expect("the committed duel vector")
+    std::fs::read(mandate_rt::repo_gen_dir().join("wasm-duel").join(path))
+        .expect("the committed duel vector")
 }
 
 #[test]
@@ -84,10 +80,8 @@ fn the_committed_profile_is_the_deterministic_one() {
     // The rt's OWN config source is the committed file: pin that it
     // parses to THE deterministic profile (a drifted/tampered profile
     // refuses here before any engine sees it).
-    let text = std::fs::read_to_string(
-        mandate_rt::repo_gen_dir().join("wasm-duel/profile.txt"),
-    )
-    .expect("the committed profile");
+    let text = std::fs::read_to_string(mandate_rt::repo_gen_dir().join("wasm-duel/profile.txt"))
+        .expect("the committed profile");
     let p = parse_profile(&text).expect("the committed profile parses");
     assert!(p.consume_fuel);
     assert_eq!(p.compilation, mandate_rt::CompilationMode::LazyTranslation);

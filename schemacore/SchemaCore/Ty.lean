@@ -58,7 +58,11 @@ values; gate row = the byte-tie (`gates gen-check`) + the axiom report.
 Core-only (imports Kit only — the cone rule).
 -/
 
-import Kit
+module
+
+
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -154,3 +158,5 @@ def renderKeyTy : KeyTy → String
 -- ends at the key leaf: the universe, the injection, the key rendering.
 
 end SchemaCore
+
+end -- public section

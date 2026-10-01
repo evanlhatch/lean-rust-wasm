@@ -68,12 +68,15 @@ phenomenon" cluster, ported fresh).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Basic
-import Machines.Trace
-import Machines.Stream
-import Kit.Observer
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+public import Machines.Basic
+public import Machines.Trace
+public import Machines.Stream
+public import Kit.Observer
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 namespace Machines
 
@@ -419,3 +422,5 @@ theorem respTrace_exec (o : Kit.Observer S O) (m : Machine S I) (s fin : S)
 end Fusion
 
 end Machines
+
+end -- public section

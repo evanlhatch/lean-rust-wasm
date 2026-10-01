@@ -143,8 +143,11 @@ impl Lcg {
 "
 
 /-- The THRESHOLD verdict's Rust face — Kit.Duel.benchVerdict's tier
-    ladder, u64 rendering (the ONE vocabulary, two renderings). -/
-def rustVerdict : String :=
+    ladder, u64 rendering (the ONE vocabulary, two renderings). The
+    name says TEXT: this is the generated Rust's TEMPLATE STRING (the
+    `fn verdict` body interpolated into the bench crate), never a
+    verdict — the verdict is Kit.Duel's enumerated tier ladder. -/
+def rustVerdictText : String :=
 "/// The THRESHOLD verdict (Kit.Duel's tier ladder, u64 face): the
 /// floored per-mille ratio — at-or-under 1000 parity, at-or-under
 /// 1020 within-noise, the fivePct band at-or-under 1050 within-5%,
@@ -275,7 +278,7 @@ use schema_generated::Example;
 /// seed, the threshold live in ONE place, the Lean emitter's row).
 const MANIFEST: &str = include_str!(\"manifest.txt\");
 
-" ++ rustLcg ++ rustVerdict ++ rustBenchRow ++ "
+" ++ rustLcg ++ rustVerdictText ++ rustBenchRow ++ "
 /// The seeded input: `n` Example values off ONE tape (both pair
 /// sides consume THE SAME rows — the pair discipline).
 fn seeded_rows(n: usize, seed: u64) -> Vec<Example> {
@@ -513,7 +516,7 @@ use mandate_delta::{Delta, Row, Schema, Value};
 /// contract: the manifest is READ, never re-encoded).
 const MANIFEST: &str = include_str!(\"manifest.txt\");
 
-" ++ rustLcg ++ rustVerdict ++ rustBenchRow ++ "
+" ++ rustLcg ++ rustVerdictText ++ rustBenchRow ++ "
 /// The seeded commit path: `n` deltas off ONE tape over the fixture
 /// schema (id:u64 keyed, name:string) — ONE tape, both sides.
 fn seeded_deltas(n: usize, seed: u64) -> Vec<Delta> {

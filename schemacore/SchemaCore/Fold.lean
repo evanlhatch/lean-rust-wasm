@@ -81,10 +81,14 @@ report + SchemaTests' fold suite + the byte-tie over the migrated
 emitters' artifacts.
 -/
 
-import SchemaCore.Ty
-import SchemaCore.Value
-import Kit.Derive.Fold
-import Kit.Derive.DepFold
+module
+
+public import SchemaCore.Ty
+public import SchemaCore.Value
+public import Kit.Derive.Fold
+public import Kit.Derive.DepFold
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -295,3 +299,5 @@ example : witSurfaceDistinct [.list .string, .set .string] = false := by decide
 example : witSurfaceDistinct [.u64, .bounded 42] = false := by decide
 
 end SchemaCore
+
+end -- public section

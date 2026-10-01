@@ -22,7 +22,7 @@
 //! below is one of the model's theorems, exercised through the real
 //! implementation.
 
-use mandate_delta::delta::{enc_delta, Delta};
+use mandate_delta::delta::{Delta, enc_delta};
 use mandate_delta::error::DeltaError;
 use mandate_delta::log::DeltaLog;
 use mandate_delta::schema::fixtures::{fixture, fixture_row};
@@ -82,8 +82,7 @@ fn fixture_schema() -> mandate_delta::Schema {
 
 /// A per-test temp dir (the shared scratch face).
 fn temp_dir(tag: &str) -> ScratchDir {
-    ScratchDir::new(&format!("mandate-delta-{tag}"))
-        .unwrap_or_else(|e| panic!("tempdir: {e}"))
+    ScratchDir::new(&format!("mandate-delta-{tag}")).unwrap_or_else(|e| panic!("tempdir: {e}"))
 }
 
 /// The scenario journal's bytes (the bare frame stream — the log's
@@ -129,8 +128,8 @@ fn crash_duel_faces() {
             .unwrap_or_else(|e| panic!("cut {cut}: write: {e}"));
         // The recovering open SUCCEEDS on every cut (the model's openAt
         // is total over the torn-write shapes).
-        let mut log = DeltaLog::open(&tmp, schema.clone())
-            .unwrap_or_else(|e| panic!("cut {cut}: open: {e}"));
+        let mut log =
+            DeltaLog::open(&tmp, schema.clone()).unwrap_or_else(|e| panic!("cut {cut}: open: {e}"));
         assert_eq!(
             log.len(),
             want_frames,
@@ -184,7 +183,11 @@ fn crash_duel_faces() {
         drop(log);
         let log = DeltaLog::open(&tmp, schema.clone())
             .unwrap_or_else(|e| panic!("cut {cut}: re-reopen: {e}"));
-        assert_eq!(log.len(), before + 1, "cut {cut}: post-recovery append lost");
+        assert_eq!(
+            log.len(),
+            before + 1,
+            "cut {cut}: post-recovery append lost"
+        );
         assert_eq!(
             log.entry(before),
             Some(&Delta::Insert(fixture_row(999, "post-recovery")))
@@ -209,16 +212,16 @@ fn snapshot_fallback_reports_and_replays_the_log() {
     let log_path = dir.path().join("journal.bin");
     let snap_path = mandate_delta::snapshot::snapshot_path_for(&log_path);
     {
-        let mut log = DeltaLog::open(&log_path, schema.clone())
-            .unwrap_or_else(|e| panic!("open: {e}"));
+        let mut log =
+            DeltaLog::open(&log_path, schema.clone()).unwrap_or_else(|e| panic!("open: {e}"));
         for d in &ops {
-            log.append(d.clone()).unwrap_or_else(|e| panic!("append: {e}"));
+            log.append(d.clone())
+                .unwrap_or_else(|e| panic!("append: {e}"));
         }
         log.compact(6, &snap_path)
             .unwrap_or_else(|e| panic!("compact: {e}"));
     }
-    let snap_bytes =
-        std::fs::read(&snap_path).unwrap_or_else(|e| panic!("read snap: {e}"));
+    let snap_bytes = std::fs::read(&snap_path).unwrap_or_else(|e| panic!("read snap: {e}"));
     assert!(!snap_bytes.is_empty());
 
     // TORN SNAPSHOT: cut the snapshot mid-file — the open falls back to
@@ -242,7 +245,11 @@ fn snapshot_fallback_reports_and_replays_the_log() {
     for d in &ops[6..] {
         expect.apply(&schema, d);
     }
-    assert_eq!(*log.state(), expect, "a fallback's state is the LOG's replay");
+    assert_eq!(
+        *log.state(),
+        expect,
+        "a fallback's state is the LOG's replay"
+    );
 
     // TORN BOTH: a torn log tail BESIDE the torn snapshot — the open
     // surfaces BOTH reports (the snapshot's fallback AND the log's
@@ -260,7 +267,10 @@ fn snapshot_fallback_reports_and_replays_the_log() {
     let rec = log
         .recovery()
         .unwrap_or_else(|| panic!("torn-both: the log's torn-tail cut was SILENT"));
-    assert!(rec.frames < ops.len() as u64, "torn-both: the torn frame survived?");
+    assert!(
+        rec.frames < ops.len() as u64,
+        "torn-both: the torn frame survived?"
+    );
     // The state is the SURVIVING prefix's replay — the log AS IT IS on
     // disk (post-compaction: frames ops[6..], so rec.frames counts
     // THOSE; the model's prefix law, at the snapshot open).
@@ -300,7 +310,10 @@ fn strict_refusal_offsets_match_the_model() {
         match DeltaLog::open_strict(&tmp, schema.clone()) {
             Err(DeltaError::TornTail { offset }) => {
                 refused_any = true;
-                assert!(want_torn, "cut {cut}: the model says clean — the strict refusal is a PHANTOM");
+                assert!(
+                    want_torn,
+                    "cut {cut}: the model says clean — the strict refusal is a PHANTOM"
+                );
                 assert_eq!(
                     offset, want_offset,
                     "cut {cut}: the refusal's offset ≠ the model's torn-frame start"
@@ -315,12 +328,21 @@ fn strict_refusal_offsets_match_the_model() {
             }
             Err(e) => panic!("cut {cut}: unexpected error {e}"),
             Ok(log) => {
-                assert!(!want_torn, "cut {cut}: the model says torn — the strict open passed it");
-                assert_eq!(log.len(), want_frames, "cut {cut}: boundary-cut frames ≠ the model's");
-                assert!(log.recovery().is_none(), "cut {cut}: phantom recovery report");
+                assert!(
+                    !want_torn,
+                    "cut {cut}: the model says torn — the strict open passed it"
+                );
+                assert_eq!(
+                    log.len(),
+                    want_frames,
+                    "cut {cut}: boundary-cut frames ≠ the model's"
+                );
+                assert!(
+                    log.recovery().is_none(),
+                    "cut {cut}: phantom recovery report"
+                );
             }
         }
     }
     assert!(refused_any, "vacuous: no scenario cut ever tore a frame");
 }
-

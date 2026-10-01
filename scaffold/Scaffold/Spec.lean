@@ -86,8 +86,12 @@ Five questions (notes/v3/01-core.md):
   lane's next order — named follow-up, not done here.
 -/
 
-import Kit.Diag
-import Kit.Suggest
+module
+
+public import Kit.Diag
+public import Kit.Suggest
+
+@[expose] public section
 
 namespace Scaffold
 

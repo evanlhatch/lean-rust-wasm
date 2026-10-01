@@ -44,8 +44,11 @@ specialization, by definition weight- and operation-preserving.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import ZSet.Basic
+public import ZSet.Basic
+@[expose] public section
+
 
 namespace ZSet
 
@@ -372,19 +375,12 @@ theorem collapse_add {a b : Int} (ha : 0 ≤ a) (hb : 0 ≤ b) :
 /-- On bags, the collapse preserves mul. -/
 theorem collapse_mul {a b : Int} (ha : 0 ≤ a) (hb : 0 ≤ b) :
     decide (0 < a * b) = (decide (0 < a) && decide (0 < b)) := by
-  have key : decide (0 < a * b) = decide (0 < a ∧ 0 < b) := decide_eq_decide.mpr (by
-    constructor
-    · intro hpos
-      rcases Int.lt_trichotomy a 0 with hlt | rfl | ha1
-      · omega
-      · rw [Int.zero_mul] at hpos
-        omega
-      · rcases Int.lt_trichotomy b 0 with hlt | rfl | hb1
-        · omega
-        · rw [Int.mul_zero] at hpos
-          omega
-        · exact ⟨ha1, hb1⟩
-    · exact fun hx => Int.mul_pos hx.1 hx.2)
+  -- the sign case tree by `grind` (06 §12): the closed-ground Int
+  -- product-sign arithmetic — the old hand chain walked
+  -- `Int.lt_trichotomy` on both factors explicitly; grind's nonlinear
+  -- sign split replaces it (the nonneg bounds stay in context)
+  have key : decide (0 < a * b) = decide (0 < a ∧ 0 < b) :=
+    decide_eq_decide.mpr (by grind [Int.mul_pos, Int.mul_nonneg])
   rw [key, Bool.decide_and]
 
 /-- The collapse distributes over the projection's preimage sum (on
@@ -495,3 +491,5 @@ theorem weightW_ofZSet (m : ZSet Row) (a : Row) :
     weightW (ofZSet m) a = weight m a := rfl
 
 end ZSet
+
+end -- public section

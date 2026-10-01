@@ -42,8 +42,12 @@ Five questions (notes/v3/01-core.md):
 - gate row: FaultsTests (the pins + the mandatory negative controls).
 -/
 
-import SchemaCore.Ty
+module
 
+public import SchemaCore.Ty
+
+
+@[expose] public section
 namespace Faults
 
 open SchemaCore (Ty)

@@ -518,9 +518,7 @@ def tyDepth : Ty → Nat
   | .bounded _ => 2
 
 theorem tyDepth_pos (t : Ty) : 1 ≤ tyDepth t := by
-  -- kept a simp walk: the option/list cases leave the CHILD variable
-  -- in the goal (not closed), so rung-3 decide cannot take them whole
-  cases t <;> simp [tyDepth]
+  cases t <;> grind [tyDepth]
 
 /-- A well-formed ty text always ends against a break char (one of the
     four the grammar puts after a ty token) or EOF. -/
@@ -867,32 +865,23 @@ theorem tyDepth_le_tyText (t : Ty) : tyDepth t ≤ (tyText t).length := by
   | u64 => simp [tyDepth, tyText_u64, lenU]
   | i64 => simp [tyDepth, tyText_i64, lenI]
   | string => simp [tyDepth, tyText_string, lenS]
-  | option t ih =>
-      simp [tyDepth, tyText_option, String.length_append, lenPr]; omega
-  | list t ih =>
-      simp [tyDepth, tyText_list, String.length_append, lenPr]; omega
+  | option t ih => grind [tyDepth, tyText_option, String.length_append, lenPr]
+  | list t ih => grind [tyDepth, tyText_list, String.length_append, lenPr]
   | result a b iha ihb =>
-      simp [tyDepth, tyText_result, String.length_append, lenPr, lenCm]
-      omega
+      grind [tyDepth, tyText_result, String.length_append, lenPr, lenCm]
   | map k v ihv =>
-      have hk := renderKeyTy_pos k
-      simp only [tyDepth, tyText_map, String.length_append, lenM, lenPl, lenPr,
-        lenCm]
-      omega
+      grind [tyDepth, tyText_map, String.length_append, lenM, lenPl, lenPr,
+        lenCm, renderKeyTy_pos]
   | set k =>
-      have hk := renderKeyTy_pos k
-      simp only [tyDepth, tyText_set, String.length_append, lenT, lenPl, lenPr]
-      omega
+      grind [tyDepth, tyText_set, String.length_append, lenT, lenPl, lenPr,
+        renderKeyTy_pos]
   | bounded n =>
       have h1 : 1 ≤ (natText n).toList.length := by
         cases hl : (natText n).toList with
         | nil => exact absurd hl (natText_ne n)
         | cons c cs => simp
-      have h2 : (natText n).length = (natText n).toList.length :=
-        (String.length_toList (s := natText n)).symm
       simp only [tyDepth, tyText_bounded, String.length_append, lenBd, lenPl, lenPr]
-      rw [h2]
-      omega
+      grind [String.length_toList]
 
 /-! ## the item level — THE GRAMMAR (the flat rep-of-lines face) -/
 
@@ -1001,12 +990,11 @@ def litLex (s : String) (hs : s.toList ≠ []) : Lexeme Unit where
         obtain ⟨h0, hcc⟩ := Prod.mk.inj (Except.ok.inj h)
         have h1 := Cursor.mk.inj hcc
         have h2 := expect_some s cur.cs rest hex
-        rw [h2, List.length_append, ← h1.right]
         have hl : 0 < s.toList.length := by
           cases hsl : s.toList with
           | nil => exact absurd hsl hs
           | cons c0 cs0 => simp
-        omega
+        grind [List.length_append]
   head_ne := by
     show s.toList.isPrefixOf [] = false
     cases hsl : s.toList with
@@ -1182,12 +1170,12 @@ def tyAtom : Lexeme Ty where
     obtain ⟨hg, hcs, -⟩ := tyScan_ok h
     have h1 : cur.cs = (tyText t).toList ++ cur'.cs := by
       rw [hg, hcs, List.takeWhile_append_dropWhile]
-    rw [h1, List.length_append]
     have hl : 0 < (tyText t).toList.length := by
       cases hsl : (tyText t).toList with
       | nil => exact absurd hsl (tyText_ne_nil t)
       | cons c0 cs0 => simp
-    omega
+    rw [h1]
+    grind [List.length_append]
   head_ne := rfl
 
 /-! ### the raw shapes + the codec -/

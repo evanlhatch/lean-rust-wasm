@@ -68,10 +68,10 @@
 
 use std::path::{Path, PathBuf};
 
-use mandate_delta::{parse_duel_manifest, Delta, Field, Row, Schema, ScratchDir, Ty, Value};
+use mandate_delta::{Delta, Field, Row, Schema, ScratchDir, Ty, Value, parse_duel_manifest};
 
 use crate::artifact::{bytes_hash, sidecar_hash};
-use crate::duel::{fold_verdicts, render_report, RowVerdict};
+use crate::duel::{RowVerdict, fold_verdicts, render_report};
 use crate::{HostError, Journal};
 
 /// The ledger journal's schema: the transfer row, keyed on `tid` (the
@@ -79,13 +79,25 @@ use crate::{HostError, Journal};
 /// scalar arms). PUBLIC: the crash-recovery differential (the tests'
 /// honest-crash simulation) writes the journal THROUGH this schema —
 /// one writer, many readers, never a second schema.
-    pub fn ledger_schema() -> Schema {
+pub fn ledger_schema() -> Schema {
     Schema::build(
         vec![
-            Field { name: "tid".into(), ty: Ty::U64 },
-            Field { name: "src".into(), ty: Ty::U64 },
-            Field { name: "dst".into(), ty: Ty::U64 },
-            Field { name: "amount".into(), ty: Ty::U64 },
+            Field {
+                name: "tid".into(),
+                ty: Ty::U64,
+            },
+            Field {
+                name: "src".into(),
+                ty: Ty::U64,
+            },
+            Field {
+                name: "dst".into(),
+                ty: Ty::U64,
+            },
+            Field {
+                name: "amount".into(),
+                ty: Ty::U64,
+            },
         ],
         "tid",
     )
@@ -199,7 +211,11 @@ pub struct Live {
 /// SNAPSHOT row (`withBal r (accBal r ∓ amt)` — Lean reads the
 /// pre-delta row, never the intermediate), applied last-wins.
 fn with_bal(r: &Account, d: i64) -> Account {
-    Account { id: r.id, owner: r.owner.clone(), balance: r.balance + d }
+    Account {
+        id: r.id,
+        owner: r.owner.clone(),
+        balance: r.balance + d,
+    }
 }
 
 /// ONE keyed update's fold step (the mirror of `applyRowDelta`'s
@@ -221,8 +237,14 @@ fn apply_one(accounts: &[Account], r: &Account) -> Vec<Account> {
 /// header).
 fn apply_transfer(accounts: &[Account], t: &Transfer) -> Vec<Account> {
     let amt = t.amount as i64;
-    let r1 = accounts.iter().find(|a| a.id == t.src).map(|r| with_bal(r, -amt));
-    let r2 = accounts.iter().find(|a| a.id == t.dst).map(|r| with_bal(r, amt));
+    let r1 = accounts
+        .iter()
+        .find(|a| a.id == t.src)
+        .map(|r| with_bal(r, -amt));
+    let r2 = accounts
+        .iter()
+        .find(|a| a.id == t.dst)
+        .map(|r| with_bal(r, amt));
     let mut out = accounts.to_vec();
     if let Some(r) = r1 {
         out = apply_one(&out, &r);
@@ -238,9 +260,17 @@ fn apply_transfer(accounts: &[Account], t: &Transfer) -> Vec<Account> {
 fn row_to_transfer(r: &Row) -> Option<Transfer> {
     let vs = r.values();
     match vs {
-        [Value::U64(tid), Value::U64(src), Value::U64(dst), Value::U64(amount)] => {
-            Some(Transfer { tid: *tid, src: *src, dst: *dst, amount: *amount })
-        }
+        [
+            Value::U64(tid),
+            Value::U64(src),
+            Value::U64(dst),
+            Value::U64(amount),
+        ] => Some(Transfer {
+            tid: *tid,
+            src: *src,
+            dst: *dst,
+            amount: *amount,
+        }),
         _ => None,
     }
 }
@@ -274,17 +304,26 @@ fn violations_over(accounts: &[Account], transfers: &[Transfer]) -> Vec<Violatio
     }
     for a in accounts {
         if a.balance < 0 {
-            out.push(ViolationRow::NegativeBalance { id: a.id, balance: a.balance });
+            out.push(ViolationRow::NegativeBalance {
+                id: a.id,
+                balance: a.balance,
+            });
         }
     }
     for t in transfers {
         if !ids.contains(&t.src) {
-            out.push(ViolationRow::UnresolvedSrc { tid: t.tid, src: t.src });
+            out.push(ViolationRow::UnresolvedSrc {
+                tid: t.tid,
+                src: t.src,
+            });
         }
     }
     for t in transfers {
         if !ids.contains(&t.dst) {
-            out.push(ViolationRow::UnresolvedDst { tid: t.tid, dst: t.dst });
+            out.push(ViolationRow::UnresolvedDst {
+                tid: t.tid,
+                dst: t.dst,
+            });
         }
     }
     out
@@ -305,20 +344,34 @@ impl Live {
         let journal = Journal::open(journal_path, ledger_schema())?;
         let mut transfers = Vec::new();
         for r in journal.state().rows() {
-            let t = row_to_transfer(r)
-                .ok_or_else(|| HostError::LiveState("a journaled ledger row lost its schema".into()))?;
+            let t = row_to_transfer(r).ok_or_else(|| {
+                HostError::LiveState("a journaled ledger row lost its schema".into())
+            })?;
             transfers.push(t);
         }
         // The fixture (Commit.fixtureSnap's accounts) replayed forward.
         let mut accounts = vec![
-            Account { id: 1, owner: "alice".into(), balance: 100 },
-            Account { id: 2, owner: "bob".into(), balance: 50 },
+            Account {
+                id: 1,
+                owner: "alice".into(),
+                balance: 100,
+            },
+            Account {
+                id: 2,
+                owner: "bob".into(),
+                balance: 50,
+            },
         ];
         for t in &transfers {
             accounts = apply_transfer(&accounts, t);
         }
         let version = 1 + journal.len();
-        Ok(Self { version, accounts, transfers, journal })
+        Ok(Self {
+            version,
+            accounts,
+            transfers,
+            journal,
+        })
     }
 
     /// THE HANDWRITTEN COMMAND: propose a transfer against the CURRENT
@@ -332,7 +385,13 @@ impl Live {
         // kv, never scope tags). Bind the guard: a dropped guard is a
         // zero-length span.
         let _span = fast_observe::scope!("ledger.propose");
-        Proposal { base: self.version, tid, src, dst, amount }
+        Proposal {
+            base: self.version,
+            tid,
+            src,
+            dst,
+            amount,
+        }
     }
 
     /// The violation queries over THIS state (the mirror of
@@ -361,12 +420,21 @@ impl Live {
     /// self-transfer's two updates last-wins (the pinned drift).
     fn post_state(&self, p: &Proposal) -> (Vec<Account>, Vec<Transfer>) {
         let mut accounts = self.accounts.clone();
-        accounts = apply_transfer(&accounts, &Transfer {
-            tid: p.tid, src: p.src, dst: p.dst, amount: p.amount,
-        });
+        accounts = apply_transfer(
+            &accounts,
+            &Transfer {
+                tid: p.tid,
+                src: p.src,
+                dst: p.dst,
+                amount: p.amount,
+            },
+        );
         let mut transfers = self.transfers.clone();
         transfers.push(Transfer {
-            tid: p.tid, src: p.src, dst: p.dst, amount: p.amount,
+            tid: p.tid,
+            src: p.src,
+            dst: p.dst,
+            amount: p.amount,
         });
         (accounts, transfers)
     }
@@ -384,7 +452,10 @@ impl Live {
     pub fn commit(&mut self, p: &Proposal) -> Result<LiveVerdict, HostError> {
         let _span = fast_observe::scope!("ledger.commit");
         if p.base != self.version {
-            return Ok(LiveVerdict::Stale { base: p.base, got: self.version });
+            return Ok(LiveVerdict::Stale {
+                base: p.base,
+                got: self.version,
+            });
         }
         // The post-state, computed ONCE: the check runs over it, and
         // an accepted commit adopts it (the working copy IS the
@@ -394,7 +465,12 @@ impl Live {
         if !vs.is_empty() {
             return Ok(LiveVerdict::Violated(vs));
         }
-        let t = Transfer { tid: p.tid, src: p.src, dst: p.dst, amount: p.amount };
+        let t = Transfer {
+            tid: p.tid,
+            src: p.src,
+            dst: p.dst,
+            amount: p.amount,
+        };
         // The effect seam: append + fsync before the call returns; a
         // fault here leaves the in-memory state UNCHANGED (memory
         // never runs ahead of the durable log).
@@ -402,7 +478,9 @@ impl Live {
         self.accounts = accounts;
         self.transfers = transfers;
         self.version += 1;
-        Ok(LiveVerdict::Committed { version: self.version })
+        Ok(LiveVerdict::Committed {
+            version: self.version,
+        })
     }
 
     /// The snapshot version (the race-honesty carrier's current face).
@@ -525,7 +603,13 @@ fn dec_proposal(bs: &[u8]) -> Option<Proposal> {
     if !rest.is_empty() {
         return None;
     }
-    Some(Proposal { base, tid, src, dst, amount })
+    Some(Proposal {
+        base,
+        tid,
+        src,
+        dst,
+        amount,
+    })
 }
 
 /// Runs ONE duel row: hash-tie the vector to its sidecar, decode, run
@@ -538,13 +622,19 @@ fn run_commit_row(root: &Path, path: &str, expect: &CommitExpect) -> Result<RowV
         )));
     }
     let vp = root.join(path);
-    let bytes = std::fs::read(&vp)
-        .map_err(|source| HostError::Io { what: "commit-duel vector", source })?;
-    let sidecar = std::fs::read_to_string(PathBuf::from(format!("{}.hdr", vp.display())))
-        .map_err(|source| HostError::Io { what: "commit-duel vector sidecar", source })?;
-    let declared = sidecar_hash(&sidecar).ok_or(
-        HostError::SidecarMalformed("the commit-duel vector's sidecar names no content hash"),
+    let bytes = std::fs::read(&vp).map_err(|source| HostError::Io {
+        what: "commit-duel vector",
+        source,
+    })?;
+    let sidecar = std::fs::read_to_string(PathBuf::from(format!("{}.hdr", vp.display()))).map_err(
+        |source| HostError::Io {
+            what: "commit-duel vector sidecar",
+            source,
+        },
     )?;
+    let declared = sidecar_hash(&sidecar).ok_or(HostError::SidecarMalformed(
+        "the commit-duel vector's sidecar names no content hash",
+    ))?;
     let computed = bytes_hash(&bytes);
     if computed != declared {
         return Ok(RowVerdict::Refused {
@@ -568,7 +658,10 @@ fn run_commit_row(root: &Path, path: &str, expect: &CommitExpect) -> Result<RowV
         "mandate-host-duel-{}",
         path.replace(['/', '\\'], "_"),
     ))
-    .map_err(|source| HostError::Io { what: "duel scratch dir", source })?;
+    .map_err(|source| HostError::Io {
+        what: "duel scratch dir",
+        source,
+    })?;
     let mut live = Live::open(&scratch.path().join("journal.bin"))?;
     let verdict = live.commit(&p)?;
     drop(scratch);
@@ -596,7 +689,10 @@ fn verdict_render(v: &LiveVerdict) -> String {
         LiveVerdict::Committed { version } => format!("committed (version {version})"),
         LiveVerdict::Stale { base, got } => format!("stale: base {base} vs {got}"),
         LiveVerdict::Violated(vs) => {
-            format!("violated: {:?}", vs.iter().map(ViolationRow::render).collect::<Vec<_>>())
+            format!(
+                "violated: {:?}",
+                vs.iter().map(ViolationRow::render).collect::<Vec<_>>()
+            )
         }
     }
 }
@@ -611,8 +707,13 @@ fn verdict_render(v: &LiveVerdict) -> String {
 /// The manifest is malformed, a vector is unreadable, or the live
 /// loop hit a genuine fault (I/O / journal).
 pub fn run_commit_duel(root: &Path) -> Result<CommitDuelReport, HostError> {
-    let manifest = std::fs::read_to_string(commit_duel_dir(root).join("manifest.txt"))
-        .map_err(|source| HostError::Io { what: "commit-duel manifest", source })?;
+    let manifest =
+        std::fs::read_to_string(commit_duel_dir(root).join("manifest.txt")).map_err(|source| {
+            HostError::Io {
+                what: "commit-duel manifest",
+                source,
+            }
+        })?;
     // The structural walk is the SHARED parser's (the manifest module
     // — every duel lane consumes it); the expectation vocabulary is
     // THIS lane's two arms.
@@ -625,5 +726,8 @@ pub fn run_commit_duel(root: &Path) -> Result<CommitDuelReport, HostError> {
             verdict: run_commit_row(root, &row.path, &row.expectation)?,
         });
     }
-    Ok(CommitDuelReport { generator: parsed.generator, rows })
+    Ok(CommitDuelReport {
+        generator: parsed.generator,
+        rows,
+    })
 }

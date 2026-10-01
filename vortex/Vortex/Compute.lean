@@ -69,8 +69,11 @@ refusals + the account teeth) + the axiom report.
 
 Core-only (imports Vortex.Codecs — the cone rule).
 -/
+module
 
-import Vortex.Codecs
+public import Vortex.Codecs
+@[expose] public section
+
 
 namespace Vortex
 
@@ -131,41 +134,21 @@ theorem shiftFoR_holds : ∀ (p : VPred) (base x : Nat) (q : VPred),
     shiftFoR p base = some q → q.holds x = p.holds (base + x) := by
   intro p
   induction p with
+  -- the threshold arms by `grind` (06 §12): the closed-ground
+  -- decide-arithmetic over the shift's if-tree — the if-split and the
+  -- `some`-injectivity are grind-native; the bounds stay in context
   | eqVal t =>
       intro base x q hq
       simp only [shiftFoR] at hq
-      by_cases hb : t < base
-      · rw [if_pos hb] at hq; cases hq
-        simp only [VPred.holds, decide_eq_decide]
-        omega
-      · rw [if_neg hb] at hq; cases hq
-        simp only [VPred.holds, decide_eq_decide]
-        omega
+      grind [VPred.holds]
   | ltVal t =>
       intro base x q hq
       simp only [shiftFoR] at hq
-      by_cases hb : t ≤ base
-      · rw [if_pos hb] at hq; cases hq
-        simp only [VPred.holds, decide_eq_decide]
-        omega
-      · rw [if_neg hb] at hq; cases hq
-        simp only [VPred.holds, decide_eq_decide]
-        omega
+      grind [VPred.holds]
   | gtVal t =>
       intro base x q hq
       simp only [shiftFoR] at hq
-      by_cases hb : t < base
-      · rw [if_pos hb] at hq; cases hq
-        -- q = .notP (.ltVal 0): both sides are TRUE (below the base,
-        -- every value clears the bound)
-        have hv1 : (VPred.notP (VPred.ltVal 0)).holds x = true := by
-          simp only [VPred.holds]; simp
-        have hv2 : (VPred.gtVal t).holds (base + x) = true := by
-          simp only [VPred.holds]; exact decide_eq_true (by omega)
-        rw [hv1, hv2]
-      · rw [if_neg hb] at hq; cases hq
-        simp only [VPred.holds, decide_eq_decide]
-        omega
+      grind [VPred.holds]
   | notP p ih =>
       intro base x q hq
       simp only [shiftFoR] at hq
@@ -1038,3 +1021,5 @@ theorem hazard_above_f53_exact (v : Nat) (_hv : f53 ≤ v) (hv64 : v < 2 ^ 64) :
   Nat.mod_eq_of_lt hv64
 
 end Vortex
+
+end -- public section

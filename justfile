@@ -23,7 +23,9 @@ rust:
 	cd crates/schema-generated && cargo test
 	cd crates/mandate-delta && cargo test
 	cd crates/mandate-faults && cargo test
+	cd crates/mandate-rt && cargo test
 	cd crates/mandate-host && cargo test
+	cd crates/mandate-store && cargo test
 
 # The bench face (wave-30 C2 — the flatland discipline: a bench is a
 # PAIR — candidate vs baseline, the same seeded inputs — with a
@@ -116,9 +118,45 @@ gen:
 # The wasm slice regen (the BINARY lane's writer side: the WAT text
 # artifact + the wasm bytes + the .hdr sidecar through the emit spine;
 # the validator runs at generation — an invalid module refuses loudly,
-# nothing written). A drift fails `just gates`.
+# nothing written). A drift fails `just gates`. The writer's row set
+# includes the FEATURE SHIM (gen/wasm-feature-shim.mjs — the selection
+# shim, WasmCore.Profile's feature table rendered; the byte-tie's
+# writer side for the wasm-feature-detect discipline).
 wasmgen:
 	lake exe wasmgen
+
+# The SIMD DUAL-BUILD (the wasm-feature-detect discipline, the Rust
+# faces' side): the crate's wasm face builds TWICE — the simd128 bundle
+# (RUSTFLAGS "-C target-feature=+simd128") and the scalar twin — and
+# the committed selection shim (gen/wasm-feature-shim.mjs, byte-tied
+# through the spine) picks at load. WASM SIMD HAS NO RUNTIME FEATURE
+# DETECTION: a validated probe module is the whole discipline — the
+# shim carries the probe + the select () contract.
+#
+# THE HONEST BOUNDARY: the guest components are LEAN-EMITTED wasm and
+# the emitted fragment is scalar (no v128 ctor in the closed op set),
+# so TODAY the dual build applies to the RUST-CRATE wasm faces and any
+# future SIMD-emitting guest work — WASM_DUAL_CRATE pins the crate so
+# the first SIMD-bearing consumer adopts the recipe by name, never by
+# re-invention. THE ENGINE FACES ARE NOT HERE: mandate-rt's wasmi axis
+# is the crate-FEATURE axis (its Cargo.toml's note), off in the
+# deterministic profile — an ENGINE feature is a dependency edge, not a
+# bundle. The build needs nightly -Z build-std (the nix-pinned
+# toolchain's sysroot carries no wasm std; rust-src rides the
+# profile) and demands the wasm profile on PATH (the devenv env).
+WASM_DUAL_CRATE := "crates/mandate-rt"
+WASM_TARGET := "wasm32-unknown-unknown"
+
+wasm-dual:
+	cd {{WASM_DUAL_CRATE}} && RUSTFLAGS="-C target-feature=+simd128" \
+	  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR=target/wasm-dual/simd128 \
+	  cargo rustc -Z build-std=core,std,panic_abort --crate-type cdylib \
+	  --target {{WASM_TARGET}} --release
+	cd {{WASM_DUAL_CRATE}} && RUSTFLAGS="-C target-feature=-simd128" \
+	  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR=target/wasm-dual/scalar \
+	  cargo rustc -Z build-std=core,std,panic_abort --crate-type cdylib \
+	  --target {{WASM_TARGET}} --release
+	@echo "wasm-dual: two bundles written ({{WASM_DUAL_CRATE}}/target/wasm-dual/{simd128,scalar}); the selection shim (gen/wasm-feature-shim.mjs) picks at load"
 
 # Single gates (the loud re-baseline: `just gates-axioms-write` refuses a
 # non-empty diff without `--accept-drift` — append it by hand).
@@ -166,6 +204,43 @@ gates-native-policy:
 # registry column; --write is the deliberate re-baseline).
 gates-coverage:
 	lake exe gates coverage
+
+# The nanoda SECOND lane's pinned tools (the kernel-check row's
+# --nanoda face; notes/nanoda-probe.md). NOT committed binaries: the
+# recipe IS the artifact — clone-at-pin + build into .tools/nanoda-lane/
+# (gitignored build residue). THE THREE-WAY PIN: lean4export @
+# 66f1fb4bc256072069767fce52d39480e4524869 with its lean-toolchain
+# OVERWRITTEN to the tree's pin (an exporter on a foreign toolchain
+# invalidates the lane), nanoda_lib @ 3a2407216ee84a75f9e1aead6803d0578be06ae7
+# (v0.4.19), exporter format 3.1.0 — the gate re-pins EVERY export's
+# meta line against (3.1.0, 4.33.0) and refuses a drift. The first
+# cargo build needs ONE online fetch (the probe's caveat); afterwards
+# offline. The lane runs on the WAVE cadence (~772MB / ~100s per root
+# export + the ~116s check) — never in `just gates`; CI: the
+# weekly/manual nanoda job (ci.yml).
+tools-nanoda:
+	mkdir -p .tools/nanoda-lane/exports
+	if [ -d .tools/nanoda-lane/lean4export/.git ]; then git -C .tools/nanoda-lane/lean4export fetch origin; else git clone https://github.com/leanprover/lean4export .tools/nanoda-lane/lean4export; fi
+	git -C .tools/nanoda-lane/lean4export checkout 66f1fb4bc256072069767fce52d39480e4524869
+	echo "leanprover/lean4:v4.33.0" > .tools/nanoda-lane/lean4export/lean-toolchain
+	cd .tools/nanoda-lane/lean4export && lake build
+	if [ -d .tools/nanoda-lane/nanoda_lib/.git ]; then git -C .tools/nanoda-lane/nanoda_lib fetch origin; else git clone https://github.com/ammkrn/nanoda_lib .tools/nanoda-lane/nanoda_lib; fi
+	git -C .tools/nanoda-lane/nanoda_lib checkout 3a2407216ee84a75f9e1aead6803d0578be06ae7
+	cd .tools/nanoda-lane/nanoda_lib && cargo build --release
+	@echo "tools-nanoda: the pinned pair is at .tools/nanoda-lane/ (lean4export@66f1fb4 on v4.33.0 + nanoda@3a24072/v0.4.19)"
+
+# The nanoda lane's runner row (the honest shape: the gate SKIPS with
+# the note — never a laundered pass — when .tools/nanoda-lane/ is
+# absent). Wave cadence: NOT in `just gates`/`just ci`; the CI
+# weekly/manual job calls this row after `just build tools-nanoda`.
+gates-kernel-check-nanoda:
+	lake exe gates kernel-check --nanoda
+
+# The nanoda lane's live run of record over ONE library (the probe's
+# AGREEMENT run: Kit's closure, 174,918 decls, ~772MB / ~4min). The
+# byte-cost proof the wave cadence buys.
+gates-kernel-check-nanoda-kit:
+	lake exe gates kernel-check --nanoda --package=Kit
 
 # The lean4lean pure-kernel replay (the independent double-check; builds
 # the lean4lean exe on demand). One invocation PER MODULE (the batch
@@ -216,6 +291,35 @@ componentgen:
 # --accept-drift appended by hand).
 gates-elab-watch:
 	lake exe gates elab-watch
+
+# ── The DEBLOAT + NON-ACCUMULATION discipline (notes/design-debloat.md) ──
+#
+# The discipline is NON-ACCUMULATION + minimal project size, NOT
+# artifact location — no clean-as-solution row lives here: artifacts
+# are prevented from accumulating (the ignore wall, the shared cargo
+# target), never swept after the fact. The `size` row is the READ-ONLY
+# audit; when its numbers climb, the answer is a prevention piece
+# (an ignore row, a config), not a clean recipe.
+#
+# The zones: the shared target/ (cargo), .lake/ (lake), .tools/
+# (the nanoda lane's pinned builds), legacy/'s ARTIFACT zones
+# (untracked, regenerable — the TRACKED legacy surface is frozen by
+# the legacy-hash gate, never touched), and /tmp's scratch. The
+# 2026-10-06 census (the before numbers): .lake 6.3G, .tools 1.1G,
+# six per-crate target/ dirs ~26.4G (mandate-host alone 22G),
+# legacy/.lake 30M, legacy/crates/guestlang-rt/target 988M,
+# legacy/docs-site/node_modules 252M (12,621 files), /tmp scratch ~6G.
+
+# The per-zone footprint report (the audit row — READ-ONLY, it deletes
+# nothing; read it after the heavy waves; the discipline is the tree's
+# footprint stays BOUNDED, and a bounded claim needs the numbers).
+size:
+	@echo "== lean-rust-wasm footprint census (regenerable zones)"
+	@du -sh .lake .tools target 2>/dev/null || true
+	@du -sh crates/*/target 2>/dev/null || echo "(no per-crate target/ — the shared root target is the shape)"
+	@du -sh legacy/.lake legacy/crates/guestlang-rt/target legacy/docs-site/node_modules 2>/dev/null || true
+	@echo "-- /tmp scratch (lrw-owned)"
+	@du -sh /tmp/lean-beam /tmp/mw-baseline /tmp/llvm-spike /tmp/nanoda-spike /tmp/lrw-grind 2>/dev/null || true
 
 # The CI battery: the FULL composition — build + test exes + the gates +
 # the Rust batteries. CI runs EXACTLY this recipe (the local/CI parity

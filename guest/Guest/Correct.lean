@@ -702,7 +702,9 @@ theorem fnModule_ok (w : SrcOp → Op) (hrow : RowP w)
       = finishRun (execList (fnModuleW w e p res L) fuel
           INIT
           (fnBody w res e)) := by
-    simp only [runFunc, fnModuleW, Module.typeAt, List.getElem?_cons_zero,
+    unfold runFunc
+    rw [Module.funcAt_of_imports_nil (fnModuleW w e p res L) 0 (by rfl)]
+    simp only [fnModuleW, Module.typeAt, List.getElem?_cons_zero,
       List.reverse_replicate]
     obtain ⟨bound, rest, hpop, hbd, hrest⟩ :=
       popTys_of_stackTys (List.replicate p ValType.i64) args []

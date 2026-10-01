@@ -40,8 +40,13 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Cost.Basic
-import Kit.Relation
+
+module
+
+public import Cost.Basic
+public import Kit.Relation
+
+@[expose] public section
 
 open Kit
 
@@ -170,3 +175,6 @@ theorem Grading.cost_honest (e : Expr P) :
   (Expr.preserves g.costRows e).symm
 
 end Cost
+
+
+end -- public section

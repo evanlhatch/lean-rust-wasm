@@ -43,6 +43,7 @@ public import LintKit.CodecLints
 public import LintKit.Cone
 public import LintKit.DecideFirst
 public import LintKit.DupDefBodies
+public import LintKit.EvidenceRedundancy
 public import LintKit.Graduation
 public import LintKit.GuestBan
 public import LintKit.PackageNamespace
@@ -89,6 +90,7 @@ def linterCode : Name → TextKit.ECode
   | `linter.guestlang.didyoumeanDiscipline => ⟨"LK0015"⟩
   | `linter.guestlang.noLinterSetOption => ⟨"LK0016"⟩
   | `linter.guestlang.bareExample => ⟨"LK0017"⟩
+  | `linter.guestlang.evidenceRedundancy => ⟨"LK0018"⟩
   | _ => ⟨"LK0000"⟩
 
 /-- The env-linter finding's Diag: the linter's allocated code, the
@@ -172,7 +174,11 @@ meta def lintkitLinters : Array (NamedEnvLinter × Lean.Option Bool) := #[
   ({ toEnvLinter := zeroCitationLinter
      optName := `linter.guestlang.zeroCitation
      declName := ``LintKit.zeroCitationLinter },
-   linter.guestlang.zeroCitation)
+   linter.guestlang.zeroCitation),
+  ({ toEnvLinter := evidenceRedundancyLinter
+     optName := `linter.guestlang.evidenceRedundancy
+     declName := ``LintKit.evidenceRedundancyLinter },
+   linter.guestlang.evidenceRedundancy)
 ]
 
 /-- Per-declaration enablement (the runner's replacement for core's

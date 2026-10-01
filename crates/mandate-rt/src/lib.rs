@@ -33,7 +33,9 @@ pub mod profile;
 
 use wasmi::{Val, ValType};
 
-pub use profile::{CompilationMode, DeterministicProfile, ProfileError, load_profile, parse_profile};
+pub use profile::{
+    CompilationMode, DeterministicProfile, ProfileError, load_profile, parse_profile,
+};
 
 /// The typed error surface (the one-writer stringification: wasmi's
 /// Display carries the cause chain).
@@ -116,12 +118,7 @@ pub fn profile_engine(p: &DeterministicProfile) -> Result<wasmi::Engine, RtError
 /// Compile + invoke one export on the wasmi engine, fuel-metered (the
 /// one-shot face; the scalar-ABI `i64` args are COERCED to the
 /// export's param types — the introspection, not a per-fn table).
-pub fn invoke_core(
-    wasm: &[u8],
-    func: &str,
-    args: &[i64],
-    fuel: u64,
-) -> Result<Vec<i64>, RtError> {
+pub fn invoke_core(wasm: &[u8], func: &str, args: &[i64], fuel: u64) -> Result<Vec<i64>, RtError> {
     invoke_core_fueled(wasm, func, args, fuel).map(|(r, _)| r)
 }
 

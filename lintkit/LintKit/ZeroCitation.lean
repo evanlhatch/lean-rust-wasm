@@ -55,7 +55,7 @@ meta def zeroCitationTest (decl : Name) : MetaM (Option MessageData) := do
   let some mod := modOfDecl env decl | return none
   if isTestModule mod then return none
   let census ← citationCensus env
-  if citedOutsideModule? env census decl then return none
+  if ← citedOutsideModule? env census decl then return none
   -- the test pins count as citations (#print axioms in a Tests module)
   if ← citedInTestSources? env decl then return none
   return some m!"zero citations: `{decl}` is referenced nowhere outside \

@@ -52,11 +52,44 @@ just gates   # the gate spine: axioms, docs-check, gen-check,
              # native-policy, coverage, kernel-check, ownership
 ```
 
+## The inner loop (lean-beam — notes/lean-beam-study.md)
+
+NEVER `lake build` to learn whether one file elaborates. The
+beam-shaped loop (the warm LSP daemon + the typed JSON CLI):
+`lean-beam update <file>` → probe (`run-at` / `goals` / `hover` /
+`todo`) → edit → `sync <file>` (the readiness verdict:
+`blockingErrorCount`, `staleDirectDeps`, `recoveryPlan` — the typed
+answer, not the error flood) → `save <file>` (the zero-build
+checkpoint). Escalate to `lake build` ONLY on the named stop
+conditions (a dependency edited across hops; the lakefile/toolchain
+touched; the end-of-task batch validation). Scratch files are for
+context-free syntax checks ONLY (a scratch file re-imports from a
+detached module — the context drift lies); `run-at` probes the REAL
+module at the REAL position. Multi-agent waves: one `jj workspace`
+per agent + `BEAM_SESSION_ROOT` per workspace (the byte isolation is
+jj's; the session isolation is beam's).
+
 ## Version control (jj)
 
 The working copy IS a commit — small atomic changes, `jj describe` once
 the change is known. NEVER `git checkout/reset/stash` — use `jj undo` /
 `jj new`. Do not run `jj git push` from an agent session.
+
+## The footprint discipline (notes/design-debloat.md)
+
+NON-ACCUMULATION + minimal project size — never clean-as-solution.
+The census is the audit: run `just size` (read-only) after heavy
+waves; when a zone climbs, land a PREVENTION piece, never a sweep.
+The prevention pieces: the artifact zones (.lake/, target/, .tools/,
+node_modules/, .beam/) are gitignored — jj NEVER snapshots them; the
+Rust crates share ONE root target/ (.cargo/config.toml) — never build
+into a per-crate target/ or commit per-crate build dirs. The legacy
+tree gets NO build side effects: never run its builds in place (mine
+per notes/v3/14-build-map.md from its own history; its build residue
+is regenerable and outside the legacy-hash surface). Scratch lives in
+/tmp and is deleted when its probe finishes (the notes remain) —
+never delete /tmp/lean-beam (the active daemon) or a bench baseline
+while its pair is live.
 
 ## The legacy tree
 

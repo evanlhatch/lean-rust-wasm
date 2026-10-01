@@ -14,7 +14,11 @@ carries the five-questions answers its generated headers fill.
 Core-only (imports Scaffold.Generate — the cone rule).
 -/
 
-import Scaffold.Generate
+module
+
+public import Scaffold.Generate
+
+@[expose] public section
 
 namespace Scaffold
 

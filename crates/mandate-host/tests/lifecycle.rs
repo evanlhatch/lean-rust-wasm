@@ -25,11 +25,14 @@
 //! wide); the duel's verdict is exercised at its refuse rows (the
 //! committed manifest's `refuse` expectations genuinely refuse).
 
-use std::fs;
 use mandate_delta::{Delta, Value};
+use std::fs;
 use std::path::PathBuf;
 
-use mandate_host::{bytes_hash, ledger_schema, run_commit_duel, Account, HostError, HostMachine, Live, Phase, MODEL_TRANS, EVENT_CALL, EVENT_INSTANTIATE, EVENT_LOAD, EVENT_START, EVENT_STOP, GUEST_GOLDEN};
+use mandate_host::{
+    Account, EVENT_CALL, EVENT_INSTANTIATE, EVENT_LOAD, EVENT_START, EVENT_STOP, GUEST_GOLDEN,
+    HostError, HostMachine, Live, MODEL_TRANS, Phase, bytes_hash, ledger_schema, run_commit_duel,
+};
 
 fn committed_dir() -> PathBuf {
     mandate_host::repo_gen_dir()
@@ -38,11 +41,18 @@ fn committed_dir() -> PathBuf {
 /// A fresh per-test copy of the committed component artifact set (the
 /// tamper teeth mutate their copy, never the committed universe).
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("mandate-host-lifecycle-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "mandate-host-lifecycle-{}-{name}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("scratch dir");
     let committed = committed_dir();
-    for f in ["component-slice.wasm", "component-slice.wasm.hdr", "component-slice.wit"] {
+    for f in [
+        "component-slice.wasm",
+        "component-slice.wasm.hdr",
+        "component-slice.wit",
+    ] {
         fs::copy(committed.join(f), dir.join(f)).expect("copy the committed artifact");
     }
     dir
@@ -73,17 +83,24 @@ fn invalid_component_bytes() -> Vec<u8> {
     wasm
 }
 
-/// A VALID component carrying `add64` with the WRONG component
-/// signature (one param, not two) — compiles, instantiates, and the
-/// start-time typed lift refuses (refuseStart's face).
+/// A VALID component carrying `add64` with the WRONG component RESULT
+/// type (`string`, not `u64`) — the surface check passes (the arity is
+/// the params' count: `add64/2`), the engine instantiates, and the
+/// start-time typed lift refuses (refuseStart's face — the signature
+/// teeth live at the lift, past the skew fail-fast's arity surface).
 fn wrong_signature_bytes() -> Vec<u8> {
     let wat = r#"(component
-  (core module $m (type (func (param i64) (result i64)))
-    (func (type 0) (param i64) (result i64) local.get 0 i64.const 1 i64.add)
-    (export "add64" (func 0)))
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "canonical_abi_realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024)
+    (type $core_add (func (param i64 i64) (result i32)))
+    (func (type $core_add) (param i64 i64) (result i32) i32.const 1024)
+    (export "add64" (func 1)))
   (core instance $i (instantiate $m))
-  (type $t (func (param "a" u64) (result u64)))
-  (func $f (type $t) (canon lift (core func $i "add64")))
+  (alias core export $i "memory" (core memory $mem))
+  (alias core export $i "canonical_abi_realloc" (core func $realloc))
+  (type $t (func (param "a" u64) (param "b" u64) (result string)))
+  (func $f (type $t) (canon lift (core func $i "add64") (memory $mem) (realloc $realloc)))
   (export "add64" (func $f)))"#;
     wat::parse_str(wat).expect("the wrong-sig component builds")
 }
@@ -143,7 +160,11 @@ fn host_at(phase: Phase) -> HostMachine {
             h.load(&dir).expect_err("the tampered load refuses");
         }
     }
-    assert_eq!(h.phase(), phase, "the fixture must land exactly at {phase:?}");
+    assert_eq!(
+        h.phase(),
+        phase,
+        "the fixture must land exactly at {phase:?}"
+    );
     h
 }
 
@@ -162,7 +183,11 @@ fn happy_path_lands_each_model_row() {
     assert_eq!(h.phase(), Phase::Running);
     let got = h.call(2, 3).expect("the golden call");
     assert_eq!(got, GUEST_GOLDEN);
-    assert_eq!(h.phase(), Phase::Running, "the call is running's activity, not a transition");
+    assert_eq!(
+        h.phase(),
+        Phase::Running,
+        "the call is running's activity, not a transition"
+    );
     h.stop().expect("stop");
     assert_eq!(h.phase(), Phase::Stopped);
 }
@@ -175,7 +200,10 @@ fn the_driven_rows_agree_with_the_model() {
         // The refusal rows are ENVIRONMENT-INDUCED (no method drives
         // them) — the_differential pins them via sabotage in
         // `the_refusal_rows_agree_with_the_model`.
-        if !matches!(*event, EVENT_LOAD | EVENT_INSTANTIATE | EVENT_START | EVENT_STOP) {
+        if !matches!(
+            *event,
+            EVENT_LOAD | EVENT_INSTANTIATE | EVENT_START | EVENT_STOP
+        ) {
             continue;
         }
         let mut h = host_at(*from);
@@ -186,8 +214,15 @@ fn the_driven_rows_agree_with_the_model() {
             EVENT_STOP => h.stop(),
             _ => unreachable!("filtered above"),
         };
-        assert!(result.is_ok(), "{event} from {from:?} must drive: {result:?}");
-        assert_eq!(h.phase(), *to, "{event}: the landing phase must be the model's");
+        assert!(
+            result.is_ok(),
+            "{event} from {from:?} must drive: {result:?}"
+        );
+        assert_eq!(
+            h.phase(),
+            *to,
+            "{event}: the landing phase must be the model's"
+        );
     }
 }
 
@@ -201,14 +236,18 @@ fn the_refusal_rows_agree_with_the_model() {
     let mut h = HostMachine::new();
     let dir = tampered_scratch("refuse-load");
     let err = h.load(&dir).expect_err("refuseLoad");
-    assert!(matches!(err, HostError::ContentHashMismatch { .. }), "{err:?}");
+    assert!(
+        matches!(err, HostError::ContentHashMismatch { .. }),
+        "{err:?}"
+    );
     assert_eq!(h.phase(), Phase::Failed);
 
     // refuseInstantiate: loaded → failed — hash-tied bytes the engine
     // refuses to compile.
     let mut h = HostMachine::new();
     let dir = doctored_scratch("refuse-instantiate", &invalid_component_bytes());
-    h.load(&dir).expect("the doctored set loads (the tie passes)");
+    h.load(&dir)
+        .expect("the doctored set loads (the tie passes)");
     assert_eq!(h.phase(), Phase::Loaded);
     let err = h.instantiate().expect_err("refuseInstantiate");
     assert!(matches!(err, HostError::EngineRefused(_)), "{err:?}");
@@ -219,7 +258,8 @@ fn the_refusal_rows_agree_with_the_model() {
     let mut h = HostMachine::new();
     let dir = doctored_scratch("refuse-start", &wrong_signature_bytes());
     h.load(&dir).expect("load");
-    h.instantiate().expect("the wrong-sig component instantiates");
+    h.instantiate()
+        .expect("the wrong-sig component instantiates");
     let err = h.start().expect_err("refuseStart");
     assert!(matches!(err, HostError::ComponentSignature(_)), "{err:?}");
     assert_eq!(h.phase(), Phase::Failed);
@@ -263,9 +303,15 @@ fn every_illegal_pair_refuses_typed_and_stays_put() {
                     assert_eq!(f, from.name(), "the error names the phase it refused");
                     assert_eq!(e, event);
                 }
-                other => panic!("{event} from {from:?}: expected the typed Lifecycle refusal, got {other:?}"),
+                other => panic!(
+                    "{event} from {from:?}: expected the typed Lifecycle refusal, got {other:?}"
+                ),
             }
-            assert_eq!(h.phase(), from, "an illegal transition never moves the host");
+            assert_eq!(
+                h.phase(),
+                from,
+                "an illegal transition never moves the host"
+            );
         }
     }
 }
@@ -284,7 +330,13 @@ fn a_call_before_running_refuses_typed() {
             .call(2, 3)
             .expect_err("the call is legal only from Running (the model's guard)");
         assert!(
-            matches!(err, HostError::Lifecycle { event: EVENT_CALL, .. }),
+            matches!(
+                err,
+                HostError::Lifecycle {
+                    event: EVENT_CALL,
+                    ..
+                }
+            ),
             "{err:?}"
         );
         assert_eq!(h.phase(), from);
@@ -298,18 +350,32 @@ fn a_call_before_running_refuses_typed() {
 #[test]
 fn the_model_mirror_is_total_and_closed() {
     assert_eq!(MODEL_TRANS.len(), 8);
-    let mut pairs: Vec<(&str, &str)> =
-        MODEL_TRANS.iter().map(|(e, f, _)| (*e, f.name())).collect();
+    let mut pairs: Vec<(&str, &str)> = MODEL_TRANS.iter().map(|(e, f, _)| (*e, f.name())).collect();
     pairs.sort();
     pairs.dedup();
-    assert_eq!(pairs.len(), 8, "each (event, from) pair appears at most once");
+    assert_eq!(
+        pairs.len(),
+        8,
+        "each (event, from) pair appears at most once"
+    );
     for (_, _, to) in MODEL_TRANS {
-        assert!(Phase::ALL.contains(to), "every to-phase is in the enumeration");
+        assert!(
+            Phase::ALL.contains(to),
+            "every to-phase is in the enumeration"
+        );
     }
     for (event, from, to) in MODEL_TRANS {
         if event.starts_with("refuse") || *event == "trap" {
-            assert_eq!(*to, Phase::Failed, "{event} lands the terminal refusal face");
-            assert_ne!(*from, Phase::Failed, "no refusal fires FROM the terminal face");
+            assert_eq!(
+                *to,
+                Phase::Failed,
+                "{event} lands the terminal refusal face"
+            );
+            assert_ne!(
+                *from,
+                Phase::Failed,
+                "no refusal fires FROM the terminal face"
+            );
         }
     }
 }
@@ -317,7 +383,10 @@ fn the_model_mirror_is_total_and_closed() {
 // ── The journal discipline: the Live loop's crash honesty ──────────
 
 fn journal_scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("mandate-host-liverec-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "mandate-host-liverec-{}-{name}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("scratch dir");
     dir
@@ -351,16 +420,33 @@ fn crash_after_the_journal_effect_recovers_honestly() {
     {
         // The effect lands; the process "dies" before ANYTHING else.
         let mut j = mandate_host::Journal::open(&path, ledger_schema()).expect("open");
-        j.record(Delta::Insert(ledger_row(7, 1, 2, 10))).expect("the durable effect");
+        j.record(Delta::Insert(ledger_row(7, 1, 2, 10)))
+            .expect("the durable effect");
     }
     let live = Live::open(&path).expect("the reopen recovers the durable log");
-    assert_eq!(live.version(), 2, "the accepted commit's version bump survives the crash");
-    assert_eq!(live.transfers().len(), 1, "the journaled transfer IS in the ledger");
+    assert_eq!(
+        live.version(),
+        2,
+        "the accepted commit's version bump survives the crash"
+    );
+    assert_eq!(
+        live.transfers().len(),
+        1,
+        "the journaled transfer IS in the ledger"
+    );
     assert_eq!(
         live.accounts(),
         &[
-            Account { id: 1, owner: "alice".into(), balance: 90 },
-            Account { id: 2, owner: "bob".into(), balance: 60 },
+            Account {
+                id: 1,
+                owner: "alice".into(),
+                balance: 90
+            },
+            Account {
+                id: 2,
+                owner: "bob".into(),
+                balance: 60
+            },
         ],
         "the balances moved: the derived state replays the durable effect"
     );
@@ -383,13 +469,24 @@ fn a_proposal_that_never_committed_leaves_no_trace() {
     }
     let live = Live::open(&path).expect("reopen");
     assert_eq!(live.version(), 1, "no accepted commit — no bump");
-    assert!(live.transfers().is_empty(), "no journaled intent — the proposal is gone");
+    assert!(
+        live.transfers().is_empty(),
+        "no journaled intent — the proposal is gone"
+    );
     assert!(live.violations().is_empty());
     assert_eq!(
         live.accounts(),
         &[
-            Account { id: 1, owner: "alice".into(), balance: 100 },
-            Account { id: 2, owner: "bob".into(), balance: 50 },
+            Account {
+                id: 1,
+                owner: "alice".into(),
+                balance: 100
+            },
+            Account {
+                id: 2,
+                owner: "bob".into(),
+                balance: 50
+            },
         ],
         "the fixture state, untouched"
     );
@@ -405,9 +502,15 @@ fn a_torn_tail_recovers_to_the_last_good_frame_and_reports() {
     {
         let mut live = Live::open(&path).expect("fresh");
         let p1 = live.propose(1, 1, 2, 10);
-        assert!(matches!(live.commit(&p1), Ok(mandate_host::LiveVerdict::Committed { .. })));
+        assert!(matches!(
+            live.commit(&p1),
+            Ok(mandate_host::LiveVerdict::Committed { .. })
+        ));
         let p2 = live.propose(2, 2, 1, 5);
-        assert!(matches!(live.commit(&p2), Ok(mandate_host::LiveVerdict::Committed { .. })));
+        assert!(matches!(
+            live.commit(&p2),
+            Ok(mandate_host::LiveVerdict::Committed { .. })
+        ));
     }
     // The crash mid-append: half of a VALID next frame hits the disk.
     let mut bytes = fs::read(&path).expect("read the journal");
@@ -425,7 +528,10 @@ fn a_torn_tail_recovers_to_the_last_good_frame_and_reports() {
 
     let live = Live::open(&path).expect("the recovering open refuses nothing here");
     let recovery = live.recovery().expect("the cut is REPORTED, never silent");
-    assert!(recovery.frames == 2, "the good prefix carries the two commits");
+    assert!(
+        recovery.frames == 2,
+        "the good prefix carries the two commits"
+    );
     assert_eq!(live.version(), 3, "the version rides the good prefix");
     assert_eq!(live.transfers().len(), 2);
     // The torn transfer is NOT in the recovered state (it never
@@ -446,7 +552,10 @@ fn reopen_equivalence_the_state_is_the_journal_replay() {
         let mut live = Live::open(&path).expect("fresh");
         for (tid, src, dst, amt) in &committed {
             let p = live.propose(*tid, *src, *dst, *amt);
-            assert!(matches!(live.commit(&p), Ok(mandate_host::LiveVerdict::Committed { .. })));
+            assert!(matches!(
+                live.commit(&p),
+                Ok(mandate_host::LiveVerdict::Committed { .. })
+            ));
         }
         end_accounts = live.accounts().to_vec();
         assert_eq!(live.version(), 1 + committed.len() as u64);
@@ -454,7 +563,11 @@ fn reopen_equivalence_the_state_is_the_journal_replay() {
     let live = Live::open(&path).expect("reopen");
     assert_eq!(live.version(), 1 + committed.len() as u64);
     assert_eq!(live.transfers().len(), committed.len());
-    assert_eq!(live.accounts(), &end_accounts, "the reopen reconstructs the same state");
+    assert_eq!(
+        live.accounts(),
+        &end_accounts,
+        "the reopen reconstructs the same state"
+    );
 }
 
 /// THE STALENESS TOOTH (the race-honesty carrier, pinned beside the
@@ -468,7 +581,10 @@ fn a_stale_proposal_refuses_on_the_version() {
     let mut live = Live::open(&dir.join("journal.bin")).expect("fresh");
     let stale = live.propose(1, 1, 2, 10);
     let p2 = live.propose(2, 2, 1, 5);
-    assert!(matches!(live.commit(&p2), Ok(mandate_host::LiveVerdict::Committed { version: 2 })));
+    assert!(matches!(
+        live.commit(&p2),
+        Ok(mandate_host::LiveVerdict::Committed { version: 2 })
+    ));
     match live.commit(&stale) {
         Ok(mandate_host::LiveVerdict::Stale { base: 1, got: 2 }) => {}
         other => panic!("the stale proposal must refuse with both versions: {other:?}"),
@@ -483,8 +599,12 @@ fn a_stale_proposal_refuses_on_the_version() {
 /// rendering names the tier: TESTED AGREEMENT, never a theorem.
 #[test]
 fn the_commit_duel_agrees() {
-    let report = run_commit_duel(&mandate_host::live::repo_root()).expect("the committed duel runs");
-    assert!(report.rows.len() >= 4, "the committed manifest's rows are present");
+    let report =
+        run_commit_duel(&mandate_host::live::repo_root()).expect("the committed duel runs");
+    assert!(
+        report.rows.len() >= 4,
+        "the committed manifest's rows are present"
+    );
     let verdict = report.verdict();
     assert!(
         matches!(verdict, mandate_host::RowVerdict::Agree),
@@ -492,4 +612,91 @@ fn the_commit_duel_agrees() {
         report.render()
     );
     assert!(report.render().contains("TESTED AGREEMENT"));
+}
+
+// ---------------------------------------------------------------------------
+// THE RELOAD (the D6 port): the component swap without a host restart —
+// the composition discipline (stop's release + the fresh load →
+// instantiate → start sequence, each a model row) + the identity pin.
+// ---------------------------------------------------------------------------
+
+/// THE PIN: a running host swaps the component and keeps serving — the
+/// identity names the bytes now running (same bytes → same identity;
+/// the golden discipline still holds after the swap).
+#[test]
+fn reload_swaps_and_names_the_identity() {
+    let dir = scratch("reload-same");
+    let mut h = host_at(Phase::Running);
+    let old_identity = h.identity().expect("a running host has an identity");
+
+    let got = h.reload(&dir).expect("the same-bytes swap succeeds");
+    assert_eq!(h.phase(), Phase::Running);
+    assert_eq!(got, old_identity, "same bytes = same identity");
+    // the host still serves the golden after the swap
+    let answered = h.call(2, 3).expect("the swapped component answers");
+    assert_eq!(answered, GUEST_GOLDEN);
+}
+
+/// THE SWAP HONESTY: a swap to DIFFERENT bytes (the tampered component
+/// — the hash tie refuses) is a typed refusal, the host lands in
+/// `Failed` (the model's escape row), and the old identity is GONE
+/// (the resources were released — no half-swap carries stale state).
+#[test]
+fn reload_refuses_a_tampered_swap_and_lands_failed() {
+    let dir = tampered_scratch("reload-tampered");
+    let mut h = host_at(Phase::Running);
+
+    let err = h.reload(&dir).expect_err("the tampered swap refuses");
+    assert!(
+        matches!(err, HostError::ContentHashMismatch { .. }),
+        "{err:?}"
+    );
+    assert_eq!(h.phase(), Phase::Failed);
+    assert!(h.identity().is_none(), "a failed host carries no bytes");
+}
+
+/// The reload's phase discipline: the pre-run states refuse the
+/// composition TYPED (the plain sequence is the path there — a
+/// reload label on a fresh host is the illegal-transition refusal),
+/// and the phase stays put.
+#[test]
+fn reload_from_unloaded_refuses_typed() {
+    let mut h = HostMachine::new();
+    let err = h
+        .reload(&committed_dir())
+        .expect_err("the pre-run reload refuses");
+    assert!(
+        matches!(
+            err,
+            HostError::Lifecycle {
+                from: "unloaded",
+                event: "reload"
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(h.phase(), Phase::Unloaded);
+}
+
+/// The Failed-state honesty: a host that failed (the tampered swap's
+/// terminal face) can swap — the reload is the recovery path (a fresh
+/// instance, a fresh identity).
+#[test]
+fn reload_recovers_a_failed_host() {
+    let mut h = host_at(Phase::Running);
+    // force the failure: the tampered bytes refuse the hash tie at
+    // reload — the host lands Failed (the model's escape row)
+    let t = tampered_scratch("reload-recovery");
+    let _ = h.reload(&t).expect_err("the tampered swap refuses");
+    assert_eq!(h.phase(), Phase::Failed);
+
+    // the recovery: the COMMITTED set reloads the failed host
+    let got = h
+        .reload(&committed_dir())
+        .expect("the failed host recovers");
+    assert_eq!(h.phase(), Phase::Running);
+    assert_eq!(
+        got,
+        bytes_hash(&fs::read(committed_dir().join("component-slice.wasm")).expect("read"))
+    );
 }

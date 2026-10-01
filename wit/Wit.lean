@@ -26,7 +26,7 @@ record (`gen/schema-slice.wit`) and the mandate tree's WIT emitter:
 
 ## EXCLUSIONS — each named with its consumer (the leftover rule)
 
-- **variants / funcs / worlds / resources / `use`** — the mandate
+- **variants / funcs / worlds / `use`** — the mandate
   emitter emits NONE of them today (the item model is records-only,
   SchemaCore.Item's honest gap; the mined legacy surface lives at
   legacy/lean/schema-lang/SchemaLang/Emit/Wit.lean). They land with
@@ -36,8 +36,32 @@ record (`gen/schema-slice.wit`) and the mandate tree's WIT emitter:
   fold's exhaustiveness). PARTIAL GROWTH LANDED: the world carrier
   (`Wit.World` — funcs + worlds as data over the records-only item
   model) rides the component lane's emission (`Guest.Component`);
-  variants/resources/`use` are still out, with the same named
-  consumers.
+  variants/`use` are still out, with the same named consumers.
+  THE D2 GROWTH LANDED (the honest narrowing): the resource rows —
+  `Resource` (the interface-level declaration), `Ty.own`/`Ty.borrow`
+  (the handle refs, the component-model's own/borrow spellings) +
+  `Ty.stream`/`Ty.future` (the waitable rows) + the `result` face's
+  one-summand completeness (`Ty.resultOk`/`Ty.resultErr`) — with the
+  RENDERER extended over all of them (`Render.ty` stays total over
+  the closed grammar) and the RESOURCE DECLARATIONS parsing (the
+  engine-level `resourceLineG` rows, the round-trip laws extended —
+  Wit.Parse's header). THE DEFERRED REMAINDER'S WALL WAS A
+  CARRIER-CHOICE MISTAKE, now dissolved: the ty-level rows
+  (`stream`/`future`/`resultOk`/`resultErr`/`own`/`borrow`) PARSE —
+  the D2 finisher read `Kit.Codec.decode_encode`'s UNCONDITIONAL
+  obligation against a ty-unconstrained carrier, but `WitOk`'s
+  per-field `tyPre` conjunct IS the fragment gate riding the payload
+  subtype (the WireTarget `conditionalRetraction` discipline: the
+  law's domain narrowed by the carrier, never by a premise), so the
+  rows land as parser arms + an honest `tyPre` shrink — every
+  round-trip law extends as an instance. The fragment's residual
+  gate is the handle refs' NAME discipline (`own<9bad>` refuses —
+  the maximal-munch name run's head need not be alpha). Malformed
+  stream/result/handle syntax refuses with the structured
+  `ParseError` (the WitTests teeth). The lifecycle discipline rides
+  the effects lane's resource split (`Wit.Resource`); the
+  world-as-session reading is
+  `Wit.Session`.
 - **no parser** — `Wit.Render` is ONE-directional (AST → text, total).
   Text → AST (the skew-check's parser; the round-trip law) is a LATER
   order — no round-trip claim is made here.
@@ -47,9 +71,12 @@ record (`gen/schema-slice.wit`) and the mandate tree's WIT emitter:
   here. The ctor keeps the artifact's spelling.
 - **no n-tuples** — WIT's tuples are n-ary; the toolkit emits only the
   pair, so `Ty.tuple` is binary. Larger arities land with a consumer.
-- **no single-summand `result`** — WIT allows `result<T>` and
-  `result<_, E>`; the toolkit always emits both summands, so both are
-  required — the one-summand forms are UNCONSTRUCTIBLE.
+- **the single-summand `result`** — the toolkit always emits both
+  summands, so the D2 growth is the EMITTER's only consumer: the
+  one-summand forms landed as `Ty.resultOk`/`Ty.resultErr` (the fault
+  channel's faces; the D2 rows above). The bare parameterless `result`
+  stays out (no consumer; its spelling would collide with a resource
+  handle named `result`).
 - **no name mangling** — record/field names arrive pre-mangled (the
   kebab lane lives upstream, target-specific by doctrine); the AST
   carries the wire spellings as strings.
@@ -86,7 +113,11 @@ The five questions (notes/v3/01-core.md):
 - gate row: gen-check (the byte-tie over `gen/schema-slice.wit` — the
   renderer's artifact-side proof) + the axiom report (the `Wit` root).
 -/
+module
 
+
+
+@[expose] public section
 namespace Wit
 
 /-- The scalar atoms the toolkit's WIT lowerings produce. CLOSED —
@@ -110,8 +141,14 @@ inductive Ty where
   | atom (s : Scalar)
   | option (α : Ty)
   | list (α : Ty)
+  | stream (α : Ty)
+  | future (α : Ty)
   | result (ok err : Ty)
+  | resultOk (ok : Ty)
+  | resultErr (err : Ty)
   | tuple (a b : Ty)
+  | own (name : String)
+  | borrow (name : String)
 deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- One record field: the wire name + the WIT type. -/
@@ -132,13 +169,26 @@ structure Record where
   fields_nodup : (fields.map Field.name).Nodup := by decide
 deriving Repr, Inhabited
 
-/-- A WIT interface: the record names are distinct IN THE TYPE (the
-    same discipline — WIT rejects duplicate record names in an
-    interface). -/
+/-- A WIT resource declaration (the interface-level row: `resource r;`).
+    The handle's lifecycle discipline is `Wit.Resource`'s — the
+    declaration is the NAME's row; the handle refs (`Ty.own`/`Ty.borrow`)
+    name it. The decl-name and ref-name agreement is the consumer's
+    check (the name-mangling precedent: the AST carries wire spellings). -/
+structure Resource where
+  name : String
+deriving Repr, BEq, Inhabited
+
+/-- A WIT interface: the record names AND the resource-declaration
+    names are distinct IN THE TYPE (the same discipline — WIT rejects
+    duplicate record names / duplicate resource declarations in an
+    interface). The `resources` default keeps every pre-D2 literal
+    constructing identically (the byte-tie's surface unchanged). -/
 structure Interface where
   name : String
   records : List Record
+  resources : List Resource := []
   records_nodup : (records.map Record.name).Nodup := by decide
+  resources_nodup : (resources.map Resource.name).Nodup := by decide
 deriving Repr, Inhabited
 
 /-- A WIT package: the id (the `mandate:slice` form) + its interfaces.
@@ -151,3 +201,6 @@ structure Package where
 deriving Repr, Inhabited
 
 end Wit
+
+end -- public section
+

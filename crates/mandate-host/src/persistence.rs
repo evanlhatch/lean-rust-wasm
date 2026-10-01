@@ -13,8 +13,8 @@
 
 use std::path::Path;
 
-use mandate_delta::{Delta, DeltaLog, FsBackend, Recovery, Schema};
 use mandate_delta::snapshot::SnapshotReport;
+use mandate_delta::{Delta, DeltaLog, FsBackend, Recovery, Schema};
 
 use crate::HostError;
 
@@ -51,9 +51,11 @@ impl Journal {
     /// I/O failure, or a corrupt COMPLETE frame in the log (the typed
     /// refusal — the snapshot's anomalies are reports, the log's
     /// corruption is an error).
-    pub fn open_snapshotted(path: &Path, snapshot_path: &Path, schema: Schema)
-        -> Result<(Self, SnapshotReport), HostError>
-    {
+    pub fn open_snapshotted(
+        path: &Path,
+        snapshot_path: &Path,
+        schema: Schema,
+    ) -> Result<(Self, SnapshotReport), HostError> {
         let (log, report) =
             DeltaLog::open_snapshotted(path, snapshot_path, schema).map_err(HostError::from)?;
         Ok((Self { log }, report))
@@ -68,7 +70,9 @@ impl Journal {
     /// `seqno` past the log's end (nothing written, nothing cut), or
     /// backend/write I/O failure.
     pub fn compact(&mut self, seqno: u64, snapshot_path: &Path) -> Result<(), HostError> {
-        self.log.compact(seqno, snapshot_path).map_err(HostError::from)
+        self.log
+            .compact(seqno, snapshot_path)
+            .map_err(HostError::from)
     }
 
     /// THE EFFECT SEAM: record one accepted delta — the journal write
@@ -141,21 +145,30 @@ mod tests {
     /// state and the wire form survive.
     #[test]
     fn record_reopen_round_trip() {
-        let dir = ScratchDir::new("mandate-host-journal")
-            .unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let dir =
+            ScratchDir::new("mandate-host-journal").unwrap_or_else(|e| panic!("tempdir: {e}"));
         let path = dir.path().join("journal.bin");
         {
             let mut j = Journal::open(&path, schema()).unwrap_or_else(|e| panic!("{e}"));
-            assert!(j.recovery().is_none(), "a fresh journal reports no recovery");
-            let seq = j.record(Delta::Insert(row(1, "a"))).unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                j.recovery().is_none(),
+                "a fresh journal reports no recovery"
+            );
+            let seq = j
+                .record(Delta::Insert(row(1, "a")))
+                .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(seq, 0);
-            j.record(Delta::Remove(Value::U64(1))).unwrap_or_else(|e| panic!("{e}"));
+            j.record(Delta::Remove(Value::U64(1)))
+                .unwrap_or_else(|e| panic!("{e}"));
             assert!(j.state().rows().is_empty());
         }
         {
             let j = Journal::open(&path, schema()).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(j.len(), 2);
-            assert!(j.recovery().is_none(), "a clean journal reports no recovery");
+            assert!(
+                j.recovery().is_none(),
+                "a clean journal reports no recovery"
+            );
             assert!(j.state().rows().is_empty());
         }
     }
@@ -167,18 +180,22 @@ mod tests {
     /// honesty).
     #[test]
     fn snapshot_crash_matrix_through_the_host_seam() {
-        let dir = ScratchDir::new("mandate-host-crash-matrix")
-            .unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let dir =
+            ScratchDir::new("mandate-host-crash-matrix").unwrap_or_else(|e| panic!("tempdir: {e}"));
         let path = dir.path().join("journal.bin");
         let snap = mandate_delta::snapshot_path_for(&path);
 
         // Build a store, compact it, grow the tail.
         {
             let mut j = Journal::open(&path, schema()).unwrap_or_else(|e| panic!("{e}"));
-            j.record(Delta::Insert(row(1, "a"))).unwrap_or_else(|e| panic!("{e}"));
-            j.record(Delta::Insert(row(2, "b"))).unwrap_or_else(|e| panic!("{e}"));
-            j.compact(1, &snap).unwrap_or_else(|e| panic!("compact: {e}"));
-            j.record(Delta::Insert(row(3, "c"))).unwrap_or_else(|e| panic!("{e}"));
+            j.record(Delta::Insert(row(1, "a")))
+                .unwrap_or_else(|e| panic!("{e}"));
+            j.record(Delta::Insert(row(2, "b")))
+                .unwrap_or_else(|e| panic!("{e}"));
+            j.compact(1, &snap)
+                .unwrap_or_else(|e| panic!("compact: {e}"));
+            j.record(Delta::Insert(row(3, "c")))
+                .unwrap_or_else(|e| panic!("{e}"));
         }
         // The honest snapshotted reopen: applied at the snapshot's
         // seqno, the state is the full replay.
@@ -212,31 +229,41 @@ mod tests {
         // surface — the snapshot applied AND the tail's cut reported.
         std::fs::write(&snap, &raw).unwrap_or_else(|e| panic!("write: {e}"));
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read: {e}"));
-        std::fs::write(&path, &bytes[..bytes.len() - 1])
-            .unwrap_or_else(|e| panic!("write: {e}"));
+        std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap_or_else(|e| panic!("write: {e}"));
         {
             let (j, report) = Journal::open_snapshotted(&path, &snap, schema())
                 .unwrap_or_else(|e| panic!("open: {e}"));
             assert_eq!(report, SnapshotReport::Applied { seqno: 1 });
-            let rec = j.recovery().unwrap_or_else(|| panic!("the torn tail went SILENT"));
+            let rec = j
+                .recovery()
+                .unwrap_or_else(|| panic!("the torn tail went SILENT"));
             assert_eq!(rec.frames, 1, "the surviving tail's frame count");
             // Snapshot (row 1) + the surviving tail frame (row 2 —
             // row 3's frame is the torn one the cut dropped).
-            assert_eq!(j.state().rows(), &[row(1, "a"), row(2, "b")], "snapshot + surviving tail");
+            assert_eq!(
+                j.state().rows(),
+                &[row(1, "a"), row(2, "b")],
+                "snapshot + surviving tail"
+            );
         }
 
         // TORN BOTH: both anomalies report; the surviving log's
         // replay is the state.
         std::fs::write(&snap, &raw[..raw.len() - 3]).unwrap_or_else(|e| panic!("write: {e}"));
-        std::fs::write(&path, &bytes[..bytes.len() - 1])
-            .unwrap_or_else(|e| panic!("write: {e}"));
+        std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap_or_else(|e| panic!("write: {e}"));
         {
             let (j, report) = Journal::open_snapshotted(&path, &snap, schema())
                 .unwrap_or_else(|e| panic!("open: {e}"));
             assert!(matches!(report, SnapshotReport::FellBack(_)), "{report}");
-            let rec = j.recovery().unwrap_or_else(|| panic!("the torn tail went SILENT"));
+            let rec = j
+                .recovery()
+                .unwrap_or_else(|| panic!("the torn tail went SILENT"));
             assert_eq!(rec.frames, 1);
-            assert_eq!(j.state().rows(), &[row(2, "b")], "the surviving log prefix's replay");
+            assert_eq!(
+                j.state().rows(),
+                &[row(2, "b")],
+                "the surviving log prefix's replay"
+            );
         }
 
         // COMPACT INTERRUPTED (the pre-cut window): snapshot landed,
@@ -249,7 +276,11 @@ mod tests {
         {
             let mut pre_cut = Vec::new();
             for r in [row(1, "a"), row(2, "b")] {
-                assert!(mandate_delta::delta::enc_delta(&schema(), &Delta::Insert(r), &mut pre_cut));
+                assert!(mandate_delta::delta::enc_delta(
+                    &schema(),
+                    &Delta::Insert(r),
+                    &mut pre_cut
+                ));
             }
             std::fs::write(&path, &pre_cut).unwrap_or_else(|e| panic!("write: {e}"));
         }
@@ -262,7 +293,8 @@ mod tests {
             // The interrupted cut was FINISHED by the open (the
             // subsumed prefix retired); a heal compact lands the tail
             // alone — state unchanged by either cut.
-            j.compact(j.len(), &snap).unwrap_or_else(|e| panic!("heal: {e}"));
+            j.compact(j.len(), &snap)
+                .unwrap_or_else(|e| panic!("heal: {e}"));
             assert_eq!(j.state().rows(), &[row(1, "a"), row(2, "b")]);
             drop(j);
             let (j, report) = Journal::open_snapshotted(&path, &snap, schema())

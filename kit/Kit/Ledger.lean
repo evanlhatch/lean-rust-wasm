@@ -78,14 +78,18 @@ The five questions (notes/v3/01-core.md):
   lands with the committed ledger file (the named follow-up).
 -/
 
-import Lean
-import TextKit.Basic
-import TextKit.Grammar
-import TextKit.Grammar.Lexemes
-import TextKit.Grammar.Check
-import TextKit.Grammar.Laws
-import Kit.Diag
-import Kit.CodeRegistry
+module
+
+public import Lean
+public import TextKit.Basic
+public import TextKit.Grammar
+public import TextKit.Grammar.Lexemes
+public import TextKit.Grammar.Check
+public import TextKit.Grammar.Laws
+public import Kit.Diag
+public import Kit.CodeRegistry
+
+@[expose] public section
 
 open Lean
 
@@ -778,3 +782,5 @@ theorem parse_print_selfStable (s : String) :
   rfl
 
 end Kit.Ledger
+
+end -- public section

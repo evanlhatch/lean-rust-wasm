@@ -72,11 +72,14 @@ the one field the two-rep lane needs beyond the order (key decEq) and
 Repr imports ZSet.Basic cone-legally (both C1 — the cone table's rows;
 the old deliberate-parallel note was the consolidation debt, paid).
 -/
+module
 
-import Kit.Relation
-import Kit.Correspondence
-import ZSet.Basic
-import Repr.Basic
+public import Kit.Relation
+public import Kit.Correspondence
+public import ZSet.Basic
+public import Repr.Basic
+@[expose] public section
+
 
 namespace Repr
 
@@ -769,3 +772,5 @@ theorem raw_ignore_step [DecidableEq K] (k : K) (v : V) :
     (Op.insert k v) (fun _ => rfl) (insert_effect_ne k v)
 
 end Repr
+
+end -- public section

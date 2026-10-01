@@ -26,8 +26,12 @@ The five questions (notes/v3/01-core.md):
 - gate row: `GuestStd`'s row in Gates.Packages.
 -/
 
-import LintKit.GuestGate
+module
 
+public import LintKit.GuestGate
+
+
+@[expose] public section
 namespace GuestStd
 
 /-- The u64 COUNT of a string list. Guest-legal length: core's

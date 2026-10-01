@@ -33,7 +33,7 @@ THE RUNGS (each discharges its level):
 - `decTypedSchema?` — the read's base schema: the fields × names zip
   (a length disagreement refuses — SS0006).
 - `decTypedRel?` — the rel ladder: read / filter / join / aggregate /
-  sort / fetch / set. The computed-output-schema discipline survives
+  sort / fetch / set / cross / write. The computed-output-schema discipline survives
   the read: the input schema flows DOWN the recursion, each node's
   output schema is computed exactly as `Typed`'s index computes it,
   and the refinements the GADT forces are the decode's refusals —
@@ -124,11 +124,16 @@ def Rel.decodable {inS outS : Schema} :
   | .filter i _ => i.decodable
   | .project _ _ => False
   | .keep _ _ => True
+  -- the shared-base join has no wire spelling (toProto refuses) — the
+  -- law's hypothesis is vacuously false for it; the domain is True
+  | .join' _ _ _ _ _ => True
   | .join l r _ _ => l.decodable ∧ r.decodable
   | .aggregate i _ ms => (∀ m ∈ ms, m.tied) ∧ i.decodable
   | .sort i _ => i.decodable
   | .fetch i _ _ => i.decodable
   | .set _ l r => l.decodable ∧ r.decodable
+  | .cross l r => l.decodable ∧ r.decodable
+  | .write _ _ i => i.decodable
 
 end Substrait.Typed
 
@@ -151,6 +156,7 @@ def eSS0008 : Kit.ECode := ⟨"SS0008"⟩
 def eSS0009 : Kit.ECode := ⟨"SS0009"⟩
 def eSS0010 : Kit.ECode := ⟨"SS0010"⟩
 def eSS0011 : Kit.ECode := ⟨"SS0011"⟩
+def eSS0012 : Kit.ECode := ⟨"SS0012"⟩
 
 /-- The typed decode's refusal, in the ONE envelope (05 §4): the SS
     family's error, structured — never a bare string. -/
@@ -731,6 +737,34 @@ def decTypedRel? (r : Proto.Rel) : Except Kit.Diag AnyRel :=
                     will not accept the disagreement")
           | .error d => .error d
       | .error d => .error d
+  | .cross left right =>
+      -- the condition-free join: NO condition to decode (the wire's
+      -- CrossRel carries none — the join arm's cond rung is absent)
+      match decTypedRel? left with
+      | .ok (AnyRel.mk sl sl' l) =>
+          match decTypedRel? right with
+          | .ok (AnyRel.mk sr sr' r) =>
+              .ok (AnyRel.mk (sl ++ sr) (sl' ++ sr') (.cross l r))
+          | .error d => .error d
+      | .error d => .error d
+  | .write nms op ts input =>
+      match decTypedRel? input with
+      | .ok (AnyRel.mk inS s r) =>
+          -- the table schema's read face, then THE ALIGNMENT: the
+          -- wire's table_schema must agree with the input's OUTPUT
+          -- schema (the typed ctor's alignment by construction — the
+          -- disagreement refuses, SS0012)
+          match decTypedSchema? ts.fields ts.names with
+          | .ok sc =>
+              if hsc : sc = s then
+                .ok (AnyRel.mk inS s (.write nms op r))
+              else
+                .error (ssDiag eSS0012 "typed-decode: the write's table schema \
+                  disagrees with the input's output schema — the typed \
+                  write's alignment is BY CONSTRUCTION (the lowering writes \
+                  the echo face; a drifted wire schema refuses)")
+          | .error d => .error d
+      | .error d => .error d
 
 /-- The grouping walk's law: the keys the lowering wrote read back to
     exactly themselves (the lowering is Except-valued — the law is
@@ -884,6 +918,12 @@ theorem decTypedRel?_ok : ∀ {inS outS : Schema} (rel : Rel inS outS) (p : Prot
       intro p hp _
       simp only [Rel.toProto] at hp
       simp at hp
+  | join' _ _ _ _ _ _ _ =>
+      -- the shared-base join ALWAYS refuses (no wire spelling) — the
+      -- law's hypothesis is never satisfied (the keep arm's shape)
+      intro p hp _
+      simp only [Rel.toProto] at hp
+      simp at hp
   | join left right cond jt ihl ihr =>
       intro p hp hd
       simp only [Rel.toProto] at hp
@@ -976,6 +1016,41 @@ theorem decTypedRel?_ok : ∀ {inS outS : Schema} (rel : Rel inS outS) (p : Prot
               have h2 := ihr r hr hd.2
               simp only [decTypedRel?, h1, h2, Except.ok.injEq]
               rfl
+  | cross left right ihl ihr =>
+      intro p hp hd
+      simp only [Rel.toProto] at hp
+      cases hl : left.toProto with
+      | error _ => rw [hl] at hp; simp at hp
+      | ok l =>
+          rw [hl] at hp
+          cases hr : right.toProto with
+          | error _ => rw [hr] at hp; simp at hp
+          | ok r =>
+              rw [hr] at hp
+              simp only [Except.ok.injEq] at hp
+              subst hp
+              have h1 := ihl l hl hd.1
+              have h2 := ihr r hr hd.2
+              simp only [decTypedRel?, h1, h2, Except.ok.injEq]
+  | @write s s' _names _op input ih =>
+      intro p hp hd
+      simp only [Rel.toProto] at hp
+      cases hi : input.toProto with
+      | error _ => rw [hi] at hp; simp at hp
+      | ok i =>
+          rw [hi] at hp
+          cases hf : colsToProto s' with
+          | error _ => rw [hf] at hp; simp at hp
+          | ok fields =>
+              rw [hf] at hp
+              simp only [Except.ok.injEq] at hp
+              subst hp
+              have h1 := ih i hi hd
+              -- the written schema reads back to ITSELF (the schema law)
+              have h2 : decTypedSchema? fields s'.names = .ok s' :=
+                decTypedSchema?_colsToProto s' fields hf
+              simp only [decTypedRel?, h1, h2, Except.ok.injEq]
+              rw [dif_pos trivial]
 
 /-! ## rung 6 — the plan face -/
 

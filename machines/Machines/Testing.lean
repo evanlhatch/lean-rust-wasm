@@ -77,9 +77,12 @@ lists + the completeness proof as the constructor arguments here.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Events
-import Machines.Explore
+public import Machines.Events
+public import Machines.Explore
+@[expose] public section
+
 
 namespace Machines.Testing
 
@@ -320,3 +323,5 @@ theorem guardCoverage_refuted (m : MachineWithInv S I) (inputs : List I)
   simpa using List.any_eq_false.mp hp s hs
 
 end Machines.Testing
+
+end -- public section

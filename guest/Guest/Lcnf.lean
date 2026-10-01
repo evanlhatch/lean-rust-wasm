@@ -654,8 +654,8 @@ def trCode (enums : Std.HashMap Lean.Name Unit) (sibs : List Lean.Name)
       .ok (.dec fvarId.name.toString n objs? kc)
   | .del fvarId k => do
       -- THE DEL (the honest deallocation): the ownership assertion +
-      -- the dead marking at the lowering (the freelist reuse is the
-      -- named follow-up).
+      -- the dead marking + the reuse publish at the lowering (the
+      -- shape provenance keys the publish — the lowering's record).
       let kc ← trCode enums sibs k
       .ok (.del fvarId.name.toString kc)
   termination_by codeSize code
@@ -721,7 +721,14 @@ def toIR (ds : List (Decl .impure)) : Except LowerError (List IR.Decl) := do
                 (toString p.type))
         out := out ++ [{ name := d.name.toString
                        , params := ps, resultTy := resultTy
-                       , value := .extern }]
+                       , value := .extern
+                           { params := ps.map (·.2), result := resultTy
+                           , effect := .host
+                           , note := "the LCNF frontend's extern: the \
+                                      body is unmodeled (the host link \
+                                      step is the named follow-up); the \
+                                      declared rows are the mapped \
+                                      faces above" } }]
     | .code code =>
         let enums := collectScalarEnums code
         let resultTy ←

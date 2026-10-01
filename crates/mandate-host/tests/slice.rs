@@ -15,10 +15,7 @@ fn gen_dir() -> PathBuf {
 /// A fresh per-test copy of the committed artifact set (the tamper
 /// teeth mutate their copy, never the committed universe).
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mandate-host-{}-{name}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("mandate-host-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("scratch dir");
     let committed = gen_dir();
@@ -50,7 +47,10 @@ fn tampered_module_refuses() {
     fs::write(&p, wasm).expect("write");
 
     let err = run_slice(&dir).expect_err("tampered bytes refuse");
-    assert!(matches!(err, HostError::ContentHashMismatch { .. }), "{err:?}");
+    assert!(
+        matches!(err, HostError::ContentHashMismatch { .. }),
+        "{err:?}"
+    );
 }
 
 /// TAMPER TOOTH: a doctored SIDECAR (the declared hash no longer names
@@ -65,11 +65,17 @@ fn tampered_sidecar_refuses() {
         "content hash 10175063987543006018",
         "content hash 10175063987543006019",
     );
-    assert_ne!(sidecar, doctored, "the committed hash string must be present");
+    assert_ne!(
+        sidecar, doctored,
+        "the committed hash string must be present"
+    );
     fs::write(&p, doctored).expect("write");
 
     let err = run_slice(&dir).expect_err("a doctored sidecar refuses");
-    assert!(matches!(err, HostError::ContentHashMismatch { .. }), "{err:?}");
+    assert!(
+        matches!(err, HostError::ContentHashMismatch { .. }),
+        "{err:?}"
+    );
 }
 
 /// SKEW TOOTH: the sidecar is absent -> the artifact set is
@@ -81,7 +87,13 @@ fn missing_sidecar_refuses() {
 
     let err = run_slice(&dir).expect_err("the incomplete set refuses");
     assert!(
-        matches!(err, HostError::Io { what: "wasm-slice.wasm.hdr", .. }),
+        matches!(
+            err,
+            HostError::Io {
+                what: "wasm-slice.wasm.hdr",
+                ..
+            }
+        ),
         "{err:?}"
     );
 }
@@ -95,7 +107,13 @@ fn missing_wit_refuses() {
 
     let err = run_slice(&dir).expect_err("the incomplete set refuses");
     assert!(
-        matches!(err, HostError::Io { what: "schema-slice.wit", .. }),
+        matches!(
+            err,
+            HostError::Io {
+                what: "schema-slice.wit",
+                ..
+            }
+        ),
         "{err:?}"
     );
 }
@@ -133,7 +151,10 @@ fn wrong_answer_refuses() {
     fs::write(dir.join("wasm-slice.wasm.hdr"), resided).expect("write");
 
     let err = run_slice(&dir).expect_err("43 is not the golden");
-    assert!(matches!(err, HostError::AnswerMismatch { got: 43 }), "{err:?}");
+    assert!(
+        matches!(err, HostError::AnswerMismatch { got: 43 }),
+        "{err:?}"
+    );
 }
 
 /// The run path over RAW bytes (no artifact set) still enforces the
@@ -146,23 +167,24 @@ fn raw_run_answer_checks_the_golden() {
     assert_eq!(got, GOLDEN_ANSWER);
     let wat = "(module (export \"answer\" (func 0)) (func (result i64) i64.const 43))";
     let err = run_answer(&wat::parse_str(wat).expect("builds")).expect_err("43 refuses");
-    assert!(matches!(err, HostError::AnswerMismatch { got: 43 }), "{err:?}");
+    assert!(
+        matches!(err, HostError::AnswerMismatch { got: 43 }),
+        "{err:?}"
+    );
 }
 
 /// The engine seam reports a missing export and a wrong signature as
 /// typed errors (no panics on real error paths).
 #[test]
 fn missing_export_and_signature_are_typed() {
-    let no_export = wat::parse_str("(module (func (result i64) i64.const 42))")
-        .expect("builds");
+    let no_export = wat::parse_str("(module (func (result i64) i64.const 42))").expect("builds");
     assert!(matches!(
         run_answer(&no_export),
         Err(HostError::MissingExport(name)) if name == "answer"
     ));
 
-    let wrong_ty = wat::parse_str(
-        "(module (export \"answer\" (func 0)) (func (result i32) i32.const 42))",
-    )
-    .expect("builds");
+    let wrong_ty =
+        wat::parse_str("(module (export \"answer\" (func 0)) (func (result i32) i32.const 42))")
+            .expect("builds");
     assert!(matches!(run_answer(&wrong_ty), Err(HostError::Signature)));
 }

@@ -43,10 +43,14 @@ Consumer trail: rides `WasmCore.Types` + `WasmCore.Instr`; consumed by
 `WasmCore.Validate` (the per-function judgment + the module driver)
 and `WasmCore.Encode` (the byte emission). Core-only (the cone rule).
 -/
+module
 
-import WasmCore.Types
-import WasmCore.Instr
 
+public import WasmCore.Types
+public import WasmCore.Instr
+
+
+@[expose] public section
 namespace WasmCore
 
 /-- One function: its type (by index into `Module.types`), its
@@ -75,6 +79,26 @@ structure Export where
   desc : ExportDesc
 deriving BEq, DecidableEq, Repr, Inhabited
 
+/-- ONE function IMPORT: the two-level wire name (`mod.name` — the
+    core binary's import section entry), the declared type (by index),
+    and the MODEL's provision row: the closed `Op` the executor's host
+    answers with (`none` = no modeled provision — the honest ledger's
+    `.unmodeled`; the HOST's real provision is the linker's, the wire
+    carries none of it). The provision reuses the ONE op table
+    (`semOp`) — never a parallel semantics table (07-extensibility R6).
+    The IR's extern discipline (`Guest.IR.ExternSig`) is the declared
+    trust boundary this models the far side of. -/
+structure Import where
+  mod : String
+  name : String
+  tyIdx : Nat
+  /-- The model's provision row (the executor's extern-call answer;
+      `none` = the unprovisioned model run — `.unmodeled`, never a
+      wrong answer). Default `none`: every import-less module literal
+      is untouched. -/
+  impl : Option Op := .none
+deriving BEq, Repr, Inhabited
+
 /-- ONE funcref table: the entries are the module's own FUNCTION
     INDICES (the active-element face — initialized at offset 0 in
     order, the only shape the consumer needs). The table's size IS the
@@ -90,13 +114,18 @@ deriving BEq, DecidableEq, Repr, Inhabited
     section entirely (the ops that need it refuse at validation when
     there is no memory — the later memory-order owns the limit check);
     `tables = []` omits the table section (the indirect-call lane's
-    validator row refuses a `callindirect` over an absent table). -/
+    validator row refuses a `callindirect` over an absent table);
+    `imports = []` omits the import section (THE IMPORT FACE: the
+    wasm imports-first function-index space — imported functions take
+    indices 0..k-1, the local funcs shift by k; every import-less
+    module literal is index-identical to the pre-import model). -/
 structure Module where
   types : List FuncType
   funcs : List Func
   exports : List Export
   memMin : Nat := 0
   tables : List Table := []
+  imports : List Import := []
 deriving BEq, Repr, Inhabited
 
 /-- Resolve a type index (total; `none` = dangling — validation
@@ -104,11 +133,31 @@ deriving BEq, Repr, Inhabited
 def Module.typeAt (m : Module) (i : Nat) : Option FuncType :=
   m.types[i]?
 
-/-- The module's call environment: function index → its resolved type. -/
+/-- THE IMPORT FACE's index resolution: an absolute function index
+    resolves to a LOCAL func only — an index below the import count is
+    an imported function (no local body; the executor's provision row
+    answers it). Total; `imports = []` reduces to `m.funcs[fn]?`. -/
+def Module.funcAt (m : Module) (fn : Nat) : Option Func :=
+  if fn < m.imports.length then none else m.funcs[fn - m.imports.length]?
+
+/-- The import-less reduction (every pre-import module's `funcAt` IS
+    the local lookup — the no-import byte-tie's proof face). -/
+theorem Module.funcAt_of_imports_nil (m : Module) (fn : Nat) (h : m.imports = []) :
+    m.funcAt fn = m.funcs[fn]? := by
+  rw [Module.funcAt, h]
+  simp
+
+/-- The module's call environment: function index → its resolved type
+    (the imports' declared types included — the validator's call rows
+    type-check against the IMPORTED signature exactly as against a
+    local one; the trust boundary is type-checked, never skipped). -/
 def Module.fenv (m : Module) : Nat → Option FuncType := fun fn =>
-  match m.funcs[fn]? with
-  | some f => m.typeAt f.tyIdx
-  | none => none
+  match m.imports[fn]? with
+  | some imp => m.typeAt imp.tyIdx
+  | none =>
+      match m.funcs[fn - m.imports.length]? with
+      | some f => m.typeAt f.tyIdx
+      | none => none
 
 /-- THE TABLE's ONE lookup (the executor's indirect-call face): entry
     `i` of table 0 = the function index it names; past the entries =
@@ -119,3 +168,6 @@ def Module.tableAt (m : Module) (i : Nat) : Option Nat :=
   | none => none
 
 end WasmCore
+
+end -- public section
+

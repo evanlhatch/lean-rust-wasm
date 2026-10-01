@@ -40,6 +40,11 @@ Doctrine slots (notes/v3/01-core.md): the five questions —
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
+
+module
+
+@[expose] public section
+
 namespace Cost
 
 /-! ## The cost model -/
@@ -156,3 +161,5 @@ theorem Graded.bind_assoc {C : Type} [LE C] (m : CostModel C)
   rw [m.compose_assoc]
 
 end Cost
+
+end -- public section

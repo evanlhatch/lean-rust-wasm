@@ -41,12 +41,18 @@ Core-only (no mathlib/Batteries). The five questions
 - gate row: none — TextKit is outside Gates.Packages' gated set;
   TextKitTests pins the constructors' teeth + the negative controls.
 
-MODULE FORM: a NON-`module` file (rides `TextKit.Grammar`'s form —
-the Lexeme interface lives there; consumers `import
-TextKit.Grammar.Lexemes` directly).
+MODULE FORM: a `module` file now (the kit wave removed the
+Grammar-layer blocker; `TextKit.Grammar` is a `module` and pre→module
+is the legal direction). The Lexeme interface lives in
+`TextKit.Grammar`; consumers `import TextKit.Grammar.Lexemes`
+directly.
 -/
 
-import TextKit.Grammar
+module
+
+public import TextKit.Grammar
+
+@[expose] public section
 
 namespace TextKit
 
@@ -71,7 +77,7 @@ theorem mem_takeWhile {p : Char → Bool} : ∀ (cs : List Char) (c : Char),
 
 /-- Its dropWhile twin: a suffix whose head fails `p` is all `p`-failure
     — the dropWhile keeps it whole. -/
-private theorem dropWhile_self_of_head_fail {p : Char → Bool} : ∀ sfx : List Char,
+theorem dropWhile_self_of_head_fail {p : Char → Bool} : ∀ sfx : List Char,
     sfx.head?.all (fun c => !p c) = true → sfx.dropWhile p = sfx := by
   intro sfx h
   cases sfx with
@@ -85,7 +91,7 @@ private theorem dropWhile_self_of_head_fail {p : Char → Bool} : ∀ sfx : List
 
 /-- The maximal-munch boundary: a suffix whose head fails `p` has the
     empty `p`-run. -/
-private theorem takeWhile_nil_of_head_fail {p : Char → Bool} : ∀ sfx : List Char,
+theorem takeWhile_nil_of_head_fail {p : Char → Bool} : ∀ sfx : List Char,
     sfx.head?.all (fun c => !p c) = true → sfx.takeWhile p = [] := by
   intro sfx h
   cases sfx with
@@ -230,7 +236,7 @@ theorem constCharScan_ok {c : Char} {v : α} [DecidableEq α] {cur : Cursor} {r 
 
 /-- The head's canonical round trip: the printed char's continuation
     always matches the literal head. -/
-private theorem constCharHead_ok (c : Char) (sfx : List Char) :
+theorem constCharHead_ok (c : Char) (sfx : List Char) :
     (HeadSpec.lit (String.ofList [c])).matches ((String.ofList [c]).toList ++ sfx) = true :=
   List.isPrefixOf_iff_prefix.mpr ⟨sfx, rfl⟩
 
@@ -342,7 +348,7 @@ theorem identScan_ok (fail : String) (h p : Char → Bool)
 /-- The head's canonical round trip: a gate-passing run's continuation
     always matches the head class (the gate's head conjunct, at the
     print ++ suffix shape the kit consumes). -/
-private theorem identAtomHead_ok (h p : Char → Bool) : ∀ (r : String) (sfx : List Char),
+theorem identAtomHead_ok (h p : Char → Bool) : ∀ (r : String) (sfx : List Char),
     identOk h p r = true →
     (HeadSpec.cls h).matches (r.toList ++ sfx) = true := by
   intro r sfx hpre
@@ -441,14 +447,14 @@ def identAtom (fail : String) (h p : Char → Bool)
 
 /-- The nat token's `toString` spec (the digit theory is core
     `Nat.ToString`'s). -/
-private theorem toString_decDigits (n : Nat) :
+theorem toString_decDigits (n : Nat) :
     (toString n).toList = Nat.toDigits 10 n := by
   rw [Nat.toString_eq_ofList_toDigits, String.toList_ofList]
 
 /-- The nat token's law, append form: a nat's decimal spelling scans
     back to the value exactly, leaving any non-digit suffix (the
     munch's boundary). -/
-private theorem scanNat_canonical (n : Nat) (sfx : List Char)
+theorem scanNat_canonical (n : Nat) (sfx : List Char)
     (hm : sfx.head?.all (fun c => !c.isDigit) = true) :
     scanNat ((toString n).toList ++ sfx) = .some (n, sfx) := by
   have hall : ∀ c ∈ Nat.toDigits 10 n, Char.isDigit c = true :=
@@ -470,7 +476,7 @@ private theorem scanNat_canonical (n : Nat) (sfx : List Char)
 
 /-- `print_scan`'s boundary twin: the takeWhile over the canonical
     spelling ++ suffix is the spelling. -/
-private theorem scanNat_canonical_tw (n : Nat) (sfx : List Char)
+theorem scanNat_canonical_tw (n : Nat) (sfx : List Char)
     (hm : sfx.head?.all (fun c => !c.isDigit) = true) :
     ((toString n).toList ++ sfx).takeWhile Char.isDigit = (toString n).toList := by
   have hall : ∀ c ∈ Nat.toDigits 10 n, Char.isDigit c = true :=
@@ -536,7 +542,7 @@ theorem natScan_ok {cur : Cursor} {n : Nat} {cur' : Cursor}
 
 /-- The head's canonical round trip: the decimal spelling is never
     empty and its head char is a digit (the munch's boundary face). -/
-private theorem natAtomHead_ok : ∀ (n : Nat) (sfx : List Char),
+theorem natAtomHead_ok : ∀ (n : Nat) (sfx : List Char),
     (HeadSpec.cls Char.isDigit).matches ((toString n).toList ++ sfx) = true := by
   intro n sfx
   show ((toString n).toList ++ sfx).head?.any Char.isDigit = true
@@ -619,7 +625,7 @@ theorem constStrScan_ok (s : String) (hs : s.toList ≠ []) {cur : Cursor} {u : 
 
 /-- The head's canonical round trip: the printed literal's continuation
     always matches the literal head. -/
-private theorem constStrHead_ok (s : String) (sfx : List Char) :
+theorem constStrHead_ok (s : String) (sfx : List Char) :
     (HeadSpec.lit s).matches (s.toList ++ sfx) = true :=
   List.isPrefixOf_iff_prefix.mpr ⟨sfx, rfl⟩
 
@@ -658,3 +664,5 @@ def constStrLex (s : String) (hs : s.toList ≠ []) : Lexeme Unit where
     | cons c cs => simp
 
 end TextKit
+
+end -- public section

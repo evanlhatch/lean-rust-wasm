@@ -57,6 +57,11 @@ completeness verdict) lands with its first concurrent consumer.
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
+
+module
+
+@[expose] public section
+
 namespace Machines
 
 /-! ## The machine -/
@@ -156,3 +161,5 @@ theorem run_reachable {m : Machine S I} : ∀ (start : S) {t : List I} {s : S},
 end Machine
 
 end Machines
+
+end -- public section

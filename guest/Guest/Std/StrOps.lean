@@ -41,8 +41,12 @@ This module stays core-only (LintKit.GuestGate alone) so the backend
 can import it without any domain-core closure.
 -/
 
-import LintKit.GuestGate
+module
 
+public import LintKit.GuestGate
+
+
+@[expose] public section
 namespace GuestStd
 
 /-- The guest stdlib intrinsics — the CLOSED set. -/

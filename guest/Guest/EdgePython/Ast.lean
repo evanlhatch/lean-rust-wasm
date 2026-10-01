@@ -67,7 +67,9 @@ The five questions (notes/v3/01-core.md):
   Guest lib's glob.
 -/
 
+
 import Kit.Diag
+
 
 namespace Guest.EdgePython.Py
 
@@ -98,7 +100,11 @@ inductive Ty where
   | int | bool
   | tup (ts : List Ty)
   | list (t : Ty)
-  deriving BEq, DecidableEq, Inhabited, Repr
+  -- the `DecidableEq` deriving is ABSENT on purpose: the core DecEq
+  -- handler derives no NESTED inductive (the `List Ty` recursion), no
+  -- consumer needs it (`Check`'s type rows ride `BEq`'s `==`), and an
+  -- unconsumed hand-rolled instance is surface ahead of its consumer.
+  deriving BEq, Inhabited, Repr
 
 inductive Expr where
   | int (n : Nat)
@@ -257,8 +263,8 @@ def evE (fns : List Fn) : Nat → List (String × Val) → Expr → Option Val
       let bv ← evE fns fuel env b
       let iv ← Val.asInt (← evE fns fuel env i)
       match bv, iv with
-      | .vtup es, .ofNat n => es.get? n
-      | .vlist es, .ofNat n => es.get? n
+      | .vtup es, .ofNat n => es[n]?
+      | .vlist es, .ofNat n => es[n]?
       | _, _ => none
   | fuel+1, env, .call f args => do
       let vs ← evArgs fns fuel env args
@@ -320,14 +326,19 @@ def evSs (fns : List Fn) : Nat → List Stmt → List (String × Val) →
       -- named boundary in `Fe`)
       match ← evE fns fuel env xsE with
       | .vlist es =>
-          let rec walk (env : List (String × Val)) : List Val →
+          -- THE FUEL-PER-ELEMENT DISCIPLINE: the walk rides the SAME
+          -- budget — ONE tick per element (the wave-30c `evWalk` face;
+          -- the body re-entry runs at the ticked fuel, so the mutual
+          -- block stays Nat-structural through the walk cycle).
+          let rec walk : Nat → List (String × Val) → List Val →
               Option PyFlow
-            | [] => evSs fns fuel ss env
-            | e :: rest => do
+            | 0, _, _ => none  -- the budget's element face
+            | fuel+1, env, [] => evSs fns fuel ss env
+            | fuel+1, env, e :: rest => do
                 match ← evSs fns fuel body (Env.set env x e) with
                 | .ret v => some (.ret v)
-                | .fall env' => walk env' rest
-          walk env es
+                | .fall env' => walk fuel env' rest
+          walk fuel env es
       | _ => none  -- the checker's list-typed contract
 end
 

@@ -21,6 +21,14 @@ One import point for the library. Submodules:
   pairs).
 -/
 
-import Analysis.Basic
-import Analysis.Intervals
-import Analysis.Checker
+
+module
+
+public import Analysis.Basic
+public import Analysis.Intervals
+public import Analysis.Checker
+
+@[expose] public section
+
+
+end -- public section

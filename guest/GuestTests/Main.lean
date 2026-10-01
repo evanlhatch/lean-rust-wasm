@@ -1109,7 +1109,164 @@ def extLowered : Except Guest.LowerError WasmCore.Module :=
 
 def toyExternLowered : Except Guest.LowerError WasmCore.Module :=
   Guest.lowerFunc { name := "toyExt", params := [("x", .u64)]
-                  , resultTy := .u64, value := .extern }
+                  , resultTy := .u64
+                  , value := .extern
+                      { params := [.u64], result := .u64, effect := .host
+                      , note := "the toy face's declared trust boundary: \
+                                 the host link step is the named follow-up" } }
+
+open Lean.Compiler.LCNF in
+/-- THE EXTERN CONTRACT's DECLARATION-DRIFT TOOTH (hand IR): the decl
+    carries a u32 param but the contract declares u64 — the faces and
+    the boundary's data disagree, the `externSigDrift` refusal fires
+    BEFORE anything is emitted. -/
+def toyExtDriftLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.lowerFunc { name := "toyExtDrift", params := [("x", .u32)]
+                  , resultTy := .u64
+                  , value := .extern
+                      { params := [.u64], result := .u64, effect := .host
+                      , note := "the contract's declared row vs the decl's" } }
+
+/-- THE EXTERN CONTRACT's CALL-SITE-DRIFT TOOTH (hand IR): the caller
+    passes a u32 row at a u64-declared boundary — the
+    `externCallDrift` refusal (the call site is type-checked against
+    the declared contract). -/
+def toyExtCallerDecl : Guest.IR.Decl :=
+  { name := "toyExtCaller", params := []
+  , resultTy := .u64
+  , value := .let_ { var := "x", ty := .u32, value := .litU32 4 }
+      (.let_ { var := "r", ty := .u64, value := .call "toyExt" #[.var "x"] }
+        (.ret "r")) }
+
+def toyExtCallDriftLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.lowerFuncs
+    [ { name := "toyExt", params := [("x", .u64)]
+      , resultTy := .u64
+      , value := .extern
+          { params := [.u64], result := .u64, effect := .host
+          , note := "the declared boundary" } }
+    , toyExtCallerDecl ]
+
+open Lean.Compiler.LCNF in
+/-- THE EXTERN CONTRACT's CALL-SITE MATCH (the control): the same
+    caller passing the RIGHT row (u64) lowers and validates — the
+    check is the row's, not the call's existence. -/
+def toyExtCallOkLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.lowerFuncs
+    [ { name := "toyExt", params := [("x", .u64)]
+      , resultTy := .u64
+      , value := .extern
+          { params := [.u64], result := .u64, effect := .host
+          , note := "the declared boundary" } }
+    , { name := "toyExtCallerOk", params := []
+      , resultTy := .u64
+      , value := .let_ { var := "x", ty := .u64, value := .litU64 4 }
+          (.let_ { var := "r", ty := .u64, value := .call "toyExt" #[.var "x"] }
+            (.ret "r")) } ]
+
+/-! ## The RC reuse fixtures (the memory discipline's pins) -/
+
+open Lean.Compiler.LCNF in
+/-- THE RC REUSE's BEHAVIOR-IDENTITY PAIR, program P1 (NO del): two
+    16-byte boxes; the second lands at the fresh bump (heapBase+16). -/
+def reuseNoDelDecl : Decl .impure :=
+  let v1 := hbFVar `v1
+  let b1 := hbFVar `b1
+  let v2 := hbFVar `v2
+  let b2 := hbFVar `b2
+  let w := hbFVar `w
+  { name := `GuestTests.reuseNoDel, levelParams := []
+  , type := hbU64, params := #[]
+  , value := .code (
+    hbLetU64 `v1 9 (
+    hbLetBox `b1 hbU64 `v1 (
+    hbLetU64 `v2 11 (
+    hbLetBox `b2 hbU64 `v2 (
+    hbLet `w hbU64 (.unbox b2) (
+    .return w))))))
+  , inlineAttr? := none }
+
+open Lean.Compiler.LCNF in
+/-- THE RC REUSE's PAIR, program P2 (the del between): the same two
+    boxes, the first DEL'd — the second box HANDS BACK the dead slot
+    (the shape match: both are 16-byte boxes). The reuse changes WHERE
+    b2 lands, never WHAT the program observes. -/
+def reuseDelDecl : Decl .impure :=
+  let v1 := hbFVar `v1
+  let b1 := hbFVar `b1
+  let v2 := hbFVar `v2
+  let b2 := hbFVar `b2
+  let w := hbFVar `w
+  { name := `GuestTests.reuseDel, levelParams := []
+  , type := hbU64, params := #[]
+  , value := .code (
+    hbLetU64 `v1 9 (
+    hbLetBox `b1 hbU64 `v1 (
+    .del b1 (
+    hbLetU64 `v2 11 (
+    hbLetBox `b2 hbU64 `v2 (
+    hbLet `w hbU64 (.unbox b2) (
+    .return w)))))))
+  , inlineAttr? := none }
+
+open Lean.Compiler.LCNF in
+/-- THE SHAPE-MATCH TOOTH: a 16-byte box del'd, then a 20-byte object
+    (the u64+u32 scalar ctor — 8 header + 8 + 4 packed, the packing
+    law's extent) allocated after — the shape MISMATCH keeps the fresh
+    bump path (the dead slot stays published for a later same-size
+    allocation). -/
+def reuseShapeDecl : Decl .impure :=
+  let v1 := hbFVar `v1
+  let b1 := hbFVar `b1
+  let a2 := hbFVar `a2
+  let b2 := hbFVar `b2
+  let obj := hbFVar `obj
+  { name := `GuestTests.reuseShape, levelParams := []
+  , type := hbObj, params := #[]
+  , value := .code (
+    hbLetU64 `v1 9 (
+    hbLetBox `b1 hbU64 `v1 (
+    .del b1 (
+    hbLetU64 `a2 7 (
+    hbLet `b2 hbU32 (.lit (.uint32 8)) (
+    hbLet `obj hbObj (.ctor scalarCtorInfo #[.fvar a2, .fvar b2]) (
+    .return obj)))))))
+  , inlineAttr? := none }
+
+open Lean.Compiler.LCNF in
+/-- THE HONEST-BOUNDARY TOOTH: the del of a shape-UNKNOWN var (a
+    copy's target — the allocation happened at ANOTHER variable's
+    birth) passes the rc=1 guard (the copy is a local move, no rc
+    change) and keeps the dead marking only — NO publish, NO reuse
+    (the next box lands fresh; the cache stays empty). -/
+def reuseUnknownDecl : Decl .impure :=
+  let v1 := hbFVar `v1
+  let b1 := hbFVar `b1
+  let c := hbFVar `c
+  let v2 := hbFVar `v2
+  let b2 := hbFVar `b2
+  let w := hbFVar `w
+  { name := `GuestTests.reuseUnknown, levelParams := []
+  , type := hbU64, params := #[]
+  , value := .code (
+    hbLetU64 `v1 9 (
+    hbLetBox `b1 hbU64 `v1 (
+    hbLet `c hbObj (.fvar b1 #[]) (
+    .del c (
+    hbLetU64 `v2 11 (
+    hbLetBox `b2 hbU64 `v2 (
+    hbLet `w hbU64 (.unbox b2) (
+    .return w))))))))
+  , inlineAttr? := none }
+
+def reuseNoDelLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.compile [reuseNoDelDecl]
+def reuseDelLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.compile [reuseDelDecl]
+def reuseShapeLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.compile [reuseShapeDecl]
+def reuseUnknownLowered : Except Guest.LowerError WasmCore.Module :=
+  Guest.compile [reuseUnknownDecl]
 
 /-! ## The hand-built TAG-DISPATCH teeth (the Correct.lean discipline) -/
 
@@ -2703,6 +2860,85 @@ def mutationSpecs : List TestingKit.Spec :=
       (h := by simp) 1 79
   ]
 
+/-! ## The RC reuse (the memory discipline's pins) -/
+
+def reuseSpecs : List TestingKit.Spec :=
+  [ Spec.ofList "the RC reuse: the del'd box's slot is HANDED BACK to
+      the next same-size allocation (the shape match), and the
+      behavior is IDENTICAL to the same program without the del (the
+      reuse is a memory discipline, invisible to the semantics)"
+      (fun _ => do
+        TestingKit.assert (pinValidates reuseDelLowered)
+          "the reuse module must validate"
+        -- the BEHAVIOR IDENTITY: both programs return 11 — the del
+        -- + reuse changed where the box landed, never what it holds
+        TestingKit.assertEq "reuse-behavior"
+          (resultOf (runOf reuseDelLowered 0 []))
+          (resultOf (runOf reuseNoDelLowered 0 []))
+        -- the address face: P2's bump did NOT advance past the first
+        -- box (the reuse handed the slot back); P1's did
+        TestingKit.assertEq "reuse-bump"
+          (memAtW 4 0 (runOf reuseDelLowered 0 [])) (some (Guest.heapBase + 16))
+        TestingKit.assertEq "reuse-bump-fresh"
+          (memAtW 4 0 (runOf reuseNoDelLowered 0 []))
+          (some (Guest.heapBase + 32))
+        -- the cache cleared on the reuse (the slot is spent)
+        TestingKit.assertEq "reuse-cache"
+          (memAtW 4 Guest.rcCacheSizeOff (runOf reuseDelLowered 0 [])) (some 0))
+      [("control: the reuse did NOT fire (the no-reuse address — caught)",
+         fun _ => TestingKit.assertEq "reuse-bump-wrong"
+           (memAtW 4 0 (runOf reuseDelLowered 0 [])) (some (Guest.heapBase + 32)))
+      , ("control: the reused box kept the DEAD payload (caught)",
+         fun _ => TestingKit.assertEq "reuse-dead-payload"
+           (resultOf (runOf reuseDelLowered 0 [])) (some 9))
+      ]
+      (h := by simp) 1 90
+  , Spec.ofList "the reuse's shape-match tooth: a 16-byte box del'd,
+      then a 20-byte object — the shape MISMATCH keeps the fresh bump
+      path (the dead slot stays published, the cache not cleared)"
+      (fun _ => do
+        TestingKit.assert (pinValidates reuseShapeLowered)
+          "the shape-match module must validate"
+        TestingKit.assertEq "shape-fresh"
+          (ptrOf (runOf reuseShapeLowered 0 []))
+          (some (Guest.heapBase + 16))
+        TestingKit.assertEq "shape-cache-kept"
+          (memAtW 4 Guest.rcCacheSizeOff (runOf reuseShapeLowered 0 []))
+          (some 16))
+      [("control: the mismatched shape reused the slot (caught)",
+         fun _ => TestingKit.assertEq "shape-reuse-wrong"
+           (ptrOf (runOf reuseShapeLowered 0 [])) (some Guest.heapBase))
+      , ("control: the mismatch cleared the cache (caught)",
+         fun _ => TestingKit.assertEq "shape-cache-cleared"
+           (memAtW 4 Guest.rcCacheSizeOff (runOf reuseShapeLowered 0 []))
+           (some 0))
+      ]
+      (h := by simp) 1 91
+  , Spec.ofList "the reuse's honest boundary: a shape-UNKNOWN del (a
+      copy's target) passes the rc=1 guard, keeps the dead marking
+      only — no publish (the cache stays empty), no reuse (the next
+      box lands fresh)"
+      (fun _ => do
+        TestingKit.assert (pinValidates reuseUnknownLowered)
+          "the unknown-shape module must validate"
+        TestingKit.assertEq "unknown-no-publish"
+          (memAtW 4 Guest.rcCacheSizeOff (runOf reuseUnknownLowered 0 []))
+          (some 0)
+        TestingKit.assertEq "unknown-no-reuse"
+          (memAtW 4 0 (runOf reuseUnknownLowered 0 []))
+          (some (Guest.heapBase + 32)))
+      [("control: the copy's del published the slot (caught)",
+         fun _ => TestingKit.assertEq "unknown-publish-wrong"
+           (memAtW 4 Guest.rcCacheSizeOff (runOf reuseUnknownLowered 0 []))
+           (some 16))
+      , ("control: the del blocked the second allocation (caught)",
+         fun _ => TestingKit.assertEq "unknown-bump-wrong"
+           (memAtW 4 0 (runOf reuseUnknownLowered 0 []))
+           (some (Guest.heapBase + 16)))
+      ]
+      (h := by simp) 1 92
+  ]
+
 /-! ## The extern face (the declared trust boundary's pins) -/
 
 def externSpecs : List TestingKit.Spec :=
@@ -2746,6 +2982,64 @@ def externSpecs : List TestingKit.Spec :=
            "the control demanded the module be rejected (caught)")
       ]
       (h := by simp) 1 81
+  , Spec.ofList "the extern contract's DECLARATION check: the decl's
+      faces must match the contract the ctor carries (a u32 param
+      against a u64-declared boundary refuses BEFORE anything is
+      emitted — an undeclared/skewed boundary never lands)"
+      (fun _ => do
+        match toyExtDriftLowered with
+        | .error e =>
+            TestingKit.assert ((Guest.LowerError.render e).contains "GC2024")
+              s!"the sig-drift Diag must carry its real code GC2024: \
+                 {Guest.LowerError.render e}"
+        | .ok _ =>
+            TestingKit.assert false
+              "the drifted contract did NOT refuse (the boundary is skewed)")
+      [("control: the matching contract refuses (caught)",
+         fun _ => TestingKit.assert (!pinValidates toyExternLowered)
+           "the control demanded the matching contract be rejected (caught)")
+      , ("control: the drifted contract LANDS (caught)",
+         fun _ => TestingKit.assert (pinValidates toyExtDriftLowered)
+           "the control demanded the drift be accepted (caught)")
+      ]
+      (h := by simp) 1 93
+  , Spec.ofList "the extern contract's CALL-SITE check: a call passing
+      a u32 row at a u64-declared boundary refuses (externCallDrift);
+      the right row lowers and validates (the check is the row's,
+      not the call's existence)"
+      (fun _ => do
+        match toyExtCallDriftLowered with
+        | .error e =>
+            TestingKit.assert ((Guest.LowerError.render e).contains "GC2025")
+              s!"the call-drift Diag must carry its real code GC2025: \
+                 {Guest.LowerError.render e}"
+        | .ok _ =>
+            TestingKit.assert false
+              "the drifted call did NOT refuse (the marshalling would skew)")
+      [("control: the well-rowed call refuses (caught)",
+         fun _ => TestingKit.assert (!pinValidates toyExtCallOkLowered)
+           "the control demanded the matched call be rejected (caught)")
+      , ("control: the drifted call LANDS (caught)",
+         fun _ => TestingKit.assert (pinValidates toyExtCallDriftLowered)
+           "the control demanded the drift be accepted (caught)")
+      ]
+      (h := by simp) 1 94
+  , Spec.ofList "the extern contract as DATA: the well-rowed call site
+      validates (the contract rode the ctor; the call lane consumed
+      it — the declared boundary with its effect row and trust note)"
+      (fun _ =>
+        TestingKit.assert (pinValidates toyExtCallOkLowered)
+          "the well-rowed extern call must validate")
+      [("control: the module was rejected (caught)",
+         fun _ => TestingKit.assert (!pinValidates toyExtCallOkLowered)
+           "the control demanded rejection (caught)")
+      , ("control: the module traps at LOWER time (wrong claim — the
+          boundary is runtime, caught)",
+         fun _ => TestingKit.assertEq "call-ok-lower"
+           (match toyExtCallOkLowered with | .error _ => true | .ok _ => false)
+           true)
+      ]
+      (h := by simp) 1 95
   ]
 
 /-! ## The driver -/
@@ -2777,6 +3071,7 @@ unsafe def main : IO UInt32 := do
         , ("the closure teeth", closureTeethSpecs pins)
         , ("the toy frontend", toySpecs)
         , ("the RC cascade + the del", rcSuiteSpecs)
+        , ("the RC reuse", reuseSpecs)
         , ("the in-place writes", mutationSpecs)
         , ("the extern face", externSpecs)
         , ("the translation-correctness slice", correctnessSpecs pins)

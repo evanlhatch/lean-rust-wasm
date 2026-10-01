@@ -31,16 +31,28 @@ them in their summary):
     impacted      [--print-only --paths=a,b] — the impact-aware dev loop (09 §6)
     decide-first-census [--write --accept-drift --package=<dir>]
     zero-citation-census [--write --accept-drift --package=<dir>]
+    evidence-redundancy-census [--write --accept-drift --package=<dir>]
     nolint-census [--write --accept-drift]  — the silenced-site census
     legacy-hash   [--write --accept-drift]  — the legacy-immutability gate (B4)
     feasibility   [--write --accept-drift]  — the spec-sanity gate row (B2)
     elab-watch    [--write --accept-drift]  — the elaboration-time regression watch
-    all                                     — every registered gate in one run
+    all           [--cold=<gate>...]        — every registered gate in one run
+                       (the WARM SERVER: ONE env load, the warm rows
+                       in-process, the child rows as children;
+                       --cold=<gate> runs the named row as a child —
+                       the release/debug parity path)
 
 Dispatch + the shared flags + the help are Kit.Cli's (an unknown
 subcommand/flag fails through the closed-world Diag — the did-you-mean
 teeth). Handlers are `unsafe` (the gates import module environments at
 runtime — the LintMain/Gates.Main pattern).
+
+The topology (the warm-server redesign): the env-consuming rows load
+the tree's env ONCE per process (`Gates.loadWarmEnv`) and run as pure
+Env → Verdict folds; the artifact rows never touch the env; only the
+genuinely-parallel compute (kernel-check, elab-watch) is child
+processes. `--cold=<gate>` falls back to the per-row child face (the
+child loads its own warm env) — release/debug parity.
 
 The five questions (notes/v3/01-core.md): none — the argv dispatch
 shell over Gates' registry. Gate row: none — the exe is how the rows
@@ -96,7 +108,9 @@ unsafe def runCoverage (args : List String) : IO UInt32 :=
     Gates.Coverage.run f.write f.acceptDrift (f.has "strict")
 
 unsafe def runKernelCheck (args : List String) : IO UInt32 :=
-  withFlags [] args fun _ => Gates.KernelCheck.run
+  withFlags ["nanoda"] args fun f =>
+    if f.has "nanoda" then Gates.Nanoda.run f.pkg
+    else Gates.KernelCheck.run
 
 unsafe def runOwnership (args : List String) : IO UInt32 :=
   withFlags [] args fun _ => Gates.Ownership.run
@@ -111,7 +125,7 @@ unsafe def runImpacted (args : List String) : IO UInt32 :=
         (v.splitOn ",").map (·.trimAscii.toString) |>.filter (· != ""))
 
 unsafe def runAll (args : List String) : IO UInt32 :=
-  withFlags [] args fun _ => Gates.runAll
+  withFlags ["cold"] args fun f => Gates.runAll (f.all "cold")
 
 unsafe def runElabWatch (args : List String) : IO UInt32 :=
   withFlags [] args fun f => Gates.ElabWatch.run f.write f.acceptDrift
@@ -122,34 +136,19 @@ unsafe def runLint (args : List String) : IO UInt32 :=
 unsafe def runDecideFirstCensus (args : List String) : IO UInt32 :=
   withFlags ["package"] args fun f =>
     Gates.Census.run Gates.Census.decideFirst
-      "Decide-first census — hand scripts over decidable closed finite spaces"
-      "The census linter (linter.guestlang.decideFirst, 04 §1): a theorem whose \
-        statement is decidable over a closed finite space yet whose proof term \
-        depends on non-computational lemmas. FIRST ADJUDICATED RUN (the \
-        enforcement wave): every finding is the heuristic's own false-positive \
-        class — theorems PROVED BY rfl whose elaborated term routes through \
-        non-computational casts (the proof-side approximation's blindness), and \
-        quantified-hypothesis statements the statement-side synthesizable- \
-        Decidable filter lets through (not actually closed spaces). The findings \
-        are DATA (the promotion, not a hard gate — 09 §8's rule: the census's \
-        limits are named in its own header, so it stays census-grade); a drift \
-        (a new finding, or one adjudicated away) is the deliberate re-baseline."
+      Gates.Census.decideFirstTitle Gates.Census.decideFirstDescr
       f.write f.acceptDrift f.pkg
 
 unsafe def runZeroCitationCensus (args : List String) : IO UInt32 :=
   withFlags ["package"] args fun f =>
     Gates.Census.run Gates.Census.zeroCitation
-      "Zero-citation census — the proof-level leftover rule"
-      "The census linter (linter.guestlang.zeroCitation): a theorem referenced \
-        nowhere outside its own module. FIRST ADJUDICATED RUN (the enforcement \
-        wave): the finding set is the LAW-LIBRARY class — the theorem layer ships \
-        as API (Kit.Iso/Rel/Obligation's laws, the lanes' consumed-in-module \
-        helpers), and mechanically it is INDISTINGUISHABLE from dead code (the \
-        census's named limit; the ~130 reasoned @[nolint] rows cover only the \
-        sites the earlier adjudication touched). So the census stays CENSUS-GRADE \
-        (09 §8's rule): the findings are DATA, never failures, and the DRIFT LINES \
-        are the review queue — every new uncited theorem shows up as a deliberate \
-        re-baseline diff naming it (fixed, consumed, or the reasoned opt-out)."
+      Gates.Census.zeroCitationTitle Gates.Census.zeroCitationDescr
+      f.write f.acceptDrift f.pkg
+
+unsafe def runEvidenceRedundancyCensus (args : List String) : IO UInt32 :=
+  withFlags ["package"] args fun f =>
+    Gates.Census.run Gates.Census.evidenceRedundancy
+      Gates.Census.evidenceRedundancyTitle Gates.Census.evidenceRedundancyDescr
       f.write f.acceptDrift f.pkg
 
 unsafe def runNolintCensus (args : List String) : IO UInt32 :=
@@ -226,7 +225,11 @@ deliberate re-baseline; --strict promotes registry-quiet ctors to failures)."
   , { name := "kernel-check"
       summary := "The lean4lean pure-kernel replay: every gated module's own \
 declarations re-checked by the independent Lean-4 kernel (pinned); builds the \
-lean4lean exe on demand."
+lean4lean exe on demand. --nanoda runs the SECOND lane instead (wave \
+cadence): lean4export@pin → nanoda@pin over the gated roots \
+(--package=<dir> shards), the permitted_axioms generated FROM \
+LintKit.AxiomAllowlist; the pinned tools' absence is the honest SKIP \
+(not a pass) — `just tools-nanoda` builds them."
       run := runKernelCheck }
   , { name := "ownership"
       summary := "The artifact-ownership gate (D15): every file under the \
@@ -255,6 +258,12 @@ notes/decide-first-census.md (--write/--accept-drift/--package=<dir>)."
 pattern): the linter's findings as DATA over every gated package, diffed against \
 notes/zero-citation-census.md (--write/--accept-drift/--package=<dir>)."
       run := runZeroCitationCensus }
+  , { name := "evidence-redundancy-census"
+      summary := "The evidence-redundancy census as a baselined report-gate (B6; D37's \
+teeth; the decide-first pattern): carried-law re-proofs + weaker-than-kernel \
+obligation rows, as DATA over every gated package, diffed against \
+notes/evidence-redundancy-census.md (--write/--accept-drift/--package=<dir>)."
+      run := runEvidenceRedundancyCensus }
   , { name := "nolint-census"
       summary := "The nolint census gate: every @[nolint] row's (linter, file) count \
 over the gated sources, baselined in notes/nolint-census.tsv \
@@ -278,7 +287,11 @@ root's own elaboration re-timed and compared against notes/elab-baseline.tsv —
 over 2× baseline REGRESSES (--write/--accept-drift)."
       run := runElabWatch }
   , { name := "all"
-      summary := "Every registered gate in one run (the gate registry's driver)."
+      summary := "Every registered gate in one run — the WARM SERVER: ONE env \
+load, the warm rows in-process as pure Env → Verdict folds, the artifact \
+rows env-free in-process, kernel-check/elab-watch as children; \
+--cold=<gate> (repeatable) runs a row as a child instead (the release/debug \
+parity path)."
       run := runAll } ]
 
 unsafe def main (args : List String) : IO UInt32 :=

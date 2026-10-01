@@ -41,7 +41,12 @@ The five questions (notes/v3/01-core.md):
 Core-only (imports Kit.Correspondence only — the cone rule).
 -/
 
-import Kit.Correspondence
+
+module
+
+public import Kit.Correspondence
+
+@[expose] public section
 
 namespace Kit.Varint
 
@@ -196,3 +201,5 @@ def varintCodec : Kit.Codec (List UInt8) Nat where
       exact ⟨x, rest, decVarNat?_encVarNat_eq bytes x rest hd⟩
 
 end Kit.Varint
+
+end -- public section

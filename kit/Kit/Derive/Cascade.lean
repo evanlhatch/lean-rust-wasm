@@ -71,9 +71,13 @@ Five questions (notes/v3/01-core.md):
   + the negative controls).
 -/
 
-import Lean
-import Kit.Diag
-import Kit.Derive.Fold
+module
+
+public meta import Lean
+public meta import Kit.Diag
+public meta import Kit.Derive.Fold
+
+public meta section
 
 namespace Kit.Derive.Cascade
 
@@ -510,3 +514,5 @@ def elabDeclareCascade : CommandElab
   | _ => Elab.throwUnsupportedSyntax
 
 end Kit.Derive.Cascade
+
+end -- public meta section

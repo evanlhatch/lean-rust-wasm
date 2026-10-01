@@ -115,15 +115,55 @@ def citationCensus (env : Environment) : CoreM (NameMap (Array Name)) := do
     citationCensusRef.set (some (key, m))
     return m
 
-/-- Is `decl` cited by any constant of a module OTHER than its own? -/
+/-! ## the census SCOPE (the warm-server discipline's equivalence gear) -/
+
+/-- The analyzed package's root modules, when the fold is a PER-PACKAGE
+one. The per-package shard discipline (one closure env per package)
+saw only that package's citers — dependencies never cite dependents,
+so a decl's visible citers were exactly its own package's modules.
+The warm fold runs every package against ONE shared environment, so
+the scope makes that visibility explicit instead of an artifact of
+closure: citers (and test-source pins) outside the scope's modules
+don't count. `none` = the whole-project face (the lintkit exe's
+explicit mode — one env, no scope).
+
+Equivalence (the byte-identical teeth): for decl `d` of package `P`,
+the shard env's citers = P's modules exactly (anything else importing
+`d`'s module would make `P` a dependency of a `P` dependency —
+cyclic, impossible); the scoped warm fold's citers = the modules
+under `P`'s roots = the same set. The test-source corpus restricts by
+the same prefix (a shard's corpus was the test modules in ITS closure
+— none for a library package, its own for a tests package). -/
+initialize censusScopeRef : IO.Ref (Option (Array Name)) ← IO.mkRef none
+
+def withCensusScope (roots : Array Name) (k : CoreM α) : CoreM α := do
+  let saved ← censusScopeRef.get
+  censusScopeRef.set (some roots)
+  try
+    let r ← k
+    censusScopeRef.set saved
+    pure r
+  catch e =>
+    censusScopeRef.set saved
+    throw e
+
+/-- In-scope? `scope = none` admits every module (the unscoped face). -/
+def inCensusScope? (scope : Option (Array Name)) (m : Name) : Bool :=
+  match scope with
+  | none => true
+  | some roots => roots.any (·.isPrefixOf m)
+
+/-- Is `decl` cited by any constant of a module OTHER than its own,
+within the active scope (none = whole project)? -/
 def citedOutsideModule? (env : Environment) (census : NameMap (Array Name))
-    (decl : Name) : Bool :=
+    (decl : Name) : CoreM Bool := do
   match modOfDecl env decl with
-  | none => false
+  | none => return false
   | some mod =>
-    ((census.find? decl).getD #[]).any fun c =>
+    let scope ← censusScopeRef.get
+    return ((census.find? decl).getD #[]).any fun c =>
       match modOfDecl env c with
-      | some cm => cm != mod
+      | some cm => cm != mod && inCensusScope? scope cm
       | none => false
 
 /-! ## the test-source corpus (the #print-axioms pins) -/
@@ -168,12 +208,15 @@ def testSourceCorpus (env : Environment) : CoreM (Array (Name × String)) := do
     testSourceCorpusRef.set (some (key, c))
     return c
 
-/-- Does any test module's source PIN `decl` — the `#print axioms <full
-name>` shape? (A pin spelled through an `open` — leaf name only — is
-missed; the census's false-positive review catches it.) -/
+-- Does any test module's source PIN `decl` — the `#print axioms <full
+-- name>` shape, within the active scope? (A pin spelled through an
+-- `open` — leaf name only — is missed; the census's false-positive
+-- review catches it.) -/
 def citedInTestSources? (env : Environment) (decl : Name) : CoreM Bool := do
   let corpus ← testSourceCorpus env
+  let scope ← censusScopeRef.get
   let needle := "#print axioms " ++ toString decl
-  return corpus.any fun (_, src) => src.contains needle
+  return corpus.any fun (m, src) =>
+    inCensusScope? scope m && src.contains needle
 
 end LintKit

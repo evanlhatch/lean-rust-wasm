@@ -45,8 +45,13 @@ Doctrine slots (notes/v3/01-core.md, the five questions):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Effects.Basic
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+module
+
+public import Effects.Basic
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+@[expose] public section
 
 namespace Effects
 
@@ -174,3 +179,6 @@ attribute [nolint linter.guestlang.zeroCitation "public API: the command's law, 
   Cmd.reads_depend Cmd.writes_depend Cmd.writes_preserve
 
 end Effects
+
+
+end -- public section

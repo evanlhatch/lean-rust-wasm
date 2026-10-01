@@ -32,7 +32,10 @@ use std::path::{Path, PathBuf};
 use wasmtime::Trap;
 
 use crate::artifact::bytes_hash;
-use crate::{HostError, engine::{export_i64, instantiate_core_module}};
+use crate::{
+    HostError,
+    engine::{export_i64, instantiate_core_module},
+};
 
 /// The manifest's path inside the duel directory.
 const MANIFEST: &str = "manifest.txt";
@@ -61,7 +64,8 @@ impl Expectation {
         if s == "refuse" {
             return Some(Expectation::Refuse);
         }
-        s.strip_prefix("run ").map(|r| Expectation::Run(r.to_string()))
+        s.strip_prefix("run ")
+            .map(|r| Expectation::Run(r.to_string()))
     }
 }
 
@@ -72,8 +76,14 @@ impl Expectation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowVerdict {
     Agree,
-    Diverge { loc: String, lhs: String, rhs: String },
-    Refused { why: String },
+    Diverge {
+        loc: String,
+        lhs: String,
+        rhs: String,
+    },
+    Refused {
+        why: String,
+    },
 }
 
 impl RowVerdict {
@@ -204,7 +214,9 @@ impl DuelReport {
 /// `<path>\t<expectation>` row per vector. The structural walk is the
 /// SHARED parser's (the manifest module — every duel lane consumes it);
 /// the expectation vocabulary is THIS lane's.
-pub(crate) fn parse_manifest(text: &str) -> Result<(String, Vec<(String, Expectation)>), HostError> {
+pub(crate) fn parse_manifest(
+    text: &str,
+) -> Result<(String, Vec<(String, Expectation)>), HostError> {
     let parsed = mandate_delta::parse_duel_manifest(text, Expectation::parse)
         .map_err(|e| HostError::DuelManifest(e.reason))?;
     Ok((
@@ -251,22 +263,24 @@ pub(crate) fn observe(wasm: &[u8]) -> Result<Result<i64, Trap>, HostError> {
 /// refusal is the negative control passing; an unexpected refusal or
 /// a value/trap mismatch is the DIVERGENCE WITNESS (the row + both
 /// values), never a bare `false`.
-fn run_row(
-    root: &Path,
-    path: &str,
-    expect: &Expectation,
-) -> Result<RowVerdict, HostError> {
+fn run_row(root: &Path, path: &str, expect: &Expectation) -> Result<RowVerdict, HostError> {
     // The vector bytes + their own sidecar hash tie (the binary lane's
     // skew discipline, per vector — a tampered vector refuses BEFORE
     // the engine sees a byte).
     let vp = resolve_vector(root, path)?;
-    let wasm = std::fs::read(&vp)
-        .map_err(|source| HostError::Io { what: "duel vector", source })?;
-    let sidecar = std::fs::read_to_string(PathBuf::from(format!("{}.hdr", vp.display())))
-        .map_err(|source| HostError::Io { what: "duel vector sidecar", source })?;
-    let declared = crate::artifact::sidecar_hash(&sidecar).ok_or(
-        HostError::SidecarMalformed("the duel vector's sidecar names no content hash"),
+    let wasm = std::fs::read(&vp).map_err(|source| HostError::Io {
+        what: "duel vector",
+        source,
+    })?;
+    let sidecar = std::fs::read_to_string(PathBuf::from(format!("{}.hdr", vp.display()))).map_err(
+        |source| HostError::Io {
+            what: "duel vector sidecar",
+            source,
+        },
     )?;
+    let declared = crate::artifact::sidecar_hash(&sidecar).ok_or(HostError::SidecarMalformed(
+        "the duel vector's sidecar names no content hash",
+    ))?;
     let computed = bytes_hash(&wasm);
     if computed != declared {
         return Ok(RowVerdict::Refused {
@@ -355,15 +369,27 @@ pub fn run_duel(gen_dir: &Path) -> Result<DuelReport, HostError> {
     let root = gen_dir
         .parent()
         .ok_or_else(|| HostError::Incomplete("duel: the gen dir has no parent"))?;
-    let manifest = std::fs::read_to_string(gen_dir.join("wasm-duel").join(MANIFEST))
-        .map_err(|source| HostError::Io { what: "duel manifest", source })?;
+    let manifest =
+        std::fs::read_to_string(gen_dir.join("wasm-duel").join(MANIFEST)).map_err(|source| {
+            HostError::Io {
+                what: "duel manifest",
+                source,
+            }
+        })?;
     let (generator, rows) = parse_manifest(&manifest)?;
     let mut out = Vec::new();
     for (path, expect) in rows {
         let verdict = run_row(root, &path, &expect)?;
-        out.push(DuelRow { path, expectation: expect, verdict });
+        out.push(DuelRow {
+            path,
+            expectation: expect,
+            verdict,
+        });
     }
-    Ok(DuelReport { generator, rows: out })
+    Ok(DuelReport {
+        generator,
+        rows: out,
+    })
 }
 
 #[cfg(test)]
@@ -383,9 +409,15 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("gen/wasm-duel/slice.wasm".to_string(), Expectation::Run("i64:42".to_string())),
+                (
+                    "gen/wasm-duel/slice.wasm".to_string(),
+                    Expectation::Run("i64:42".to_string())
+                ),
                 ("gen/wasm-duel/trap.wasm".to_string(), Expectation::Trap),
-                ("gen/wasm-duel/invalid.wasm".to_string(), Expectation::Refuse),
+                (
+                    "gen/wasm-duel/invalid.wasm".to_string(),
+                    Expectation::Refuse
+                ),
             ]
         );
     }
@@ -398,10 +430,8 @@ mod tests {
         assert!(matches!(e, HostError::DuelManifest(_)), "{e:?}");
         let e = parse_manifest("# GENERATED x\n# y\nrow\tg\n").expect_err("no generator row");
         assert!(matches!(e, HostError::DuelManifest(_)), "{e:?}");
-        let e = parse_manifest(
-            "# GENERATED x\n# y\ngenerator\tg\np.wasm\texplode\n",
-        )
-        .expect_err("unknown expectation");
+        let e = parse_manifest("# GENERATED x\n# y\ngenerator\tg\np.wasm\texplode\n")
+            .expect_err("unknown expectation");
         assert!(matches!(e, HostError::DuelManifest(_)), "{e:?}");
     }
 
@@ -432,12 +462,17 @@ mod tests {
                 lhs: "run i64:1".to_string(),
                 rhs: "i64:2".to_string(),
             },
-            RowVerdict::Refused { why: "w".to_string() },
+            RowVerdict::Refused {
+                why: "w".to_string(),
+            },
         ])
         .verdict()
         {
             RowVerdict::Diverge { loc, lhs, rhs } => {
-                assert_eq!((loc.as_str(), lhs.as_str(), rhs.as_str()), ("p1", "run i64:1", "i64:2"));
+                assert_eq!(
+                    (loc.as_str(), lhs.as_str(), rhs.as_str()),
+                    ("p1", "run i64:1", "i64:2")
+                );
             }
             other => panic!("expected the first diverge, got {other:?}"),
         }

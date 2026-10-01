@@ -19,18 +19,38 @@ names `--write --accept-drift`. Otherwise the committed file is diffed
 and the gate's drift/absent line printed. Returns the exit code: 1 on
 drift/absent, else 0 after the gate's clean line.
 
-`Gates.pkgPool` + the RSS admission discipline: the shard pools run
-children at bounded parallelism, and the bound is MEASURED, not guessed —
-`rssAdmits` projects the pool's peak RSS (per-lane cost × in-flight +
-margin) against a budget derived from the box's own MemAvailable at run
-time; a pool over budget QUEUES its tasks (never drops, never OOMs).
-The measured per-lane costs live with their consumers (Common's shard
-constant, KernelCheck's leaf constant, Gates' per-gate footprint table).
+`Gates.poolEngine` + the RSS admission discipline: the kernel-check
+leaf pool runs children at bounded parallelism, and the bound is
+MEASURED, not guessed — `rssAdmits` projects the pool's peak RSS
+(per-lane cost × in-flight + margin) against a budget derived from the
+box's own MemAvailable at run time; a pool over budget QUEUES its
+tasks (never drops, never OOMs). The pool's ONE remaining consumer is
+the genuinely-parallel compute (the kernel-check replays): the
+env-consuming rows are the WARM SERVER's in-process folds now
+(`Gates.loadWarmEnv` below — one environment per process, never a
+per-shard child fleet), and the per-gate child footprint table died
+with its last consumer (the old `runAll` admission).
+
+`Gates.loadWarmEnv`: the warm-server discipline's ONE load — every
+LIBRARY package's roots imported into ONE environment, once per
+process. The env-consuming gate rows fold their library packages
+against it as pure Env → Verdict folds; the TESTS-LIB packages
+CANNOT ride it (the verified wall: each tests-lib's root modules
+define a root-namespace `main` — two `main` constants cannot coexist
+in one `importModules`, empirically confirmed) — their shards stay
+CHILD PROCESSES (`testLibPool`, the RSS discipline's remaining
+tenant, one child per tests-lib per row). The library warm load is
+the docs-check OOM's root, removed: one env, loaded once, retained
+once — libgc has nothing to misplace. FUTURE OPTION (named, not
+taken): namespacing the tests' `main`s (`<Lib>Tests.main` + the
+lakefiles' entry overrides) would let the tests-libs ride the warm
+env too — the cost is every test exe's entry point plus ~20 lanes'
+files in one commit; the shard fleet is the honest shape until
+someone pays it.
 
 Deliberate exclusion: the legacy `selectPackages` shard filter — the
-fresh tree's gates have no `--package` sharding yet (one environment per
-gate run; the shard/child machinery arrives with the first gated package
-heavy enough to need it — the legacy lesson: peak RSS).
+fresh tree's `--package=<dir>` flag runs ONE package's shard body
+in-process (the debug face); the unflagged face is the warm fold.
 
 The five questions (notes/v3/01-core.md):
 - root: none — the baseline-tail combinator (write-or-diff + the loud
@@ -45,8 +65,123 @@ baseline discipline is its first consumer).
 import Lean
 import Kit.Emit
 import Gates.Packages
+import SchemaCore.Config
+import TextKit.ConfigFormat
 
 namespace Gates
+
+open SchemaCore
+
+/-! ## THE DOGFOOD (C4/N8): the tree's own knobs as the FIRST config schema
+
+The gates' concurrency/budget knobs are a CONFIG: the schema record
+below (the SchemaCore.Config discipline), the config FILE as the base
+layer (typed + validated at load — the mis-typed value refuses with
+the curated CF Diag), the env vars as the OVERRIDE source with the
+envNat semantics preserved byte-for-byte (absent/unparsable/zero →
+the default — the legacy face never changed), the record's values as
+the layer between. `envNat` stays for the env-only knobs (ElabWatch's
+floor, the pool's own count) — the dogfood's six ride the face.
+
+-/
+
+/-- The gates' config schema record (the knobs' one schema; the
+    fields' names are the env spellings' lower-camel roots). -/
+def gatesItem : SchemaCore.Item :=
+  { name := "Gates.Knobs"
+    fields :=
+      [ { name := "all_jobs", ty := .u64 }
+      , { name := "kernel_jobs", ty := .u64 }
+      , { name := "pool_jobs", ty := .u64 }
+      , { name := "rss_budget_mb", ty := .u64 }
+      , { name := "rss_margin_mb", ty := .u64 }
+      , { name := "kernel_budget_secs", ty := .u64 } ] }
+
+/-- The knobs' check rows: every CONCURRENCY knob is positive (the RSS
+    faces are free — `0` means "derive from MemAvailable", the
+    legacy semantics). -/
+def gatesChecks : List (Pred gatesItem.fields) :=
+  [ Pred.u64GtLit "all_jobs" 0
+  , Pred.u64GtLit "kernel_jobs" 0
+  , Pred.u64GtLit "pool_jobs" 0
+  , Pred.u64GtLit "kernel_budget_secs" 0 ]
+
+/-- The knobs' config schema (the record + its validation). -/
+def gatesSchema : SchemaCore.ConfigSchema :=
+  { item := gatesItem, checks := gatesChecks }
+
+/-- The env var's spelling for a knob (the adapter's ONE mapping). -/
+def knobEnvName (name : String) : String := "GATES_" ++ name.toUpper
+
+/-- The typed record's knob read (the file layer's value; `0` = unset
+    → the default — the envNat fallback, at the record's face). -/
+def typedNat (kr : RowVals gatesItem.fields) (name : String) (dflt : Nat) : Nat :=
+  match readNat gatesItem.fields kr name with
+  | some n => if n == 0 then dflt else n
+  | none => dflt
+
+/-- THE KNOB READ (the pure core): the file layer's value `fileV`
+    beneath the env override — the envNat semantics preserved
+    byte-for-byte (absent/unparsable/zero env → the default; the file
+    layer speaks only when the env layer is ABSENT). -/
+def knobOf (fileV : Nat) (env : Option String) (dflt : Nat) : Nat :=
+  match env with
+  | some v =>
+      match v.trimAscii.toString.toNat? with
+      | some n => if n == 0 then dflt else n
+      | none => dflt
+  | none => if fileV == 0 then dflt else fileV
+
+/-- The knobs' load, PURE core: the config text parsed through the
+    file grammar (TextKit.ConfigFormat), lowered against the schema
+    (the curated CF refusals), the file layer validated by the check
+    rows RESTRICTED to the file's own keys (an absent knob carries no
+    constraint — the default row is not a violation). -/
+def knobsOfText (text : String) :
+    Except Kit.Diag (RowVals gatesItem.fields) :=
+  match TextKit.ConfigFormat.fileGrammar.run text with
+  | .error _ =>
+      .error (configDiag SchemaCore.eCF0002
+        "the config file does not parse (the format is `key=value` rows)")
+  | .ok pairs =>
+      match lowerPairs gatesItem.fields pairs with
+      | .error d => .error d
+      | .ok clauses =>
+          match initialRow gatesItem.fields with
+          | none => .error (configDiag SchemaCore.eCF0002 "no default row")
+          | some base =>
+              let rFile := applySources base
+                [{ src := ConfigSource.file, overrides := clauses }]
+              let keys := pairs.map (·.1)
+              let fileChecks : List (Pred gatesItem.fields) :=
+                gatesChecks.filter fun p => p.reads.any (· ∈ keys)
+              if fileChecks.all (fun p => p.check rFile) then .ok rFile
+              else .error (configDiag SchemaCore.eCF0003
+                "a knob's value violates the declared checks")
+
+/-- The knobs' config path (`GATES_CONFIG` overrides the default; the
+    exe runs from the repo root — the registry's path precedent). -/
+def gatesConfigPath : IO System.FilePath := do
+  match ← IO.getEnv "GATES_CONFIG" with
+  | some p => pure p
+  | none => pure "gates/gates.cfg"
+
+/-- The knobs' load (the IO face: the file's text — an ABSENT file is
+    NO base layer, the behavior-identical degenerate case). -/
+def loadKnobs : IO (Except Kit.Diag (RowVals gatesItem.fields)) := do
+  let path ← gatesConfigPath
+  let text ← match (← IO.FS.readFile path |>.toBaseIO) with
+    | .ok t => pure t
+    | .error _ => pure ""
+  pure (knobsOfText text)
+
+/-- The knob read, IO face (the dogfood's ONE entry): the loaded
+    record beneath the env var. -/
+def knobNat (kr : RowVals gatesItem.fields) (name : String) (dflt : Nat) :
+    IO Nat := do
+  match ← IO.getEnv (knobEnvName name) with
+  | some v => pure (knobOf 0 (some v) dflt)
+  | none => pure (typedNat kr name dflt)
 
 /-! ## The gates' finding envelope (B1 — the one-envelope discipline, 05 §4)
 
@@ -132,13 +267,14 @@ def memAvailableMb : IO Nat := do
     fat headroom + big lanes double-margin into false exclusivity.)
     (Measured base, wave-30: 29GB box, ~26GB available fresh →
     ~23.4GB budget.) -/
-def rssBudgetMb : IO Nat := do
-  let v ← envNat "GATES_RSS_BUDGET_MB" 0
+def rssBudgetMb (kr : RowVals gatesItem.fields) : IO Nat := do
+  let v ← knobNat kr "rss_budget_mb" 0
   if v == 0 then (· * 9 / 10) <$> memAvailableMb else pure v
 
 /-- The admission margin (MB): GATES_RSS_MARGIN_MB, default 1024 —
     the slack for a pool's own driver process + measurement error. -/
-def rssMarginMb : IO Nat := envNat "GATES_RSS_MARGIN_MB" 1024
+def rssMarginMb (kr : RowVals gatesItem.fields) : IO Nat :=
+  knobNat kr "rss_margin_mb" 1024
 
 /-- The admission predicate: the PROJECTED peak — the in-flight lanes'
     worst concurrent sum + the margin — must stay under the budget.
@@ -152,21 +288,83 @@ def rssMarginMb : IO Nat := envNat "GATES_RSS_MARGIN_MB" 1024
 def rssAdmits (budgetMb marginMb projected : Nat) : Bool :=
   projected + marginMb ≤ budgetMb
 
-/-- The MEASURED per-shard RSS cost of the env-replay shard children
-    (the pkgPool lanes): peak RSS over every gated package's
-    `--package=<dir>` shard, wave-30 (Kit 1.63GB, WasmCore 1.64GB,
-    Guest 1.65GB, SchemaCore 1.66GB, Machines 1.62GB, ZSet 0.52GB —
-    rounded up to 2GB). The env-load is the cost: a shard replays the
-    full dependency closure. -/
-def shardCostMb : Nat := 2048
+/-! ## The warm env (the warm-server discipline's ONE load) -/
 
-/-! ## The bounded package pool (the shard-replay speedup) -/
+/-- THE PARTITION (the adapted warm-server shape's data): the gated
+    rows split by the tests' `main` collision — a row whose dir ends
+    `TestsLib` carries root modules defining a root-namespace `main`
+    (the test exes' entry), and two `main` constants cannot coexist in
+    one `importModules` (empirically confirmed). Libraries ride the
+    warm env; tests-libs keep the child shards. -/
+def pkgIsTestLib (pkg : PkgSpec) : Bool := pkg.dir.endsWith "TestsLib"
 
-/-- The pooled child's shape: stdout piped (the shard's block), the
-    human faces inherited (they stream live, interleaved). -/
-abbrev PkgChild :=
-  IO.Process.Child { stdin := .inherit, stdout := .piped, stderr := .inherit :
-    IO.Process.StdioConfig }
+/-- The LIBRARY rows: the warm env's packages (verified: the full set
+    imports clean in one process). -/
+def libPackages : Array PkgSpec :=
+  gatedPackages.filter (fun p => !pkgIsTestLib p)
+
+/-- The TESTS-LIB rows: the child shards' packages (the collision's
+    honest remainder). -/
+def testLibPackages : Array PkgSpec :=
+  gatedPackages.filter pkgIsTestLib
+
+/-- THE WARM ENV: every LIBRARY package's roots imported into ONE
+    environment, ONCE per process (the roots deduped — a root shared by
+    two rows imports once). The env-consuming gate rows fold their
+    LIBRARY packages against it as pure Env → Verdict folds. The env
+    is PINNED at load: a mid-run edit to the tree's sources or oleans
+    is invisible until the next run — the warm face's honest staleness
+    note; the gates read the committed-then-built state, and
+    `lake build` before the battery is the caller's discipline
+    (`just gates` rides `lake exe`, which builds the exe, never the
+    gated oleans).
+
+    Verdict equivalence to the shard discipline (the byte-identical
+    teeth): every per-package analysis scopes its decls by module
+    prefix (`LintKit.packageDecls`) and its env-wide data by the same
+    scope (the citation census's `withCensusScope`), so the fold's
+    findings over the warm env are exactly the shards' findings over
+    their closure envs — a package's shard env contained that package
+    + dependencies, and dependencies never cite dependents. -/
+unsafe def loadWarmEnv : IO (Except String Lean.Environment) := do
+  Lean.initSearchPath (← Lean.findSysroot)
+  let base ← Lean.searchPathRef.get
+  Lean.searchPathRef.set (".lake/build/lib/lean" :: base)
+  let mut roots : Array Lean.Name := #[]
+  let mut seen : Lean.NameSet := {}
+  for pkg in libPackages do
+    for r in pkg.roots do
+      unless seen.contains r do
+        seen := seen.insert r
+        roots := roots.push r
+  try
+    Lean.enableInitializersExecution
+    -- `importAll := true`: the gates' whole job is the tree's
+    -- INTERNALS — the module system's privacy (the 80/20 conversion)
+    -- hides non-public decls from a plain import; the gates are the
+    -- same package, so the private scope is theirs by right (the
+    -- hidden-declaration blind spot was measured: GatesTestsLib read
+    -- as 0 decls under the plain import).
+    let env ← Lean.importModules (roots.map ({ module := ·, importAll := true })) {}
+      (trustLevel := 1024) (loadExts := true)
+    return .ok env
+  catch e =>
+    return .error (toString e)
+
+/-- The warm load's loud refusal (the ONE shape the env rows share): a
+    failed warm load exits 1 with the `just build` hint — an unloadable
+    tree verifies nothing (docs-check's honest-partiality rule, at the
+    warm face). -/
+unsafe def withWarmEnv (gate : String) (k : Lean.Environment → IO UInt32) :
+    IO UInt32 := do
+  match ← loadWarmEnv with
+  | .error e => do
+    IO.eprintln <| toString (GateDiag eGT0011
+      s!"{gate}: WARM LOAD FAILED — {e} (run `just build` first)")
+    return 1
+  | .ok env => k env
+
+/-! ## The bounded compute pool (the kernel-check replays' spine) -/
 
 /-- The bounded pool's ENGINE, generalized over the task, the live
     child's state, and the harvested result (pkgPool's loop and
@@ -207,51 +405,45 @@ partial def poolEngine {T S R : Type} [Inhabited T] {cfg : IO.Process.StdioConfi
     live := still
   return results
 
-/-- The bounded package pool: each package's child process (the shard
-dispatch — the per-package env load is the memory discipline, KEPT)
-runs at `jobs`-way concurrency (GATES_POOL_JOBS, default 3 —
-the retune lesson: 8 lanes made a gate's worst-case footprint
-16GB-class and the heavy gates could not co-run; 3 lanes × 2GB =
-6.2GB per gate lets BOTH shard pools + the kernel leaf pool share
-the budget, the full battery overlapped)
-AND under the RSS admission predicate — a spawn
-happens only while the projected peak (shardCostMb × (live + 1) +
-the margin) stays under `budgetMb`; over budget the shards QUEUE
-(never dropped, never OOM). `mkCmd` is the child executable (the
-teeth spawn `sleep` — a synthetic over-budget case must queue, not
-fail). The (exit, stdout-block) pairs return in the INPUT order —
-the deterministic report's order — whatever the completion order.
-`partial` (the written reason, the totality rule 09 §1): the loop is
-a GENUINELY UNBOUNDED wait — the RSS budget bounds ADMISSION, not
-completion; there is NO per-child wall-clock budget (a hung shard
-child hangs the pool: queueing, never dropping, never killing), so
-no honest fuel exists. The allowance row (LintKit.partialAllowance)
-names the ENGINE — the adapter is a total fold over its results (one
-`partial def` per file; the ratchet only tightens). The engine is
-`poolEngine`'s — KernelCheck's budgeted leaf pool rides the same
-spine. -/
-def pkgPool (mkCmd : PkgSpec → String) (mkArgs : PkgSpec → Array String)
-    (pkgs : Array PkgSpec) (jobs perLaneMb budgetMb marginMb : Nat) :
-    IO (Array (UInt32 × String)) := do
-  let outs ← poolEngine (T := PkgSpec) (S := Unit) (R := UInt32 × String)
-    pkgs
+/-! ## The tests-lib shard fleet (the warm face's second leg) -/
+
+/-- THE TESTS-LIB LEG (the two-face discipline's second face — the
+    redesign's adapted shape for the root-`main` collision): ONE child
+    process per tests-lib row — `lake exe gates <gate> --package=<dir>`
+    (the per-package in-process face, run as a CHILD: the collision bars
+    the tests-libs from the warm env, and seventeen closure envs
+    retained in the driver's process is the docs-check OOM's shape —
+    the per-package env load is the honest cost, paid in a process that
+    DIES). The fleet rides `poolEngine`'s RSS admission (per-lane
+    2048MB — the env-replay shard's measured ≤1.7GB peak rounded up,
+    the justfile's table), the knobs' `pool_jobs` count cap. Stdout is
+    PIPED (the report rows' blocks are the machine face; the verdict
+    rows' findings are re-printed by the caller — batched per package,
+    the bytes unchanged); stderr inherits (the human face streams
+    live). Returns (task index, exit, stdout) in COMPLETION order —
+    the callers own their report order (the baselines' section order
+    is `gatedPackages`'s). A config-file refusal degrades to the
+    env-only knobs (the fleet's bounds are a convenience, never a
+    verdict input). -/
+unsafe def testLibPool (gate : String) : IO (Array (Nat × UInt32 × String)) := do
+  let (jobs, budgetMb, marginMb) ← match ← loadKnobs with
+    | .ok kr => pure (← knobNat kr "pool_jobs" 3, ← rssBudgetMb kr,
+        ← rssMarginMb kr)
+    | .error _ => pure (← envNat "GATES_POOL_JOBS" 3,
+        (← memAvailableMb) * 9 / 10, 1024)
+  let results ← poolEngine (T := PkgSpec) (S := Unit) (R := UInt32 × String)
+    testLibPackages
     (fun pkg => do
-      let child : PkgChild ← IO.Process.spawn
-        { cmd := mkCmd pkg, args := mkArgs pkg
+      let child ← IO.Process.spawn
+        { cmd := "lake", args := #["exe", "gates", gate, s!"--package={pkg.dir}"]
         , stdin := .inherit, stdout := .piped, stderr := .inherit }
-      pure (child, ()))
+      return (child, ()))
     (fun _ child _ => do
       match ← child.tryWait with
-      | some code => return .inr (code, ← child.stdout.readToEnd)
-      | none => return .inl ())
-    jobs perLaneMb budgetMb marginMb (pure ())
-  -- the INPUT order (the deterministic report's order — whatever the
-  -- completion order the engine harvested in)
-  let mut results : Array (UInt32 × String) :=
-    Array.replicate pkgs.size (0, "")
-  for (i, r) in outs do
-    results := results.set! i r
-  return results
+      | none => return .inl ()
+      | some code => return .inr (code, ← child.stdout.readToEnd))
+    jobs 2048 budgetMb marginMb (pure ())
+  return results.map fun (i, (code, out)) => (i, code, out)
 
 /-! ## The artifact-walk combinator (the computed artifact gates' face) -/
 
@@ -316,14 +508,15 @@ unsafe def analyzePkg (label : String) (getRoots : PkgSpec → Array Name)
     let (res, _) ← (analyze (getRoots pkg)).toIO ctx { env := env }
     return .inr res
 
-/-- The sharded gate dispatch (Axioms/NativePolicy's twin): with
-`--package=<dir>`, ONE package's shard body (the child's own face);
-without, one child process per gated package at the pooled
-concurrency + the RSS admission (the same memory discipline as
-`pkgPool`), the (exit, stdout) pairs handed to the caller's fold. -/
-unsafe def shardDispatch (gate : String) (package : Option String)
-    (shard : PkgSpec → IO UInt32) (fold : Array (UInt32 × String) → IO UInt32) :
-    IO UInt32 := do
+/-- The gate rows' dispatch spine (the warm-server topology's ONE
+copy): `--package=<dir>` runs ONE package's shard face in-process (the
+debug face — one env, no fleet); without the flag, the WARM face —
+the tree's environment loaded once (`withWarmEnv`), the fold over
+every gated package. The old `shardDispatch`'s pooled child fleet is
+gone; the two faces are verdict-equivalent by the scoping discipline
+(`loadWarmEnv`'s header). -/
+unsafe def gateDispatch (gate : String) (package : Option String)
+    (shard : PkgSpec → IO UInt32) (warm : IO UInt32) : IO UInt32 := do
   match package with
   | some dir =>
       match gatedPackages.toList.find? fun p => p.dir == dir with
@@ -331,14 +524,7 @@ unsafe def shardDispatch (gate : String) (package : Option String)
           IO.eprintln s!"{gate}: --package={dir} names no Gates.Packages row"
           return 1
       | some pkg => shard pkg
-  | none =>
-      let jobs ← envNat "GATES_POOL_JOBS" 3
-      let budgetMb ← rssBudgetMb
-      let marginMb ← rssMarginMb
-      let outs ← pkgPool (fun _ => "lake")
-        (fun pkg => #["exe", "gates", gate, s!"--package={pkg.dir}"])
-        gatedPackages jobs shardCostMb budgetMb marginMb
-      fold outs
+  | none => warm
 
 /-- The single-package env-load prelude: init the search path from the
     sysroot, `loadPkgEnv`, and on failure print the gate-named LOAD

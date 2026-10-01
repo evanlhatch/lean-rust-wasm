@@ -35,10 +35,13 @@ The five questions (notes/v3/01-core.md):
   per-library axiom sweep covers it); ContractsTests.Axioms pins the
   axiom cones.
 -/
+module
 
-import Contracts.Wp
-import Kit.Obligation
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+public import Contracts.Wp
+public import Kit.Obligation
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 namespace Contracts
 
@@ -178,3 +181,5 @@ attribute [nolint linter.guestlang.zeroCitation "public API: the pairing's claim
   Satisfied.proof
 
 end Contracts
+
+end -- public section

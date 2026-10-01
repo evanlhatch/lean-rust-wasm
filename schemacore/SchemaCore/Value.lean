@@ -50,7 +50,11 @@ row = the axiom report + SchemaTests' pins/controls.
 Core-only (imports SchemaCore.Ty only — the cone rule).
 -/
 
-import SchemaCore.Ty
+module
+
+public import SchemaCore.Ty
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -277,3 +281,5 @@ end
 instance {t : Ty} : ToString (Value t) := ⟨Value.render t⟩
 
 end SchemaCore
+
+end -- public section

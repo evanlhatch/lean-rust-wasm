@@ -13,6 +13,7 @@ re-baseline. Findings are DATA here (the promotion, not a hard gate);
 each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
 
 ## Kit
+  Kit.ListExtras.foldl_append_comm
   Kit.Expr.chain
   Kit.Rel.comp_reflLeft
   Kit.Varint.encVarNatGo_mono
@@ -23,9 +24,11 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.Ledger.forward_growthInvalidates
   Kit.Proto.CleanBytes.nil
   Kit.Expr.preserves
+  Kit.Derive.Evidence.mechanicalControls_carried
   Kit.Codec.toRel_trans
   Kit.DataRegistry.all_insert
   Kit.optionFoldl_agree
+  Kit.Derive.Evidence.emissions_obligation_iff
   Kit.Rel.comp_reflRight
   Kit.DataRegistry.nameOf_injective
   Kit.Obligation.decideDischarge_sound
@@ -40,18 +43,23 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.DisjointCommute.disjoint_commutes
   Kit.Ledger.valueOk_ledger
   Kit.optionFoldl_append
+  Kit.Derive.Evidence.emissions_carried
   Kit.Proto.decFieldStr?_encLenBytes_append
   Kit.resultOnly_audit_noninterfering
   Kit.intAddCompose_comm
   Kit.Abstraction.toRel_sound
+  Kit.Derive.Evidence.emissions_tier_exists
   Kit.Proto.encLenBytes_fuel_budget
   Kit.Proto.decFieldStr?_stop
   Kit.Expr.pipeline
+  Kit.ListExtras.filterMap_congr
   Kit.Proto.bytesToStr?_ofChars
   Kit.intAdd_invRight
   Kit.monusCompose_nopRight
   Kit.Proto.decTag?_encTag_append
   Kit.Ledger.ledgerCoherent
+  Kit.ListExtras.filter_filter_comm
+  Kit.ListExtras.mem_dedup
   Kit.Ledger.print_parse_raw
   Kit.DataRegistry.lookup?_ok_unique
   Kit.agreeOn_symm
@@ -68,6 +76,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.Rel.comp_assoc
   Kit.Proto.byteChar_charByte
   Kit.Noninterfering.below
+  Kit.Derive.Evidence.EvidenceKind.tier_matches
   Kit.dupNames_eq_nil_iff
   Kit.escapeWith_nil
   Kit.Duel.VectorSet.vectors_nodup
@@ -87,7 +96,9 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.join_append
   Kit.DataRegistry.nodup_map_unique
   Kit.Observer.refines_below
+  Kit.Derive.Cascade.flatMap_nil_iff
   Kit.Proto.decEnumField?_encVarField_append
+  Kit.Derive.Evidence.mechanicalControls_closedFinite_two
   Kit.Preserves.prim
   Kit.Proto.WireTarget.offDomainProof
   Kit.intAddCompose_nopRight
@@ -103,6 +114,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.monusApply_compose
   Kit.intAddCompose_assoc
   Kit.Composable.assoc
+  Kit.Codec.decode_encode
   Kit.Proto.encLenBytes_fuel_budget_at
   Kit.Proto.decBoolField?_encVarField_append
   Kit.resultOnly_security_noninterfering
@@ -132,6 +144,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.optionFoldl_nil
   Kit.dropSecret_preserves2
   Kit.monusCompose_nopLeft
+  Kit.ListExtras.permAppendComm
   Kit.Normalization.toRel_sound
   Kit.Proto.cleanVarField
   Kit.monusApply_nop
@@ -156,6 +169,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.Proto.decOneof?_encLenBytes_append
   Kit.monus_notReversible
   Kit.Observer.equiv_trans
+  Kit.ListExtras.permConsAppend
   Kit.Normalization.sound
   Kit.Proto.WireTarget.law
   Kit.Composable.applyCompose
@@ -177,6 +191,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.Additive.composeComm
   Kit.Proto.decLenField?_encLenBytes_append
   Kit.Proto.decElem?_clean
+  Kit.ListExtras.foldl_step_push
   Kit.Normalization.toRel_comp_self
   Kit.noninterfering_of_factor
   Kit.leakExec_notNoninterfering
@@ -188,6 +203,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.Ledger.valueOk_strsRaw
   Kit.collDiags_eq_nil_iff
   Kit.Ledger.forward_covers_row
+  Kit.Derive.Evidence.EvidenceKind.tier_ne_provedAtElab
   Kit.optionFoldl_cons
   Kit.render_sepBy_strs
   Kit.escapeWith_none
@@ -227,63 +243,302 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Kit.Proto.decBoolField?_encVarField
   Kit.CodeRegistry.sortedCodes_iff
 
-
 ## KitTestsLib
 
-
 ## TextKit
+  TextKit.GrammarE.nullableE_selfE
+  TextKit.Grammar.tailOk_label
+  TextKit.Grammar.wfProblems_rep
+  TextKit.Grammar.guardSlack_eq_one
   TextKit.lit_nlsp4
+  TextKit.ConfigFormat.cliRun_flag
+  TextKit.Grammar.tailOk_atom
+  TextKit.Grammar.tailOk_opt_none
+  TextKit.HeadSpec.breaks_sound
+  TextKit.Grammar.parseSplitsG
+  TextKit.GrammarE.tailMunchE_altR
+  TextKit.isEmpty_ite_singleton
   TextKit.scanIdent_none_of_not_alpha
+  TextKit.Grammar.wfProblems_fix
   TextKit.lit_nl
+  TextKit.canonScan_head
+  TextKit.Grammar.nullable_fix
+  TextKit.ConfigFormat.filePrint_two
+  TextKit.scanNat_canonical_tw
+  TextKit.all₂
+  TextKit.ConfigFormat.cliRunPrint
+  TextKit.ConfigFormat.mapPairSelf
+  TextKit.Grammar.tailOk_seq
   TextKit.scanIdent_of_identifier
+  TextKit.ConfigFormat.rowCert
   TextKit.Parser.bind_apply
+  TextKit.Grammar.printG_atom
+  TextKit.Grammar.print_parse
+  TextKit.Grammar.tailMunch_isSome
+  TextKit.constCharScan_ok
   TextKit.lit_sp
+  TextKit.Grammar.tailMunch_altR
+  TextKit.Grammar.printG_label
+  TextKit.isPrefixOf_append_right
+  TextKit.Grammar.parseHeadG
+  TextKit.ConfigFormat.cliFixFree
+  TextKit.ConfigFormat.rowRunPrint
+  TextKit.Grammar.predictive_guard
+  TextKit.Grammar.nullable_atom
+  TextKit.Grammar.tailOk_rel
+  TextKit.Grammar.valueOk_seq
+  TextKit.GrammarE.tailFirstE_seqR
+  TextKit.Grammar.tailFirst_rep
+  TextKit.GrammarE.wfProblemsE_repE
+  TextKit.ConfigFormat.fileRunPrint
+  TextKit.orElseChain_err
+  TextKit.Grammar.printG_seq
+  TextKit.GrammarE.tailMunchE_seqR
+  TextKit.ok_cur_inv
+  TextKit.GG.nullableE_injE
+  TextKit.Grammar.printFixBundle
+  TextKit.GrammarE.tailSelfFreeE_munch_isSome
+  TextKit.GrammarE.parseHeadE
+  TextKit.isEmpty_append
+  TextKit.GrammarE.tailFirstE_seqL
+  TextKit.Grammar.parseConsumeG
   TextKit.Parser.pure_apply
+  TextKit.Grammar.tailFirst_alt_third
+  TextKit.ConfigFormat.mapUnwrapId
+  TextKit.GrammarE.nullableE_atomE
+  TextKit.Grammar.run_print
+  TextKit.Grammar.valueOk_label
+  TextKit.GrammarE.tailFirstE_altL
+  TextKit.HeadSpec.matches_append
+  TextKit.GG.parseMonoGG
+  TextKit.Grammar.parse_print_fix
+  TextKit.tok_miss_of_headFail
+  TextKit.Grammar.tailFirst_seqL
+  TextKit.ConfigFormat.rowFixFree
+  TextKit.ConfigFormat.sabAltHeads_row
+  TextKit.GrammarE.printBundleE
+  TextKit.String.append_left_ne_empty
+  TextKit.Grammar.altCoherent_alt_rel_rel
+  TextKit.GrammarE.firstE_some_guardE
+  TextKit.GrammarE.parseMonoManyE
+  TextKit.prefix_total
+  TextKit.Grammar.valueOk_alt
+  TextKit.GrammarE.guardSlack_mono
+  TextKit.Grammar.tailOk_nil
   TextKit.GParser.pure_apply
+  TextKit.Grammar.valueOk_atom
+  TextKit.Grammar.tailMunch_altL
+  TextKit.GrammarE.parseMonoE
+  TextKit.Grammar.printG_opt_some
+  TextKit.GrammarE.tailMunchE_isSome
+  TextKit.ConfigFormat.rowOk_emptyValue
   TextKit.scanNat_none_of_not_digit
+  TextKit.GrammarE.guardSlack_altL
+  TextKit.Grammar.parseManyG_inj
+  TextKit.String.append_right_ne_empty
+  TextKit.Grammar.printG_opt_none
+  TextKit.Grammar.fixFree_fix
+  TextKit.constCharLex_pre_self
+  TextKit.ConfigFormat.fileFixFree
+  TextKit.GrammarE.effFirstE_bodyFirsts
+  TextKit.Grammar.tailOk_alt
+  TextKit.Grammar.valueOk_rep
+  TextKit.identAtomHead_ok
+  TextKit.ConfigFormat.rowOk_emptyKey
+  TextKit.ConfigFormat.fileRun_two
+  TextKit.ConfigFormat.cliCert
+  TextKit.Grammar.wfProblems_seq
+  TextKit.canonScan_consumes
+  TextKit.GrammarE.junctionE
+  TextKit.ConfigFormat.fileRun_spaces
+  TextKit.GrammarE.allWalk_congr
+  TextKit.GrammarE.guardE_atomE
+  TextKit.Grammar.tailOk_opt_some
+  TextKit.Grammar.parse_print_fixFree
+  TextKit.natAtomHead_ok
+  TextKit.GrammarE.firstE_head_ne
   TextKit.takeWhile_stop
+  TextKit.Grammar.fixValueOkGo_irrel
+  TextKit.GrammarE.printList_head
   TextKit.lit_sp4
+  TextKit.GG.parseConsumeGG
+  TextKit.String.ne_empty_length
+  TextKit.scanNat_canonical
+  TextKit.Grammar.valueOk_fix
+  TextKit.Grammar.effFirst_fix
+  TextKit.Grammar.tailFirst_altR
+  TextKit.GrammarE.tailFirstE_rep
+  TextKit.Grammar.junctionEG
+  TextKit.Grammar.foldr_append_head
+  TextKit.GrammarE.parseExcludeE
+  TextKit.GrammarE.guardSlack_seqL
+  TextKit.takeWhile_append_stop
+  TextKit.GrammarE.print_parse_E
+  TextKit.GG.parseSplitsGG
+  TextKit.ConfigFormat.rowRun_env
+  TextKit.takeWhile_nil_of_head_fail
+  TextKit.constCharHead_ok
+  TextKit.GrammarE.tailFirstE_opt_eff
+  TextKit.GrammarE.effFirstE_of_firstE
+  TextKit.Grammar.printG_rep
+  TextKit.Grammar.printG_alt
+  TextKit.Grammar.valueOk_opt_some
+  TextKit.Grammar.first_fix
+  TextKit.Grammar.junctionG_fixFree
+  TextKit.Grammar.valueOk_rel
+  TextKit.GrammarE.guardE_selfE
+  TextKit.GrammarE.parseE_inj
+  TextKit.Grammar.valueOk_opt_none
+  TextKit.canonScan_head_fail
+  TextKit.GrammarE.wfProblemsE_seqE
   TextKit.expect_cons_ne
+  TextKit.GG.nullableG_injG
+  TextKit.constStrScan_ok
   TextKit.lit_comma
+  TextKit.HeadSpec.disj_symm
+  TextKit.constStrHead_ok
+  TextKit.Grammar.printFixGo_irrel
+  TextKit.Grammar.tailMunch_seqL
+  TextKit.GrammarE.tailMunchE_altL
   TextKit.GParser.bind_apply
+  TextKit.Grammar.tailFirst_altL
+  TextKit.Grammar.parseG_inj
+  TextKit.GrammarE.parseSplitsE
+  TextKit.GrammarE.parseConsumeE
+  TextKit.Grammar.effFirst_head_ne
+  TextKit.ConfigFormat.fileCert
+  TextKit.GrammarE.firstE_selfE
+  TextKit.Grammar.tailOk_rep
   TextKit.expect_self
+  TextKit.ConfigFormat.unwrapCodec_exact
+  TextKit.String.ne_empty_toList
+  TextKit.GrammarE.tailOkE_nil
+  TextKit.GrammarE.tailMunchE_seqL
   TextKit.startsWith_cons_ne
+  TextKit.GrammarE.effFirstE_head_ne
+  TextKit.GrammarE.tailFirstE_rep_eff
+  TextKit.HeadSpec.disj_sound
+  TextKit.dropWhile_append_stop
+  TextKit.Grammar.tailMunch_seqR
+  TextKit.GrammarE.valueOkWalk_optE_none
+  TextKit.GrammarE.wfCheckE_sound
+  TextKit.Grammar.parseMonoG
+  TextKit.ConfigFormat.rowOk_good
+  TextKit.ConfigFormat.rowOk_spaceKey
   TextKit.startsWith_self
   TextKit.lit_rparen
+  TextKit.Grammar.print_parse_aux
+  TextKit.GrammarE.tailFirstE_alt_third
   TextKit.lit_lparen
+  TextKit.Grammar.tailFirst_seqR
+  TextKit.natScan_ok
+  TextKit.dropWhile_self_of_head_fail
+  TextKit.GrammarE.tailFirstE_opt
+  TextKit.Grammar.wfCheck_sound'
+  TextKit.identScan_ok
+  TextKit.toString_decDigits
+  TextKit.GrammarE.valueOkWalk_atomE
+  TextKit.GrammarE.parse_print_E
+  TextKit.Grammar.printG_rel
+  TextKit.GG.mu_injE
+  TextKit.GrammarE.bodyTailMunch_isSome
+  TextKit.ConfigFormat.pairTailCodec_exact
+  TextKit.Grammar.parseExcludeG
+  TextKit.Grammar.tailFirst_rep_eff
+  TextKit.GrammarE.wfProblemsE_altE
+  TextKit.isEmpty_ite_nil
+  TextKit.Grammar.wfProblems_alt
+  TextKit.mem_takeWhile
+  TextKit.GrammarE.guardSlack_altR
   TextKit.lit_colsp
+  TextKit.GrammarE.guardSlack_seqR_nullable
+  TextKit.GrammarE.tailFirstE_altR
+  TextKit.Grammar.printG_fix
+  TextKit.Grammar.tailFirst_opt
+  TextKit.Grammar.printBundleG
+  TextKit.GrammarE.firstE_atomE
   TextKit.Parser.consumeChar_self
   TextKit.takeDrop_head
-
+  TextKit.Grammar.tailFirst_opt_eff
 
 ## TestingKit
   TestingKit.ShrinkerV.valid
   TestingKit.ShrinkerV.smaller
   TestingKit.removals_lt
 
-
 ## LintKit
 
-
 ## Gates
+  Gates.Baselines.covQTagClimb_covQTagRawOf
   Gates.Impact.reachFrom_mono
+  Gates.Baselines.elabExact
+  Gates.Baselines.covExact
+  Gates.Baselines.prefSplit
+  Gates.Baselines.covCoherent
   Gates.Impact.affectedArtifacts_covers
-  Gates.ElabWatch.rowsClimb_map_rowSpell
+  Gates.Baselines.covRowsOf_exact
+  Gates.Baselines.valueOk_axiom
+  Gates.Baselines.covCellRawOf_covCellClimb
+  Gates.Feasibility.instGateClaim
+  Gates.Baselines.censusRunPrint
+  Gates.Baselines.valueOk_elab
+  Gates.Baselines.covRunPrint
+  Gates.Baselines.elabModHead_chain
+  Gates.Baselines.covCellsOf_map
+  Gates.Baselines.map_censusRound
   Gates.Impact.affectedArtifacts_growth
+  Gates.Baselines.axiomFixFree
+  Gates.Baselines.axiomCoherent
+  Gates.Baselines.covCellClimb_covCellRawOf
+  Gates.Baselines.censusExact
+  Gates.Baselines.axTailOk_line
+  Gates.Baselines.lineNeNil
+  Gates.Baselines.axBlockRawOf_axBlockClimb
+  Gates.Baselines.elabRawOf_elabOfRaw
+  Gates.Baselines.censusCoherent
+  Gates.Baselines.elabFixFree
   Gates.Impact.mem_expand_of
+  Gates.Baselines.map_covQTagRound
+  Gates.Baselines.map_covQTagRoundRaw
   Gates.Impact.closureIdxs_covers
-  Gates.ElabWatch.rowsClimb_exact
+  Gates.Baselines.map_axBlockRound
+  Gates.Baselines.elabCert
+  Gates.Baselines.valueOk_census
+  Gates.Baselines.axPrefix_head
+  Gates.Baselines.axiomBlocksOf_map
+  Gates.Baselines.axiomExact
+  Gates.Baselines.censusRawOf_censusOfRaw
+  Gates.Baselines.axPrefix_chars
+  Gates.Baselines.covCert
+  Gates.Baselines.elabCoherent
+  Gates.Baselines.censusFixFree
   Gates.Impact.walkTo_reachFrom
+  Gates.Baselines.prefTail_pref
+  Gates.Baselines.covQTagRawOf_covQTagClimb
+  Gates.Baselines.covRowsOf_map
+  Gates.Baselines.axDirHead_chain
+  Gates.Baselines.valueOk_cov
+  Gates.Baselines.elabOfRaw_elabRawOf
+  Gates.Baselines.censusOfRaw_censusRawOf
+  Gates.Baselines.axBlockClimb_axBlockRawOf
+  Gates.Baselines.covFixFree
+  Gates.Baselines.elabRunPrint
+  Gates.Baselines.censusCert
+  Gates.Baselines.axiomCert
+  Gates.Baselines.axiomRunPrint
   Gates.Impact.reachFrom_mono_le
+  Gates.Baselines.violPrefix_head
+  Gates.Baselines.violPrefix_chars
   Gates.Impact.mem_dedupNat
   Gates.Impact.mem_addAll_of
+  Gates.Baselines.covRowRawOf_covRowClimb
+  Gates.Baselines.map_elabRound
   Gates.Impact.closureIdxs_importer
-  Gates.ElabWatch.rowSpell_of_rowClimb
+  Gates.Baselines.covCellsOf_exact
   Gates.Impact.lastOf?_append_singleton
-
+  Gates.Baselines.covRowOf_covRowRawOf
 
 ## GatesTestsLib
-
 
 ## SchemaCore
   SchemaCore.CheckItem.checkOn_of_ne
@@ -329,6 +584,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.Fixed.toValue_eval
   SchemaCore.tyOfDescr_prim
   SchemaCore.movesOf_shape
+  SchemaCore.ColPath.set_set_same
   SchemaCore.headOk_lparen
   SchemaCore.KeyPut.upd_apply_other
   SchemaCore.tyScan_ok
@@ -339,12 +595,12 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.renderKeyTy_toTy
   SchemaCore.EntityWf.names
   SchemaCore.deriveEnc_product
-  SchemaCore.ColPath.set_commute_disjoint
   SchemaCore.listToVMap_vMapToList
   SchemaCore.KeyCoherent.proj
   SchemaCore.decU64raw?_eq
   SchemaCore.witnessedApply_reverse_inv
   SchemaCore.accKey_beq
+  ExampleEx.codec_roundtrip
   SchemaCore.tyText_bool
   SchemaCore.negativeAccounts_eq_nil_iff
   SchemaCore.int64_ofInt_toInt
@@ -363,6 +619,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.keyedErase_eq_patchW
   SchemaCore.DepSpec.setList_none
   SchemaCore.replay_nil
+  SchemaCore.exact_addition_never_hops
   SchemaCore.lenBd
   SchemaCore.entityRow_discharge_sound
   SchemaCore.foreignDiags_eq_nil_iff
@@ -372,6 +629,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.patchW_cons
   SchemaCore.Pred.depth_le_length_enc
   SchemaCore.lanesOk_spec
+  SchemaCore.fast_add_loses_identity
   SchemaCore.foldValue_list
   SchemaCore.Confluence.dischargeMerge_complete
   SchemaCore.decWProofF_encWProof_append
@@ -405,6 +663,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.esMachine_step?_eq
   SchemaCore.KeyCoherent.keyImmutable
   SchemaCore.KeyPut.applyO_swap
+  SchemaCore.ColPath.set_inj
   SchemaCore.WitnessGen.proofFor_accept
   SchemaCore.keyRecordDiags_eq_nil_iff
   SchemaCore.witnessUpsert_valid
@@ -489,13 +748,16 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.KeyPut.apply_iff
   SchemaCore.vpick_vwrite
   SchemaCore.foldKeyTy_bool
+  SchemaCore.sourceOrderWitness
   SchemaCore.deriveRender_coherent
   SchemaCore.CheckItem.dischargeOn_sound
   SchemaCore.UpdateCompat.ofAsBool
   SchemaCore.WitnessGen.accept_verdict
   SchemaCore.WitnessGen.selfChecked?_checks
   SchemaCore.edgesDet_honest
+  SchemaCore.sourceOrderCliWins
   SchemaCore.deriveDec_product
+  SchemaCore.setClause_comm_disjoint
   SchemaCore.universeCodec_exact
   SchemaCore.WitnessGen.selfChecked?_of_check_true
   SchemaCore.endpointsFlat_nil_iff
@@ -504,6 +766,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.VMap.beq_refl
   SchemaCore.KeyImgsInv.shrink
   SchemaCore.entityCascade_sound
+  Example.codec_roundtrip
   SchemaCore.UpdateItem.dischargeUnique_complete
   SchemaCore.valEncAlg_mcons
   SchemaCore.apply2_comm
@@ -595,10 +858,12 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.CheckItem.checkRows_iff
   SchemaCore.filterUnknown_nil_iff
   SchemaCore.deriveRender_list
+  SchemaCore.ExactAddition.exact_law
   SchemaCore.renderTy_bounded_u64_collision
   SchemaCore.KeyImgsInv.keep
   SchemaCore.encVal_list
   SchemaCore.listToVList_vListToList
+  SchemaCore.hazard_above_f53_exact
   SchemaCore.canonical_mem
   SchemaCore.renderKeyTy_sepOk
   SchemaCore.encKey_foldVal
@@ -653,6 +918,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.KeyPut.upd_at_key
   SchemaCore.eval_mkValue
   SchemaCore.validWb_some_old
+  ExampleEx.fields_nodup
   SchemaCore.accFold_agree
   SchemaCore.accUpd_eq
   SchemaCore.foldVMap_unique
@@ -762,6 +1028,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.foldTy_bounded
   SchemaCore.witnessedApply_cons
   SchemaCore.map_encPair
+  SchemaCore.ColPath.set_set_noncommute
   SchemaCore.applyRowDelta_update_mem_of_image
   SchemaCore.tyText_result
   SchemaCore.foldDescr_product
@@ -770,14 +1037,16 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.KeyCoherent.nodup
   SchemaCore.encVal_some
   SchemaCore.foldVMap_nil
+  SchemaCore.applySets_append
+  Example.fields_nodup
   SchemaCore.KeyImgsInv.hnd
-
 
 ## SchemaTestsLib
 
-
 ## WasmCore
   WasmCore.exec_run_two
+  WasmCore.Decode.decInstr_enc
+  WasmCore.Decode.decSection_enc
   WasmCore.stepTy_select_inv
   WasmCore.nil_of_stackTys_nil
   WasmCore.step_mem_store_out
@@ -788,31 +1057,45 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.step_mem_load_out
   WasmCore.stepFlag_loop
   WasmCore.stepTy_localtee_inv
+  WasmCore.Decode.encodeFuncEntry_ge
   WasmCore.stateWith2
+  WasmCore.Decode.decTableSec_go_enc
+  WasmCore.Decode.i32WireBounded
+  WasmCore.Decode.decExportSec_go_enc
   WasmCore.Duel.duelPaths_nodup
   WasmCore.opRow_wf
+  WasmCore.Decode.i64WirePattern
   WasmCore.completeCons
   WasmCore.args_i32_inv
   WasmCore.WatParse.decTok_call
   WasmCore.lSize_cons
+  WasmCore.Decode.iImage_self
   WasmCore.WatParse.decMem_spec
   WasmCore.finishRun_ok
+  WasmCore.Decode.decElemSec_enc
   WasmCore.WatParse.decTok_br
   WasmCore.zeroBudget_unknown
+  WasmCore.Decode.list_cons_drop
+  WasmCore.Decode.byte128_big
+  WasmCore.Decode.i32WirePattern
   WasmCore.stateWithL
   WasmCore.WatParse.allMems_complete
   WasmCore.Duel.sidecarPath_inj
   WasmCore.WatParse.strW_cons
   WasmCore.stepFlag_if_
   WasmCore.Duel.memPaths_nodup
+  WasmCore.Decode.decCodeSec_goEntry_enc
   WasmCore.Duel.wasmPath_ne_sidecar
   WasmCore.stackTys_cons_inv
   WasmCore.exec_step_det
+  WasmCore.Decode.decMemSec_enc
+  WasmCore.Decode.decFuncType_enc
   WasmCore.WatParse.strW_ne
   WasmCore.memSig_covers
   WasmCore.WatParse.decMem_self
   WasmCore.Duel.opPaths_nodup
   WasmCore.unmodeled_ne_trap
+  WasmCore.Decode.decSection_nil
   WasmCore.args_i32i32_inv
   WasmCore.execQuad_branchSome
   WasmCore.WatParse.unescTo_close
@@ -820,31 +1103,53 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.execList_call
   WasmCore.duel_opAdd_machine_run
   WasmCore.Duel.familyPaths_ne_invalid
+  WasmCore.Decode.ByteArray.toList_data
   WasmCore.exec_run_single_iff
   WasmCore.WatParse.decTok_localget
   WasmCore.valDefault_typed
+  WasmCore.Decode.decFuncSec_go_enc
   WasmCore.semOp_spec
+  WasmCore.Decode.suffixAt_section_push
   WasmCore.WatParse.decTok_drop
   WasmCore.WatParse.quoteHead_cons
+  WasmCore.Decode.dropAppendMap
   WasmCore.stepTy_frameFalse
   WasmCore.semOp_typed
+  WasmCore.Decode.foldlApp_nil_cons_len
   WasmCore.stepFlag_sound
+  WasmCore.Decode.decValTypesGo_enc
   WasmCore.exec_step_iff
   WasmCore.Duel.scenTrapVecPath_ne
   WasmCore.WatParse.decTok_return
+  WasmCore.Decode.decVarNatR_decVarNat
   WasmCore.Duel.duelBinOutputs_nodup
   WasmCore.localsMap_typed
   WasmCore.WatParse.opName_inj
+  WasmCore.Decode.opOfBytes_hit
+  WasmCore.Decode.decVarNatR_enc
   WasmCore.foldl_poisoned
+  WasmCore.Decode.stopByte_toNat
+  WasmCore.Decode.encVarNat_pos
+  WasmCore.Decode.slebFits_weak
   WasmCore.refuted_witness
   WasmCore.opSig_covers
+  WasmCore.Decode.foldlApp_nil_cons
   WasmCore.execQuad_unmodeled
+  WasmCore.Decode.stopByte_value_sign
   WasmCore.WatParse.quotedRestLen
   WasmCore.flat_step_iff
+  WasmCore.Decode.zipMapFuncs
+  WasmCore.Decode.contByte_big
   WasmCore.Duel.allOps_nodup
+  WasmCore.Decode.foldlTyIdx_len
+  WasmCore.Decode.intNat
+  WasmCore.Decode.decBody_enc_else
   WasmCore.Duel.memTrapVecPath_inj
   WasmCore.Duel.trapScenPaths_disj
   WasmCore.Duel.nodup_map_inj
+  WasmCore.Decode.lDepth_le_len
+  WasmCore.funcAt_local
+  WasmCore.Decode.i64WireBounded
   WasmCore.flat_chk
   WasmCore.tyOf_i32
   WasmCore.args_i64i32_inv
@@ -854,6 +1159,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.step_ne_outOfFuel
   WasmCore.fold_popPush
   WasmCore.execList_callindirect
+  WasmCore.Decode.stopByte_lt64
   WasmCore.stepTy_op_inv
   WasmCore.WatParse.decTok_i64const
   WasmCore.popTys_of_stackTys
@@ -864,21 +1170,40 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.execSelfSim_toRel
   WasmCore.stepFlag_block
   WasmCore.exec_typed
+  WasmCore.Decode.byte128_val
+  WasmCore.Decode.decode_encode_module
   WasmCore.stepTy_callindirect_inv
+  WasmCore.Decode.dropAppendSucc
   WasmCore.Duel.opMemVecPath_ne
+  WasmCore.Decode.decElemSec_goi_enc
   WasmCore.Duel.scenarioPaths_nodup
+  WasmCore.Module.funcAt_of_imports_nil
+  WasmCore.Decode.stopByte_ge64
+  WasmCore.Decode.slebP_prop
+  WasmCore.Decode.foldlMap_len_ge
   WasmCore.WatParse.decTok_op
   WasmCore.localsDefault_typed
   WasmCore.WatParse.decTok_localset
+  WasmCore.Decode.valTypeOfByte_hit
   WasmCore.stepTy_mem_inv
+  WasmCore.Decode.foldlMap_cons
   WasmCore.step_mem_spec
   WasmCore.stepFlag_callindirect_shape
   WasmCore.flat_push
   WasmCore.execList_loop
+  WasmCore.Decode.stopByte_val
+  WasmCore.Decode.memOfByte_hit
+  WasmCore.Decode.iDepth_le_len
+  WasmCore.Decode.Except.ok_map'
   WasmCore.execQuad_outOfFuel
   WasmCore.flat_run_backwards
+  WasmCore.Decode.iSize_le_len
   WasmCore.WatParse.decTok_brif
+  WasmCore.Decode.toNat_cast
   WasmCore.WatParse.opName_chars
+  WasmCore.Decode.decFuncSec_enc
+  WasmCore.Decode.lSize_le_len
+  WasmCore.Decode.cont_check
   WasmCore.WatParse.memName_inj
   WasmCore.Duel.opMemPaths_disj
   WasmCore.predOr_demorgan
@@ -886,198 +1211,320 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   WasmCore.execQuad_structural
   WasmCore.Duel.allMems_nodup
   WasmCore.WatParse.allOps_complete
+  WasmCore.Decode.u8toNat
+  WasmCore.Decode.decCodeSec_go_enc
   WasmCore.stepFlag_flat_sound
   WasmCore.stepTy_call_inv
+  WasmCore.Decode.slebP_small
+  WasmCore.Decode.Except.ok_bindMono
   WasmCore.step_mem_outcome
+  WasmCore.Decode.decTableSec_enc
+  WasmCore.Decode.slebP_combine
+  WasmCore.Decode.stopByte_small
   WasmCore.stepFlag_drop_shape
   WasmCore.Duel.opVecPath_inj
   WasmCore.checkBody_of_fold
+  WasmCore.Decode.dropAppendMap2
+  WasmCore.Decode.dropAppendSucc2
   WasmCore.execQuad_trap
+  WasmCore.Decode.Except.ok_bind'
   WasmCore.runFunc_safe
-  WasmCore.fenv_some
+  WasmCore.fenv_of_funcAt
   WasmCore.checkBody_sound
   WasmCore.memRow_wf
   WasmCore.WatParse.decTok_select
+  WasmCore.Decode.decValTypesGo_one
+  WasmCore.Decode.foldlMap_cons_len
   WasmCore.WatParse.decTok_i32const
   WasmCore.stepFlag_congr
   WasmCore.completeStop
   WasmCore.checkFlow_eq
+  WasmCore.Decode.decCodeSec_goLocals_enc
+  WasmCore.Decode.decVarNatR_enc_append
   WasmCore.popPush_some
+  WasmCore.Decode.Except.error_bind'
   WasmCore.flat_outOfFuel_honest
   WasmCore.getElem_congr
+  WasmCore.Profile.featureList_covers
   WasmCore.WatParse.strBeq_self
   WasmCore.stepTy_localset_inv
   WasmCore.Duel.memTrapVecPath_ne
+  WasmCore.Decode.byteArray_mk_toList
   WasmCore.popTys_typed
   WasmCore.WatParse.decTok_mem
+  WasmCore.Decode.decExportSec_enc
+  WasmCore.Decode.slebP_eq
   WasmCore.map_snd_error
   WasmCore.tyOf_getD
   WasmCore.opAddBody_pin
   WasmCore.Duel.opScenPaths_disj
   WasmCore.checkBody_complete
   WasmCore.WatParse.decOp_spec
+  WasmCore.Decode.decSlebR_stop
   WasmCore.execList_if_
   WasmCore.Duel.familyPaths_nodup
+  WasmCore.Decode.dropAppendLen
   WasmCore.step_mem_preserves
+  WasmCore.Decode.decElemSec_go_enc
   WasmCore.Duel.memScenPaths_disj
+  WasmCore.Decode.i64WireToNat
+  WasmCore.Decode.suffixAt_section
   WasmCore.Duel.duelPath_sidecar_disj
+  WasmCore.Decode.decSection_skip
   WasmCore.WatParse.strW_len
+  WasmCore.Decode.takeAppendLen
   WasmCore.flat_exec_tape
   WasmCore.consIh
+  WasmCore.Decode.foldlApp_eq
+  WasmCore.Decode.contByte_payload
+  WasmCore.Decode.stopByte_value_small
   WasmCore.foldl_cons_step
   WasmCore.stateWith
   WasmCore.semOp_exists
+  WasmCore.Decode.allValTypes_complete
   WasmCore.step_op_preserves
   WasmCore.Duel.opTrapVecPath_ne
   WasmCore.step_structural_or_frame
+  WasmCore.Decode.decBody_enc
+  WasmCore.Decode.utf8_roundtrip
+  WasmCore.Decode.slebP_neg
   WasmCore.WatParse.memName_chars
+  WasmCore.Decode.foldlMap_cons_len'
   WasmCore.WatParse.decTok_localtee
   WasmCore.flat_run_other
   WasmCore.Duel.duelPath_suffix
+  WasmCore.reservedFragment_fresh_mem
   WasmCore.Duel.combined_disj_scen
   WasmCore.Duel.memTrapPaths_nodup
   WasmCore.u32_toUInt8
   WasmCore.step_store_inBounds
   WasmCore.tyOf_i64
+  WasmCore.Decode.decTypeSec_enc
   WasmCore.step_preserves
   WasmCore.WatParse.quotedScan_ok
+  WasmCore.Decode.slebFits_step
   WasmCore.predOpLower?_covered
   WasmCore.flat_run_forwards
+  WasmCore.Decode.decSlebR_slebI_append
+  WasmCore.Decode.decCodeSec_enc
   WasmCore.checkFunc_complete
   WasmCore.WatParse.decOp_self
   WasmCore.Duel.opMemPaths_disj_trap
+  WasmCore.Decode.foldlTyEntry_len
+  WasmCore.Decode.decSlebR_slebIGo_append
   WasmCore.stackTys_reverse
+  WasmCore.Decode.i32WireToNat
+  WasmCore.Decode.lt256
   WasmCore.stepTy_drop_inv
+  WasmCore.Decode.decTypesGo_enc
   WasmCore.WatParse.decTok_unreachable
   WasmCore.flat_run_iff
   WasmCore.WatParse.decTok_callindirect
   WasmCore.getD_append_val
   WasmCore.WatParse.strEq_of_beq
+  WasmCore.reservedFragment_fresh_op
   WasmCore.Duel.memVecPath_inj
   WasmCore.Duel.nodup_append'
   WasmCore.foldl_stopped
   WasmCore.execQuad_dead
+  WasmCore.Decode.lImage_self
   WasmCore.stepTy_brif_inv
   WasmCore.Duel.scen_ne_invalid
   WasmCore.Duel.scenOpVecPath_ne
 
-
 ## WasmCoreTestsLib
-
 
 ## Wit
   Wit.Interface.records_nodup
+  Wit.Interface.resources_nodup
+  Wit.World.exports_nodup
   Wit.Record.fields_nodup
-
+  Wit.World.imports_nodup
 
 ## Machines
+  Machines.AsyncSession.step_handle
+  Machines.Async.mpsc_bounded
+  Machines.Async.mpscInputs_complete
+  Machines.Async.mutexTableStep?_eq_step?
   Machines.Closure.edb_wf
   Machines.Fusion.Adjunction.unit_law
   Machines.CrashMachine.observe_free_inr
   Machines.exploreAux_proved
   Machines.I_succ
+  Machines.InfRun.of_explore
   Machines.Closure.deriv_iff_reachable
   Machines.stabilizedOf_none
   Machines.Exec.exec_reachable
+  Machines.Async.watch_run_total
+  Machines.Async.pool_acquire1_refused
   Machines.Coalgebra.bisim_sound
+  Machines.Async.mutex_step_not_both
   Machines.Closure.transOf_step
   Machines.Testing.guardCoverage_proved
   Machines.Closure.bridge
+  Machines.InfOften.some_time
+  Machines.Async.mutex_excl
+  Machines.Async.noInfRun_mpsc_drain
   Machines.Crash.Log.lossy_unfaithful
   Machines.Exec.run_some_inv
   Machines.MachineWithInv.step?_eq_none
+  Machines.Async.infRun_watch
   Machines.Exec.run_none_absurd
+  Machines.Async.oneshot_recv_empty_refused
+  Machines.Async.insAlt_odd
+  Machines.Async.watch_next_send
   Machines.Coalgebra.behEq_bisim
   Machines.Closure.reachable_mem_states
   Machines.Closure.programOf_safe
   Machines.Closure.ruleOf_mem
   Machines.MachineWithInv.step?_eq_some
   Machines.Refines.comp
+  Machines.Async.oneshot_next_hold_full
   Machines.Exec.equivUnder_refl
+  Machines.AsyncSession.noInfRun_bounded
+  Machines.AsyncSession.dualGuestHost
   Machines.Exec.execRetraction_image_iff
+  Machines.Async.mpsc_next_recv
   Machines.stabilizedOf_some
+  Machines.AsyncSession.misShaped_refused
   Machines.Fusion.Adjunction.triangle_right
+  Machines.AsyncSession.dirs_wire
   Machines.Testing.guardCoverage_refuted
   Machines.Crash.Log.recover_prefix
+  Machines.AsyncSession.done_terminal
+  Machines.Async.fair_watch
+  Machines.Async.mpsc_full_blocks_send
   Machines.Crash.Journal.journal_faithful
+  Machines.Async.once_persists
   Machines.CrashMachine.Faithful.faithful
+  Machines.AsyncSession.host_refuses_handle_first
   Machines.Closure.stPred_ne_inPred
+  Machines.Fairness.keepsFiring
   Machines.badEntry_none
+  Machines.not_eventually_of_allRefuse
   Machines.Crash.Journal.replayJ_append
   Machines.Fusion.Adjunction.counit_law
+  Machines.Async.oneshot_next_send_empty
   Machines.Closure.deriv_reachable
   Machines.Closure.ruleOf_safe
   Machines.Refines.beh_le
   Machines.Testing.deadlockFree_proved
   Machines.refutedOf_none
-  Machines.MachineWithInv.reachable_preserves
+  Machines.Async.wg_done_refused_at_zero
+  Machines.Async.watch_schedule_independent
   Machines.CrashMachine.observe_crashy_inl
   Machines.Coalgebra.behEq_iff_bisim
   Machines.Closure.programOf_wf
+  Machines.AsyncSession.insPoll_step
   Machines.freshEntries_nil
   Machines.seen_handler
   Machines.Fusion.Adjunction.triangle_left
+  Machines.Async.mpsc_send_step
   Machines.Crash.Log.beh_eq_recovered
   Machines.Crash.Log.log_faithful
+  Machines.Async.wgInputs_complete
   Machines.MachineWithInv.step?_preserves
-  Machines.Coalgebra.next_of_none
+  Machines.Async.pool_no_double_checkout_run
+  Machines.Async.infRun_mpsc
+  Machines.Async.sem_bound
   Machines.EventSpec.safety
+  Machines.AsyncSession.export_refuses_recv
   Machines.Exec.tape_run_exec
-  Machines.Coalgebra.beh_eq
+  Machines.AsyncSession.consumer_progress
+  Machines.AsyncSession.fair_producer
   Machines.Crash.Journal.refines_journal
+  Machines.InfRun.head
   Machines.Crash.Log.refines_log_reverse
   Machines.Machine.tick_of_step
+  Machines.Async.states_mpsc_hold
   Machines.Coalgebra.bisim_sound_at
+  Machines.Async.insAlt_even
+  Machines.Async.states_mpsc_alt
   Machines.Coalgebra.states_zero
   Machines.CrashMachine.observe_free_inl
   Machines.Crash.Journal.refines_journal_reverse
+  Machines.Async.watch_send_step
+  Machines.AsyncSession.host_refuses_wrong_value
+  Machines.AsyncSession.states_producer
   Machines.crashStep_congr
+  Machines.Async.unfair_mpsc_drain
   Machines.compose_inv_cancel
   Machines.Testing.guardCoverage_find?
+  Machines.Async.states_watch
+  Machines.Async.oneshot_send_full_refused
   Machines.Crash.Log.refines_log
+  Machines.Async.insWatchFor_step
+  Machines.Async.mpsc_next_send
+  Machines.AsyncSession.insRepeat_step
   Machines.MachineWithInv.step_iff
   Machines.freshEntries_run
   Machines.Exec.run_exec_cons
   Machines.Exec.run_exec_exec_run
   Machines.Dir.flip_flip
+  Machines.Async.wg_liveness_row
   Machines.Closure.ruleOf_wf
   Machines.CrashMachine.observe_crashy_inr
   Machines.Exec.equivUnder_trans
+  Machines.Async.watch_run_last
+  Machines.Async.watch_factor
   Machines.D_zero
+  Machines.Async.mpsc_alwaysEventually_nonempty
+  Machines.Async.fair_mpsc
+  Machines.Async.mpsc_eventually_nonempty
+  Machines.Async.pool_state_ok
+  Machines.AsyncSession.offender_drift
   Machines.Exec.runnableTapes_iff
+  Machines.AsyncSession.instHostDualGuest
   Machines.refutedOf_some
+  Machines.AsyncSession.step_result
   Machines.MachineWithInv.run_preserves
   Machines.Exec.exec_run
-  Machines.check_proved
+  Machines.Async.mpsc_recv_empty_refused
   Machines.CrashMachine.step_oblig
   Machines.Refines.step
   Machines.MachineWithInv.step?_eq
   Machines.seen_refuted
   Machines.crashStep_survives
+  Machines.Async.wg_add_step
   Machines.CrashMachine.Faithful.step_preserves
+  Machines.AlwaysEventually.eventually
+  Machines.Async.pool_no_double_checkout
+  Machines.Async.once_get_refused_before
+  Machines.AsyncSession.hostDualGuest
+  Machines.Async.states_oneshot
   Machines.Closure.inv_of_eval
-  Machines.Coalgebra.states_succ
   Machines.Exec.run_exec_nil
+  Machines.Async.once_init_refused_after
+  Machines.Async.wg_wait_iff_zero
+  Machines.Async.noInfRun_oneshot
+  Machines.AsyncSession.infRun_producer
+  Machines.Async.mpsc_next_hold
   Machines.Crash.Journal.compose_add
   Machines.CrashMachine.crash_oblig
-  Machines.Coalgebra.next_of_some
   Machines.Crash.Log.lossy_rewinds
+  Machines.Async.mpsc_recv_step
+  Machines.Async.wg_infRun_add
   Machines.check_refuted
   Machines.Crash.Journal.beh_eq_journal
   Machines.Machine.step_iff
   Machines.CrashMachine.closure_of_faithful
   Machines.Machine.reachable_run
   Machines.Crash.Log.recovered_faithful
+  Machines.Async.poolInputs_complete
+  Machines.AsyncSession.msgs_wire
   Machines.exploreAux_refuted
+  Machines.Async.mutex.labels_complete
+  Machines.AsyncSession.guest_run_completes
+  Machines.Async.oneshot_send_step_none
   Machines.Coalgebra.beh_shift
-  Machines.Coalgebra.states_shift
+  Machines.infRun_of_states_fires
   Machines.Machine.run_preserves
+  Machines.AsyncSession.infRun_producer_of_fair
   Machines.Exec.equivUnder_symm
+  Machines.AsyncSession.host_run_completes
   Machines.I_zero
 
-
 ## MachinesTestsLib
-
 
 ## ZSet
   ZSet.weightW_neg
@@ -1199,9 +1646,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   ZSet.zero_add
   ZSet.weightW_supportCollapseW
 
-
 ## ZSetTestsLib
-
 
 ## Datalog
   Datalog.step_iff_conseq
@@ -1251,9 +1696,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Datalog.matchAll_complete
   Datalog.Rule.fire_conseq
 
-
 ## DatalogTestsLib
-
 
 ## Cost
   Cost.CostModel.compose_zeroRight
@@ -1281,9 +1724,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Cost.Graded.bind_assoc
   Cost.Grading.gradedUn_val
 
-
 ## CostTestsLib
-
 
 ## Effects
   Effects.Signature.pure_now_read_le
@@ -1293,12 +1734,11 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Effects.Signature.logProgram_cost_honest
   Effects.Signature.pure_get_put
   Effects.Signature.pure_append_mem
+  Effects.deriveRow_nil
   Effects.Signature.logProgram_agrees
   Effects.Signature.pure_put_journal
 
-
 ## EffectsTestsLib
-
 
 ## Contracts
   Contracts.loop_run_true_cons
@@ -1310,15 +1750,17 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Contracts.loop_run_false
   Contracts.prog_run_cons
   Contracts.loopvc_reachable_inv
+  Contracts.FeasibleVc.adm
   Contracts.while_sound_fuel
   Contracts.prog_step_iff
+  Contracts.Contract.feasiblePointDischarge_sound
+  Contracts.Contract.feasibleVc_nonvacuous
   Contracts.loopvc_run_inv
   Contracts.loopvc_exit_machine
   Contracts.loopvc_variant_bounds
-
+  Contracts.vacuousC_no_witness
 
 ## ContractsTestsLib
-
 
 ## Analysis
   Analysis.width_lt
@@ -1345,9 +1787,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Analysis.join_idem
   Analysis.Iv.le_endpoints
 
-
 ## AnalysisTestsLib
-
 
 ## Query
   Query.Row.append_inj
@@ -1356,23 +1796,31 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Query.bind_u64?_some
   Query.lex8b_irrefl
   Query.applyRepair_credit_targeted
+  Query.resolveCol_index_colWalk?
   Query.typedRowToVals_exact
   Query.lex8b_trans
   Query.wkindMulZeroNat
+  Query.appendPair_get_left
   Query.predToExpr_ok
   Query.joinPairsW_ok
   Query.fieldsSchema_cons
   Query.WKindMulZero.mul_zero_r
+  Query.appendPair_get_right
   Query.wkindMulZeroBool
   Query.qEval_total
+  Query.evalFunc_u64equal_total
   Query.blocker_absent
   Query.toTypedRow_round
   Query.evalFunc_strequal
   Query.weightOfW_zero_forall_ne
   Query.typedGet_project
   Query.keyJoinRows_atMostOne
+  Query.appendW_colsAppend
   Query.evalFunc_u64equal
   Query.bind_str?_some
+  Query.evalFunc_strequal_total
+  Query.fieldRead_total
+  Query.joinCond_ok
   Query.qEval_agree_iff
   Query.lex8b_cons_true
   Query.accId_image
@@ -1392,6 +1840,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Query.accBal_withBal
   Query.toTypedRow_keep
   Query.applyRepair_danglingSrc_targeted
+  Query.joinCondOf_evalCell_total
   Query.evalFunc_and
   Query.projectW_wmap
   Query.qEval_sound
@@ -1407,10 +1856,10 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Query.filterRowsM_ok_exists
   Query.fieldsSchema_length
   Query.evalFunc_or
-
+  Query.joinCond_holds_total
+  Query.evalCell_call_total
 
 ## QueryTestsLib
-
 
 ## Vortex
   Vortex.decDict?_encDict_append
@@ -1554,18 +2003,20 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Vortex.inDomainDType_extension
   Vortex.headD_cons'
 
-
 ## VortexTestsLib
-
 
 ## Substrait
   Substrait.Typed.mem_foldl_addFn_left
   Substrait.Wire.decNamedStructBody?_encNamedStructBody_append
+  Substrait.Typed.HasCol.atLeft_index
   Substrait.Typed.mem_addFn_of_mem
+  Substrait.Typed.Row.get_append_left
   Substrait.Wire.decPlanRelElem?_clean
+  Substrait.Typed.HasCol.atRight_index
   Substrait.Decode.decTypedField?_hit
   Substrait.Text.NameTable.ofName_self
   Substrait.Decode.decTypedTyCore?_setNull
+  Substrait.Wire.writeOpOfNum?_self
   Substrait.Text.ScalarCtor.toPType_ofPType
   Substrait.Text.joinTypeOfName_miss
   Substrait.Wire.decExpressionBody?_encExpressionBody
@@ -1573,7 +2024,6 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Substrait.Wire.decNullBody?_law
   Substrait.Decode.decTypedSortKeys?_ok
   Substrait.Typed.measureListToProto_ok_length
-  Substrait.Typed.Schema.get?_lt
   Substrait.Decode.decTypedRel?_ok
   Substrait.Decode.decTypedMeasures?_ok
   Substrait.Text.NameTable.complete
@@ -1601,12 +2051,14 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Substrait.Wire.decExprElem?_stop_nil
   Substrait.Typed.Expr.toProto_ords
   Substrait.Wire.joinTypeOfNum?_self
+  Substrait.Typed.evalJoinPairs_ok_exists
   Substrait.Wire.decRep?_encExprElem_nil
   Substrait.Text.typeChars_scalar_length
   Substrait.Text.parseType_typeText_scalar
   Substrait.Text.parseScalarGo_typeChars
   Substrait.Decode.decTypedPlan?_ok
   Substrait.Wire.inDomainSortFields_self
+  Substrait.Text.writeOpOfName_self
   Substrait.Text.NameTable.nodup
   Substrait.Wire.decRep?_encSortElem_nil
   Substrait.Text.sortDirOfName_self
@@ -1617,14 +2069,19 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Substrait.Decode.decTypedLit?_toProtoLiteral
   Substrait.Typed.walkProto_ok_length
   Substrait.Wire.nullabilityOfNum?_self
+  Substrait.Typed.matchedRow_ok_complete
+  Substrait.Typed.Row.get_append_right
   Substrait.Text.setOpOfName_self
   Substrait.Wire.decRelBody?_law
+  Substrait.Typed.matchedRow_ok_exists
   Substrait.Typed.Row.get_resolves
   Substrait.Wire.decPlanBody?_encPlanBody_append
   Substrait.Typed.colsToProto_ok_length
   Substrait.Decode.decTypedTyCore?_of_toProtoType
   Substrait.Wire.decFieldStr?_clean
+  Substrait.Typed.Schema.get?_append_left
   Substrait.Wire.decMeasureElem?_stop_nil
+  Substrait.Typed.evalJoinPairs_ok_complete
   Substrait.Wire.decPlanRelElem?_encPlanRelElem_append
   Substrait.Typed.evalKeepW_out
   Substrait.Wire.decExpressionBody?_law
@@ -1632,17 +2089,20 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Substrait.Wire.decSortFieldBody?_encSortFieldBody_append
   Substrait.Wire.inDomainExprs_self
   Substrait.Wire.decNatLit?_encNatLit
+  Substrait.Typed.unmatchedWith_ok_exists
   Substrait.Typed.evalJoinPairs_ok_sound
   Substrait.Text.drop5_listOpen
   Substrait.Typed.Rel.toProto_width
   Substrait.Wire.decExprElem?_encExprElem_append
   Substrait.Text.findName_self
+  Substrait.Typed.anyMatchOn_ok_exists
   Substrait.Wire.sortDirOfNum?_self
   Substrait.Decode.decTypedMeasure?_ok
   Substrait.Typed.matchedRow_ok_sound
   Substrait.Typed.castVal_self
   Substrait.Wire.decArgElem?_eq
   Substrait.Decode.toProtoType_ok_required
+  Substrait.Typed.evalJoin_ok_exists
   Substrait.Wire.decPTypeBody?_encPTypeBody_append
   Substrait.Decode.decTypedSchema?_colsToProto
   Substrait.Wire.decSortElem?_stop_nil
@@ -1650,9 +2110,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Substrait.Decode.decTypedColTy?_colType
   Substrait.Text.sortDirOfName_miss
 
-
 ## SubstraitTestsLib
-
 
 ## Inspector
   Inspector.WhatIf.firstDivergence?_none
@@ -1670,67 +2128,73 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Inspector.WhatIf.firstDivergenceAux_some
   Inspector.WhatIf.whatIfReport_prefix
 
-
 ## InspectorTestsLib
-
 
 ## Scaffold
 
-
 ## ScaffoldTestsLib
-
 
 ## Guest
   Guest.Correct.adderWf
+  Guest.Layout.padded_ge
   Guest.EdgePython.Fe.msS_ret
   Guest.srcChain_witness
   Guest.altSize_pos
   Guest.Correct.adder_value
   Guest.Correct.popTys_split
   Guest.Correct.row_wBuggy
+  Guest.Layout.align_pos
   Guest.envUpdS_opW
   Guest.Correct.row_opW
   Guest.Correct.adder_run
   Guest.Correct.fnModule_ok
   Guest.Correct.run_chain
+  Guest.Layout.go_pairwise
   Guest.EdgePython.Fe.msS_while
   Guest.Correct.locals_else
   Guest.adder_machine
+  Guest.Layout.user_size
   Guest.Correct.localsDefault_replicate
+  Guest.EdgePython.Fe.msS_forIn
   Guest.cases_sizeOf
   Guest.fd_sizeOf
   Guest.Correct.fap_steps
   Guest.altSizes_gt_default
   Guest.src_step_iff
+  Guest.Layout.u64_offsets
   Guest.EdgePython.Fe.msL_cons
   Guest.Correct.run_fnBody
   Guest.Correct.adderWf6
   Guest.Correct.buggy_disagrees
   Guest.Correct.buggy_run
   Guest.altSizes_suffix
+  Guest.fnIdx_cap_disjoint
   Guest.lt_left
   Guest.Correct.realizes_fap
+  Guest.Layout.go_ge
+  Guest.box_slots_sorted
   Guest.Correct.execList_zero_ok_absurd
   Guest.EdgePython.Fe.msS_assign
+  Guest.Layout.width_pos
   Guest.srcMachine_run_chain
   Guest.Correct.stackTys_len
   Guest.Correct.lit_steps
   Guest.Correct.run_chain_inv
+  Guest.closure_slots_sorted
   Guest.Correct.realizes_lit
   Guest.lt_right
   Guest.EdgePython.Fe.msL_nil
   Guest.evalS_machine_value
+  Guest.rcCell_payload_disjoint
+  Guest.Layout.user_offsets
   Guest.Correct.all_i64
   Guest.Correct.evalW_opW
   Guest.altSizes_gt_ctor
   Guest.EdgePython.Fe.msS_ifelse
 
-
 ## GuestTestsLib
 
-
 ## ComponentTestsLib
-
 
 ## Repr
   Repr.Asc.tail
@@ -1768,19 +2232,13 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Repr.Represents.pres_step
   Repr.deleteS_asc
 
-
 ## ReprTestsLib
-
 
 ## ScaffoldDemo
 
-
 ## ScaffoldLedger
-
 
 ## Faults
 
-
 ## FaultsTestsLib
-
 

@@ -13,25 +13,20 @@ re-baseline. Findings are DATA here (the promotion, not a hard gate);
 each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
 
 ## Kit
-
+  Kit.Derive.Evidence.mechanicalControls_carried
+  Kit.Derive.Evidence.mechanicalControls_closedFinite_two
 
 ## KitTestsLib
 
-
 ## TextKit
-
 
 ## TestingKit
 
-
 ## LintKit
-
 
 ## Gates
 
-
 ## GatesTestsLib
-
 
 ## SchemaCore
   SchemaCore.boolOr_true
@@ -43,74 +38,61 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   SchemaCore.boolOr_false
   SchemaCore.tyText_string
 
-
 ## SchemaTestsLib
   orderJournal_legal
   orderJournal_illegal
 
-
 ## WasmCore
-
 
 ## WasmCoreTestsLib
 
-
 ## Wit
 
-
 ## Machines
-
+  Machines.AsyncSession.step_handle
+  Machines.AsyncSession.host_refuses_handle_first
+  Machines.AsyncSession.export_refuses_recv
+  Machines.AsyncSession.offender_drift
+  Machines.AsyncSession.step_result
+  Machines.Async.mpsc_recv_empty_refused
+  Machines.AsyncSession.hostDualGuest
+  Machines.AsyncSession.msgs_wire
 
 ## MachinesTestsLib
   respTrace03r
   wheelLookup_pin
   ghost_teeth_real
 
-
 ## ZSet
   ZSet.wkindBool_zero
   ZSet.false_of_not_eq_true
 
-
 ## ZSetTestsLib
-
 
 ## Datalog
 
-
 ## DatalogTestsLib
-
 
 ## Cost
 
-
 ## CostTestsLib
-
 
 ## Effects
 
-
 ## EffectsTestsLib
-
 
 ## Contracts
 
-
 ## ContractsTestsLib
-
 
 ## Analysis
 
-
 ## AnalysisTestsLib
-
 
 ## Query
 
-
 ## QueryTestsLib
   tMissLookup
-
 
 ## Vortex
   Vortex.encDTypeBody_binary
@@ -122,7 +104,6 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   Vortex.selfFalseTy_prim_i64
   Vortex.encDTypeBody_variant
   Vortex.selfFalseTy_prim_u64
-
 
 ## VortexTestsLib
   option_pin
@@ -178,50 +159,42 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
   lowcard_pin
   nonint_for_refused
 
-
 ## Substrait
 
-
 ## SubstraitTestsLib
-
 
 ## Inspector
   Inspector.Explain.xMissLookup
 
-
 ## InspectorTestsLib
-
 
 ## Scaffold
 
-
 ## ScaffoldTestsLib
 
-
 ## Guest
-
+  Guest.Layout.u64_offsets
 
 ## GuestTestsLib
 
-
 ## ComponentTestsLib
-
+  ComponentTests.StreamFixture.msgs_empty
+  ComponentTests.StreamFixture.step_first
+  ComponentTests.StreamFixture.wireItems
+  ComponentTests.StreamFixture.export_refuses_recv
+  ComponentTests.StreamFixture.msgs_wire
+  ComponentTests.StreamFixture.hostDualGuest
+  ComponentTests.StreamFixture.offender_drift
 
 ## Repr
 
-
 ## ReprTestsLib
-
 
 ## ScaffoldDemo
 
-
 ## ScaffoldLedger
-
 
 ## Faults
 
-
 ## FaultsTestsLib
-
 

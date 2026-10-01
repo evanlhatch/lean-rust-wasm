@@ -1,0 +1,11 @@
+# The debloat discipline (notes/design-debloat.md): the crates are
+# standalone (no root workspace), so each would otherwise keep its own
+# target/ — six copies of the same dep closure (~26GB measured, one
+# crate alone at 22GB). ONE shared target dir at the repo root instead:
+# relative target-dir resolves against this file's parent, so every
+# crate's build lands in <root>/target and the deps build ONCE.
+# Overridden per invocation where the recipe wants isolation (the
+# wasm-dual row's CARGO_TARGET_DIR), untouched in CI (the cache path
+# was already the root target/).
+[build]
+target-dir = "target"

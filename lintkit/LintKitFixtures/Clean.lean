@@ -9,6 +9,7 @@ Evidence, not architecture.
 
 import LintKit
 import Kit.Correspondence
+import Kit.Obligation
 
 -- The census linters are ON here too: the negative controls must prove
 -- the compliant decls QUIET WHILE ENABLED, not merely unlinted.
@@ -17,6 +18,7 @@ set_option linter.guestlang.recursiveSimpEqns true
 set_option linter.guestlang.decideFirst true
 set_option linter.guestlang.graduation true
 set_option linter.guestlang.zeroCitation true
+set_option linter.guestlang.evidenceRedundancy true
 
 namespace LintKitFixtures.Clean
 
@@ -95,6 +97,48 @@ def tautologyCodec : Kit.Codec (Nat → Bool) (Nat → Bool) where
 dec `citeCitedFixture` there) — quiet. -/
 theorem citedFixture : 1 < 2 := by
   decide
+
+/-- evidenceRedundancy NEGATIVE (the CITATION face): the same statement
+shape as `Violations.violRoundtrip`, but the proof IS the law-field
+citation — the ladder's currency, zero new proof content — quiet. -/
+def cleanCodec : Kit.Codec Nat Nat where
+  encode a := a + 0
+  decode a := some a
+  policy a := ∀ n : Nat, n = n  -- undecidable: no instance (the graduation gap)
+  decode_encode := fun _ => rfl
+  decode_some_policy := fun _ _ _ _ => rfl
+
+/-- evidenceRedundancy NEGATIVE: the cited (not re-proved) round trip
+— quiet for evidenceRedundancy; zeroCitation fires (uncited here), the
+driver pins that finding. -/
+theorem cleanRoundtrip : ∀ (b : Nat), cleanCodec.decode (cleanCodec.encode b) = some b :=
+  cleanCodec.decode_encode
+
+/-- evidenceRedundancy NEGATIVE: the KERNEL-tiered row over a decidable
+claim — `decidableNow` IS the weakest sufficient tier — quiet. -/
+def cleanDecObl : Kit.Obligation Nat (1 < 2) :=
+  { label := "clean/kernel-tier"
+    tier := .decidableNow
+    payload := 0
+    provenance := `LintKitFixtures.Clean }
+
+/-- evidenceRedundancy NEGATIVE: the kernel rung's discharge — quiet. -/
+def cleanDecDischarged : Kit.Discharged Nat (1 < 2) :=
+  { obligation := cleanDecObl, evidence := .decided true }
+
+/-- evidenceRedundancy NEGATIVE: the citation-tier row over a decidable
+claim — Class B flags only the WEAKER-than-kernel tiers (a hand proof
+is decideFirst's census's business, not this one) — quiet. -/
+def cleanCitedObl : Kit.Obligation Nat (1 < 2) :=
+  { label := "clean/cited"
+    tier := .provedAtElab
+    payload := 0
+    provenance := `LintKitFixtures.Clean }
+
+/-- evidenceRedundancy NEGATIVE: the citedProof discharge — quiet. -/
+def cleanCitedDischarged : Kit.Discharged Nat (1 < 2) :=
+  { obligation := cleanCitedObl
+    evidence := .citedProof `LintKitFixtures.Clean.cleanRoundtrip }
 
 /-- Generic quiet decl (no linter may flag an ordinary def). -/
 def plainOk (n : Nat) : Nat := n

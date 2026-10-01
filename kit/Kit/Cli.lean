@@ -31,7 +31,11 @@ none — the exes are how the rows run, not rows. Tests: KitTests.Cli
 (the did-you-mean teeth + the help-from-table pin + the verdict map).
 -/
 
-import Kit.Diag
+module
+
+public import Kit.Diag
+
+@[expose] public section
 
 namespace Kit.Cli
 
@@ -192,3 +196,5 @@ def run (prog : String) (about : String) (subs : List Sub)
         return Verdict.finding.exit
 
 end Kit.Cli
+
+end -- @[expose] public section

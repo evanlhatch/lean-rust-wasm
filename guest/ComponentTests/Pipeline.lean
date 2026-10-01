@@ -30,6 +30,9 @@ import Guest.Component
 import ComponentTests.Fixture
 import ComponentTests.StringFixture
 import ComponentTests.EdgeFixture
+import ComponentTests.FaultFixture
+import ComponentTests.WitFixture
+import ComponentTests.ImportFixture
 
 open Guest
 
@@ -89,3 +92,45 @@ def ComponentTests.Pipeline.edgeRows (s : Guest.Component.Spec) :
     List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile :=
   (Guest.Component.edgeComponentEmitter.run s,
    (Guest.Component.edgeComponentEmitter.runBinary).getD (fun _ => []) s)
+
+/-- The FAULT lane's spec: the hand-built heap-return module + the
+    typed-refusal world (`ComponentTests.FaultFixture.faultSpec` —
+    pure data, no LCNF re-run; the D6 port's result-channel face). -/
+def ComponentTests.Pipeline.faultSpec : Guest.Component.Spec :=
+  ComponentTests.FaultFixture.faultSpec
+
+/-- The FAULT lane's emission rows — the writer's write path
+    (`faultComponentEmitter`; the edgeRows discipline). -/
+def ComponentTests.Pipeline.faultRows (s : Guest.Component.Spec) :
+    List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile :=
+  (Guest.Component.faultComponentEmitter.run s,
+   (Guest.Component.faultComponentEmitter.runBinary).getD (fun _ => []) s)
+
+/-- The WITNESS lane's spec: the hand-built checker module + the
+    typed-refusal world (`ComponentTests.WitFixture.witGateSpec` —
+    pure data, no LCNF re-run; the host-gating lane's
+    `witness-gate : func(...) -> result<_, u64>` face). -/
+def ComponentTests.Pipeline.witSpec : Guest.Component.Spec :=
+  ComponentTests.WitFixture.witGateSpec
+
+/-- The WITNESS lane's emission rows — the writer's write path
+    (`witComponentEmitter`; the faultRows discipline). -/
+def ComponentTests.Pipeline.witRows (s : Guest.Component.Spec) :
+    List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile :=
+  (Guest.Component.witComponentEmitter.run s,
+   (Guest.Component.witComponentEmitter.runBinary).getD (fun _ => []) s)
+
+/-- The IMPORT lane's spec: the hand-built import fixture (the guest's
+    `add64` calling the imported `host-add` — `ComponentTests.
+    ImportFixture.importSpecOk`, pure data, no LCNF re-run; the
+    externs' OTHER half: the world's import row + the core module's
+    wasm import + the host's provision). -/
+def ComponentTests.Pipeline.importSpec : Guest.Component.Spec :=
+  ComponentTests.ImportFixture.importSpecOk
+
+/-- The IMPORT lane's emission rows — the writer's write path
+    (`importComponentEmitter`; the witRows discipline). -/
+def ComponentTests.Pipeline.importRows (s : Guest.Component.Spec) :
+    List Kit.Emit.GeneratedFile × List Kit.Emit.BinaryFile :=
+  (Guest.Component.importComponentEmitter.run s,
+   (Guest.Component.importComponentEmitter.runBinary).getD (fun _ => []) s)

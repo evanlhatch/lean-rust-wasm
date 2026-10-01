@@ -36,12 +36,17 @@ import SchemaTests.Commit
 import SchemaTests.EntityMachine
 import SchemaTests.Inc
 import SchemaTests.Confluence
+import SchemaTests.ProfileFast
 import SchemaTests.RustEmit
 import SchemaTests.Fuzz
 import SchemaTests.TsEmit
 import SchemaTests.Witness
 import SchemaTests.Dependent
 import SchemaTests.DeltaLog
+import SchemaTests.SurfaceV1
+import SchemaTests.Surface
+import SchemaTests.SurfaceNeg
+import SchemaTests.Config
 
 open Kit SchemaCore TestingKit
 
@@ -2440,6 +2445,7 @@ def main : IO UInt32 :=
     , ("SchemaCore.Pred", [predSpec])
     , ("SchemaCore.Check", [checkSpec])
     , ("SchemaCore.Keys", [keysSpec])
+    , ("SchemaCore.Surface", [SchemaTests.Surface.surfaceSpec])
     , ("SchemaCore.Update", [updateSpec])
     , ("SchemaCore.View", [viewSpec])
     , ("SchemaCore.EventSourced", [eventSourcedSpec, esCodecSpec, esMigrationSpec])
@@ -2449,6 +2455,7 @@ def main : IO UInt32 :=
     , ("SchemaCore.Emit.Fuzz", [SchemaTests.Fuzz.fuzzEmitSpec])
     , ("SchemaCore.Emit.Ts", [tsEmitSpec])
     , ("SchemaCore.Profile", [profilePinSpec, profileSpec])
+    , ("SchemaCore.Profile fast lane", SchemaTests.ProfileFast.profileFastSpecs)
     , ("SchemaCore.EntityMachine", [entityMachineSpec])
     , ("SchemaCore.Diff", [diffSpec, verdictSpec, remedySpec])
     , ("SchemaCore.Violate+Commit", [commitFaceSpec, refuseFaceSpec,
@@ -2458,7 +2465,9 @@ def main : IO UInt32 :=
     , ("SchemaCore.Witness", [witnessCheckerSpec, witnessObligationSpec,
         witnessCodecSpec, witnessProducerSpec])
     , ("SchemaCore.Dependent", [dependentSpec, dependentTypeSpec,
-        dependentRustSpec]) ]
+        dependentRustSpec])
+    , ("SchemaCore.Config", [SchemaTests.Config.configLawsSpec,
+        SchemaTests.Config.configLowerSpec, SchemaTests.Config.configRustSpec]) ]
 
 /-! ## The Rust lane (SchemaCore.Emit.Rust) — the differential's Lean side
 

@@ -59,8 +59,11 @@ peel.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import ZSet.Relation
+public import ZSet.Relation
+@[expose] public section
+
 
 namespace ZSet
 
@@ -530,3 +533,5 @@ def peel (g : Graph K V) : Nat → List V → Option (List (List V))
             fun layers => ss :: layers
 
 end ZSet
+
+end -- public section

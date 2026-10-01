@@ -48,9 +48,13 @@ Core-only. Five questions:
   axiom pins.
 -/
 
-import TextKit.Grammar.Parse
-import TextKit.Grammar.Check
-import Kit.CheckedProp
+module
+
+public import TextKit.Grammar.Parse
+public import TextKit.Grammar.Check
+public import Kit.CheckedProp
+
+@[expose] public section
 
 namespace TextKit
 
@@ -685,7 +689,7 @@ theorem Grammar.printFixBundle {R : Type} (m : R → Nat) (sb : GrammarE R R)
 -- The ok-inversion (ONE copy at the root: both families' proofs
 -- consume it — the E/G pair's shared bookkeeping, formerly duplicated
 -- as `GrammarE.ok_cur_inv` and `Grammar.ok_cur_inv`).
-private theorem ok_cur_inv {A : Type} {w : A × Cursor} {v : A} {c : Cursor}
+theorem ok_cur_inv {A : Type} {w : A × Cursor} {v : A} {c : Cursor}
     (h : (Except.ok w : Except ParseError (A × Cursor)) = Except.ok (v, c)) : w.2 = c :=
   (Prod.mk.inj (Except.ok.inj h)).2
 
@@ -1037,7 +1041,7 @@ theorem GG.parseMonoGG :
             | repG a =>
                 intro hn xs cur cur' h
                 simp only [parseGG] at h
-                have hna : GG.mu a < n := by simp [GG.mu] at hn; omega
+                have hna : GG.mu a < n := by grind [GG.mu]
                 have manyMono : ∀ f, f ≤ F → ∀ ys c c',
                     parseManyGG sb a f c = .ok (ys, c') → c'.cs.length ≤ c.cs.length := by
                   intro f
@@ -1497,8 +1501,7 @@ theorem GrammarE.print_parse_E {R : Type} (sb : GrammarE R R) (m : R → Nat)
                     valueOkWalk_congr b y _ _ (fun _ _ => rfl)
                   refine ⟨?_, ?_, ?_⟩
                   · rw [hx1, hy1, String.toList_append, List.append_assoc]
-                  · rw [hy2, hx2, String.length_append]
-                    omega
+                  · grind [String.length_append]
                   · rw [valueOkWalk_seqE, ← hbrAB, ← hbrBB]
                     simp [hx3, hy3]
       | altE a b iha ihb =>
@@ -2869,7 +2872,7 @@ theorem Grammar.parseExcludeG :
     file's compile fix: with A fixed at the surface, the fuel-IH gets
     captured into the structural IHs and the seq case's payload
     unification fails). -/
-private theorem Grammar.print_parse_aux :
+theorem Grammar.print_parse_aux :
     ∀ (fuel : Nat) {R : Type} (g : Grammar R),
     altCoherent g →
       ∀ {x : R} {cur cur' : Cursor},
@@ -2907,8 +2910,7 @@ private theorem Grammar.print_parse_aux :
                   rw [printG_seq]
                   refine ⟨?_, ?_, ?_⟩
                   · rw [hx1, hy1, String.toList_append, List.append_assoc]
-                  · rw [hy2, hx2, String.length_append]
-                    omega
+                  · grind [String.length_append]
                   · rw [valueOk_seq]
                     simp [hx3, hy3]
       | alt a b iha ihb =>
@@ -4435,7 +4437,7 @@ theorem GrammarE.parse_print_E {R : Type} (m : R → Nat) (sb : GrammarE R R)
                   (fun y _ => Grammar.printFix m sb dec y)).toList.length + sfx.length) := by
             rw [List.length_append, List.length_append]
           have hgs1 : 1 ≤ guardSlack (GrammarE.seqE a b) := by
-            unfold guardSlack; split <;> omega
+            grind (splits := 4) [GrammarE.guardSlack]
           have hfuelA : ((printWalk a p (fun y _ => Grammar.fixValueOk m sb dec y)
                 (fun y _ => Grammar.printFix m sb dec y)).toList ++
               ((printWalk b q (fun y _ => Grammar.fixValueOk m sb dec y)
@@ -4464,7 +4466,8 @@ theorem GrammarE.parse_print_E {R : Type} (m : R → Nat) (sb : GrammarE R R)
                   have h2 := String.ne_empty_length hPA
                   rw [← String.length_toList] at h2
                   exact h2
-                have h2b : guardSlack b ≤ 2 := by unfold guardSlack; split <;> omega
+                have h2b : guardSlack b ≤ 2 := by
+                  grind (splits := 4) [GrammarE.guardSlack]
                 have hrel : guardSlack (GrammarE.seqE a b) = guardSlack a := by
                   have h2 : guardE (GrammarE.seqE a b) = guardE a := by
                     show (guardE a && (if nullableE a then guardE b else true))
@@ -4707,7 +4710,8 @@ theorem GrammarE.parse_print_E {R : Type} (m : R → Nat) (sb : GrammarE R R)
                       have h2 := String.ne_empty_length hPz
                       rw [← String.length_toList] at h2
                       exact h2
-                    have h1g : 1 ≤ guardSlack a := by unfold guardSlack; split <;> omega
+                    have h1g : 1 ≤ guardSlack a := by
+                      grind (splits := 4) [GrammarE.guardSlack]
                     rw [hcsE, GrammarE.printList_cons, String.toList_append,
                       List.length_append, List.length_append] at hf0
                     exact absurd hf0 (by omega)
@@ -5646,3 +5650,5 @@ def Grammar.grammarPredictive {R : Type} : Kit.CheckedProp (Grammar R) where
   complete? := .missing
 
 end TextKit
+
+end -- public section

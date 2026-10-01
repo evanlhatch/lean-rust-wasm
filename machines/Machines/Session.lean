@@ -84,11 +84,14 @@ content, re-carried over the closed branching grammar).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Basic
-import Machines.Coalg
-import Kit.Observer
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+public import Machines.Basic
+public import Machines.Coalg
+public import Kit.Observer
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 namespace Machines
 
@@ -519,3 +522,5 @@ theorem bounded_refines [DecidableEq P] :
 end Session
 
 end Machines
+
+end -- public section

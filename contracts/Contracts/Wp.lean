@@ -55,9 +55,12 @@ The five questions (notes/v3/01-core.md):
 Core-only: imports Effects.Footprint + Kit.Obligation only (the cone
 rule; no mathlib, no Batteries).
 -/
+module
 
-import Effects.Footprint
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+public import Effects.Footprint
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+@[expose] public section
+
 
 namespace Contracts
 
@@ -337,3 +340,5 @@ theorem while_sat (P Q : State → Prop) (w : While) (v : LoopVCs P Q w) (s : St
   while_sound_fuel P Q w v (w.var s + 1) s (v.vInit s h) (Nat.le_succ _)
 
 end Contracts
+
+end -- public section

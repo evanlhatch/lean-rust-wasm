@@ -77,9 +77,13 @@ SchemaCore.RowVals — the cone rule; the Rust face renders TEXT only,
 it is not an emitter).
 -/
 
-import SchemaCore.Fold
-import SchemaCore.Pred
-import SchemaCore.RowVals
+module
+
+public import SchemaCore.Fold
+public import SchemaCore.Pred
+public import SchemaCore.RowVals
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -570,3 +574,5 @@ example : ({ packetSpec with
   = ["field `length` must be a result (got u64)"] := rfl
 
 end SchemaCore
+
+end -- public section

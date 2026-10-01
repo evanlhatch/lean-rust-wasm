@@ -15,12 +15,13 @@ Positive pins + the MANDATORY negative controls (15-patterns #5) for
 3. `keep` — the wall-1 DISSOLVE's runtime face: the drop projection's
    lowered rel runs the keep walk, and the kept row IS the query lane's
    picked row (`toTypedRow_keep`'s content at runtime).
-4. `refusals` — the mandatory negative controls: the join's NAMED
-   refusal (QL0001 — the wall-2 disposition, the bridge refuses the
-   QUERY), the mis-typed column's resolution refusal (the lowering
-   refuses the QUERY where the checker refuses the ROW), the missing
-   column, and the NULL cell's decode refusal (the Codec's honest
-   partiality).
+4. `refusals` — the mandatory negative controls: the join's KEY
+   refusals (QL0001 — the wall-2 dissolve's residue: the shared-base
+   join LOWERS, but an unresolvable key column and a key type outside
+   the comparison-kernel fragment still refuse the QUERY), the
+   mis-typed column's resolution refusal (the lowering refuses the
+   QUERY where the checker refuses the ROW), the missing column, and
+   the NULL cell's decode refusal (the Codec's honest partiality).
 -/
 
 import Query
@@ -82,10 +83,31 @@ def bridgeRun {gs : List Field} (q : Q bFields gs) :
       | .error _ => []
   | .error _ => []
 
-/-- The equijoin (the wall-2 fragment face): the bridge REFUSES it —
-    the named QL0001, never a fabricated lowering. -/
+/-- THE EQUIJOIN (the wall-2 dissolve's fragment face): the shared-base
+    join LOWERS — self-joined on `id`, the appended schema's rows. -/
 def joinSelf : Q bFields (bFields ++ bFields) :=
   .join "id" "id" .table .table
+
+/-- The equijoin's key refusal: the right key does not resolve (no
+    such column on the right side) — QL0001, never a fabricated
+    comparison. -/
+def joinMissingKey : Q bFields (bFields ++ bFields) :=
+  .join "id" "nope" .table .table
+
+/-- A query whose result schema CARRIES the join's appended shape
+    (the select-over-join arm — the endo-filter's plan-honest face). -/
+def selectOverJoin : Q bFields (bFields ++ bFields) :=
+  .select (.u64EqLit "id" 2) (.join "id" "id" .table .table)
+
+/-- The string kernel's join (the strEqSig dispatch's second row). -/
+def joinStr : Q bFields (bFields ++ bFields) :=
+  .join "name" "name" .table .table
+
+/-- The key TYPE DISAGREEMENT: the right key resolves only at its own
+    type, not the left key's — QL0001 (no transport, no fabricated
+    comparison). -/
+def joinTypeMismatch : Q bFields (bFields ++ bFields) :=
+  .join "id" "name" .table .table
 
 /-! ## Suite — the bridge's teeth -/
 
@@ -107,6 +129,27 @@ def bridgeSpec : Spec :=
                some (bRow 1 "ann" 200), some (bRow 2 "bob" 50), some (bRow 3 "cee" 300)])
         && (weightW (evalQ bigSel (tableW bRows true)) (bRow 2 "bob" 50) = false)
         && (weightW (evalQ bigSel (tableW bRows true)) (bRow 3 "cee" 300) = true)
+        -- THE JOIN: the wall-2 dissolve's duel — the shared-base join
+        -- lowers, both evaluators agree on the ON-satisfying appended
+        -- rows (the self-join on id: every row pairs with itself alone,
+        -- ids distinct — 3 appended pairs)
+        && decide (bridgeRun joinSelf
+            = [some (Query.Row.append (bRow 1 "ann" 200) (bRow 1 "ann" 200)),
+               some (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50)),
+               some (Query.Row.append (bRow 3 "cee" 300) (bRow 3 "cee" 300))])
+        && (weightW (evalQ joinSelf (tableW bRows true))
+              (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50)) = true)
+        && (weightW (evalQ joinSelf (tableW bRows true))
+              (Query.Row.append (bRow 1 "ann" 200) (bRow 2 "bob" 50)) = false)
+        -- SELECT-OVER-JOIN: the endo filter rides the sub-plan's
+        -- output schema (the plan-honest face) — one pair survives
+        && decide (bridgeRun selectOverJoin
+            = [some (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50))])
+        -- the STRING kernel's join (the strEqSig dispatch's second row)
+        && decide (bridgeRun joinStr
+            = [some (Query.Row.append (bRow 1 "ann" 200) (bRow 1 "ann" 200)),
+               some (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50)),
+               some (Query.Row.append (bRow 3 "cee" 300) (bRow 3 "cee" 300))])
         -- THE KEEP: the drop projection's duel — both evaluators agree
         && decide (bridgeRun idProj
             = [some projRow1, some (.cons (.u64 2) .nil), some (.cons (.u64 3) .nil)])
@@ -119,11 +162,16 @@ def bridgeSpec : Spec :=
             | .ok n => decide (n = 3)
             | .error _ => false))
         "the bridge's round trips or the agreement drifted")
-    [ ("the join LOWERS (caught: the bridge refuses — the wall-2 disposition, QL0001)",
+    [("the join's MISSING KEY refuses (caught: the dissolve's named narrowing, QL0001)",
         fun _ => assert
-          (match qToRel joinSelf with
-          | .error _ => false | .ok _ => true)
-          "the join refusal was not exercised")
+          (match qToRel joinMissingKey with
+          | .ok _ => true | .error _ => false)
+          "the missing-key refusal was not exercised")
+    , ("the join's key TYPE DISAGREEMENT refuses (caught: QL0001)",
+        fun _ => assert
+          (match qToRel joinTypeMismatch with
+          | .ok _ => true | .error _ => false)
+          "the type-disagreement refusal was not exercised")
     , ("the nullability bit IS recoverable (caught: the Retraction's honest gap)",
         fun _ => assert (fieldToCol (colToField ("x", .i64, true)) = ("x", .i64, true))
           "the inverse recovered the bit")

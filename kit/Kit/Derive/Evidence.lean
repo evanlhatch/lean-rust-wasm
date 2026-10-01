@@ -43,7 +43,11 @@ The five questions (notes/v3/01-core.md):
   full cone arriving with a derived capability).
 -/
 
-import Kit.Obligation
+module
+
+public import Kit.Obligation
+
+@[expose] public section
 
 namespace Kit.Derive.Evidence
 
@@ -256,3 +260,5 @@ theorem mechanicalControls_closedFinite_two :
     (mechanicalControls .closedFinite).length == 2 := rfl
 
 end Kit.Derive.Evidence
+
+end -- @[expose] public section

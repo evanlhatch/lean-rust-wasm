@@ -30,7 +30,13 @@ The five questions (notes/v3/01-core.md):
   axiom sweep covers it); KitTests.Axioms pins the bridge's cone.
 -/
 
-import Kit.Correspondence
+
+module
+
+public import Kit.Correspondence
+
+@[expose] public section
+
 
 namespace Kit
 
@@ -103,3 +109,5 @@ def toIso (c : CheckedProp α) (hc : ∀ a, c.P a → c.check a = true) :
 end CheckedProp
 
 end Kit
+
+end -- @[expose] public section

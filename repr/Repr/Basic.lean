@@ -54,7 +54,12 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Kit.Relation
+
+module
+
+public import Kit.Relation
+
+@[expose] public section
 
 namespace Repr
 
@@ -213,3 +218,6 @@ theorem no_ignore_step {Tok Obs C A : Type} (R : Kit.Rel C A)
   exact hne (hfun c0 a0 (astep t a0) hR0 h).symm
 
 end Repr
+
+
+end -- public section

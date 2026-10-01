@@ -19,5 +19,13 @@ aggregation, arithmetic generation, recursive bag weights, external
 effects — each lands with its named law.
 -/
 
-import Datalog.Basic
-import Datalog.Semantics
+
+module
+
+public import Datalog.Basic
+public import Datalog.Semantics
+
+@[expose] public section
+
+
+end -- public section

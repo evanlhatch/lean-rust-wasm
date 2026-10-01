@@ -67,7 +67,12 @@ as an exclusion lives in `Machines.Dsl` (`machine_safety`).
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Machines.Basic
+
+module
+
+public import Machines.Basic
+
+@[expose] public section
 
 namespace Machines
 
@@ -220,3 +225,6 @@ theorem reachable_preserves (m : MachineWithInv S I) (init : S)
 end MachineWithInv
 
 end Machines
+
+
+end -- public section

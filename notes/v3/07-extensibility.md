@@ -95,7 +95,7 @@ its second phase boundary without firing is a finding.
 
 | module | status | consumer / trigger |
 |---|---|---|
-| `Kit.Hyper` | KEPT | 16 §4.3's ranked program (the doctrine commits to the power jump); consumer = the first security-facing lane claim (noninterference, 08 §35's safety rows at the power); the worked instances + the KitTests pins are the evidence until then. DEADLINE (named, wave-30 A6): the NAMED candidate consumer is the asyncband models' schedule-independence claim — a KEPT row outliving its SECOND phase boundary without that consumer (or a named successor) is a finding; the header carries the discipline inline |
+| `Kit.Hyper` | CONSUMED (wave-30 E5) | 16 §4.3's ranked program (the doctrine commits to the power jump); FIRST CONSUMER LANDED: `Machines.Async.watch_schedule_independent` — the asyncband models' schedule-independence claim (the watch channel's coalescing as a `Noninterfering` instance over execution pairs, the extract as data, zero new machinery); the named SUCCESSOR consumer is the first security-facing lane claim (noninterference, 08 §35's safety rows at the power); the worked instances + the KitTests pins + the E5 consumer are the evidence |
 
 DELETED (wave-30 A6, the table's own rule — each PARKED row outlived its
 second phase boundary without its trigger firing; grep-verified zero

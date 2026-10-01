@@ -156,8 +156,9 @@ pub fn parse_profile(text: &str) -> Result<DeterministicProfile, ProfileError> {
     for (k, v) in rows {
         let slot: &mut Option<bool> = match k {
             "compilation" => {
-                let m = CompilationMode::of_row(v).ok_or_else(|| {
-                    ProfileError::UnknownValue { key: k.to_string(), value: v.to_string() }
+                let m = CompilationMode::of_row(v).ok_or_else(|| ProfileError::UnknownValue {
+                    key: k.to_string(),
+                    value: v.to_string(),
                 })?;
                 if compilation.replace(m).is_some() {
                     return Err(ProfileError::DuplicateKey(k.to_string()));
@@ -180,7 +181,7 @@ pub fn parse_profile(text: &str) -> Result<DeterministicProfile, ProfileError> {
                 return Err(ProfileError::UnknownValue {
                     key: k.to_string(),
                     value: v.to_string(),
-                })
+                });
             }
         };
         if slot.replace(b).is_some() {
@@ -191,9 +192,9 @@ pub fn parse_profile(text: &str) -> Result<DeterministicProfile, ProfileError> {
     // The strict completeness face: eight axes, all present.
     let _ = seen;
     Ok(DeterministicProfile {
-        consume_fuel: consume_fuel.ok_or_else(|| ProfileError::MissingKey("consume-fuel".into()))?,
-        compilation: compilation
-            .ok_or_else(|| ProfileError::MissingKey("compilation".into()))?,
+        consume_fuel: consume_fuel
+            .ok_or_else(|| ProfileError::MissingKey("consume-fuel".into()))?,
+        compilation: compilation.ok_or_else(|| ProfileError::MissingKey("compilation".into()))?,
         floats: floats.ok_or_else(|| ProfileError::MissingKey("floats".into()))?,
         memory64: memory64.ok_or_else(|| ProfileError::MissingKey("memory64".into()))?,
         multi_memory: multi_memory
@@ -211,7 +212,10 @@ pub fn parse_profile(text: &str) -> Result<DeterministicProfile, ProfileError> {
 /// the reader re-derives nothing).
 pub fn load_profile(gen_dir: &Path) -> Result<DeterministicProfile, ProfileError> {
     let text = std::fs::read_to_string(gen_dir.join(PROFILE_FILE)).map_err(|e| {
-        ProfileError::MalformedRow(format!("{} unreadable: {e}", gen_dir.join(PROFILE_FILE).display()))
+        ProfileError::MalformedRow(format!(
+            "{} unreadable: {e}",
+            gen_dir.join(PROFILE_FILE).display()
+        ))
     })?;
     parse_profile(&text)
 }
@@ -250,8 +254,7 @@ mod tests {
     #[test]
     fn refuses_malformed_profiles() {
         assert_eq!(
-            parse_profile(&GOOD.replace("simd\toff", "spectre\toff"))
-                .unwrap_err(),
+            parse_profile(&GOOD.replace("simd\toff", "spectre\toff")).unwrap_err(),
             ProfileError::UnknownKey("spectre".into())
         );
         assert!(matches!(

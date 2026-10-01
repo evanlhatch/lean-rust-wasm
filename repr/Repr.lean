@@ -32,6 +32,10 @@ The five questions (notes/v3/01-core.md):
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Repr.Basic
-import Repr.FinMap
+public import Repr.Basic
+public import Repr.FinMap
+@[expose] public section
+
+end -- public section

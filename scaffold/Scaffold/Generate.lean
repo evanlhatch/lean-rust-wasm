@@ -69,9 +69,13 @@ Five questions (notes/v3/01-core.md):
   elaboration + the teeth); the gates' wiring is the adoption act.
 -/
 
-import Kit.Emit
-import Kit.Derive.Evidence
-import Scaffold.Spec
+module
+
+public import Kit.Emit
+public import Kit.Derive.Evidence
+public import Scaffold.Spec
+
+@[expose] public section
 
 namespace Scaffold
 

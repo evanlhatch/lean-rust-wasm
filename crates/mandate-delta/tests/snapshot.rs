@@ -17,8 +17,7 @@ fn fixture_schema() -> mandate_delta::Schema {
 }
 
 fn temp_dir(tag: &str) -> ScratchDir {
-    ScratchDir::new(&format!("mandate-delta-snap-{tag}"))
-        .unwrap_or_else(|e| panic!("tempdir: {e}"))
+    ScratchDir::new(&format!("mandate-delta-snap-{tag}")).unwrap_or_else(|e| panic!("tempdir: {e}"))
 }
 
 /// THE LCG STREAM (the tree's one recurrence — TestingKit.lcg, Knuth 64,
@@ -88,19 +87,28 @@ fn snapshot_plus_tail_equals_full_replay_sweep() {
             let mut log = DeltaLog::open(&log_path, schema.clone())
                 .unwrap_or_else(|e| panic!("case {case}: open: {e}"));
             for (i, d) in ops.iter().enumerate() {
-                log.append(d.clone()).unwrap_or_else(|e| panic!("case {case}: append {i}: {e}"));
+                log.append(d.clone())
+                    .unwrap_or_else(|e| panic!("case {case}: append {i}: {e}"));
             }
-            log.compact(s as u64, &snap_path).unwrap_or_else(|e| panic!("case {case}: compact: {e}"));
+            log.compact(s as u64, &snap_path)
+                .unwrap_or_else(|e| panic!("case {case}: compact: {e}"));
             // In memory, compaction changes the INDEX, never the state.
-            assert_eq!(*log.state(), reference, "case {case}: state changed by compact");
+            assert_eq!(
+                *log.state(),
+                reference,
+                "case {case}: state changed by compact"
+            );
             assert_eq!(log.len(), (n - s) as u64, "case {case}: rebased length");
             assert_eq!(log.entries(), &ops[s..], "case {case}: rebased entries");
         }
         // Reopen: snapshot + tail = the full replay.
-        let (mut log, report) =
-            DeltaLog::open_snapshotted(&log_path, &snap_path, schema.clone())
-                .unwrap_or_else(|e| panic!("case {case}: reopen: {e}"));
-        assert_eq!(report, SnapshotReport::Applied { seqno: s as u64 }, "case {case}: report");
+        let (mut log, report) = DeltaLog::open_snapshotted(&log_path, &snap_path, schema.clone())
+            .unwrap_or_else(|e| panic!("case {case}: reopen: {e}"));
+        assert_eq!(
+            report,
+            SnapshotReport::Applied { seqno: s as u64 },
+            "case {case}: report"
+        );
         assert_eq!(*log.state(), reference, "case {case}: reopened state");
         assert_eq!(log.entries(), &ops[s..], "case {case}: reopened entries");
         // The rebased log stays appendable and honest.
@@ -160,9 +168,8 @@ fn torn_snapshot_at_every_offset_falls_back_and_reports() {
     }
     // The intact file still applies (the negative control).
     std::fs::write(&cut_path, &raw).unwrap_or_else(|e| panic!("write: {e}"));
-    let (log, report) =
-        DeltaLog::open_snapshotted(&log_path, &cut_path, schema.clone())
-            .unwrap_or_else(|e| panic!("open: {e}"));
+    let (log, report) = DeltaLog::open_snapshotted(&log_path, &cut_path, schema.clone())
+        .unwrap_or_else(|e| panic!("open: {e}"));
     assert_eq!(report, SnapshotReport::Applied { seqno: 4 });
     // The APPLIED path recovers the FULL state (snapshot + tail) — the
     // torn fallbacks above recovered only the tail's replay, REPORTED.
@@ -192,8 +199,14 @@ fn corrupt_snapshot_never_loads() {
     let bad_path = dir.path().join("bad.snapshot");
     type Mutator = fn(&mut Vec<u8>);
     let mutators: &[(&str, Mutator)] = &[
-        ("hash-byte", |b| { let n = b.len() - 1; b[n] ^= 0x01; }),
-        ("state-byte", |b| { let m = b.len() / 2; b[m] ^= 0x01; }),
+        ("hash-byte", |b| {
+            let n = b.len() - 1;
+            b[n] ^= 0x01;
+        }),
+        ("state-byte", |b| {
+            let m = b.len() / 2;
+            b[m] ^= 0x01;
+        }),
         ("magic", |b| b[0] = b'X'),
         ("trailing", |b| b.push(0)),
     ];
@@ -229,8 +242,10 @@ fn torn_log_tail_beside_snapshot_recovers_and_reports() {
         }
         log.compact(4, &snap_path).unwrap_or_else(|e| panic!("{e}"));
         // Two more frames AFTER the compaction (the tail grew).
-        log.append(Delta::Insert(fixture_row(50, "x"))).unwrap_or_else(|e| panic!("{e}"));
-        log.append(Delta::Insert(fixture_row(51, "y"))).unwrap_or_else(|e| panic!("{e}"));
+        log.append(Delta::Insert(fixture_row(50, "x")))
+            .unwrap_or_else(|e| panic!("{e}"));
+        log.append(Delta::Insert(fixture_row(51, "y")))
+            .unwrap_or_else(|e| panic!("{e}"));
     }
     let bytes = std::fs::read(&log_path).unwrap_or_else(|e| panic!("read: {e}"));
     // Tear the tail: cut the file mid-last-frame.
@@ -240,8 +255,14 @@ fn torn_log_tail_beside_snapshot_recovers_and_reports() {
         .unwrap_or_else(|e| panic!("open: {e}"));
     // The snapshot applies (rule B: the log is the tail) AND the log's
     // own cut is reported. BOTH reports surface.
-    assert_eq!(report, SnapshotReport::Applied { seqno: 4 }, "snapshot report");
-    let rec = log.recovery().unwrap_or_else(|| panic!("the torn tail went SILENT"));
+    assert_eq!(
+        report,
+        SnapshotReport::Applied { seqno: 4 },
+        "snapshot report"
+    );
+    let rec = log
+        .recovery()
+        .unwrap_or_else(|| panic!("the torn tail went SILENT"));
     // Surviving frames: 6 post-cut + 2 post-appends - 1 torn = 7.
     assert_eq!(rec.frames, 7, "the good prefix's frame count");
     // The state: snapshot + surviving tail (one post-append frame).
@@ -282,10 +303,15 @@ fn torn_both_recovers_and_reports_twice() {
     let (log, report) = DeltaLog::open_snapshotted(&log_path, &snap_path, schema.clone())
         .unwrap_or_else(|e| panic!("open: {e}"));
     assert!(
-        matches!(report, SnapshotReport::FellBack(FallbackReason::Torn { .. })),
+        matches!(
+            report,
+            SnapshotReport::FellBack(FallbackReason::Torn { .. })
+        ),
         "the torn snapshot must be reported: {report}"
     );
-    let rec = log.recovery().unwrap_or_else(|| panic!("the torn log tail went SILENT"));
+    let rec = log
+        .recovery()
+        .unwrap_or_else(|| panic!("the torn log tail went SILENT"));
     assert_eq!(rec.frames, 2, "the surviving log prefix");
     assert_eq!(*log.state(), reference, "state = surviving replay");
 }
@@ -329,10 +355,15 @@ fn compact_interrupted_before_the_cut() {
     let (mut log, report) = DeltaLog::open_snapshotted(&log_path, &snap_path, schema.clone())
         .unwrap_or_else(|e| panic!("open: {e}"));
     assert_eq!(report, SnapshotReport::Applied { seqno: 5 });
-    assert_eq!(*log.state(), reference, "state after the interrupted compact");
+    assert_eq!(
+        *log.state(),
+        reference,
+        "state after the interrupted compact"
+    );
     assert_eq!(log.len(), 3, "the dead prefix still sits in the file");
     // A later compact heals it (the real cut this time).
-    log.compact(3, &snap_path).unwrap_or_else(|e| panic!("heal compact: {e}"));
+    log.compact(3, &snap_path)
+        .unwrap_or_else(|e| panic!("heal compact: {e}"));
     drop(log);
     let (log, report) = DeltaLog::open_snapshotted(&log_path, &snap_path, schema.clone())
         .unwrap_or_else(|e| panic!("re-open: {e}"));
@@ -383,7 +414,11 @@ fn foreign_snapshot_refuses_to_align() {
     let (log, report) = DeltaLog::open_snapshotted(&log_b, &snap_a, schema.clone())
         .unwrap_or_else(|e| panic!("open: {e}"));
     assert_eq!(report, SnapshotReport::FellBack(FallbackReason::Unaligned));
-    assert_eq!(*log.state(), reference_b, "the fallback is B's own full replay");
+    assert_eq!(
+        *log.state(),
+        reference_b,
+        "the fallback is B's own full replay"
+    );
 }
 
 /// The byte-tie: the snapshot's ATOMS are the log's atoms — a
@@ -399,15 +434,21 @@ fn snapshot_atoms_refuse_out_of_policy_bytes() {
     raw.extend_from_slice(&[0]); // row count
     raw.extend_from_slice(&8u64.to_le_bytes()); // prefix hash
     raw.extend_from_slice(&9u64.to_le_bytes()); // tail-head hash
-    raw.extend_from_slice(&mandate_delta::snapshot::bytes_hash(&{
-        let mut b = b"MDL1".to_vec();
-        b.extend_from_slice(&[0x80, 0x00, 0]);
-        b.extend_from_slice(&8u64.to_le_bytes());
-        b.extend_from_slice(&9u64.to_le_bytes());
-        b
-    }).to_le_bytes());
+    raw.extend_from_slice(
+        &mandate_delta::snapshot::bytes_hash(&{
+            let mut b = b"MDL1".to_vec();
+            b.extend_from_slice(&[0x80, 0x00, 0]);
+            b.extend_from_slice(&8u64.to_le_bytes());
+            b.extend_from_slice(&9u64.to_le_bytes());
+            b
+        })
+        .to_le_bytes(),
+    );
     match snapshot::decode_snapshot(&schema, &raw) {
-        Err(snapshot::SnapshotError::Corrupt { reason: "non-canonical varint", .. }) => {}
+        Err(snapshot::SnapshotError::Corrupt {
+            reason: "non-canonical varint",
+            ..
+        }) => {}
         other => panic!("expected the atom refusal, got {other:?}"),
     }
 }
@@ -421,7 +462,8 @@ fn compact_range_refusal_writes_nothing() {
     let log_path = dir.path().join("j.bin");
     let snap_path = snapshot::snapshot_path_for(&log_path);
     let mut log = DeltaLog::open(&log_path, schema.clone()).unwrap_or_else(|e| panic!("{e}"));
-    log.append(Delta::Insert(fixture_row(1, "a"))).unwrap_or_else(|e| panic!("{e}"));
+    log.append(Delta::Insert(fixture_row(1, "a")))
+        .unwrap_or_else(|e| panic!("{e}"));
     assert!(matches!(
         log.compact(5, &snap_path),
         Err(DeltaError::CompactRange { seqno: 5, len: 1 })
@@ -459,7 +501,10 @@ fn plain_open_ignores_the_snapshot() {
     // the honest consequence of compaction, never a wrong state).
     assert_eq!(*log.state(), full_replay(&schema, &ops[4..]));
     assert!(log.recovery().is_none());
-    assert_eq!(DeltaLog::open_snapshotted(&log_path, &snap_path, fixture_schema())
-        .unwrap_or_else(|e| panic!("{e}"))
-        .1, SnapshotReport::Applied { seqno: 4 });
+    assert_eq!(
+        DeltaLog::open_snapshotted(&log_path, &snap_path, fixture_schema())
+            .unwrap_or_else(|e| panic!("{e}"))
+            .1,
+        SnapshotReport::Applied { seqno: 4 }
+    );
 }

@@ -52,6 +52,13 @@ def main : IO UInt32 := do
       [(wasmSliceEmitter, wasmSliceModule)]
       (fun _ f =>
         pure { items := items, contentHash := Kit.Emit.bytesHash f.contents })
+    -- THE FEATURE SHIM (WasmCore.Profile's row): the selection shim —
+    -- the feature table rendered + the simd128 probe + the `select`
+    -- contract; `gates gen-check` ties it through the same ONE emitter.
+    let _shim ← Kit.Emit.runEmitters "wasmgen"
+      [(WasmCore.Profile.shimEmitter, ())]
+      (fun _ f => pure { items := WasmCore.Profile.featureList.length
+                       , contentHash := f.contents.hash })
     -- THE DUEL's lanes (WasmCore.Duel's row): the manifest (text) +
     -- the family vectors (binary, each with its sidecar). The
     -- executor-computed expectations come from `duelRows` — the SAME
@@ -75,5 +82,5 @@ def main : IO UInt32 := do
       IO.println s!"wasmgen: duel manifest + {WasmCore.Duel.duelPaths.length} \
         vector(s) written"
     IO.println s!"wasmgen: {texts.length} text + {bins.length} binary \
-      artifact(s) written"
+      artifact(s) written (the feature shim included)"
     return 0

@@ -92,8 +92,11 @@ not a lifecycle state).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Dsl
+public import Machines.Dsl
+@[expose] public section
+
 
 namespace Machines
 
@@ -200,3 +203,5 @@ theorem hostLifecycleWedge_battery_refutes :
 #print axioms hostLifecycleTableStep?_eq_step?
 
 end Machines
+
+end -- public section

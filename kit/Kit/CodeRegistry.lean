@@ -57,13 +57,17 @@ Core-only (no mathlib/Batteries). Five questions (notes/v3/01-core.md):
   KitTests pins + the axiom pins in KitTests.Axioms.
 -/
 
-import Kit.CheckedProp
-import TextKit.Basic
-import TextKit.Literals
-import TextKit.Grammar
-import TextKit.Grammar.Lexemes
-import TextKit.Grammar.Check
-import TextKit.Grammar.Laws
+module
+
+public import Kit.CheckedProp
+public import TextKit.Basic
+public import TextKit.Literals
+public import TextKit.Grammar
+public import TextKit.Grammar.Lexemes
+public import TextKit.Grammar.Check
+public import TextKit.Grammar.Laws
+
+@[expose] public section
 namespace Kit
 
 /-! ## the row -/
@@ -716,7 +720,7 @@ data here, so the teeth tests construct occurrences directly.
     HERE and in `notes/code-registry.txt` in the same change. -/
 def codeFamilies : List String :=
   ["KB", "KD", "KL", "TK", "SC", "SD", "SCF", "SN", "SE", "WV", "SU", "GC",
-    "EM", "IN", "FT", "QL", "SS", "LK", "GT", "CX"]
+    "EM", "IN", "FT", "QL", "SS", "LK", "GT", "CX", "SR", "CF", "WD"]
 
 /-- The RAW code shape: uppercase letters (the family prefix's
     spelling) followed by exactly 4 digits — the family clause
@@ -768,3 +772,5 @@ first, then spell it"
 end CodeRegistry
 
 end Kit
+
+end -- public section

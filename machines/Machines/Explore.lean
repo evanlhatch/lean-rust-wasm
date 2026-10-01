@@ -74,8 +74,11 @@ table).
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Basic
+public import Machines.Basic
+@[expose] public section
+
 
 namespace Machines
 
@@ -453,3 +456,5 @@ theorem check_refuted (m : Machine S I) (inv? : S → Bool) (inputs : List I)
     h
 
 end Machines
+
+end -- public section

@@ -2,6 +2,13 @@
 /.lake/
 lake-manifest.json
 
+# The pinned gate tools' build residue (NOT committed binaries —
+# `just tools-nanoda` is the artifact; the recipe is the discipline)
+/.tools/
+
+# lean-beam session state (the daemon's live dir — never tracked)
+/.beam/
+
 # Rust
 /target/
 /crates/target/
@@ -26,3 +33,4 @@ node_modules/
 # Local env + secrets
 .env
 .secrets/
+/.gates-warm-cache/

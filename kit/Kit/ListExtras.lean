@@ -36,6 +36,11 @@ The five questions (notes/v3/01-core.md):
   the moved theorems by their new Kit.ListExtras names).
 -/
 
+
+
+module
+
+@[expose] public section
 namespace Kit.ListExtras
 
 /-- Order-preserving dedup — the report faces' ONE copy (first
@@ -147,3 +152,5 @@ theorem permAppendComm {α : Type} :
       exact (List.Perm.cons x ih).trans (permConsAppend x l₂ xs)
 
 end Kit.ListExtras
+
+end -- @[expose] public section

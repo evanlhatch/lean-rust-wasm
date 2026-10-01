@@ -62,9 +62,13 @@ The five questions (notes/v3/01-core.md):
 
 Imports: `WasmCore.Types` only (cone-ordered).
 -/
+module
 
-import WasmCore.Types
 
+public import WasmCore.Types
+
+
+@[expose] public section
 namespace WasmCore
 
 -- MEMORY OPS + OPS GET THEIR MEANING from `WasmCore.OpTable` — the
@@ -155,3 +159,6 @@ theorem lSize_cons (i : Instr) (is : List Instr) :
     lSize (i :: is) = iSize i + lSize is := rfl
 
 end WasmCore
+
+end -- public section
+

@@ -35,7 +35,13 @@ deliberately per 01-core §3, never silently.
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Kit.Correspondence
+
+module
+
+public import Kit.Correspondence
+
+@[expose] public section
+
 
 namespace Kit
 
@@ -232,3 +238,5 @@ theorem Observer.equiv_below {E O₁ O₂ : Type} {o₁ : Observer E O₁}
   exact congrArg h.extract hxy
 
 end Kit
+
+end -- @[expose] public section

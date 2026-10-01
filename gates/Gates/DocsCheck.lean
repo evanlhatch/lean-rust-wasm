@@ -47,17 +47,18 @@ oleans — this gate never builds). Not a load-time gate: a package env
 that fails to load is a FAILURE (an unloadable tree verifies nothing).
 
 THE MEMORY SHAPE (revised — the deliberate in-process exclusion did not
-survive measurement): resolution runs ONE CHILD PROCESS per gated
-package (the Axioms shard discipline, `Gates.shardDispatch`), each
-loading its package env in a fresh process and printing the pending
-names that resolve there. The in-process shape this file first landed
-with ("each env imported one at a time and dropped; RSS stays flat")
-was wrong: libgc's conservative stack scan RETAINS every dropped env
-(the legacy lesson, arrived again) — measured at a 27GB peak + an
-earlyoom SIGTERM (exit 143) once the gated set grew past a handful of
-packages. The child discipline bounds the peak at the heaviest single
-env (~2GB); the pool rides the RSS admission like every other env
-lane.
+survive measurement): the LIBRARY rows' resolution rides the shared
+warm env in-process (one env, loaded once, retained once — libgc has
+nothing to misplace); the TESTS-LIB rows run ONE CHILD PROCESS each
+(`Gates.testLibPool`, the Axioms shard discipline), each loading its
+package env in a fresh process and printing the pending names that
+resolve there. The all-in-process shape this file first landed with
+("each env imported one at a time and dropped; RSS stays flat") was
+wrong: libgc's conservative stack scan RETAINS every dropped env (the
+legacy lesson, arrived again) — measured at a 27GB peak + an earlyoom
+SIGTERM (exit 143) once the gated set grew past a handful of packages.
+The child discipline bounds the peak at the heaviest single env (~2GB);
+the pool rides the RSS admission like every other env lane.
 
 The five questions (notes/v3/01-core.md):
 - root: none — the notes-drift gate + the headers' gate-row honesty
@@ -80,7 +81,7 @@ open Lean
 
 namespace Gates.DocsCheck
 
-open Gates (PkgSpec gatedPackages loadPkgEnv)
+open Gates (PkgSpec gatedPackages loadPkgEnv pkgIsTestLib testLibPackages)
 
 /-! ## Fence scanning -/
 
@@ -426,143 +427,165 @@ unsafe def runPkg (pkg : PkgSpec) : IO UInt32 := do
         IO.println n
     return 0
 
-/-- Run the gate: scan the notes, resolve the pending decl names against
-    the gated packages' environments — ONE CHILD PROCESS per package
-    (the shard dispatch's pooled lanes; the memory shape in the header). -/
-unsafe def run (package : Option String) : IO UInt32 := do
-  let (files, fences, scanError) ← scanNotes
-  -- 2. the pending resolution set: (location, name) per non-sketch fence
-  let pending := pendingOfFences fences
-  -- 3. resolve: ONE CHILD PROCESS per gated package (the shard
-  --    dispatch — the memory discipline; the header's shape). Each
-  --    child loads its env in a fresh process and prints the pending
-  --    names that resolve there; the parent folds the resolved sets. A
-  --    load failure is a gate failure — an unloadable tree verifies
-  --    nothing — a collected loadError row with the `just build` hint
-  --    (the honest-partiality rule: not `Gates.withPkgEnv`'s
-  --    first-failure exit, not the combinator's shape).
-  -- 4. THE 08-STATUS DISCIPLINE (B5): the capability catalog's status
-  --    table — every LANDED/PARTIAL row's citations resolve (the landed
-  --    scope names a real decl, resolved against the SAME gated envs as
-  --    the fences); every SPEC/PARTIAL `pending` citation must NOT
-  --    resolve (a resolution = the section landed; the promotion is
-  --    owed). The citations join the pending set (the same shard
-  --    machinery, one env walk).
+/-- The report tail (the shard-parent's AND the warm face's shared
+fold — ONE copy of the 08-status verdicts + the gate-row scan + the
+findings' render + the summary line): `resolvedAll` is every pending
+name that resolved in the gated env(s), `loadErrors` the collected
+load-failure rows (empty on the warm face — the env is all-or-nothing
+upstream). -/
+unsafe def reportTail (files : Array System.FilePath) (fences : Array Fence)
+    (scanError : Option String) (pending : Array (String × String))
+    (resolvedAll : Array String) (loadErrors : Array String) : IO UInt32 := do
+  -- the status rows' verdicts (the gate reads the RESOLVED set —
+  -- a citation that resolved is gone from `pending`)
   let statusRows : List StatusRow ← do
     if ← statusTablePath.pathExists then
       pure (parseStatusRows (← IO.FS.readFile statusTablePath))
     else pure []
-  -- the parent's `pending` stays the FENCES' names (the unresolved-fence
-  -- report's face); the status citations resolve in the children only
-  -- (runPkg recomputes both) and are judged against `resolvedAll` below
-  Gates.shardDispatch "docs-check" package runPkg fun outs => do
-    let mut loadErrors : Array String := #[]
-    let mut resolvedAll : Array String := #[]
-    -- `outs` is in the input order (the gatedPackages order)
-    for (pkg, (code, text)) in gatedPackages.zip outs do
-      if code != 0 then
-        loadErrors := loadErrors.push
-          s!"{pkg.dir}: the shard's env load failed (its loud LOAD FAILED \
-            line is on stderr; run `just build` first)"
-      resolvedAll := resolvedAll ++
-        (text.splitOn "\n").filter (· != "")
-    let pending := pending.filter fun (_, n) => !resolvedAll.contains n
-    -- the status rows' verdicts (the gate reads the RESOLVED set —
-    -- a citation that resolved is gone from `pending`)
-    let mut statusFindings : List String := []
-    for r in statusRows do
-      match r.status with
-      | "LANDED" | "PARTIAL" =>
-          if r.landed.isEmpty then
+  let mut statusFindings : List String := []
+  for r in statusRows do
+    match r.status with
+    | "LANDED" | "PARTIAL" =>
+        if r.landed.isEmpty then
+          statusFindings := statusFindings ++
+            [toString (GateDiag eGT0009
+              s!"docs-check: 08-status §{r.sec}: the {r.status} row names \
+                NO declaration — a landed scope cites its decl (the \
+                status discipline is mechanical: the row's citation is \
+                the gate's resolution target)")]
+        for n in r.landed do
+          unless resolvedAll.contains n do
             statusFindings := statusFindings ++
               [toString (GateDiag eGT0009
-                s!"docs-check: 08-status §{r.sec}: the {r.status} row names \
-                  NO declaration — a landed scope cites its decl (the \
-                  status discipline is mechanical: the row's citation is \
-                  the gate's resolution target)")]
-          for n in r.landed do
-            unless resolvedAll.contains n do
-              statusFindings := statusFindings ++
-                [toString (GateDiag eGT0009
-                  s!"docs-check: 08-status §{r.sec}: the {r.status} row \
-                    cites '{n}' — no such declaration in the tree's env \
-                  (the landed scope's citation must resolve; repair the \
-                  row or the lane)")]
-      | "SPEC" =>
-          for n in r.pending do
-            if resolvedAll.contains n then
-              statusFindings := statusFindings ++
-                [toString (GateDiag eGT0010
-                  s!"docs-check: 08-status §{r.sec}: the SPEC row's \
-                    pending decl '{n}' RESOLVES — the section landed; \
-                  promote the row (a SPEC entry that lands moves to \
-                  LANDED in the same commit)")]
-      | _ => pure ()  -- WATCH: one line + its trigger; no decl to check
-    -- 5. the gate-row honesty scan (D33): every gated srcDir's .lean
-    --    files' "outside the gated set" claims, checked against the
-    --    table (textkit's exclusion is the named one above).
-    let gatedDirs := gatedPackages.map (·.dir)
-    -- ONE deduped file set (rows share srcDirs; the `.`-srcDir rows
-    -- overlap every tree dir — each file is scanned once, in sorted
-    -- order for a deterministic report). Walk fuel 16: far beyond any
-    -- real srcDir's depth; exhaustion is a REPORTED finding, never a
-    -- silent truncation.
-    let walkFuel := 16
-    let mut walkExhausted := false
-    let mut gateRowFiles : Array String := #[]
-    for pkg in gatedPackages do
-      if skippedDirNames.contains pkg.srcDir then continue
-      let (fs, ex) ← leanFilesUnder walkFuel pkg.srcDir
-      walkExhausted := walkExhausted || ex
-      for f in fs do
-        unless gateRowFiles.contains f.toString do
-          gateRowFiles := gateRowFiles.push f.toString
-    gateRowFiles := gateRowFiles.qsort (fun a b => a < b)
-    let mut gateRowScanned := 0
-    let mut gateRowFindings : Array String := #[]
-    for f in gateRowFiles do
-      let text ← IO.FS.readFile f
-      gateRowScanned := gateRowScanned + 1
-      for (ln, lib) in gateRowClaims gatedDirs text do
-        gateRowFindings := gateRowFindings.push <| toString (GateDiag eGT0010
-          s!"docs-check: {f}:{ln}: \
-          gate-row claim — '{lib} is outside/not in the gated set' — but \
-          {lib} IS in Gates.Packages' gated set; correct the header's \
-          gate row")
-    -- 6. report (the ONE envelope — every finding a gate Diag, its GT
-    -- row a live registry spelling; 05 §4's discipline at the gates')
-    let mut findings : List String := []
-    for f in fences do
-      if f.unclosed then
-        findings := findings ++ [toString (GateDiag eGT0008
-          s!"docs-check: {dispName f.file}:{f.openLine}: UNCLOSED lean fence")]
-    for (loc, n) in pending do
-      findings := findings ++ [toString (GateDiag eGT0009
-        s!"docs-check: {loc}: fence names '{n}' — no such declaration in \
-        the tree's env (is the fence a sketch? tag it ```lean sketch)")]
-    for g in gateRowFindings do
-      findings := findings ++ [g]
-    for g in statusFindings do
-      findings := findings ++ [g]
-    for e in loadErrors do
-      findings := findings ++ [toString (GateDiag eGT0011
-        s!"docs-check: LOAD FAILED — {e}")]
-    if walkExhausted then
-      findings := findings ++
-        [toString (GateDiag eGT0012
-          "docs-check: WALK FUEL EXHAUSTED — a srcDir is deeper than the \
-          gate-row scan's bound; raise the fuel or flatten the tree")]
-    if let some e := scanError then
-      findings := findings ++ [toString (GateDiag eGT0012 s!"docs-check: {e}")]
-    let exempt := fences.filter (·.sketch) |>.size
-    for l in findings do IO.println l
-    if loadErrors.isEmpty then
-      IO.println s!"docs-check: {files.size} notes file(s), {fences.size} lean fence(s) \
-        ({exempt} sketch-exempt), {pending.size} unresolved name(s); \
-        gate-row scan: {gateRowScanned} file(s), {gateRowFindings.size} false claim(s); \
-        08-status: {statusRows.length} row(s), {statusFindings.length} stale row(s)"
-    if !findings.isEmpty then return 1
-    IO.println "docs-check: clean — every non-sketch lean fence's decl names resolve in the tree's env"
-    return 0
+                s!"docs-check: 08-status §{r.sec}: the {r.status} row \
+                  cites '{n}' — no such declaration in the tree's env \
+                (the landed scope's citation must resolve; repair the \
+                row or the lane)")]
+    | "SPEC" =>
+        for n in r.pending do
+          if resolvedAll.contains n then
+            statusFindings := statusFindings ++
+              [toString (GateDiag eGT0010
+                s!"docs-check: 08-status §{r.sec}: the SPEC row's \
+                  pending decl '{n}' RESOLVES — the section landed; \
+                promote the row (a SPEC entry that lands moves to \
+                LANDED in the same commit)")]
+    | _ => pure ()  -- WATCH: one line + its trigger; no decl to check
+  -- the gate-row honesty scan (D33): every gated srcDir's .lean
+  -- files' "outside the gated set" claims, checked against the
+  -- table (textkit's exclusion is the named one above).
+  let gatedDirs := gatedPackages.map (·.dir)
+  -- ONE deduped file set (rows share srcDirs; the `.`-srcDir rows
+  -- overlap every tree dir — each file is scanned once, in sorted
+  -- order for a deterministic report). Walk fuel 16: far beyond any
+  -- real srcDir's depth; exhaustion is a REPORTED finding, never a
+  -- silent truncation.
+  let walkFuel := 16
+  let mut walkExhausted := false
+  let mut gateRowFiles : Array String := #[]
+  for pkg in gatedPackages do
+    if skippedDirNames.contains pkg.srcDir then continue
+    let (fs, ex) ← leanFilesUnder walkFuel pkg.srcDir
+    walkExhausted := walkExhausted || ex
+    for f in fs do
+      unless gateRowFiles.contains f.toString do
+        gateRowFiles := gateRowFiles.push f.toString
+  gateRowFiles := gateRowFiles.qsort (fun a b => a < b)
+  let mut gateRowScanned := 0
+  let mut gateRowFindings : Array String := #[]
+  for f in gateRowFiles do
+    let text ← IO.FS.readFile f
+    gateRowScanned := gateRowScanned + 1
+    for (ln, lib) in gateRowClaims gatedDirs text do
+      gateRowFindings := gateRowFindings.push <| toString (GateDiag eGT0010
+        s!"docs-check: {f}:{ln}: \
+        gate-row claim — '{lib} is outside/not in the gated set' — but \
+        {lib} IS in Gates.Packages' gated set; correct the header's \
+        gate row")
+  -- report (the ONE envelope — every finding a gate Diag, its GT
+  -- row a live registry spelling; 05 §4's discipline at the gates')
+  let mut findings : List String := []
+  for f in fences do
+    if f.unclosed then
+      findings := findings ++ [toString (GateDiag eGT0008
+        s!"docs-check: {dispName f.file}:{f.openLine}: UNCLOSED lean fence")]
+  for (loc, n) in pending do
+    findings := findings ++ [toString (GateDiag eGT0009
+      s!"docs-check: {loc}: fence names '{n}' — no such declaration in \
+      the tree's env (is the fence a sketch? tag it ```lean sketch)")]
+  for g in gateRowFindings do
+    findings := findings ++ [g]
+  for g in statusFindings do
+    findings := findings ++ [g]
+  for e in loadErrors do
+    findings := findings ++ [toString (GateDiag eGT0011
+      s!"docs-check: LOAD FAILED — {e}")]
+  if walkExhausted then
+    findings := findings ++
+      [toString (GateDiag eGT0012
+        "docs-check: WALK FUEL EXHAUSTED — a srcDir is deeper than the \
+        gate-row scan's bound; raise the fuel or flatten the tree")]
+  if let some e := scanError then
+    findings := findings ++ [toString (GateDiag eGT0012 s!"docs-check: {e}")]
+  let exempt := fences.filter (·.sketch) |>.size
+  for l in findings do IO.println l
+  if loadErrors.isEmpty then
+    IO.println s!"docs-check: {files.size} notes file(s), {fences.size} lean fence(s) \
+      ({exempt} sketch-exempt), {pending.size} unresolved name(s); \
+      gate-row scan: {gateRowScanned} file(s), {gateRowFindings.size} false claim(s); \
+      08-status: {statusRows.length} row(s), {statusFindings.length} stale row(s)"
+  if !findings.isEmpty then return 1
+  IO.println "docs-check: clean — every non-sketch lean fence's decl names resolve in the tree's env"
+  return 0
+
+/-- The WARM face, TWO LEGS (the Axioms twin's shape): the pending
+set resolved against the SHARED warm env in-process (one leaf-name
+fold over the LIBRARY rows' closures), PLUS the TESTS-LIB rows' child
+shards (`Gates.testLibPool` — the root-`main` collision bars them
+from the warm env), each printing the pending names THAT package's
+closure resolves (the shard face's own machine face, recomputed from
+the same scan). A failed shard lands in `loadErrors` (the
+pre-redesign per-package load-failure row). On a green tree (every
+fence + citation name resolves in its own package's env) the verdict
+is byte-identical to the full shard face; the named limit: the
+resolved set is the UNION of the packages' closures, so on a red tree
+a name resolvable ONLY in a foreign package reads resolved here (the
+shard face's resolution was per-package). -/
+unsafe def runWarm (env : Environment) : IO UInt32 := do
+  let (files, fences, scanError) ← scanNotes
+  let pendingFences := pendingOfFences fences
+  let statusRows : List StatusRow ← do
+    if ← statusTablePath.pathExists then
+      pure (parseStatusRows (← IO.FS.readFile statusTablePath))
+    else pure []
+  let statusNames : List String :=
+    statusRows.flatMap fun r => r.landed ++ r.pending
+  let leaves := envLeafNames env
+  let resolved? (n : String) : Bool :=
+    leaves.contains (lastComponent (String.toName n))
+  let mut resolvedAll : Array String :=
+    ((pendingFences.map (·.2)) ++ statusNames).filter resolved?
+  let mut loadErrors : Array String := #[]
+  for (i, code, out) in ← Gates.testLibPool "docs-check" do
+    let pkg := testLibPackages[i]!
+    if code != 0 then
+      loadErrors := loadErrors.push s!"{pkg.dir}: the shard exited {code}"
+    else
+      for n in (out.splitOn "\n").filter (· != "") do
+        unless resolvedAll.contains n do
+          resolvedAll := resolvedAll.push n
+  -- reportTail's contract: `pending` is the UNRESOLVED set (a resolved
+  -- name is gone from it — the shard parent's own discipline; the
+  -- fence findings fire per pending row)
+  let unresolved := pendingFences.filter fun (_, n) => !resolvedAll.contains n
+  reportTail files fences scanError unresolved resolvedAll loadErrors
+
+/-- Run the gate: without `--package`, the WARM face (the tree's env
+loaded once, the resolution in-process); with it, ONE package's shard
+face in-process (the debug face — the names that resolve in THAT
+package's closure env, printed for the parent fold). -/
+unsafe def run (package : Option String) : IO UInt32 :=
+  Gates.gateDispatch "docs-check" package runPkg
+    (Gates.withWarmEnv "docs-check" runWarm)
 
 end Gates.DocsCheck

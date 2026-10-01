@@ -45,13 +45,15 @@ def rowOf (path contentHash : String) : String :=
 
 /-- The walk's skip list (by base name): `.devenv` is the devenv
 shell's scratch dir, `.lake`/`.git` the build + VCS state, and
-`node_modules` the docs-site's dependency cache — all UNTRACKED
-scratch under legacy/ (symlinked store paths, a volatile sqlite
-cache, pack files, the npm cache), not the legacy source surface.
-Everything TRACKED under legacy/ is frozen; the skips are named here,
-never silent (the CodeRegistryCheck skip-list convention). -/
+`node_modules`/`target` the dependency/build caches (the npm cache,
+cargo's per-crate build residue — the guestlang-rt fuzz targets ran
+to 988M of untracked artifacts). All UNTRACKED scratch under legacy/
+(symlinked store paths, a volatile sqlite cache, pack files, build
+cache), not the legacy source surface. Everything TRACKED under
+legacy/ is frozen; the skips are named here, never silent (the
+CodeRegistryCheck skip-list convention). -/
 def skipDirNames : List String := [".devenv", ".lake", ".git",
-  "node_modules"]
+  "node_modules", "target"]
 
 /-- Fuel-bounded walk over EVERY file under `dir` (all extensions —
 the whole surface is frozen). Returns the `(path, content)` rows in

@@ -28,7 +28,11 @@ Consumer trail: `WasmCore.Instr`, `WasmCore.Module`,
 The module is core-only (no mathlib, no Batteries — the cone rule);
 it imports nothing.
 -/
+module
 
+
+
+@[expose] public section
 namespace WasmCore
 
 /-- The wasm value types: the four numerics + the two reference types.
@@ -52,3 +56,6 @@ structure FuncType where
 deriving BEq, DecidableEq, Repr, Inhabited
 
 end WasmCore
+
+end -- public section
+

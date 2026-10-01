@@ -44,14 +44,18 @@ Consumer trail: rides `Kit.Correspondence` (Codec), `Kit.Varint`
 `WasmCore.OpTable` (the ONE op table's wire facets),
 `WasmCore.Module`. Core-only (the cone rule).
 -/
+module
 
-import Kit.Correspondence
-import Kit.Varint
-import WasmCore.Types
-import WasmCore.Instr
-import WasmCore.OpTable
-import WasmCore.Module
 
+public import Kit.Correspondence
+public import Kit.Varint
+public import WasmCore.Types
+public import WasmCore.Instr
+public import WasmCore.OpTable
+public import WasmCore.Module
+
+
+@[expose] public section
 namespace WasmCore
 
 open Kit.Varint
@@ -171,6 +175,18 @@ def encodeFuncEntry (f : Func) : List UInt8 :=
   let bodyBytes := localsBytes ++ (encodeBody f.body ++ [0x0B])
   encVarNat bodyBytes.length ++ bodyBytes
 
+/-- One import entry: the two-level name (`mod.name`, each
+    length-prefixed) + kind func (0x00) + the declared type index —
+    THE IMPORT FACE's wire row (pinned against the devenv's
+    wasm-tools: `04 68 6f 73 74 03 61 64 64 00 00` for
+    `host.add : [] -> []`). -/
+def encodeImport (i : Import) : List UInt8 :=
+  let modBytes := i.mod.toByteArray.toList
+  let nameBytes := i.name.toByteArray.toList
+  (encVarNat modBytes.length ++ modBytes)
+    ++ (encVarNat nameBytes.length ++ nameBytes)
+    ++ (0x00 :: encVarNat i.tyIdx)
+
 /-- One export entry: name (UTF-8, length-prefixed) + kind + index
     (func kind 0x00, memory kind 0x02 — the binary format's). -/def encodeExport (e : Export) : List UInt8 :=
   let nameBytes := e.name.toByteArray.toList
@@ -200,9 +216,11 @@ def encodePreamble : List UInt8 :=
   [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]
 
 /-- THE module encoder: the minimal sections in the binary format's
-    fixed order (type 1, function 3, table 4, memory 5, export 7,
-    element 9, code 10), each elided when empty; `memMin = 0` omits
-    memory, `tables = []` omits the table section, and the element
+    fixed order (type 1, import 2, function 3, table 4, memory 5,
+    export 7, element 9, code 10), each elided when empty; `memMin = 0`
+    omits memory, `tables = []` omits the table section, `imports = []`
+    omits the import section (the byte-tie's no-import path — every
+    pre-import module encodes byte-identically), and the element
     section covers only the tables WITH entries. Total by
     construction — every fold is structural, every size an encVarNat. -/
 def encodeModule (m : Module) : List UInt8 :=
@@ -210,6 +228,9 @@ def encodeModule (m : Module) : List UInt8 :=
     ++ (if m.types.isEmpty then [] else
         encodeSection 1
           (encVarNat m.types.length ++ (m.types.map encodeFuncType |>.foldl (· ++ ·) [])))
+    ++ (if m.imports.isEmpty then [] else
+        encodeSection 2 (encVarNat m.imports.length
+          ++ (m.imports.map encodeImport |>.foldl (· ++ ·) [])))
     ++ (if m.funcs.isEmpty then [] else
         encodeSection 3 (encVarNat m.funcs.length ++ (m.funcs.map (fun f => encVarNat f.tyIdx)
           |>.foldl (· ++ ·) [])))
@@ -230,3 +251,6 @@ def encodeModule (m : Module) : List UInt8 :=
           ++ (m.funcs.map encodeFuncEntry |>.foldl (· ++ ·) [])))
 
 end WasmCore
+
+end -- public section
+

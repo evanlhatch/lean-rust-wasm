@@ -1,0 +1,53 @@
+# mandate-store — the OCI artifact store with the provenance badges
+# (design-wave-30 D5; legacy's forge oci.rs mined, local layout lane).
+#
+# THE STORE'S SHAPE: the OCI image-layout on disk — the honest first
+# slice, no network:
+#
+#   <root>/
+#   ├── oci-layout                  {"imageLayoutVersion":"1.0.0"}
+#   ├── index.json                  label → manifest digest
+#   └── blobs/sha256/<hex>          content-addressed blobs (config,
+#                                   layers, manifests — all sha256)
+#
+# THE PROVENANCE DISCIPLINE: the manifest's annotations ARE the gates'
+# outputs (the axiom-report badge, the gates-green stamp, the ledger's
+# content hash) — composed in ONE place (`put`, the one writer), checked
+# in ONE place (`read`/`check_annotations`). The store never invents a
+# badge: the writer supplies the attested values, the store cross-checks
+# the ledger hash against the bytes' own digest (a lying ledger row
+# refuses at put).
+#
+# THE VERIFY DISCIPLINE: every read re-hashes the blob; a tampered blob
+# refuses (refuse-with-report, never a silent fallback). A manifest
+# whose provenance shape is incomplete, or whose axiom badge is stale
+# against the live report, is REFUSED with a rendered report.
+#
+# Dependencies, deliberately few and ALL from the offline registry
+# cache (the delta crate's one-dependency discipline, widened by two):
+#   - sha2: the content address IS the security boundary (OCI digests
+#     are sha256); hand-rolling sha256 is not acceptable.
+#   - serde_json: the manifest/index documents. No derive — the store
+#     builds and inspects values with `json!`/`Value` (the annotation
+#     surface is four keys, not a type system).
+# Hex encoding is two lines (legacy's oci.rs precedent); no hex crate.
+#
+# The OCI-REMOTE face (push/pull over oci-distribution, the oci-wasm
+# discipline) is the NAMED next step — not this crate. The local
+# layout is deliberately image-spec-shaped so the remote lane uploads
+# from `blob_path`/manifest digests without re-packing.
+#
+# no unsafe; deterministic bytes (no timestamps anywhere — the store's
+# bytes are a function of content + annotations only).
+
+[package]
+name = "mandate-store"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "OCI image-layout artifact store with provenance badges: content-addressed blobs, gate-output annotations, tamper-refusing reads"
+
+[dependencies]
+sha2 = "0.10"
+serde_json = "1"

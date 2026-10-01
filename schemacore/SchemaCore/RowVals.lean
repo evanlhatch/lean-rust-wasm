@@ -36,8 +36,12 @@ SchemaTests' round-trip pins + negative controls.
 Core-only (imports SchemaCore.Item + SchemaCore.Value — the cone rule).
 -/
 
-import SchemaCore.Item
-import SchemaCore.Value
+module
+
+public import SchemaCore.Item
+public import SchemaCore.Value
+
+@[expose] public section
 
 namespace SchemaCore
 
@@ -93,3 +97,5 @@ def fieldIndexIso {names : List String} (hnd : names.Nodup) :
     exact (List.getElem_inj hnd).mp hj)
 
 end SchemaCore
+
+end -- public section

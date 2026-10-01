@@ -53,7 +53,11 @@ Core-only. Five questions:
 - gate row: none yet — TextKitTests pins the fixture round trips.
 -/
 
-import TextKit.Grammar
+module
+
+public import TextKit.Grammar
+
+@[expose] public section
 
 namespace TextKit
 
@@ -491,3 +495,5 @@ theorem orElseChain_err {A : Type} :
       simp only [TextKit.orElse, h1, h2']
 
 end TextKit
+
+end -- public section

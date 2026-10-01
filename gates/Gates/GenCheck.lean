@@ -159,7 +159,35 @@ unsafe def run : IO UInt32 := do
             | .ok _ =>
               let ef := ComponentTests.Pipeline.edgeRows
                 ComponentTests.Pipeline.edgeSpec
-              compFresh := (cf.1 ++ sf.1 ++ ef.1, cf.2 ++ sf.2 ++ ef.2)
+              -- the fault lane: the D6 port's typed-refusal channel
+              -- (the same skew check + the write path's rows — the
+              -- edgeRows discipline)
+              match Guest.Component.regen ComponentTests.Pipeline.faultSpec with
+              | .error e =>
+                  IO.eprintln <| toString (GateDiag eGT0001 s!"gen-check: COMPONENT FAULT REGEN FAILED — {e}")
+                  failed := true
+              | .ok _ =>
+                let ff := ComponentTests.Pipeline.faultRows
+                  ComponentTests.Pipeline.faultSpec
+                -- the witness lane: the host-gating lane's checker
+                -- component (the same skew check + the write path's
+                -- rows — the faultRows discipline)
+                match Guest.Component.regen ComponentTests.Pipeline.witSpec with
+                | .error e =>
+                    IO.eprintln <| toString (GateDiag eGT0001
+                      s!"gen-check: COMPONENT WITNESS REGEN FAILED — {e}")
+                    failed := true
+                | .ok _ =>
+                  let wf := ComponentTests.Pipeline.witRows
+                    ComponentTests.Pipeline.witSpec
+                  compFresh :=
+                    (cf.1 ++ sf.1 ++ ef.1 ++ ff.1 ++ wf.1,
+                     cf.2 ++ sf.2 ++ ef.2 ++ ff.2 ++ wf.2)
+      -- THE FEATURE SHIM's regen (pure over Unit — WasmCore.Profile's
+      -- emitter row; the `wasmgen` writer runs the same ONE copy — the
+      -- feature table rendered + the simd128 probe + the select
+      -- contract).
+      let shimFresh := WasmCore.Profile.shimEmitter.run ()
       -- THE BENCH/E2E LANE's regen (wave-30 C2 — the benches + the
       -- validator are artifacts through the spine: the emitter's run
       -- over the SAME replayed registry is the writer's (`just gen`)
@@ -173,7 +201,8 @@ unsafe def run : IO UInt32 := do
       let (_, textTied, failed') ← Gates.forDeclared "gen-check"
         "run `just gen` and commit"
         (r.files ++ wasmFresh.1 ++ duelFresh.1 ++ compFresh.1
-          ++ journalFresh.1 ++ witnessFresh.1 ++ faultsFresh ++ benchFresh)
+          ++ journalFresh.1 ++ witnessFresh.1 ++ faultsFresh ++ benchFresh
+          ++ shimFresh)
         fun f committed => do
           match Kit.Emit.tieText committed f.contents with
           | .tied => return true

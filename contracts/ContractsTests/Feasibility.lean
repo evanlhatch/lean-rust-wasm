@@ -89,11 +89,11 @@ def feasSpecs : List TestingKit.Spec :=
       (fun _ => do
         -- the honest verdicts: unchecked is the WARNING cell and is NOT
         -- checked; the declared emptiness IS checked (declared ≠ passed)
-        assert (Feas.Verdict.checked Feas.Verdict.unchecked == false)
+        assert (Feas.isChecked Feas.Verdict.unchecked == false)
           "an unchecked row counted as checked — the warning is fiction"
         assert ((Feas.Verdict.render Feas.Verdict.unchecked).startsWith "WARNING")
           "the unchecked cell lost its WARNING rendering"
-        assert (Feas.Verdict.checked (Feas.Verdict.declaredEmpty "n"))
+        assert (Feas.isChecked (Feas.Verdict.declaredEmpty "n"))
           "the declared emptiness counted as unchecked"
         assert ((Feas.Verdict.render (Feas.Verdict.declaredEmpty "n")).startsWith "vacuous (DECLARED")
           "the declared-empty cell lost its DECLARED rendering"
@@ -130,7 +130,7 @@ def feasSpecs : List TestingKit.Spec :=
           "the planted vacuous contract's census row is not the declared-empty cell"
         pure ())
       [ ("the unchecked row must pass as checked (a LIE — caught)", fun _ =>
-          assert (Feas.Verdict.checked Feas.Verdict.unchecked)
+          assert (Feas.isChecked Feas.Verdict.unchecked)
             "the control demands the unchecked row pass")
       , ("the vacuous contract must admit a feasible verdict (a LIE — caught)", fun _ =>
           -- the fiction: registering the planted vacuous contract as

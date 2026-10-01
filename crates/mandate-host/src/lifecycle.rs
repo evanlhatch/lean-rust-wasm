@@ -37,7 +37,7 @@ use std::path::Path;
 use wasmtime::component::{Component, Instance};
 use wasmtime::{Engine, Store};
 
-use crate::component::{load_component, GUEST_EXPORT, GUEST_GOLDEN};
+use crate::component::{GUEST_EXPORT, GUEST_GOLDEN, load_component};
 use crate::engine::instantiate_component_module;
 use crate::{HostError, HostError::Lifecycle};
 
@@ -149,7 +149,9 @@ pub struct HostMachine {
 
 impl std::fmt::Debug for HostMachine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HostMachine").field("phase", &self.phase.name()).finish()
+        f.debug_struct("HostMachine")
+            .field("phase", &self.phase.name())
+            .finish()
     }
 }
 
@@ -191,7 +193,10 @@ impl HostMachine {
         if self.phase == legal {
             Ok(())
         } else {
-            Err(Lifecycle { from: self.phase.name(), event })
+            Err(Lifecycle {
+                from: self.phase.name(),
+                event,
+            })
         }
     }
 
@@ -238,10 +243,25 @@ impl HostMachine {
     pub fn instantiate(&mut self) -> Result<(), HostError> {
         let _span = fast_observe::scope!("host.instantiate");
         self.guard(EVENT_INSTANTIATE, Phase::Loaded)?;
-        let wasm = self
-            .wasm
-            .clone()
-            .ok_or(HostError::Incomplete("instantiate: the Loaded phase lost its wasm"))?;
+        let wasm = self.wasm.clone().ok_or(HostError::Incomplete(
+            "instantiate: the Loaded phase lost its wasm",
+        ))?;
+        // THE SCHEMA SKEW FAIL-FAST (the D6 port) rides THIS phase —
+        // pre-link, pre-run: the component TYPE's export surface
+        // verified against the committed expectation, a skew refusing
+        // with the first difference named (the model's
+        // `refuseInstantiate` row; the load's own skew check is the
+        // artifact-level WIT presence face). Folded into the SAME
+        // match as the engine work — every refusal here is the model's
+        // escape row, Failed.
+        let skewed = crate::component::verify_component_surface(
+            &wasm,
+            crate::component::EXPECTED_WORLD_SURFACE,
+        );
+        if let Err(e) = skewed {
+            self.phase = Phase::Failed;
+            return Err(e);
+        }
         match Self::instantiate_impl(&wasm) {
             Ok((engine, component, instance, store)) => {
                 self.engine = Some(engine);
@@ -282,14 +302,12 @@ impl HostMachine {
         let _span = fast_observe::scope!("host.start");
         self.guard(EVENT_START, Phase::Instantiated)?;
         let out = (|| {
-            let store = self
-                .store
-                .as_mut()
-                .ok_or(HostError::Incomplete("start: the Instantiated phase lost its store"))?;
-            let instance = self
-                .instance
-                .as_ref()
-                .ok_or(HostError::Incomplete("start: the Instantiated phase lost its instance"))?;
+            let store = self.store.as_mut().ok_or(HostError::Incomplete(
+                "start: the Instantiated phase lost its store",
+            ))?;
+            let instance = self.instance.as_ref().ok_or(HostError::Incomplete(
+                "start: the Instantiated phase lost its instance",
+            ))?;
             let func = instance
                 .get_func(&mut *store, GUEST_EXPORT)
                 .ok_or_else(|| HostError::MissingExport(GUEST_EXPORT.to_string()))?;
@@ -328,14 +346,12 @@ impl HostMachine {
         let _span = fast_observe::scope!("host.call");
         self.guard(EVENT_CALL, Phase::Running)?;
         let out = (|| {
-            let store = self
-                .store
-                .as_mut()
-                .ok_or(HostError::Incomplete("call: the Running phase lost its store"))?;
-            let instance = self
-                .instance
-                .as_ref()
-                .ok_or(HostError::Incomplete("call: the Running phase lost its instance"))?;
+            let store = self.store.as_mut().ok_or(HostError::Incomplete(
+                "call: the Running phase lost its store",
+            ))?;
+            let instance = self.instance.as_ref().ok_or(HostError::Incomplete(
+                "call: the Running phase lost its instance",
+            ))?;
             let func = instance
                 .get_func(&mut *store, GUEST_EXPORT)
                 .ok_or_else(|| HostError::MissingExport(GUEST_EXPORT.to_string()))?;
@@ -354,7 +370,10 @@ impl HostMachine {
                 // the seeded fact; anything else refuses — and the
                 // lifecycle treats it as the model's `trap`.
                 self.phase = Phase::Failed;
-                Err(HostError::ComponentAnswerMismatch { got, expected: GUEST_GOLDEN })
+                Err(HostError::ComponentAnswerMismatch {
+                    got,
+                    expected: GUEST_GOLDEN,
+                })
             }
             Err(e) => {
                 self.phase = Phase::Failed;
@@ -379,4 +398,69 @@ impl HostMachine {
         self.phase = Phase::Stopped;
         Ok(())
     }
+
+    /// THE IDENTITY (the swap discipline's name source): the loaded
+    /// component's content hash (the LCG fold — the same recurrence
+    /// the sidecars tie). Hashes establish IDENTITY, not correctness
+    /// (notes/v3/03 §5): two loads of the same bytes are the same
+    /// component; a swap is a NEW identity, re-checked by the same
+    /// teeth every load runs (the hash tie + the skew fail-fast).
+    #[must_use]
+    pub fn identity(&self) -> Option<u64> {
+        self.wasm.as_deref().map(crate::artifact::bytes_hash)
+    }
+
+    /// THE RELOAD (the D6 port — the component swap without a host
+    /// restart, TEST-GRADE): the host releases whatever it holds and
+    /// runs the fresh `load → instantiate → start` sequence. The
+    /// discipline is COMPOSITION, not new model rows — every step is a
+    /// row of the model's table (the release is `stop`'s / the refusal
+    /// path's; the sequence is `load`/`instantiate`/`start`), and a
+    /// refusal mid-sequence lands [`Phase::Failed`] exactly as the
+    /// model's escape rows declare. The STATE DISCIPLINE, named: the
+    /// swap carries NO guest state across (a new instance is a new
+    /// guest — anything the old instance held is gone; a stateful swap
+    /// needs the delta-log lane, [`crate::persistence`], and is the
+    /// named follow-up). The swap's honesty is the IDENTITY: the
+    /// returned hash names the bytes now running; a swap to different
+    /// bytes is a different identity, never silently aliased.
+    ///
+    /// Legal from `Running`/`Stopped`/`Failed` (the states a long-lived
+    /// host reaches); from the pre-run states the plain sequence IS the
+    /// path — a reload there is the typed illegal-transition refusal.
+    ///
+    /// # Errors
+    /// The illegal transition (typed `Lifecycle`), or the sequence's
+    /// own typed refusal (which also moves the host to `Failed`).
+    pub fn reload(&mut self, gen_dir: &Path) -> Result<u64, HostError> {
+        let _span = fast_observe::scope!("host.reload");
+        match self.phase {
+            Phase::Running | Phase::Stopped | Phase::Failed => {}
+            Phase::Unloaded | Phase::Loaded | Phase::Instantiated => {
+                return Err(Lifecycle {
+                    from: self.phase.name(),
+                    event: EVENT_RELOAD,
+                });
+            }
+        }
+        // the release face (stop's resource release, from any held
+        // state — the terminal bookkeeping without the transition)
+        self.engine = None;
+        self.component = None;
+        self.instance = None;
+        self.store = None;
+        self.wasm = None;
+        self.phase = Phase::Unloaded;
+        self.load(gen_dir)?;
+        self.instantiate()?;
+        self.start()?;
+        Ok(self.identity().ok_or(HostError::Incomplete(
+            "reload: the Running phase lost its wasm",
+        ))?)
+    }
 }
+
+/// The reload event's name (the composition's own label — NOT a model
+/// row; the differential documents the composition here and in the
+/// `reload` doc).
+pub const EVENT_RELOAD: &str = "reload";

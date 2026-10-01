@@ -34,8 +34,13 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Cost.Basic
-import Kit.Change
+
+module
+
+public import Cost.Basic
+public import Kit.Change
+
+@[expose] public section
 
 namespace Cost
 
@@ -96,3 +101,6 @@ theorem spend_seq (budget c₁ c₂ : Nat) :
   (Kit.monus.applyCompose budget c₁ c₂).symm
 
 end Cost
+
+
+end -- public section

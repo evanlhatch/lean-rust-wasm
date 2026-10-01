@@ -89,10 +89,13 @@ first term-led clause.
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import Machines.Testing
-import Lean
-import TextKit.Suggest
+public import Machines.Testing
+public import Lean
+public meta import TextKit.Suggest  -- the meta elab layer reads `suggestSuffix`
+@[expose] public section
+
 
 namespace Machines.Dsl
 
@@ -137,7 +140,7 @@ syntax (name := machineUnknownClause) (priority := low) ident " : " term : machi
     clauses (the closed-world discipline — the valid space, not a
     heuristic) and appends the ONE did-you-mean suffix
     (`TextKit.suggestSuffix` — one engine, one format tree-wide). -/
-def clauseError (got : String) (legal : List String) : CommandElabM Unit :=
+meta def clauseError (got : String) (legal : List String) : CommandElabM Unit :=
   let valid := legal.map (fun l => s!"`{l}:`")
   throwError
     s!"machine!: unknown clause `{got}:` — legal clauses: " ++
@@ -148,7 +151,7 @@ def clauseError (got : String) (legal : List String) : CommandElabM Unit :=
 syntax (name := machineCmd) "machine!" ident "where" machineClause* : command
 
 open Lean.Parser.Term in
-def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
+meta def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
   -- stx = [machine!, name, where, clausesNode] — the clauses arrive in
   -- SOURCE ORDER (the events' order is the Label-ctor order). The sweep
   -- dispatches on the clause KIND, enforcing the cardinalities.
@@ -304,7 +307,9 @@ def elabMachineImpl (stx : Syntax) : Lean.Elab.Command.CommandElabM Unit := do
 
 /-- The registration form: the type must be the literal `CommandElab`
     synonym, so the impl is a separate def. -/
-@[command_elab machineCmd] def elabMachine : Lean.Elab.Command.CommandElab :=
+@[command_elab machineCmd] meta def elabMachine : Lean.Elab.Command.CommandElab :=
   elabMachineImpl
 
 end Machines.Dsl
+
+end -- public section

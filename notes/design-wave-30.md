@@ -227,10 +227,19 @@ E7. **The quickstart + user guide** (the authoring loop as a user
 F1. **The substrait typed decode ladder** (IN FLIGHT — the
     continuation's rungs 4-6 + the full-circle pin + the tests; the
     finisher queue).
-F2. **The qlang join wall** (the named refusal QL0001 today): the
-    typed join's design (the doubled-stream + same-input-children wall
-    — the rel-term schema casts that keep evalRel's reductions) —
-    dissolve-or-keep-named, deliberately.
+F2. **The qlang join wall** (DISSOLVED): the typed join gained the
+    SHARED-BASE reading (`Substrait.Typed.Rel.join'` — both children
+    read the same stream, the query lane's reading; the caller-spelled
+    output via the `AppendCols` witness — the Keep pattern twice, no
+    transport), the BUILT condition (`Query.TypedBridge.joinCond` —
+    the lifted key reads, the type disagreement IS the resolution
+    failure), the pair walk's completeness mirror
+    (`evalJoinPairs_ok_complete`), and the qlang! `then join` stage;
+    the agreement extends BOTH directions (`qEval_sound`/
+    `qEval_complete` over the join arm). The residue is the named
+    narrowings (QL0001: key resolution / key-type disagreement / the
+    u64-string comparison-kernel fragment; inner-only; the wire
+    spelling refuses — the keep precedent).
 F3. **The DepFold fragment's extensions** (multi-index, Prop sorts,
     params — the named refusals KD0015-0019's covered set grows as
     consumers need).

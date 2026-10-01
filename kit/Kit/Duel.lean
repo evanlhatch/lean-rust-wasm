@@ -53,8 +53,12 @@ The five questions (notes/v3/01-core.md):
   KitTests pins are the standing evidence.
 -/
 
-import Kit.Emit
-import TestingKit.Lcg
+module
+
+public import Kit.Emit
+public import TestingKit.Lcg
+
+@[expose] public section
 
 namespace Kit.Duel
 
@@ -407,3 +411,5 @@ def genBytes (t : TestingKit.Tape) : Nat → ByteArray × TestingKit.Tape
     (rest.push b.toNat.toUInt8, t2)
 
 end Kit.Duel
+
+end -- public section

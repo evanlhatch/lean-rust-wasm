@@ -54,8 +54,13 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Analysis.Intervals
-import Kit.Relation
+
+module
+
+public import Analysis.Intervals
+public import Kit.Relation
+
+@[expose] public section
 
 namespace Analysis
 
@@ -140,3 +145,6 @@ theorem intervalPair_agrees (e : Expr Int) :
   abstract_sound e
 
 end Analysis
+
+
+end -- public section

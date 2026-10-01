@@ -25,8 +25,12 @@ elaboration-time gate + the registry write; LintKit is core-only —
 any package may import it, the Guest lane's convention).
 -/
 
-import LintKit.GuestGate
+module
 
+public import LintKit.GuestGate
+
+
+@[expose] public section
 /-- The REGISTERED fn: the mark is the registration. -/
 @[guest]
 def genInc (n : UInt64) : UInt64 := n + 3

@@ -98,13 +98,17 @@ Consumer trail: rides `WasmCore.Types`, `WasmCore.Instr`,
 `WasmCore.Module`, `WasmCore.Validate` (the checker the theorem
 rides). Core-only (the cone rule — no mathlib, no Batteries).
 -/
+module
 
-import WasmCore.Types
-import WasmCore.Instr
-import WasmCore.OpTable
-import WasmCore.Module
-import WasmCore.Validate
 
+public import WasmCore.Types
+public import WasmCore.Instr
+public import WasmCore.OpTable
+public import WasmCore.Module
+public import WasmCore.Validate
+
+
+@[expose] public section
 namespace WasmCore
 
 /-! ## Values — the machine-int discipline -/
@@ -466,8 +470,10 @@ def step : State → Instr → Outcome
   | s, .select =>
       match s.stack with
       | .i32 b :: v1 :: v2 :: rest =>
-          if b != 0 then .ok { s with stack := v1 :: rest }
-          else .ok { s with stack := v2 :: rest }
+          -- the spec's select: pops c, val2, val1 (top-first); c≠0 → val1
+          -- (the FIRST-pushed, deepest of the pair) — v2 here; else val2.
+          if b != 0 then .ok { s with stack := v2 :: rest }
+          else .ok { s with stack := v1 :: rest }
       | _ => .trap .typeErr
   | _, .unreach => .trap .unreach
 
@@ -611,14 +617,50 @@ def execList (m : Module) : Nat → State → List Instr → Outcome
             (execList m fuel { s with stack := rest } chosen)
       | _ => .trap .typeErr
   | fuel + 1, s, .call fn :: is =>
-      -- the calls layer: the callee resolved by STATIC index, the
-      -- shared invoke core does everything after it
-      match m.funcs[fn]? with
-      | none => .unmodeled
-      | some f =>
-          match m.typeAt f.tyIdx with
+      -- THE IMPORT CALL (the extern-call's model semantics): a call
+      -- at an index below the import count is an imported function —
+      -- the module's PROVISION ROW answers it (`Import.impl`: the
+      -- closed op the model's host computes, the ONE op table's
+      -- `semOp` over the popped args). The args pop against the
+      -- IMPORT's DECLARED type (the call-typing premise is the
+      -- validator's own; the trust boundary is type-checked, never
+      -- skipped), the answer pushes over the caller's retained stack.
+      -- No modeled row (the unprovisioned model run) is the honest
+      -- ledger's `.unmodeled` — never a wrong answer; the HOST's real
+      -- provision is the linker's (the wire carries none of it).
+      match m.imports[fn]? with
+      | some imp =>
+          match imp.impl with
           | none => .unmodeled
-          | some ft => invokeFunc f ft s.stack s is (execList m fuel)
+          | some op =>
+              match m.typeAt imp.tyIdx with
+              | none => .unmodeled
+              | some ft =>
+                  match popTys ft.params.reverse s.stack with
+                  | none => .trap .typeErr
+                  | some (bound, rest) =>
+                      match semOp op bound with
+                      | none => .unmodeled
+                      | some v =>
+                          -- THE PROVISION'S TYPE TOOTH: the answer
+                          -- crosses only when its type matches the
+                          -- import's declared row — a skewed
+                          -- provision never enters the caller's
+                          -- stack (the unmodeled ledger; the host's
+                          -- typed lift is the real provision's
+                          -- tooth, the instantiate-time refusal).
+                          if ft.results = [tyOf v]
+                            then execList m fuel { s with stack := v :: rest } is
+                            else .unmodeled
+      | none =>
+          -- the calls layer: the callee resolved by STATIC index, the
+          -- shared invoke core does everything after it
+          match m.funcAt fn with
+          | none => .unmodeled
+          | some f =>
+              match m.typeAt f.tyIdx with
+              | none => .unmodeled
+              | some ft => invokeFunc f ft s.stack s is (execList m fuel)
   | fuel + 1, s, .callindirect ty :: is =>
       -- THE INDIRECT-CALL LAYER (the table discipline): the callee's
       -- index is RUNTIME data — the i32 on top (the first-class
@@ -637,7 +679,7 @@ def execList (m : Module) : Nat → State → List Instr → Outcome
               match m.tableAt ix.toNat with
               | none => .trap .tabOOB
               | some fn =>
-                  match m.funcs[fn]? with
+                  match m.funcAt fn with
                   | none => .unmodeled
                   | some f =>
                       match m.typeAt f.tyIdx with
@@ -727,7 +769,9 @@ theorem finishRun_ok (o : Outcome) (s' : State) :
       locals' defaults, answer `.unmodeled` (the honest fragment
       ledger — DISTINCT from trap). -/
 def runFunc (m : Module) (fn : Nat) (args : List Val) (fuel : Nat) : Outcome :=
-  match m.funcs[fn]? with
+  -- the absolute-index resolution (an imported function has no local
+  -- body to run — the driver's honest `.unmodeled`)
+  match m.funcAt fn with
   | none => .unmodeled
   | some f =>
     match m.typeAt f.tyIdx with
@@ -1213,10 +1257,10 @@ theorem step_preserves (s s' : State) (i : Instr) (b mid : List ValType)
           split at hstep
           · rw [Outcome.ok.injEq] at hstep
             subst hstep
-            exact ⟨by simp [stackTys, hv1.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
+            exact ⟨by simp [stackTys, hv2.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
           · rw [Outcome.ok.injEq] at hstep
             subst hstep
-            exact ⟨by simp [stackTys, hv2.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
+            exact ⟨by simp [stackTys, hv1.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
       | i64 =>
           exfalso
           simp [tyOf] at hcty
@@ -1369,37 +1413,58 @@ theorem execList_flat (m : Module) (fuel : Nat) (s : State) (i : Instr) (is : Li
   | drop => simp [execList]
   | select => simp [execList]
 
-/-- The call arm's equation (the calls layer's reduction face: the
-    fuel-shared sub-exec + the join + the honest ledger arms). -/
+/-- The call arm's equation (the calls layer's reduction face: THE
+    IMPORT CALL's provision row first — the closed op the model's host
+    answers with, the answer's type checked against the import's
+    declared row — then the local callee's fuel-shared sub-exec + the
+    join + the honest ledger arms). -/
 theorem execList_call (m : Module) (fuel : Nat) (s : State) (fn : Nat) (is : List Instr) :
     execList m (fuel + 1) s (Instr.call fn :: is)
-      = match m.funcs[fn]? with
-        | none => .unmodeled
-        | some f =>
-            match m.typeAt f.tyIdx with
+      = match m.imports[fn]? with
+        | some imp =>
+            match imp.impl with
             | none => .unmodeled
-            | some ft =>
-                match popTys ft.params.reverse s.stack with
-                | some (bound, rest) =>
-                    match localsDefault? f.locals with
-                    | none => .unmodeled
-                    | some defaults =>
-                        match execList m fuel
-                            { locals := fun n =>
-                                (bound.reverse ++ defaults).getD n (.i32 0)
-                            , stack := []
-                            , mem := s.mem
-                            , memSize := s.memSize } f.body with
-                        | .ok s' =>
-                            execList m fuel (callJoin s rest s') is
-                        | .branch none s' =>
-                            execList m fuel (callJoin s rest s') is
-                        | .branch (some _) _ => .unmodeled
-                        | .trap r => .trap r
-                        | .structural => .structural
-                        | .unmodeled => .unmodeled
-                        | .outOfFuel => .outOfFuel
-                | none => .trap .typeErr := rfl
+            | some op =>
+                match m.typeAt imp.tyIdx with
+                | none => .unmodeled
+                | some ft =>
+                    match popTys ft.params.reverse s.stack with
+                    | none => .trap .typeErr
+                    | some (bound, rest) =>
+                        match semOp op bound with
+                        | none => .unmodeled
+                        | some v =>
+                            if ft.results = [tyOf v]
+                              then execList m fuel { s with stack := v :: rest } is
+                              else .unmodeled
+        | none =>
+            match m.funcAt fn with
+            | none => .unmodeled
+            | some f =>
+                match m.typeAt f.tyIdx with
+                | none => .unmodeled
+                | some ft =>
+                    match popTys ft.params.reverse s.stack with
+                    | some (bound, rest) =>
+                        match localsDefault? f.locals with
+                        | none => .unmodeled
+                        | some defaults =>
+                            match execList m fuel
+                                { locals := fun n =>
+                                    (bound.reverse ++ defaults).getD n (.i32 0)
+                                , stack := []
+                                , mem := s.mem
+                                , memSize := s.memSize } f.body with
+                            | .ok s' =>
+                                execList m fuel (callJoin s rest s') is
+                            | .branch none s' =>
+                                execList m fuel (callJoin s rest s') is
+                            | .branch (some _) _ => .unmodeled
+                            | .trap r => .trap r
+                            | .structural => .structural
+                            | .unmodeled => .unmodeled
+                            | .outOfFuel => .outOfFuel
+                    | none => .trap .typeErr := rfl
 
 /-- The INDIRECT-call arm's equation (the table layer's reduction
     face: the runtime index → the table entry → the type check → the
@@ -1415,7 +1480,7 @@ theorem execList_callindirect (m : Module) (fuel : Nat) (s : State) (ty : Nat)
                 match m.tableAt ix.toNat with
                 | none => .trap .tabOOB
                 | some fn =>
-                    match m.funcs[fn]? with
+                    match m.funcAt fn with
                     | none => .unmodeled
                     | some f =>
                         match m.typeAt f.tyIdx with
@@ -1511,18 +1576,27 @@ theorem stepTy_select_inv (c : Ctx) (base mid : List ValType)
   cases h
   exact ⟨_, _, _, by assumption, by assumption, rfl, rfl⟩
 
-/-- The fenv's resolution face: a resolved entry names the function
-    record and its type (the calls layer's lookup bridge). -/
-theorem fenv_some (m : Module) (fn : Nat) (ft : FuncType)
-    (h : m.fenv fn = some ft) :
-    ∃ f, m.funcs[fn]? = some f ∧ m.typeAt f.tyIdx = some ft := by
-  have h' : m.fenv fn = match m.funcs[fn]? with
-      | some g => m.typeAt g.tyIdx
-      | none => none := rfl
-  rw [h'] at h
-  cases hf : m.funcs[fn]? with
-  | none => rw [hf] at h; simp at h
-  | some f => rw [hf] at h; exact ⟨f, rfl, h⟩
+/-- THE IMPORT FACE's resolution lemmas (the calls layer's lookup
+    bridge, import-aware): a `funcAt`-resolved callee is a LOCAL
+    function — the fenv entry IS its declared type, and the
+    module-check fold sees it at the shifted local index. -/
+theorem funcAt_local (m : Module) (fn : Nat) (f : Func)
+    (h : m.funcAt fn = some f) :
+    m.funcs[fn - m.imports.length]? = some f := by
+  unfold Module.funcAt at h
+  split at h
+  · simp at h
+  · exact h
+
+theorem fenv_of_funcAt (m : Module) (fn : Nat) (f : Func)
+    (h : m.funcAt fn = some f) : m.fenv fn = m.typeAt f.tyIdx := by
+  have hge : ¬ (fn < m.imports.length) := by
+    intro hlt
+    rw [Module.funcAt, if_pos hlt] at h
+    simp at h
+  have hnone : m.imports[fn]? = none := by
+    simpa using Nat.le_of_not_gt hge
+  rw [Module.fenv, hnone, funcAt_local m fn f h]
 
 theorem stepTy_call_inv (c : Ctx) (base mid : List ValType) (fn : Nat)
     (h : StepTy c base (Instr.call fn) mid) :
@@ -1827,7 +1901,7 @@ theorem frame_dispatch (m : Module) (fuel : Nat) (c : Ctx)
     clause), propagate traps/fuel untouched. -/
 theorem exec_typed (m : Module)
     (hcal : ∀ fn : Nat, ∀ (ft : FuncType) (f : Func),
-      m.fenv fn = some ft → m.funcs[fn]? = some f →
+      m.fenv fn = some ft → m.funcAt fn = some f →
       BodyTy (fnCtx m.fenv m.typeAt ft f) [] f.body ft.results.reverse) :
     ∀ (fuel : Nat) (c : Ctx), c.fenv = m.fenv → c.tenv = m.typeAt →
       (∀ body base final s,
@@ -1946,14 +2020,16 @@ theorem exec_typed (m : Module)
                 -- the calls layer: the callee's entry state is
                 -- well-typed (`hcal` + `localsMap_typed`), the callee's
                 -- run rides the SAME IH at its own ctx, and the join
-                -- composes the stacks (the ok/return faces named once)
+                -- composes the stacks (the ok/return faces named once).
+                -- THE IMPORT FACE: the callee resolution splits — an
+                -- import index rides the PROVISION ROW (its runtime-
+                -- typed answer; a skewed provision answers unmodeled,
+                -- never a wrong stack), a local index rides hcal's
+                -- body typing at the funcAt-resolved record.
                 obtain ⟨ft, ts, hfenvFn, hb, hm⟩ := stepTy_call_inv c base mid fn hst
                 rw [hm] at htail
                 rw [hb] at hstack
                 have hf' : m.fenv fn = some ft := by rw [← hfenv]; exact hfenvFn
-                obtain ⟨f, hfIdx, hftIdx⟩ := fenv_some m fn ft hf'
-                have hcB : BodyTy (fnCtx m.fenv m.typeAt ft f) [] f.body ft.results.reverse :=
-                  hcal fn ft f hf' hfIdx
                 obtain ⟨bound, rest, hpop, hbd, hrest⟩ :=
                   popTys_of_stackTys ft.params.reverse s.stack ts hstack
                 -- the join's stack composition (the ok + return faces)
@@ -1964,52 +2040,112 @@ theorem exec_typed (m : Module)
                   fun sC hface =>
                     hok is (callJoin s rest sC) (ft.results.reverse ++ ts) final htail
                       (by simp only [callJoin, stackTys_append, hface, hrest]) hloc
-                cases hd : localsDefault? f.locals with
-                | none =>
-                    -- non-integer locals: outside the fragment (honest)
-                    simp only [execList_call, hfIdx, hftIdx, hpop, hd]
-                    exact execQuad_unmodeled c final
-                | some defaults =>
-                    have hdf : stackTys defaults = f.locals :=
-                      localsDefault_typed f.locals defaults hd
-                    have hlocC : ∀ n t, (fnCtx m.fenv m.typeAt ft f).lty n = some t →
-                        tyOf ((bound.reverse ++ defaults).getD n (.i32 0)) = t :=
-                      fun n t hn =>
-                        localsMap_typed ft.params f.locals bound defaults n t hbd hdf hn
-                    have hresC : (fnCtx m.fenv m.typeAt ft f).resRev = ft.results.reverse := rfl
-                    obtain ⟨hneC, hokC, -, hretC⟩ :=
-                      (ih (fnCtx m.fenv m.typeAt ft f) rfl rfl).1 f.body [] ft.results.reverse
-                        { locals := fun n =>
-                            (bound.reverse ++ defaults).getD n (.i32 0)
-                        , stack := []
-                        , mem := s.mem
-                        , memSize := s.memSize }
-                        hcB (by simp [stackTys]) hlocC
-                    simp only [execList_call, hfIdx, hftIdx, hpop, hd]
-                    cases hx : execList m fuel
-                        { locals := fun n =>
-                            (bound.reverse ++ defaults).getD n (.i32 0)
-                        , stack := []
-                        , mem := s.mem
-                        , memSize := s.memSize } f.body with
-                    | ok s' => exact hjoinQ s' (hokC s' hx).1
-                    | branch d s2 =>
-                        cases d with
+                cases himp : m.imports[fn]? with
+                | some imp =>
+                    -- THE IMPORT CALL: the provision row's answer
+                    simp only [execList_call, himp]
+                    cases himpl : imp.impl with
+                    | none =>
+                        simp only [himpl]
+                        exact execQuad_unmodeled c final
+                    | some op =>
+                        -- the declared type IS the fenv-resolved one
+                        have hftI : m.typeAt imp.tyIdx = some ft := by
+                          rw [Module.fenv, himp] at hf'
+                          exact hf'
+                        simp only [himpl, hftI, hpop]
+                        cases hsem : semOp op bound with
                         | none =>
-                            -- the callee's `ret`: the return signal joins
-                            -- the caller (the results are on the callee's
-                            -- stack, per the return clause)
-                            exact hjoinQ s2 ((hretC s2 hx).1.trans hresC)
-                        | some _ =>
-                            -- the br-escape: the validator's depth gap —
-                            -- the honest unmodeled (branches do not cross
-                            -- calls)
+                            simp only [hsem]
                             exact execQuad_unmodeled c final
-                    | trap r =>
-                        exact execQuad_trap c final r (fun h0 => hneC (by rw [hx, h0]))
-                    | structural => exact execQuad_structural c final
-                    | unmodeled => exact execQuad_unmodeled c final
-                    | outOfFuel => exact execQuad_outOfFuel c final
+                        | some v =>
+                            -- the provision's type tooth: the answer
+                            -- crosses only when its type matches the
+                            -- import's declared row (the runtime check
+                            -- IS the theorem's face — a skewed
+                            -- provision answers unmodeled, and the
+                            -- well-typed crossing carries the typing
+                            -- out of the check itself)
+                            simp only [hsem]
+                            by_cases hres : ft.results = [tyOf v]
+                            · rw [if_pos hres]
+                              rw [hres] at htail
+                              exact hok is { s with stack := v :: rest }
+                                (tyOf v :: ts) final htail
+                                (by simp [stackTys, hrest]) hloc
+                            · rw [if_neg hres]
+                              exact execQuad_unmodeled c final
+                | none =>
+                    -- the local callee (the calls layer, funcAt-resolved)
+                    have hkle : m.imports.length ≤ fn := by simpa using himp
+                    cases hfn : m.funcs[fn - m.imports.length]? with
+                    | none =>
+                        have hfa : m.funcAt fn = none := by
+                          rw [Module.funcAt, if_neg (by omega)]
+                          exact hfn
+                        simp only [execList_call, himp, hfa]
+                        exact execQuad_unmodeled c final
+                    | some f =>
+                        have hfa : m.funcAt fn = some f := by
+                          rw [Module.funcAt, if_neg (by omega)]
+                          exact hfn
+                        have hftIdx : m.typeAt f.tyIdx = some ft := by
+                          have hfe := fenv_of_funcAt m fn f hfa
+                          rw [hfe] at hf'
+                          exact hf'
+                        have hcB : BodyTy (fnCtx m.fenv m.typeAt ft f) [] f.body
+                            ft.results.reverse := hcal fn ft f hf' hfa
+                        cases hd : localsDefault? f.locals with
+                        | none =>
+                            -- non-integer locals: outside the fragment
+                            simp only [execList_call, himp, hfa, hftIdx, hpop, hd]
+                            exact execQuad_unmodeled c final
+                        | some defaults =>
+                            have hdf : stackTys defaults = f.locals :=
+                              localsDefault_typed f.locals defaults hd
+                            have hlocC : ∀ n t,
+                                (fnCtx m.fenv m.typeAt ft f).lty n = some t →
+                                tyOf ((bound.reverse ++ defaults).getD n (.i32 0)) = t :=
+                              fun n t hn =>
+                                localsMap_typed ft.params f.locals bound defaults n t hbd hdf hn
+                            have hresC : (fnCtx m.fenv m.typeAt ft f).resRev
+                                = ft.results.reverse := rfl
+                            obtain ⟨hneC, hokC, -, hretC⟩ :=
+                              (ih (fnCtx m.fenv m.typeAt ft f) rfl rfl).1 f.body []
+                                ft.results.reverse
+                                { locals := fun n =>
+                                    (bound.reverse ++ defaults).getD n (.i32 0)
+                                , stack := []
+                                , mem := s.mem
+                                , memSize := s.memSize }
+                                hcB (by simp [stackTys]) hlocC
+                            simp only [execList_call, himp, hfa, hftIdx, hpop, hd]
+                            cases hx : execList m fuel
+                                { locals := fun n =>
+                                    (bound.reverse ++ defaults).getD n (.i32 0)
+                                , stack := []
+                                , mem := s.mem
+                                , memSize := s.memSize } f.body with
+                            | ok s' => exact hjoinQ s' (hokC s' hx).1
+                            | branch d s2 =>
+                                cases d with
+                                | none =>
+                                    -- the callee's `ret`: the return signal
+                                    -- joins the caller (the results are on
+                                    -- the callee's stack, per the return
+                                    -- clause)
+                                    exact hjoinQ s2 ((hretC s2 hx).1.trans hresC)
+                                | some _ =>
+                                    -- the br-escape: the validator's depth
+                                    -- gap — the honest unmodeled (branches
+                                    -- do not cross calls)
+                                    exact execQuad_unmodeled c final
+                            | trap r =>
+                                exact execQuad_trap c final r
+                                  (fun h0 => hneC (by rw [hx, h0]))
+                            | structural => exact execQuad_structural c final
+                            | unmodeled => exact execQuad_unmodeled c final
+                            | outOfFuel => exact execQuad_outOfFuel c final
             | callindirect ty =>
                 -- THE INDIRECT-CALL LAYER (the table discipline's type
                 -- safety): the callee index is RUNTIME data — the
@@ -2045,7 +2181,12 @@ theorem exec_typed (m : Module)
                         simp only
                         exact execQuad_trap c final .tabOOB (by simp)
                     | some fn =>
-                        cases hfIdx : m.funcs[fn]? with
+                        -- the entry's resolution is funcAt's ONE face
+                        -- (an import-naming entry answers unmodeled —
+                        -- the table's identity entries cover the
+                        -- imports too, but an imported callee has no
+                        -- body to type)
+                        cases hfIdx : m.funcAt fn with
                         | none =>
                             simp only [hfIdx]
                             exact execQuad_unmodeled c final
@@ -2066,8 +2207,7 @@ theorem exec_typed (m : Module)
                                   obtain ⟨bound, rest2, hpop, hbd, hrest⟩ :=
                                     popTys_of_stackTys ft.params.reverse rest0 ts hcty.2
                                   have hf' : m.fenv fn = some ft' := by
-                                    simp only [Module.fenv, hfIdx]
-                                    rw [hftR]
+                                    rw [fenv_of_funcAt m fn f hfIdx, hftR]
                                   have hcB : BodyTy (fnCtx m.fenv m.typeAt ft' f) []
                                       f.body ft'.results.reverse := hcal fn ft' f hf' hfIdx
                                   rw [hEq] at hcB
@@ -2242,11 +2382,11 @@ theorem exec_typed (m : Module)
                 cases c0 with
                 | i32 b =>
                     have hx : step s Instr.select
-                        = .ok { s with stack := (if b != 0 then v2 else v3) :: rest3 } := by
+                        = .ok { s with stack := (if b != 0 then v3 else v2) :: rest3 } := by
                       simp only [step, hstack2, hrest2, hrest3]
                       split <;> rfl
                     obtain ⟨hstk2, hloc2⟩ := step_preserves s
-                      { s with stack := (if b != 0 then v2 else v3) :: rest3 }
+                      { s with stack := (if b != 0 then v3 else v2) :: rest3 }
                       Instr.select (ValType.i32 :: t :: t' :: ts) (t :: ts) c.lty c.tenv hx
                       (by rw [hstack2]; exact hstack) hloc hchk
                     rw [hm] at htail
@@ -2331,7 +2471,7 @@ theorem exec_typed (m : Module)
     the TYPE error alone. -/
 theorem runFunc_safe (m : Module) (i : Nat) (f : Func) (ft : FuncType)
     (args : List Val) (fuel : Nat)
-    (hf : m.funcs[i]? = some f)
+    (hf : m.funcAt i = some f)
     (hft : m.typeAt f.tyIdx = some ft)
     (hval : checkModule m = .ok ())
     (hargs : stackTys args = ft.params.reverse) :
@@ -2339,13 +2479,19 @@ theorem runFunc_safe (m : Module) (i : Nat) (f : Func) (ft : FuncType)
     ∧ (∀ s', runFunc m i args fuel = .ok s' →
           stackTys s'.stack = ft.results.reverse) := by
   -- the module check's unfold: the table discipline first, the
-  -- per-function fold second (the driver's two stages)
+  -- per-function fold second (the driver's two stages). The callee's
+  -- LOCAL index rides `funcAt_local` (the import face's shift).
   have hv2 : checkFuncs m 0 m.funcs = .ok () := by
     rw [checkModule] at hval
     cases htab : checkTables m with
     | error e => rw [htab] at hval; simp at hval
-    | ok _ => rw [htab] at hval; exact hval
-  obtain ⟨ft2, hft2, hcf⟩ := checkFuncs_some m m.funcs 0 i f hv2 hf
+    | ok _ =>
+        -- the import face's stage (the driver's THREE stages now)
+        cases himp : checkImports m with
+        | error e => rw [htab] at hval; simp [himp] at hval
+        | ok _ => rw [htab, himp] at hval; exact hval
+  obtain ⟨ft2, hft2, hcf⟩ := checkFuncs_some m m.funcs 0
+    (i - m.imports.length) f hv2 (funcAt_local m i f hf)
   have hftE : some ft = some ft2 := hft.symm.trans hft2
   injection hftE with hftE2
   subst hftE2
@@ -2362,14 +2508,16 @@ theorem runFunc_safe (m : Module) (i : Nat) (f : Func) (ft : FuncType)
       simp only [runFunc, hf, hft, hpop, hd]
       have hdf : stackTys defaults = f.locals := localsDefault_typed f.locals defaults hd
       -- the call-typing premise, discharged from the module check
+      -- (the funcAt-resolved callee: the fenv entry IS the local's
+      -- declared type — `fenv_of_funcAt` — and the module-check fold
+      -- sees it at the shifted local index — `funcAt_local`)
       have hcal : ∀ fn : Nat, ∀ (ft' : FuncType) (g : Func),
-          m.fenv fn = some ft' → m.funcs[fn]? = some g →
+          m.fenv fn = some ft' → m.funcAt fn = some g →
           BodyTy (fnCtx m.fenv m.typeAt ft' g) [] g.body ft'.results.reverse := by
         intro fn ft' g hf hfIdx
-        obtain ⟨ft2, hft2, hcf2⟩ := checkFuncs_some m m.funcs 0 fn g hv2 hfIdx
-        have hf2 : m.fenv fn = m.typeAt g.tyIdx := by
-          simp only [Module.fenv, hfIdx]
-        rw [hf2, hft2] at hf
+        obtain ⟨ft2, hft2, hcf2⟩ := checkFuncs_some m m.funcs 0
+          (fn - m.imports.length) g hv2 (funcAt_local m fn g hfIdx)
+        rw [fenv_of_funcAt m fn g hfIdx, hft2] at hf
         simp only [Option.some.injEq] at hf
         subst hf
         exact checkFunc_sound m.fenv m.typeAt _ g hcf2
@@ -2396,3 +2544,8 @@ theorem runFunc_safe (m : Module) (i : Nat) (f : Func) (ft : FuncType)
         · have hk := (hretc s2 h).1
           cases hs2
           exact hk
+
+end WasmCore
+
+end -- public section
+

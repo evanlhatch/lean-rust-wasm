@@ -55,7 +55,12 @@ executable `step`/`eval`, tied by `step_iff_conseq` and
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Datalog.Basic
+
+module
+
+public import Datalog.Basic
+
+@[expose] public section
 
 namespace Datalog
 
@@ -1138,3 +1143,6 @@ def Program.run [DecidableEq Value] [Inhabited Value] (P : Program Value)
   Program.checked P |>.map fun _ => eval P E
 
 end Datalog
+
+
+end -- public section

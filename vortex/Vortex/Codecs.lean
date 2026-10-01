@@ -53,14 +53,35 @@ SchemaCore are both c1domain, lintkit's cone table; Correspondence is
 the semantic dict codec's graded carrier, LintKit the nolint opt-out
 attribute's reason-string form — core-only, any package may import it).
 -/
+module
 
-import Kit
-import Kit.Correspondence
-import Kit.Varint
-import SchemaCore.Item
-import SchemaCore.Codec
-import LintKit.Basic
-import Vortex.Encoding
+public import Kit.Correspondence
+public import Kit.Relation
+public import Kit.Hyper
+public import Kit.Obligation
+public import Kit.Registry
+public import Kit.CheckedProp
+public import Kit.Emit
+public import Kit.Suggest
+public import Kit.Diag
+public import Kit.Cli
+public import Kit.CodeRegistry
+public import Kit.Change
+public import Kit.Observer
+public import Kit.Varint
+public import Kit.Proto
+public import Kit.Duel
+public import Kit.Mangle
+-- the Kit barrel itself stays pre-module (Kit.Lane/Kit.Text are the
+-- named stays); the module-only members are imported directly
+public import Kit.Correspondence
+public import Kit.Varint
+public import SchemaCore.Item
+public import SchemaCore.Codec
+public import LintKit.Basic
+public import Vortex.Encoding
+@[expose] public section
+
 
 open Kit Varint SchemaCore
 
@@ -101,11 +122,10 @@ theorem readBytes?_bytesOfNat_append : ∀ (b s : Nat) (rest : List UInt8),
       have hsize : UInt8.size = 256 := rfl
       have hbyte : (s % 256).toUInt8.toNat = s % 256 :=
         UInt8.toNat_ofNat_of_lt' (by rw [hsize]; omega)
-      simp only [readBytes?, bytesOfNat, List.cons_append, hbyte]
-      rw [ih (s / 256) rest (by omega)]
-      simp only [Option.map_some, Option.some.injEq]
-      have hval : s % 256 + 256 * (s / 256) = s := by omega
-      rw [hval]
+      -- the cons arm by `grind` (06 §12): the byte's div/mod decomposition
+      -- facts are in grind's lemma domain; the IH fires from the context
+      -- (the 4.33 redundancy-gate spelling — no explicit local names)
+      grind [readBytes?, bytesOfNat, Nat.mod_add_div, Option.some.injEq]
 
 /-- The byte base as a power of two (the two faces of one boundary). -/
 theorem pow256 (b : Nat) : 256 ^ b = 2 ^ (8 * b) := by
@@ -139,6 +159,15 @@ theorem packStream_le (w : Nat) (xs : List Nat) (h : ∀ v ∈ xs, v < 2 ^ w) :
       have hv : v + 1 ≤ 2 ^ w := by have := h v (by simp); omega
       have hS : packStream w vs + 1 ≤ 2 ^ (w * vs.length) :=
         ih (fun u hu => h u (by simp [hu]))
+      -- the bound chase STAYS the hand calc (06 §12's stays ledger): two
+      -- grind defeats — the goal reduces to `v + 2^w*P + 1 ≤ 2^(w*len) * 2^w`,
+      -- a nonlinear sandwich (the product `2^w * P` against
+      -- `P + 1 ≤ 2^(w*len)`) grind's case tree cannot assemble even with
+      -- the distributivity lemmas named and `splits := 32`. The hand
+      -- chain rides `Nat.mul_le_mul_left` directly.
+      have hv : v + 1 ≤ 2 ^ w := by have := h v (by simp); omega
+      have hS : packStream w vs + 1 ≤ 2 ^ (w * vs.length) :=
+        ih (fun u hu => h u (by simp [hu]))
       have hsplit : 2 ^ (w * (vs.length + 1))
           = 2 ^ w * 2 ^ (w * vs.length) := by
         rw [Nat.mul_add, Nat.mul_one, Nat.pow_add, Nat.mul_comm]
@@ -166,18 +195,19 @@ theorem unpackStream_packStream (w : Nat) (xs : List Nat) (h : ∀ v ∈ xs, v <
     unpackStream w xs.length (packStream w xs) = xs := by
   induction xs with
   | nil => simp [unpackStream]
+  -- the cons arm by `grind` (06 §12): the mod/div decomposition facts
+  -- are in grind's lemma domain — the arm is CLOSED-GROUND (the goal
+  -- shape is the round-trip law itself, not a drift-exposed
+  -- intermediate). The IH fires from the context (the 4.33
+  -- redundancy-gate spelling — no explicit local names).
   | cons v vs ih =>
       have hv : v < 2 ^ w := h v (by simp)
       have hs : ∀ u ∈ vs, u < 2 ^ w := fun u hu => h u (by simp [hu])
-      have hlow : packStream w (v :: vs) % 2 ^ w = v := by
-        simp only [packStream, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hv]
-      have hshift : packStream w (v :: vs) / 2 ^ w = packStream w vs := by
-        simp only [packStream]
-        rw [Nat.add_mul_div_left v (packStream w vs)
-          (show 0 < 2 ^ w from Nat.pow_pos (by omega)),
-          Nat.div_eq_of_lt hv, Nat.zero_add]
-      simp only [unpackStream, List.length_cons, hlow, hshift]
-      simp [ih hs]
+      have hvmod : v % 2 ^ w = v := Nat.mod_eq_of_lt hv
+      have hvdiv : v / 2 ^ w = 0 := Nat.div_eq_of_lt hv
+      have hpos : 0 < 2 ^ w := Nat.pow_pos (by omega)
+      grind [unpackStream, packStream, List.length_cons,
+        Nat.add_mul_mod_self_left, Nat.add_mul_div_left]
 
 /-! ## The foldl-min helper (the FoR base's min-ness) -/
 
@@ -954,3 +984,7 @@ theorem readColumnData_emitColumnData_append (c : ColumnData)
   · next hv =>
       simp only [List.nil_append]
       exact decodeColumn_encodeColumn_append _ _ hdom rest
+
+end Vortex
+
+end -- public section

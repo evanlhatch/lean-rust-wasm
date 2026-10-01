@@ -77,13 +77,17 @@ pub struct GenSlice {
 pub fn load_gen_slice(gen_dir: &Path) -> Result<GenSlice, HostError> {
     // 1. The module bytes.
     let wasm_path = gen_dir.join("wasm-slice.wasm");
-    let wasm = std::fs::read(&wasm_path)
-        .map_err(|source| HostError::Io { what: "wasm-slice.wasm", source })?;
+    let wasm = std::fs::read(&wasm_path).map_err(|source| HostError::Io {
+        what: "wasm-slice.wasm",
+        source,
+    })?;
 
     // 2. The sidecar — the hash tie.
     let sidecar_path = gen_dir.join("wasm-slice.wasm.hdr");
-    let sidecar = std::fs::read_to_string(&sidecar_path)
-        .map_err(|source| HostError::Io { what: "wasm-slice.wasm.hdr", source })?;
+    let sidecar = std::fs::read_to_string(&sidecar_path).map_err(|source| HostError::Io {
+        what: "wasm-slice.wasm.hdr",
+        source,
+    })?;
     let declared = sidecar_hash(&sidecar).ok_or(HostError::SidecarMalformed(
         "no `content hash <n>` field in the GENERATED header",
     ))?;
@@ -94,12 +98,23 @@ pub fn load_gen_slice(gen_dir: &Path) -> Result<GenSlice, HostError> {
 
     // 3. The WIT surface — the artifact set's completeness witness.
     let wit_path = gen_dir.join("schema-slice.wit");
-    let wit = std::fs::read_to_string(&wit_path)
-        .map_err(|source| HostError::Io { what: "schema-slice.wit", source })?;
-    if !wit.lines().next().is_some_and(|l| l.starts_with("// GENERATED")) {
-        return Err(HostError::Incomplete("schema-slice.wit: not a GENERATED artifact"));
+    let wit = std::fs::read_to_string(&wit_path).map_err(|source| HostError::Io {
+        what: "schema-slice.wit",
+        source,
+    })?;
+    if !wit
+        .lines()
+        .next()
+        .is_some_and(|l| l.starts_with("// GENERATED"))
+    {
+        return Err(HostError::Incomplete(
+            "schema-slice.wit: not a GENERATED artifact",
+        ));
     }
-    if !wit.lines().any(|l| l.starts_with("package ") && l.contains(":slice;")) {
+    if !wit
+        .lines()
+        .any(|l| l.starts_with("package ") && l.contains(":slice;"))
+    {
         return Err(HostError::Incomplete(
             "schema-slice.wit: no `package <org>:slice;` declaration",
         ));
@@ -119,8 +134,7 @@ mod tests {
     #[test]
     fn bytes_hash_pin_matches_committed_sidecar() {
         let committed = repo_gen_dir();
-        let wasm =
-            std::fs::read(committed.join("wasm-slice.wasm")).expect("the committed module");
+        let wasm = std::fs::read(committed.join("wasm-slice.wasm")).expect("the committed module");
         let sidecar = std::fs::read_to_string(committed.join("wasm-slice.wasm.hdr"))
             .expect("the committed sidecar");
         let declared = sidecar_hash(&sidecar).expect("the sidecar names a content hash");

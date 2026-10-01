@@ -25,12 +25,13 @@ The layout discipline (the bytes are the artifact's, verbatim):
 
 The world case (grown with its first consumer, `Guest.Component`):
 `func`/`exportItem`/`importItem`/`world`/`worldFile` render the
-`Wit.World` carrier (the component boundary's contract). The world's
-PARSE-BACK is a NAMED follow-up (`Wit.World`'s header): the accepted
-language below stays the world-free package text, and `worldFile`'s
-image is deliberately outside it — the world artifact's tie is the
-render-side byte-tie (the committed bytes vs the fresh render), not a
-round-trip claim.
+`Wit.World` carrier (the component boundary's contract). The world
+BLOCK's parse-back LANDED with the func-level async row
+(`Wit.Parse.parseWorld` over `Render.world`'s image — the round-trip
+laws are the generic instances); the worldFile DOCUMENT's package
+line stays render-only (the id is the component driver's), and its
+tie is the render-side byte-tie (the committed bytes vs the fresh
+render).
 
 Core-only (imports `Wit` + `Wit.World` only — the cone rule).
 
@@ -45,10 +46,14 @@ The five questions (notes/v3/01-core.md):
 - ladder rung: rung 1 — total structural folds.
 - gate row: gen-check (the byte-tie over gen/schema-slice.wit).
 -/
+module
 
-import Wit
-import Wit.World
 
+public import Wit
+public import Wit.World
+
+
+@[expose] public section
 namespace Wit.Render
 
 /-- The scalar atom's spelling (the artifact of record's — `i64`
@@ -59,13 +64,26 @@ def scalar : Scalar → String
   | .i64 => "i64"
   | .string => "string"
 
-/-- The WIT type text: total over the closed grammar. -/
+/-- The WIT type text: total over the closed grammar. The D2 rows:
+    `stream<T>`/`future<T>` (the waitable wrappers), the one-summand
+    `result<T>` / `result<_, E>` (the fault channel's faces — the bare
+    parameterless `result` is the named gap: no consumer, and its
+    spelling would collide with a resource handle named `result`), and
+    the handle refs `own<r>`/`borrow<r>` (the component-model's
+    spellings over the declared resource's NAME — the refs' decl-name
+    agreement is the consumer's check, the name-mangling precedent). -/
 def ty : Ty → String
   | .atom s => scalar s
   | .option a => "option<" ++ ty a ++ ">"
   | .list a => "list<" ++ ty a ++ ">"
+  | .stream a => "stream<" ++ ty a ++ ">"
+  | .future a => "future<" ++ ty a ++ ">"
   | .result ok err => "result<" ++ ty ok ++ ", " ++ ty err ++ ">"
+  | .resultOk ok => "result<" ++ ty ok ++ ">"
+  | .resultErr err => "result<_, " ++ ty err ++ ">"
   | .tuple a b => "tuple<" ++ ty a ++ ", " ++ ty b ++ ">"
+  | .own r => "own<" ++ r ++ ">"
+  | .borrow r => "borrow<" ++ r ++ ">"
 
 /-- One field line (4-space indent, trailing comma). -/
 def field (f : Field) : String :=
@@ -101,10 +119,24 @@ def recordsJoin : List Record → String
   | [] => ""
   | r :: rs => record r ++ recordsJoin rs
 
-/-- One interface block (the record blocks concatenated). -/
+/-- One resource-declaration line (column 0 — the head is deliberately
+    disjoint from the record blocks' two-space indent, the parser's
+    FIRST-set discipline; the artifact of record has no resources, so
+    the byte-tie surface is unchanged by this row). -/
+def resource (r : Resource) : String :=
+  "resource " ++ r.name ++ ";\n"
+
+/-- The resource lines' concatenation (the same fold form). -/
+def resourcesJoin : List Resource → String
+  | [] => ""
+  | r :: rs => resource r ++ resourcesJoin rs
+
+/-- One interface block: the resource lines, then the record blocks
+    (canonical order — the artifact of record, resources absent, is
+    byte-identical). -/
 def interface (i : Interface) : String :=
   "interface " ++ i.name ++ " {\n"
-    ++ recordsJoin i.records ++ "}\n"
+    ++ resourcesJoin i.resources ++ recordsJoin i.records ++ "}\n"
 
 /-- The interface blocks' concatenation (the same fold form). -/
 def interfacesJoin : List Interface → String
@@ -127,24 +159,36 @@ def funcParam (p : Field) : String :=
   p.name ++ ": " ++ ty p.ty
 
 def func (f : Func) : String :=
-  "func(" ++ String.intercalate ", " (f.params.map funcParam) ++ ")"
+  (if f.async then "async " else "")
+    ++ "func(" ++ String.intercalate ", " (f.params.map funcParam) ++ ")"
     ++ match f.result with
        | some t => " -> " ++ ty t
        | none => ""
 
+/-- The async row's spelling (the honest one per the WIT spec's
+    current shape — the `async` keyword before `func`, confirmed
+    against the mandate tree's fixtures, e.g. legacy
+    `splicer-mw.wit`'s `export watch-counts: async func(n: u64) ->
+    stream<u64>;` and the async-lift fixture's `f : async func() ->
+    u64`). -/
+def funcAsync (f : Func) (h : f.async = true) : String := "async " ++ func { f with async := false }
+
+/-- One item line: the direction's indent+keyword, then the inline-
+    func form (`name: [async ]func(...) [-> ty];`) or the by-name
+    interface form (`name;`). The item grammar's parse face reads
+    exactly these bytes (`Wit.Parse.itemG`). -/
+def itemLine (dir : String) (i : Item) : String :=
+  match i with
+  | .func f => dir ++ f.name ++ ": " ++ func f ++ ";\n"
+  | .iface i => dir ++ i.name ++ ";\n"
+
 /-- One EXPORT item line (2-space indent, trailing semicolon). The
     inline-func form carries the type; the interface form is
     by-name. -/
-def exportItem (i : Item) : String :=
-  match i with
-  | .func f => "  export " ++ f.name ++ ": " ++ func f ++ ";\n"
-  | .iface i => "  export " ++ i.name ++ ";\n"
+def exportItem (i : Item) : String := itemLine "  export " i
 
 /-- One IMPORT item line (the same shapes). -/
-def importItem (i : Item) : String :=
-  match i with
-  | .func f => "  import " ++ f.name ++ ": " ++ func f ++ ";\n"
-  | .iface i => "  import " ++ i.name ++ ";\n"
+def importItem (i : Item) : String := itemLine "  import " i
 
 /-- The items' concatenation (one line each, order preserved —
     the explicit-fold form). -/
@@ -168,3 +212,6 @@ def worldFile (id : String) (w : World) : String :=
   "package " ++ id ++ ";\n\n" ++ world w
 
 end Wit.Render
+
+end -- public section
+

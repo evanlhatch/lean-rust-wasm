@@ -104,8 +104,8 @@ def keywords : List String :=
 def kw (s : String) : GParser Unit := do
   let _t ← tok s
   match ← peek with
-  | some c => if TextKit.isIdentChar c then failure else pure ()
-  | none => pure ()
+  | Option.some c => if TextKit.isIdentChar c then failure else pure ()
+  | Option.none => pure ()
 
 /-- An identifier: alpha head, ident-chars after, NOT a keyword. -/
 def identP : GParser String := label "identifier" do

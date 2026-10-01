@@ -32,7 +32,10 @@ impl ScratchDir {
         );
         let path = std::env::temp_dir().join(&stamp);
         std::fs::create_dir_all(&path)?;
-        Ok(Self { path, tag: stamp.into() })
+        Ok(Self {
+            path,
+            tag: stamp.into(),
+        })
     }
 
     /// The scratch directory's path.

@@ -56,11 +56,17 @@ Five questions (notes/v3/01-core.md):
   refusal teeth + the negative controls).
 -/
 
-import Lean
-import Kit.Diag
-import Kit.CheckedProp
-import Kit.Derive.Common
-import Kit.Derive.Fold
+
+module
+
+public meta import Lean
+public meta import Kit.Diag
+public meta import Kit.CheckedProp
+public meta import Kit.Derive.Common
+public meta import Kit.Derive.Fold
+
+public meta section
+
 
 namespace Kit.Derive.Bridge
 
@@ -399,3 +405,5 @@ def elabDeclareBridge : CommandElab
   | _ => Elab.throwUnsupportedSyntax
 
 end Kit.Derive.Bridge
+
+end -- public meta section

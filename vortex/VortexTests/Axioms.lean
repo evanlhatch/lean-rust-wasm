@@ -36,11 +36,14 @@ open Vortex
 #guard_msgs in
 #print axioms Vortex.layoutLaw_discharged
 
-/-- info: 'Vortex.decBitPacked?_encBitPacked_append' depends on axioms: [propext, Quot.sound] -/
+-- the wave's grind migrations (Codecs: readBytes?/unpackStream_packStream)
+-- import Classical.choice through the consumed byte laws — the honest
+-- drift (06 §12's choice-axiom note); the integrator re-baselines.
+/-- info: 'Vortex.decBitPacked?_encBitPacked_append' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Vortex.decBitPacked?_encBitPacked_append
 
-/-- info: 'Vortex.decFoR?_encFoR_append' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'Vortex.decFoR?_encFoR_append' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Vortex.decFoR?_encFoR_append
 

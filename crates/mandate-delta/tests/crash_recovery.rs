@@ -17,16 +17,14 @@ fn fixture_schema() -> mandate_delta::Schema {
 /// A per-test temp dir: the shared scratch face (std-only, removed on
 /// drop).
 fn temp_dir(tag: &str) -> ScratchDir {
-    ScratchDir::new(&format!("mandate-delta-{tag}"))
-        .unwrap_or_else(|e| panic!("tempdir: {e}"))
+    ScratchDir::new(&format!("mandate-delta-{tag}")).unwrap_or_else(|e| panic!("tempdir: {e}"))
 }
 
 /// Write a journal of `n` entries through the FILE backend; return the
 /// path + the full byte content.
 fn write_journal(dir: &ScratchDir, n: u64) -> (std::path::PathBuf, Vec<u8>) {
     let path = dir.path().join("journal.bin");
-    let mut log = DeltaLog::open(&path, fixture_schema())
-        .unwrap_or_else(|e| panic!("open: {e}"));
+    let mut log = DeltaLog::open(&path, fixture_schema()).unwrap_or_else(|e| panic!("open: {e}"));
     for i in 0..n {
         let d = match i % 3 {
             0 => Delta::Insert(fixture_row(i, &format!("row-{i}-with-some-payload-bytes"))),
@@ -104,9 +102,15 @@ fn torn_tail_at_every_offset() {
             // The cut lands at the last good frame's boundary — at or
             // before the crash point (the torn frame itself never
             // survives).
-            assert!(rec.offset as usize <= cut, "cut {cut}: recovery past the crash");
+            assert!(
+                rec.offset as usize <= cut,
+                "cut {cut}: recovery past the crash"
+            );
         } else {
-            assert!(log.recovery().is_none(), "cut {cut}: phantom recovery report");
+            assert!(
+                log.recovery().is_none(),
+                "cut {cut}: phantom recovery report"
+            );
         }
         // The recovered log is still appendable, and the append survives
         // a reopen.
@@ -116,13 +120,20 @@ fn torn_tail_at_every_offset() {
         drop(log);
         let log = DeltaLog::open(&tmp, fixture_schema())
             .unwrap_or_else(|e| panic!("cut {cut}: re-reopen: {e}"));
-        assert_eq!(log.len(), before + 1, "cut {cut}: post-recovery append lost");
+        assert_eq!(
+            log.len(),
+            before + 1,
+            "cut {cut}: post-recovery append lost"
+        );
         assert_eq!(
             log.entry(before),
             Some(&Delta::Insert(fixture_row(999, "post-recovery")))
         );
     }
-    assert!(dropped_any, "vacuous: no truncation ever dropped a frame tail");
+    assert!(
+        dropped_any,
+        "vacuous: no truncation ever dropped a frame tail"
+    );
 }
 
 /// The STRICT face: the same torn cuts are the typed refusal — the
@@ -140,7 +151,10 @@ fn strict_open_refuses_torn_tails() {
             Err(DeltaError::TornTail { offset }) => {
                 // The torn offset is the last good frame's boundary — at
                 // or before the crash point.
-                assert!(offset as usize <= cut, "cut {cut}: torn offset {offset} past the crash");
+                assert!(
+                    offset as usize <= cut,
+                    "cut {cut}: torn offset {offset} past the crash"
+                );
                 refused_any = true;
             }
             Ok(log) => {
@@ -181,7 +195,10 @@ fn mid_log_corruption_is_an_error() {
     ] {
         match open {
             Err(DeltaError::Corrupt { offset: 0, reason }) => {
-                assert!(reason.contains("tag"), "corrupt reason names the tag: {reason}");
+                assert!(
+                    reason.contains("tag"),
+                    "corrupt reason names the tag: {reason}"
+                );
             }
             Err(e) => panic!("{name}: expected Corrupt at 0, got {e}"),
             Ok(_) => panic!("{name}: mid-log corruption must not open cleanly"),

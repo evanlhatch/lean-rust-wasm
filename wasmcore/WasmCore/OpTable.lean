@@ -49,10 +49,14 @@ The five questions (notes/v3/01-core.md):
 
 Imports: `WasmCore.Types`, `WasmCore.Instr` only (cone-ordered).
 -/
+module
 
-import WasmCore.Types
-import WasmCore.Instr
 
+public import WasmCore.Types
+public import WasmCore.Instr
+
+
+@[expose] public section
 namespace WasmCore
 
 /-! ## The rows -/
@@ -199,4 +203,41 @@ def memPop (m : MemOp) : List ValType := (memSig m).1
 /-- `memSig`'s pushes (same discipline). -/
 def memPush (m : MemOp) : List ValType := (memSig m).2
 
+/-! ## The named next fragment (exnref + GC — the extension points) -/
+
+/-- The RESERVED spellings of the next fragment: the exceptions-final
+    (exnref) and GC instructions' WAT names. NO ctor in `Instr.lean`,
+    NO row above — the rows are one-per-ctor (a row without a ctor is
+    the parallel-table failure R6 forbids), so the fragment's absence
+    is THIS LIST plus the feature axes' off rows
+    (`WasmCore.Profile.featureAxis .exceptionsFinal / .gc`), never a
+    stub. When the order lands: ONE ctor + ONE row per instruction
+    (R6's acceptance), the validator's judgment extends over the new
+    ctors, and the axis row flips WITH its named gate. -/
+def reservedFragmentSpellings : List String :=
+  -- the exnref direction (exceptionsFinal)
+  [ "throw", "throw_ref", "try_table"
+  -- the GC direction (struct/array types + the typed-reference ops;
+  -- typeReflection + typedFunctionReferences ride the same gate)
+  , "struct.new", "struct.get", "struct.set"
+  , "array.new", "array.get", "array.set"
+  , "ref.cast", "ref.test", "call_ref", "return_call_ref" ]
+
+/-- The reserved spellings are FRESH: no closed-universe row (plain or
+    mem) carries one — a spelling collision would bind a fragment's
+    name to a scalar op behind the feature gate. The decide is over
+    the CLOSED ctor sets: a new op ctor whose row's name collides with
+    a reserved spelling fails here, loud. -/
+theorem reservedFragment_fresh_op (o : Op) :
+    (opRow o).name ∉ reservedFragmentSpellings := by
+  cases o <;> decide
+
+/-- The mem rows' freshness pin (same decide). -/
+theorem reservedFragment_fresh_mem (m : MemOp) :
+    (memRow m).name ∉ reservedFragmentSpellings := by
+  cases m <;> decide
+
 end WasmCore
+
+end -- public section
+

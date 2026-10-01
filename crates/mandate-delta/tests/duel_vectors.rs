@@ -21,7 +21,7 @@
 //! hand-composed fixture era is over; a wire drift fails THIS test, and
 //! a generator drift fails the gate.
 
-use mandate_delta::delta::{dec_delta, dec_journal, enc_delta, enc_journal, Delta};
+use mandate_delta::delta::{Delta, dec_delta, dec_journal, enc_delta, enc_journal};
 use mandate_delta::manifest::parse_duel_manifest;
 use mandate_delta::schema::fixtures::{fixture, fixture_row};
 use mandate_delta::value::Value;
@@ -45,9 +45,11 @@ fn fixture_schema() -> mandate_delta::Schema {
 fn manifest_rows() -> Vec<mandate_delta::manifest::DuelRow<Option<String>>> {
     // The vocabulary is total here (every column is `decode …` or
     // `refuse`), so the note itself rides as the parsed expectation.
-    parse_duel_manifest(MANIFEST, |col| Some(col.strip_prefix("decode ").map(str::to_string)))
-        .unwrap_or_else(|e| panic!("manifest: {e}"))
-        .rows
+    parse_duel_manifest(MANIFEST, |col| {
+        Some(col.strip_prefix("decode ").map(str::to_string))
+    })
+    .unwrap_or_else(|e| panic!("manifest: {e}"))
+    .rows
 }
 
 /// Re-base a manifest row's repo-root-relative path to the crate root.
@@ -116,18 +118,23 @@ fn duel_rows() {
                 );
             }
             Some(note) => {
-                let (kind, value_note) =
-                    note.split_once(' ').unwrap_or((note, ""));
+                let (kind, value_note) = note.split_once(' ').unwrap_or((note, ""));
                 match kind {
                     "journal-empty" => {
                         assert_eq!(value_note, "", "note drift");
                         let mut rest: &[u8] = &bytes;
-                        let journal =
-                            dec_journal(&schema, &mut rest).unwrap_or_else(|e| {
-                                panic!("{}: {e:?}", row.path)
-                            });
-                        assert!(journal.is_empty(), "{}: expected the empty journal", row.path);
-                        assert!(rest.is_empty(), "{}: journal wire must fully consume", row.path);
+                        let journal = dec_journal(&schema, &mut rest)
+                            .unwrap_or_else(|e| panic!("{}: {e:?}", row.path));
+                        assert!(
+                            journal.is_empty(),
+                            "{}: expected the empty journal",
+                            row.path
+                        );
+                        assert!(
+                            rest.is_empty(),
+                            "{}: journal wire must fully consume",
+                            row.path
+                        );
                         // Both directions: re-encode byte-identically.
                         let mut re = Vec::new();
                         enc_journal(&schema, &journal, &mut re);
@@ -135,12 +142,19 @@ fn duel_rows() {
                     }
                     "journal" => {
                         let mut rest: &[u8] = &bytes;
-                        let journal =
-                            dec_journal(&schema, &mut rest).unwrap_or_else(|e| {
-                                panic!("{}: {e:?}", row.path)
-                            });
-                        assert!(rest.is_empty(), "{}: journal wire must fully consume", row.path);
-                        assert_eq!(journal, pinned_journal(value_note), "{}: value pin", row.path);
+                        let journal = dec_journal(&schema, &mut rest)
+                            .unwrap_or_else(|e| panic!("{}: {e:?}", row.path));
+                        assert!(
+                            rest.is_empty(),
+                            "{}: journal wire must fully consume",
+                            row.path
+                        );
+                        assert_eq!(
+                            journal,
+                            pinned_journal(value_note),
+                            "{}: value pin",
+                            row.path
+                        );
                         // Both directions: re-encode byte-identically.
                         let mut re = Vec::new();
                         enc_journal(&schema, &journal, &mut re);
@@ -156,11 +170,14 @@ fn duel_rows() {
                     }
                     _ => {
                         let mut rest: &[u8] = &bytes;
-                        let decoded =
-                            dec_delta(&schema, &mut rest).unwrap_or_else(|e| {
-                                panic!("{}: {e:?}", row.path)
-                            });
-                        assert_eq!(decoded, pinned_frame(kind, value_note), "{}: value pin", row.path);
+                        let decoded = dec_delta(&schema, &mut rest)
+                            .unwrap_or_else(|e| panic!("{}: {e:?}", row.path));
+                        assert_eq!(
+                            decoded,
+                            pinned_frame(kind, value_note),
+                            "{}: value pin",
+                            row.path
+                        );
                         assert!(rest.is_empty(), "{}: frame must fully consume", row.path);
                         // Both directions: re-encode byte-identically.
                         let mut re = Vec::new();
@@ -184,7 +201,11 @@ fn lean_atom_pins_inside_frames() {
     let schema = fixture_schema();
     // u64 300 = [0xAC, 0x02]; "hi" = [2, 104, 105] — Codec.lean's pins.
     let mut out = Vec::new();
-    assert!(enc_delta(&schema, &Delta::Insert(fixture_row(300, "hi")), &mut out));
+    assert!(enc_delta(
+        &schema,
+        &Delta::Insert(fixture_row(300, "hi")),
+        &mut out
+    ));
     assert_eq!(out, vec![0x00, 2, 0xAC, 0x02, 2, 104, 105]);
     // i64 pins ride the row positions' type (not in this fixture's
     // schema; the atom-level pins live in value.rs's known-answer test).

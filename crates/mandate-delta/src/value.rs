@@ -26,7 +26,7 @@
 //! silent misparse).
 
 use crate::error::DecodeFail;
-use schema_generated::{dec_bool, dec_i64, dec_string, dec_u64, enc_str, CodecError};
+use schema_generated::{CodecError, dec_bool, dec_i64, dec_string, dec_u64, enc_str};
 
 // The atom encode primitives' ONE home (re-exported for the frame/row
 // codecs in `delta`/`schema` — the same names, one implementation).
@@ -184,9 +184,8 @@ mod tests {
         ] {
             let mut out = Vec::new();
             enc_value(&v, &mut out);
-            let decoded = dec_value(v.ty(), &mut out.as_slice()).unwrap_or_else(|e| {
-                panic!("decode {v:?}: {e:?}")
-            });
+            let decoded = dec_value(v.ty(), &mut out.as_slice())
+                .unwrap_or_else(|e| panic!("decode {v:?}: {e:?}"));
             assert_eq!(decoded, v);
         }
     }

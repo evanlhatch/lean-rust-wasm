@@ -9,8 +9,11 @@ constructor, whose suggest engine rides core's levenshtein DP). If a
 changes and this file FAILS THE BUILD — the drift is loud, not silent.
 Evidence, not architecture — the five-question block lives in the modules under test.
 -/
+module
 
-import Scaffold
+public import Scaffold
+
+@[expose] public section
 
 open Scaffold
 

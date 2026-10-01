@@ -38,8 +38,11 @@ The five questions (notes/v3/01-core.md):
 
 The journal stays causal; the Z-set is a PROJECTION of it.
 -/
+module
 
-import ZSet.Basic
+public import ZSet.Basic
+@[expose] public section
+
 
 namespace ZSet
 
@@ -94,3 +97,5 @@ def Event.net [CanonKey α] [DecidableEq α] (e : Event α) : Delta α :=
   e.intent.accept
 
 end ZSet
+
+end -- public section

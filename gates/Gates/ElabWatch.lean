@@ -61,6 +61,7 @@ registry's newest entry).
 -/
 import Lean
 import Kit.Correspondence
+import Gates.Baselines
 import Gates.Packages
 import Gates.Common
 
@@ -71,12 +72,11 @@ namespace Gates.ElabWatch
 /-- One baseline row: the gated root's module name + its committed
     elaboration milliseconds + the reference root's milliseconds in the
     SAME sweep (the ratio is the signal; see the module header). (`mod`,
-    not `module` — the latter is a parser keyword.) -/
-structure Entry where
-  mod : String
-  millis : Nat
-  refMillis : Nat
-  deriving Repr, Inhabited
+    not `module` — the latter is a parser keyword.) THE GRAMMAR LAYER's
+    row: the type, the format's grammar value, and the round-trip laws
+    live in `Gates.Baselines` (the CodeRegistry template's flat shape);
+    this module consumes them — the hand render/parse pair died. -/
+abbrev Entry := Gates.Baselines.ElabRow
 
 /-- The reference root: the stable core-only module every sweep re-times
     alongside the gated roots — machine speed + sustained load divide
@@ -91,178 +91,42 @@ def baselinePath : System.FilePath := "notes/elab-baseline.tsv"
 def isDataRow (line : String) : Bool :=
   line != "" && !line.startsWith "#"
 
-/-- One data row's raw face: the three fields' canonical values (the
-    module spelling VERBATIM, the two millis values). The byte face of
-    this raw triple is `renderRow`'s spelling; the codec below declares
-    the correspondence (the codec discipline's registration of the
-    renderRow/parseRow pair — Kit.CodeRegistry's `registryCodec` is the
-    template: the climb rides the Option grade, never failing on the
-    raw face it owns). -/
-abbrev RowRaw := String × Nat × Nat
+/-- Parse one DATA line through the format's grammar: the CANONICAL
+    reader (the fields' spellings exact — a hand-edited field count, a
+    leading-zero millisecond, or a stray space is a REFUSAL: the drift
+    tooth; the code-registry replay precedent). The zero-reference
+    refusal is the READER's semantic face (a zero reference makes the
+    ratio meaningless — the finding), kept at the gate's finding walk. -/
+@[nolint linter.guestlang.unregisteredRoundtrip "the correspondence is registered in Gates.Baselines (elabCodec/elabIso — the grammar-layer codec with the proved laws); this is the LENIENT READER face over it (the refusals are the gate's findings, not the codec's)"]
+def parseLine? (line : String) : Option Entry :=
+  match TextKit.Grammar.run Gates.Baselines.elabLineG (line ++ "\n") with
+  | Except.ok e => some (Gates.Baselines.elabOfRaw e)
+  | Except.error _ => Option.none
 
-/-- The row's spell (the codec's encode face): the field order IS the
-    format's content. -/
-def rowSpell : Entry → RowRaw := fun e => (e.mod, e.millis, e.refMillis)
-
-/-- The row's climb (the codec's decode face). Total on the raw face:
-    the canonical format carries every raw triple — `parseRow`'s
-    zero-reference refusal is the READER's semantic face (a zero
-    reference makes the ratio meaningless — the finding), not the
-    format's. -/
-def rowClimb : RowRaw → Option Entry :=
-  fun (m, ms, ref) => some { mod := m, millis := ms, refMillis := ref }
-
-/-- THE row codec: the correspondence the TSV's data row declares
-    (the codec discipline — the renderRow/parseRow pair's registration;
-    the law is the registry template's climb shape). -/
-def rowCodec : Kit.Codec RowRaw Entry where
-  encode := rowSpell
-  decode := rowClimb
-  policy := fun _ => True
-  decode_encode := fun _ => rfl
-  decode_some_policy := fun _ _ _ => trivial
-
-/-- The rows' climb: the fold (the registry's `rowsDecode` shape). -/
-def rowsClimb : List RowRaw → Option (List Entry)
-  | [] => some []
-  | r :: rest => (rowsClimb rest).bind fun es => (rowClimb r).map (· :: es)
-
-/-- The climb inverts the spell, one row at a time (the law's per-row
-    face — `rowCodec.decode_encode`). -/
-theorem rowsClimb_map_rowSpell : ∀ (es : List Entry),
-    rowsClimb (es.map rowSpell) = some es
-  | [] => rfl
-  | e :: rest => by
-      show (rowsClimb (rest.map rowSpell)).bind
-          (fun es => (rowClimb (rowSpell e)).map (· :: es))
-        = some (e :: rest)
-      rw [rowsClimb_map_rowSpell rest]
-      rfl
-
-/-- THE format codec: the row list ↔ the entry array — the TSV's data
-    face (the header is `render`'s constant, the newline discipline
-    `render`'s; the DATA is this correspondence, the codec discipline's
-    registration for the render/parse pair). -/
-def tsvCodec : Kit.Codec (List RowRaw) (Array Entry) where
-  encode := fun es => es.toList.map rowSpell
-  decode := fun raw => (rowsClimb raw).map (fun es => es.toArray)
-  policy := fun _ => True
-  decode_encode := fun es => by
-      show (rowsClimb (es.toList.map rowSpell)).map _ = some es
-      rw [rowsClimb_map_rowSpell]
-      rfl
-  decode_some_policy := fun _ _ _ => trivial
-
-/-! ### THE GRADUATION (15-patterns #11 at the codec grade) -/
-
-/-- The row decode's TOTALITY as data: `rowClimb` never refuses — the
-    canonical format carries every raw triple (the doc note above). -/
-def rowClimbTotal : (r : RowRaw) → {e : Entry // rowClimb r = some e}
-  | (m, ms, ref) => ⟨{ mod := m, millis := ms, refMillis := ref }, rfl⟩
-
-/-- The row decode's EXACTNESS law (~5 LOC, the audit's face): a
-    successful climb determines the spell — the climb inverts the
-    spell on the accepted face. -/
-theorem rowSpell_of_rowClimb (r : RowRaw) (e : Entry)
-    (h : rowClimb r = some e) : rowSpell e = r := by
-  obtain ⟨m, ms, ref⟩ := r
-  have h1 : rowClimb (m, ms, ref)
-      = some { mod := m, millis := ms, refMillis := ref } := rfl
-  rw [h1, Option.some.injEq] at h
-  subst h
-  rfl
-
-/-- THE GRADUATION'S VALUE (the row): the raw triple ≅ the entry — a
-    TRUE `Kit.Iso` from the total climb + the exactness law. -/
-def rowIso : Kit.Iso RowRaw Entry :=
-  rowCodec.toIsoOfExact rowClimbTotal rowSpell_of_rowClimb
-
-/-- The rows' climb totality as data (the fold's recursion). -/
-def rowsClimbTotal : ∀ (raw : List RowRaw),
-    {es : List Entry // rowsClimb raw = some es}
-  | [] => ⟨[], rfl⟩
-  | r :: rest =>
-      let t := rowsClimbTotal rest
-      have hr : rowClimb r = some (rowClimbTotal r).1 := (rowClimbTotal r).2
-      ⟨(rowClimbTotal r).1 :: t.1, by
-        simp only [rowsClimb, t.2, hr, Option.bind_some, Option.map_some]⟩
-
-/-- The rows' climb EXACTNESS: a successful climb determines the
-    spell list — the per-row law rides the fold. -/
-theorem rowsClimb_exact : ∀ (raw : List RowRaw) (es : List Entry),
-    rowsClimb raw = some es → es.map rowSpell = raw := by
-  intro raw
-  induction raw with
-  | nil =>
-      intro es h
-      simp only [rowsClimb, Option.some.injEq] at h
-      subst h
-      rfl
-  | cons r rest ih =>
-      intro es h
-      simp only [rowsClimb, Option.bind_eq_some_iff,
-        Option.map_eq_some_iff] at h
-      obtain ⟨es', h1, e, h2, he⟩ := h
-      rw [← he, List.map_cons, ih es' h1, rowSpell_of_rowClimb r e h2]
-
-/-- THE GRADUATION'S VALUE (the format): the raw row list ≅ the entry
-    array — a TRUE `Kit.Iso` from the total climb + the exactness law
-    (the array face collapses via `Array.toList_toArray`). -/
-def tsvIso : Kit.Iso (List RowRaw) (Array Entry) :=
-  tsvCodec.toIsoOfExact
-    (fun raw =>
-      let ⟨esl, hcl⟩ : {es : List Entry // rowsClimb raw = some es} :=
-        rowsClimbTotal raw
-      ⟨esl.toArray, by
-        show (rowsClimb raw).map (fun l => l.toArray) = some esl.toArray
-        rw [hcl, Option.map_some]⟩)
-    (fun raw es h => by
-      have h1 : (rowsClimb raw).map (fun l => l.toArray) = some es := h
-      obtain ⟨esl, hcl, hae⟩ := Option.map_eq_some_iff.mp h1
-      rw [← hae, Array.toArray_toList]
-      exact rowsClimb_exact raw esl hcl)
-
-/-- Parse one DATA row: `mod<TAB>millis<TAB>refMillis`; none when
-    malformed (the malformed row is a FINDING, never silently dropped —
-    the hand-edit detection face; the code-registry replay precedent).
-    THE READER'S FACES, deliberate (the codec is the canonical
-    correspondence, this is the lenient reader): the fields are trimmed
-    (a hand-edited row's stray spaces still read), a leading-zero
-    spelling still reads, and a zero reference is refused (the
-    semantic finding, not a format refusal). -/
-def parseRow (line : String) : Option Entry :=
-  match line.splitOn "\t" with
-  | [mod, ms, ref] =>
-      match ms.trimAscii.toString.toNat?, ref.trimAscii.toString.toNat? with
-      | some n, some r =>
-          if r == 0 then none  -- a zero-reference row is malformed
-          else some { mod := mod.trimAscii.toString, millis := n, refMillis := r }
-      | _, _ => none
-  | _ => none
+/-- The correspondence, named in code: the line codec is registered in
+    Gates.Baselines (the grammar-layer `Kit.Codec` with the proved
+    laws); this file's `parseLine?`/`render` are its faces. -/
+def elabLineCorrespondence := Gates.Baselines.elabCodec
 
 /-- Parse the TSV: the rows + the malformed DATA lines. -/
 def parse (text : String) : Array Entry × Array String :=
-  let lines := (text.splitOn "\n").map (·.trimAscii.toString)
+  let lines := text.splitOn "\n"
   let rows : Array Entry :=
-    (lines.filterMap (fun l => if isDataRow l then parseRow l else none)).toArray
+    (lines.filterMap (fun l => if isDataRow l then parseLine? l else none)).toArray
   let bad : Array String :=
-    (lines.filter (fun l => isDataRow l && (parseRow l).isNone)).toArray
+    (lines.filter (fun l => isDataRow l && (parseLine? l).isNone)).toArray
   (rows, bad)
 
-/-- The fresh render (the write face's bytes): the constant header, then
-    each entry's canonical row spelling (`rowCodec`'s encode face's
-    bytes), LF-joined, the final newline the file's. -/
-def renderRow (e : Entry) : String := s!"{e.mod}\t{e.millis}\t{e.refMillis}"
-
+/-- The fresh render (the write face's bytes): THE GRAMMAR'S DERIVED
+    PRINTER — the constant header's atoms + the rows' fold (the hand
+    byte-assembly died; the bytes are unchanged — the gate's green run
+    without a re-baseline is the proof). The correspondence: the
+    `Kit.Codec` is registered in Gates.Baselines (`elabCodec`/
+    `elabIso`, the grammar-layer codec with the proved laws); this is
+    its printer face. -/
+@[nolint linter.guestlang.unregisteredRoundtrip "the correspondence is registered in Gates.Baselines (elabCodec/elabIso — the grammar-layer codec with the proved laws); this render is the printer face over it"]
 def render (entries : Array Entry) : String :=
-  let header :=
-    "# The elaboration-time baseline (notes/v3/09-gates-ops.md §7).\n" ++
-    "# GENERATED by `lake exe gates elab-watch --write` — do not hand-edit.\n" ++
-    "# mod<TAB>millis<TAB>refMillis — the committed signal is the RATIO; a module\n" ++
-    "# over 2× its committed ratio (and over the GATES_ELAB_FLOOR_MS\n" ++
-    "# jitter floor) fails `gates elab-watch`.\n"
-  header ++ String.intercalate "\n"
-    (entries.toList.map renderRow) ++ "\n"
+  Gates.Baselines.printElab entries
 
 /-! ## The delta discipline (the pure teeth) -/
 
@@ -359,6 +223,11 @@ unsafe def run (write acceptDrift : Bool) : IO UInt32 := do
   for malformedLine in malformed do
     findings := findings.push
       s!"MALFORMED baseline row (hand-edited? the file is GENERATED): {malformedLine}"
+  for e in committed do
+    if e.refMillis == 0 then
+      findings := findings.push
+        (s!"ZERO-REFERENCE baseline row ({e.mod}): the ratio's denominator is " ++
+          "zero — the committed signal is meaningless (hand-edited?)")
   match refNow with
   | none =>
       findings := findings.push s!"REFERENCE {referenceMod} unavailable — \

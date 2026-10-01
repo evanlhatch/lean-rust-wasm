@@ -139,5 +139,70 @@ the relational content the ladder can't reach.
 - **Deltas at the boundary, inversion in the log** (the event-sourcing
   architecture invariant): the journal carries the inversion witnesses;
   the boundary speaks net deltas. Never invert at the boundary, never
-  ship the raw event stream across it. (15-patterns #7 is the
-  meta-level analogue; this rule is the data-plane one.)
+  ship the raw event stream across it. the pattern: the boundary's net delta is the table's lookup row.)
+
+## 12. The grind discipline (the wave-31 policy)
+
+Refines §10: grind is SANCTIONED where the value is SHRINKAGE +
+solidity, never speed — a slower-but-solid grind closer beats a hand
+simp chain that fights drift. The owner's framing is explicit: elab
+cost may rise; robustness under small statement drift is the prize.
+
+**The honest classes** (migrate these):
+- Induction-heavy byte-arithmetic arms: the varint/fuel position
+  arithmetic where a hand chain fights div/mod (the varint migration:
+  15 LOC → 1 grind (splits := 24) line).
+- Closed-ground set/arithmetic goals: bounded Nats, byte residues,
+  length bookkeeping — nothing quantified at open universes.
+
+**The hostile classes** (never grind these):
+- Exact-image div/mod recursion: the splits explode — grind's case
+  tree is exponential in the div/mod count; the hand chain wins.
+- Decide-witnesses: a goal closed by `decide` stays `decide` (grind
+  adds nothing and its terms are opaque).
+- Pure omega one-liners: a proof already `by omega` gains nothing —
+  grinding it only imports choice. Migration = SHRINKAGE; there is
+  no shrinkage from 1 line to 1 line.
+- Reduction-critical teeth: grind's terms are OPAQUE to kernel
+  reduction — the tree's rfl teeth ride reduction. NEVER grind a
+  proof whose TERM must reduce (the decoder's rfl teeth, the equation
+  lemmas, anything consumed by `decide`/`rfl` downstream). A law
+  consumed by rewriting only is fair game.
+
+**The redundancy-gate spelling**: 4.33's redundancy gate FORBIDS
+passing IHs (or any local names) explicitly — a hard error on local
+names. The sanctioned spelling is named LEMMAS in the brackets +
+`(splits := N)` where the case tree needs a nudge; local facts (the
+IHs, the `have`s) are picked up automatically from the context. Keep
+the needed facts in context and let grind find them.
+
+**The choice-axiom note**: grind imports `Classical.choice` — a
+tactic-migrated proof's pin gains choice over the bare triple. That
+drift is HONEST (no `sorry`, no new axiom KIND): the Axioms.lean pins
+update, the report notes it, and the INTEGRATOR re-baselines at the
+wave's commit — never mid-order, never `--write`.
+
+**Drift-stability**: where a grind closer feeds many downstream
+goals, pin the pattern — a `grind_pattern` guard per lemma so a
+statement drift fails the guard loudly instead of silently unfinding
+the E-matching. A grind closer with no guard is acceptable only where
+it consumes exactly one goal.
+
+**The stays**: a migration that defeats you twice stays omega/hand —
+and its shape joins the hostile list WITH THE EVIDENCE (the goal that
+defeated grind, so the next agent doesn't re-pay). The wave-31 ledger
+(wasmcore/WasmCore/Decode.lean):
+- `decVarNatR_decVarNat`'s cons case — grind (splits := 32) over
+  `decVarNatR`/`decVarNat?` equations cannot digest the `bind`
+  lambda's paired destructuring against the `drop (pos' - pos)`
+  arithmetic; the hand case tree (one defeat, shape matches this
+  class) stays.
+- `decFuncType_enc` and the seven slot laws — grind cannot reduce the
+  byte-guard Decidable instances (the `badFuncType`-class refusals):
+  the guard conditions sit behind `UInt8` casts that `simp only`
+  fires but grind's terms treat as opaque. This is the
+  reduction-tooth boundary showing up as an elaboration failure, not
+  just a kernel one.
+- `slebFits_step` needed TWO nudges (the `128 ^ (k + 1)` atom needs
+  `Nat.pow_succ` passed as a named lemma + `slebP_prop` kept in
+  context) — inside budget, landed; the nudge shape is the pattern.

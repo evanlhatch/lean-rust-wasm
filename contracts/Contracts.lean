@@ -23,7 +23,11 @@ Modules:
 The five questions (notes/v3/01-core.md): root/carrier/spine/ladder/
 gate answers live in the modules (this umbrella aggregates the imports).
 -/
+module
 
-import Contracts.Wp
-import Contracts.WpMachine
-import Contracts.Contract
+public import Contracts.Wp
+public import Contracts.WpMachine
+public import Contracts.Contract
+@[expose] public section
+
+end -- public section

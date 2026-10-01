@@ -220,6 +220,12 @@ def fixtureExpected : Array (Name × Array Name) := #[
     `LintKitFixtures.Violations.guestBad]),
   (`linter.guestlang.recursiveSimpEqns, #[`LintKitFixtures.Violations.recNoSimp]),
   (`linter.guestlang.decideFirst, #[`LintKitFixtures.Violations.colorNeHand]),
+  (`linter.guestlang.evidenceRedundancy, #[
+    -- CLASS A: the re-proof of the carried law
+    `LintKitFixtures.Violations.violRoundtrip,
+    -- CLASS B: both faces of the weaker-than-kernel row
+    `LintKitFixtures.Violations.violSweepObl,
+    `LintKitFixtures.Violations.violSweepDischarged]),
   (`linter.guestlang.graduation, #[`LintKitFixtures.Violations.parityCodec]),
   (`linter.guestlang.zeroCitation, #[
     -- the planted zero-citation theorem
@@ -228,9 +234,11 @@ def fixtureExpected : Array (Name × Array Name) := #[
     -- outside their module — correct findings, not false ones (the
     -- zeroCitation pins live in LintKitTests.Main)
     `LintKitFixtures.Violations.colorNeHand,
+    `LintKitFixtures.Violations.violRoundtrip,
     `LintKitFixtures.Clean.checkWithBridge_true_of_lt,
     `LintKitFixtures.Clean.colorNeDecide,
-    `LintKitFixtures.Clean.shadeRfl]),
+    `LintKitFixtures.Clean.shadeRfl,
+    `LintKitFixtures.Clean.cleanRoundtrip]),
   (`linter.guestlang.axiomAllowlist, #[]),
   (`linter.guestlang.dupDefBodies, #[]),
   (`linter.guestlang.packageNamespace, #[])
@@ -259,6 +267,8 @@ unsafe def run : M UInt32 := do
     ((linter.guestlang.bareExample).defValue)
   check "zeroCitation is default-OFF (census)"
     (!(linter.guestlang.zeroCitation).defValue)
+  check "evidenceRedundancy is default-OFF (census)"
+    (!(linter.guestlang.evidenceRedundancy).defValue)
   check "bareChecker is default-ON (gate)"
     ((linter.guestlang.bareChecker).defValue)
   check "verdictCtors is default-ON (gate)" ((linter.guestlang.verdictCtors).defValue)
@@ -315,7 +325,8 @@ unsafe def run : M UInt32 := do
       |>.insert `linter.guestlang.guestBan true
       |>.insert `linter.guestlang.decideFirst true
       |>.insert `linter.guestlang.graduation true
-      |>.insert `linter.guestlang.zeroCitation true }
+      |>.insert `linter.guestlang.zeroCitation true
+      |>.insert `linter.guestlang.evidenceRedundancy true }
   let (findings, _) ← (LintKit.lintModules #[`LintKitFixtures.Violations] cfg).toIO
     { fileName := "<lintkit-tests>", fileMap := default } { env }
   IO.println s!"-- {findings.size} fixture finding(s):"

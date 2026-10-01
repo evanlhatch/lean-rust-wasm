@@ -30,9 +30,13 @@ relation over `V × V` — the edge/adjacency accessors, `Reach` + the
 bounded path-folding sweep, `Acyclic` with the cycle refused as data,
 the strata `peel`).
 -/
+module
 
-import ZSet.Basic
-import ZSet.Free
-import ZSet.Trichotomy
-import ZSet.Relation
-import ZSet.Graph
+public import ZSet.Basic
+public import ZSet.Free
+public import ZSet.Trichotomy
+public import ZSet.Relation
+public import ZSet.Graph
+@[expose] public section
+
+end -- public section

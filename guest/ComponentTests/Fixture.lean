@@ -17,10 +17,14 @@ name is deliberate: the lowered module exports the decl's own name,
 so the world's export func name and the core export agree (`add64`).
 -/
 
-import LintKit.GuestGate
-import Wit
-import Wit.World
+module
 
+public import LintKit.GuestGate
+public import Wit
+public import Wit.World
+
+
+@[expose] public section
 /-! ## The compiled functions -/
 
 /-- THE component pin's guest function. The `@[guest]` mark IS the

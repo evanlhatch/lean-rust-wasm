@@ -45,8 +45,11 @@ The five questions:
 
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
+module
 
-import ZSet.Basic
+public import ZSet.Basic
+@[expose] public section
+
 
 namespace ZSet
 
@@ -557,3 +560,5 @@ def homIso (g : Kit.Additive M M) : Kit.Iso (Hom α M g) (α → M) where
     fun m => congrFun (Hom.eq_lift (g := g) (h := h)) m).symm
 
 end ZSet
+
+end -- public section

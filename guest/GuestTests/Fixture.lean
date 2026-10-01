@@ -51,8 +51,12 @@ may import it — the Lower.lean convention). The driver's LCNF reader
 is unaffected: it reads the fixture decls, not the import closure.
 -/
 
-import LintKit.Basic
+module
 
+public import LintKit.Basic
+
+
+@[expose] public section
 def GuestTests.add64 (a b : UInt64) : UInt64 := a + b
 
 def GuestTests.sel64 (c : Bool) (a b : UInt64) : UInt64 :=

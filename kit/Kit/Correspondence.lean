@@ -38,7 +38,14 @@ The five questions (notes/v3/01-core.md):
   (core triple only).
 -/
 
-import Kit.Relation
+
+module
+
+public import Kit.Relation
+
+@[expose] public section
+
+public section
 
 namespace Kit
 
@@ -696,3 +703,7 @@ theorem Normalization.toRel_det (n : Normalization A) {a b b' : A}
   h1.symm.trans h2
 
 end Kit
+
+end -- public section
+
+end -- @[expose] public section

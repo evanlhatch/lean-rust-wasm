@@ -40,8 +40,12 @@ Core-only. Five questions:
   grammars must each fail `wfCheck` with the named row).
 -/
 
-import TextKit.Grammar
-import Kit.Diag
+module
+
+public import TextKit.Grammar
+public import Kit.Diag
+
+@[expose] public section
 
 namespace TextKit
 
@@ -304,19 +308,19 @@ def Grammar.wfDiagnose (g : Grammar R) : List Kit.Diag :=
 /-! ## the soundness bridge -/
 
 -- List.isEmpty/append/if plumbing (small hand kind).
-private theorem isEmpty_append {α : Type} (l₁ l₂ : List α) :
+theorem isEmpty_append {α : Type} (l₁ l₂ : List α) :
     (l₁ ++ l₂).isEmpty = true → l₁.isEmpty = true ∧ l₂.isEmpty = true := by
   cases l₁ <;> cases l₂ <;> simp_all
 
-private theorem isEmpty_ite_nil (c : Bool) (s : String) :
+theorem isEmpty_ite_nil (c : Bool) (s : String) :
     ((if c then [] else [s]) : List String).isEmpty = true → c = true := by
   cases c <;> simp_all
 
-private theorem isEmpty_ite_singleton (c : Bool) (s : String) :
+theorem isEmpty_ite_singleton (c : Bool) (s : String) :
     ((if c then [s] else []) : List String).isEmpty = true → c = false := by
   cases c <;> simp_all
 
-private theorem all₂ {α : Type} {p : α → Bool} {l : List α} (h : l.all p = true) :
+theorem all₂ {α : Type} {p : α → Bool} {l : List α} (h : l.all p = true) :
     ∀ x ∈ l, p x = true :=
   List.all_eq_true.mp h
 
@@ -442,3 +446,5 @@ theorem Grammar.wfCheck_sound (g : Grammar A) (h : wfCheck g = true) : Predictiv
   wfCheck_sound' g [] h
 
 end TextKit
+
+end -- public section

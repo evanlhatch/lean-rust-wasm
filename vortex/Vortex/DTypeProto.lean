@@ -60,9 +60,12 @@ The five questions (notes/v3/01-core.md):
   the round-trip sweeps + the negative controls + the known-answer
   byte vectors.
 -/
+module
 
-import Kit.Proto
-import Vortex.DType
+public import Kit.Proto
+public import Vortex.DType
+@[expose] public section
+
 
 namespace Vortex
 
@@ -980,3 +983,5 @@ def dtypeWireTarget : WireTarget DType where
                  ifaceRow := "vortex.dtype" }
 
 end Vortex
+
+end -- public section

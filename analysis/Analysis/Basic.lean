@@ -64,7 +64,12 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Kit.Correspondence
+
+module
+
+public import Kit.Correspondence
+
+@[expose] public section
 
 namespace Analysis
 
@@ -143,3 +148,6 @@ def AbstractDomain.toAbstraction (d : AbstractDomain C A) (α : C → A)
   sound := hα
 
 end Analysis
+
+
+end -- public section

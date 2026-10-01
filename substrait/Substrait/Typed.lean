@@ -44,8 +44,12 @@ SLICE-2 GROWTH (the aggregate/sort/fetch/set rows, ported from legacy
   (name + argument list + return) whose argument spine makes arity/
   type mismatches TYPE errors.
 - `Rel inS outS` — the relation family (read/filter/project/join/
-  aggregate/sort/fetch/set — the grown core; every exclusion named in
-  Proto's header).
+  aggregate/sort/fetch/set — the grown core — plus the fuller-plan
+  rows: `cross` (the condition-free join) and `write` (the named
+  write, schema-preserving, the alignment by construction); the ONLY
+  exclusions left are the extension rels (the `Any` detail's opaque
+  operator — no typed carrier) — every narrowing named in Proto's
+  header).
 
 THE TYPED-CORRECTNESS BRIDGE (the WF discipline): the lowering
 `Expr.toProto` / `Rel.toProto` is `Except`-valued (types/literals
@@ -309,23 +313,38 @@ def Keep.none : (s : Schema) → Keep s []
   | [] => .wnil
   | e :: s' => .wdrop e (Keep.none s')
 
+/-- THE CONCATENATION WITNESS (the Keep pattern at the join — wall 2's
+dissolve): the caller's spelled output schema IS the left schema's
+elementwise append of the right — a `Type`-sorted walk, never a
+transport. The Q bridge's join lowering spells `out := fieldsSchema
+(ga ++ gb)` and builds the witness structurally (the `f :: rest`
+append reduces definitionally), so the node's output index is the
+spelled term and `evalRel`'s definitional match reductions survive
+(the wall's teeth — the Keep precedent). The evaluator walks the
+witness (`Row.appendW`, the data face). -/
+inductive AppendCols : Schema → Schema → Schema → Type where
+  | wnil : AppendCols [] r r
+  | wcons (e : Col) : AppendCols s' r outs → AppendCols (e :: s') r (e :: outs)
+
 /--
 `Rel` — the schema-indexed relation family (read/filter/project/keep/
-join/aggregate/sort/fetch/set). `Rel inS outS` takes rows of `inS` and
+join/aggregate/sort/fetch/set/cross/write). `Rel inS outS` takes rows of `inS` and
 produces rows of `outS`; each node's output schema is computed from its
 arguments (read preserves, filter preserves, project appends, keep
 DROPS to the caller's spelled subselection, join concatenates both
-sides' outputs, aggregate returns grouping keys ++ measures,
-sort/fetch preserve, set preserves the shared output).
+sides' outputs, join' concatenates over the SHARED input (the
+caller-spelled output — the witness), aggregate returns grouping
+keys ++ measures, sort/fetch preserve, set preserves the shared
+output).
 -/
 inductive Rel : Schema → Schema → Type where
   | read (table : String) (schema : Schema) : Rel schema schema
   /-- The filter: ENDO ON THE ROW SCHEMA (the wire's width law — the
       filter node's output rows have exactly its input rows' schema),
       composition-honest on the PLAN: the sub-plan may be non-endo
-      (the query bridge's select-over-project lowering is the
-      consumer — the cond reads the sub-plan's OUTPUT schema `s`, the
-      plan's input `inS` flows through). -/
+      (the query bridge's select-over-join lowering is the consumer —
+      the cond reads the sub-plan's OUTPUT schema `s`, the plan's
+      input `inS` flows through). -/
   | filter (input : Rel inS s) (cond : Expr s .bool n) : Rel inS s
   | project (input : Rel s p) (outs : List (Projection p)) : Rel s (projectOut p outs)
   /-- THE DROP PROJECTION (the wall-1 dissolve, `Query.TypedBridge`'s
@@ -345,6 +364,27 @@ inductive Rel : Schema → Schema → Type where
   | join (left : Rel sl sl') (right : Rel sr sr')
          (cond : Expr (sl' ++ sr') .bool n)
          (joinType : Proto.JoinType) : Rel (sl ++ sr) (sl' ++ sr')
+  /-- THE SHARED-BASE JOIN (wall 2's dissolve, `Query.TypedBridge`'s
+      equijoin lowering is the consumer): BOTH children read the SAME
+      input stream — the query lane's reading (`Q.join`'s children
+      share the base), no doubled stream, no per-node replication. The
+      output schema is the CALLER'S spelling, carried by the
+      concatenation witness `w : AppendCols sl' sr' outs` (the
+      Keep-witness discipline: the Type-sorted data face, the spelled
+      index — never a transport), so `evalRel`'s definitional match
+      reductions survive. The wire spelling refuses loudly (the wire's
+      join node's children own their inputs; the emit lane ports with
+      its consumer — the keep precedent). WEIGHT FACE (02 §4, the F5
+      note): the join node MULTIPLIES the children's weights at each
+      ON-satisfying pair — over Bool the multiply is AND (set
+      semantics, this evaluator's face); the weight-polymorphic
+      reading is the query lane's `joinPairsW`, and the optimizer's
+      equational theory (F5) consumes the semiring laws, never this
+      list walk. -/
+  | join' (left : Rel s sl') (right : Rel s sr')
+          (w : AppendCols sl' sr' outs)
+          (cond : Expr (sl' ++ sr') .bool n)
+          (joinType : Proto.JoinType) : Rel s outs
   /-- Group + measure: the output schema is the grouping keys' types
       then the measures' return types (BOTH computed — the positions
       are the contract; the legacy's unnamed aggregate columns). -/
@@ -359,6 +399,24 @@ inductive Rel : Schema → Schema → Type where
       and produce the same output schema (the typed layer's
       same-schema discipline makes two the honest arity). -/
   | set (op : Proto.SetOp) (left : Rel s s') (right : Rel s s') : Rel s s'
+  /-- THE CROSS JOIN (the condition-free join — the wire's `CrossRel
+      { left = 2, right = 3 }`): the `join` node at the always-true
+      condition, no separate evaluation kernel (the evaluator rides
+      `evalJoin` at the literal-true cond — the shared width rule's
+      face). -/
+  | cross (left : Rel sl sl') (right : Rel sr sr') : Rel (sl ++ sr) (sl' ++ sr')
+  /-- THE WRITE (the wire's `WriteRel { named_table = 1, table_schema
+      = 3, op = 4, input = 5 }`): write the input rows into the named
+      table. THE ALIGNMENT BY CONSTRUCTION: the written table's schema
+      IS the input's output schema (the proto's "must align with Rel
+      input" discipline, forced — no separate schema datum to drift;
+      the lowering WRITES the echo face, the decode REFUSES the
+      disagreement — SS0012). SCHEMA-PRESERVING (the write's output
+      reads back the written table — the spec's face; the width law's
+      shared rule). The evaluator refuses loudly (the evaluator is
+      read-only — the write executes at the consumer; the named
+      boundary, never a fabricated side effect). -/
+  | write (names : List String) (op : Proto.WriteOp) (input : Rel s s') : Rel s s'
 
 /-! ## the lowering (Typed → Proto) — plain matches, `rfl` equations -/
 
@@ -667,6 +725,11 @@ def Rel.toProto : {inS : Schema} → {outS : Schema} →
         | .error e, _, _ => .error e
         | _, .error e, _ => .error e
         | _, _, .error e => .error e
+    | .join' _ _ _ _ _ =>
+        .error "typed: the shared-base join has no wire spelling — the wire's \
+          join node's children own their inputs (the doubled-stream reading); \
+          the shared-base reading is the query lane's, the emit lane ports \
+          with its consumer (the keep precedent)"
     | .aggregate input grouping measures =>
         match input.toProto, anyExprListToProto grouping,
             measureListToProto measures with
@@ -688,6 +751,20 @@ def Rel.toProto : {inS : Schema} → {outS : Schema} →
         | .ok l, .ok r => .ok (.set op l r)
         | .error e, _ => .error e
         | _, .error e => .error e
+    | .cross left right =>
+        match left.toProto, right.toProto with
+        | .ok l, .ok r => .ok (.cross l r)
+        | .error e, _ => .error e
+        | _, .error e => .error e
+    | @Rel.write _ outS names op input =>
+        match input.toProto with
+        | .ok i =>
+            match colsToProto outS with
+            | .ok fields =>
+                .ok (Proto.Rel.write names op
+                  { fields := fields, names := outS.names } i)
+            | .error e => .error e
+        | .error e => .error e
 
 /-- THE WF BRIDGE (the width agreement): the wire width rule
     (`Proto.Rel.width`) equals the TYPED output schema's length, for
@@ -743,6 +820,12 @@ theorem Rel.toProto_width : ∀ {inS : Schema} {outS : Schema} (rel : Rel inS ou
   | keep input _ ih =>
       -- the keep arm ALWAYS refuses (no wire spelling) — the width
       -- law's domain is the accepted rels; the refusal is the tooth
+      intro p hp
+      simp only [Rel.toProto] at hp
+      simp at hp
+  | join' _ _ _ _ _ ihl ihr =>
+      -- the shared-base join ALWAYS refuses (no wire spelling) — same
+      -- disposition as the keep arm above
       intro p hp
       simp only [Rel.toProto] at hp
       simp at hp
@@ -815,6 +898,37 @@ theorem Rel.toProto_width : ∀ {inS : Schema} {outS : Schema} (rel : Rel inS ou
           subst hp
           have hw := ih i hi
           simp [Proto.Rel.width, hw]
+  | cross left right ihl ihr =>
+      intro p hp
+      simp only [Rel.toProto] at hp
+      cases hl : left.toProto with
+      | error _ => rw [hl] at hp; simp at hp
+      | ok l =>
+          rw [hl] at hp
+          cases hr : right.toProto with
+          | error _ => rw [hr] at hp; simp at hp
+          | ok r =>
+              rw [hr] at hp
+              simp only [Except.ok.injEq] at hp
+              subst hp
+              have hwl := ihl l hl
+              have hwr := ihr r hr
+              simp [Proto.Rel.width, hwl, hwr, List.length_append]
+  | write _ _ input ih =>
+      intro p hp
+      simp only [Rel.toProto] at hp
+      cases hi : input.toProto with
+      | error _ => rw [hi] at hp; simp at hp
+      | ok i =>
+          rw [hi] at hp
+          cases hf : colsToProto _ with
+          | error _ => rw [hf] at hp; simp at hp
+          | ok fields =>
+              rw [hf] at hp
+              simp only [Except.ok.injEq] at hp
+              subst hp
+              have hw := ih i hi
+              simp [Proto.Rel.width, hw]
   | set _ left right ihl _ihr =>
       -- BOTH sides produce the same output schema (the typed layer's
       -- same-schema discipline); the wire width reads the LEFT side's
@@ -890,12 +1004,15 @@ def Rel.fns {inS : Schema} {outS : Schema} (rel : Rel inS outS) : List String :=
   | .project input outs => input.fns ++ outs.flatMap (fun pr => pr.expr.fns)
   | .keep input _ => input.fns
   | .join left right cond _ => left.fns ++ right.fns ++ cond.fns
+  | .join' left right _ cond _ => left.fns ++ right.fns ++ cond.fns
   | .aggregate input grouping measures =>
       input.fns ++ grouping.flatMap AnyExpr.fns ++
         measures.flatMap (fun m => m.sig.name :: m.args.flatMap AnyExpr.fns)
   | .sort input keys => input.fns ++ keys.flatMap (fun k => k.key.fns)
   | .fetch input _ _ => input.fns
   | .set _ left right => left.fns ++ right.fns
+  | .cross left right => left.fns ++ right.fns
+  | .write _ _ input => input.fns
 
 /-- Lower a typed rel to a full plan: the single top-level relation +
     the distinct function names (first-use order — the seed's stand-in

@@ -58,7 +58,12 @@ Doctrine slots (notes/v3/01-core.md, the five questions):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+module
+
+public import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it)
+
+@[expose] public section
 
 namespace Effects
 
@@ -360,3 +365,6 @@ theorem row_blind_to_double_spend :
   Row.join_idem _
 
 end Effects
+
+
+end -- public section

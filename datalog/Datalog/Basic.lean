@@ -49,7 +49,12 @@ The five questions (notes/v3/01-core.md):
 Core-only: no mathlib, no Batteries (the cone rule).
 -/
 
-import Kit.Change
+
+module
+
+public import Kit.Change
+
+@[expose] public section
 
 /-! ## Predicates, ground atoms, terms, literals, rules -/
 
@@ -269,3 +274,6 @@ def matchAll [DecidableEq Value] (lits : List (Lit Value))
     (F.filterMap fun a => l.matchLit a s).flatMap (matchAll rest F)
 
 end Datalog
+
+
+end -- public section
