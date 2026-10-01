@@ -141,6 +141,8 @@ fn undeclared_surfaces_report_no_fault() {
     assert!(e.fault().is_none());
     let e = HostError::LiveState("test".to_string());
     assert!(e.fault().is_none());
+    let e = HostError::WitnessRefused { code: 1 };
+    assert!(e.fault().is_none());
     let e = HostError::Io {
         what: "test",
         source: std::io::Error::new(std::io::ErrorKind::NotFound, "test"),

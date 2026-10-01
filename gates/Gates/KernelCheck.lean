@@ -348,10 +348,15 @@ unsafe def run : IO UInt32 := do
     unless rootOut.exitCode == 0 do
       throw <| IO.userError s!"`lake env printenv LEAN_PATH` failed:\n{rootOut.stderr}"
     let leanPath := s!"{libDir}:{rootOut.stdout.trimAscii}"
-    let budgetMs := (← Gates.envNat "GATES_KERNEL_BUDGET_SECS" 300) * 1000
-    let jobs ← Gates.envNat "GATES_KERNEL_JOBS" 6
-    let budgetMb ← Gates.rssBudgetMb
-    let marginMb ← Gates.rssMarginMb
+    -- the knobs ride the config face (C4's dogfood; the loud CF exit
+    -- on a mis-typed config file)
+    let kr ← match ← Gates.loadKnobs with
+      | .ok kr => pure kr
+      | .error d => IO.eprintln (Kit.Diag.toString d); return 1
+    let budgetMs := (← Gates.knobNat kr "kernel_budget_secs" 300) * 1000
+    let jobs ← Gates.knobNat kr "kernel_jobs" 6
+    let budgetMb ← Gates.rssBudgetMb kr
+    let marginMb ← Gates.rssMarginMb kr
     -- partition: ours-with-declarations are checked; stale oleans are
     -- deleted with a report; declaration-free sources are skipped
     let mut checkMods : Array Name := #[]

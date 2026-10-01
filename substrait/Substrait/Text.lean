@@ -470,6 +470,27 @@ theorem setOpOfName_self (op : Proto.SetOp) :
 theorem setOpOfName_miss : setOpOfName "Minus" = none :=
   setOpTable.ofName_miss _ (by intro x; cases x <;> decide)
 
+/-- The write ops' display tokens (`Insert`, … — the `&` is the rel
+    header's). The full closed enum — no narrowing. -/
+def writeOpName : Proto.WriteOp → String
+  | .insert => "Insert"
+  | .delete => "Delete"
+  | .update => "Update"
+  | .ctas => "Ctas"
+
+def writeOpTable : NameTable Proto.WriteOp where
+  name := writeOpName
+  table := [.insert, .delete, .update, .ctas]
+  nodup := by decide
+  complete := by intro op; cases op <;> simp
+
+def writeOpOfName (s : String) : Option Proto.WriteOp :=
+  writeOpTable.ofName s
+
+theorem writeOpOfName_self (op : Proto.WriteOp) :
+    writeOpOfName (writeOpName op) = some op :=
+  writeOpTable.ofName_self op
+
 /-- The join types' display tokens (`Inner`, … — the `&` is the rel
     header's). The narrow four cover the closed union; the legacy's
     semi/anti/single/mark rows port with their ctor set's consumers. -/
@@ -562,6 +583,10 @@ abbrev kwJoin : String := "Join["
 
 abbrev kwSet : String := "Set["
 
+abbrev kwCross : String := "Cross["
+
+abbrev kwWrite : String := "Write["
+
 /-- `$0, $1, …, $w-1` — the reference range's text. -/
 def refRange (w : Nat) : String :=
   String.intercalate sepTok ((List.range w).map (fun i => "$" ++ toString i))
@@ -584,10 +609,10 @@ def readTableName : Proto.ReadType → String
   | .namedTable names => String.intercalate dotTok names
 
 /-- The canonical rel lines: the substrait-explain shapes, children
-    indented 2 spaces per level. TOTAL over the narrow `Rel` union —
-    every arm renders (the narrow union carries no write/extension
-    arms; the legacy's Ctx/anchor machinery ports with the extensions
-    section). -/
+    indented 2 spaces per level. TOTAL over the `Rel` union minus the
+    extension arms — every arm renders (the extension rels' `Any`
+    detail has no text face — the named boundary; the legacy's
+    Ctx/anchor machinery ports with the extensions section). -/
 def relLines : Proto.Rel → String → List String
   | .read rt baseSchema, indent =>
       [indent ++ kwRead ++ readTableName rt ++ arrowTok ++
@@ -629,6 +654,13 @@ def relLines : Proto.Rel → String → List String
   | .set op left right, indent =>
       (indent ++ kwSet ++ ampTok ++ setOpName op ++ refOutput left.width ++ "]") ::
         relLines left (indent ++ indentUnit) ++ relLines right (indent ++ indentUnit)
+  | .cross left right, indent =>
+      (indent ++ kwCross ++ refOutput (left.width + right.width) ++ "]") ::
+        relLines left (indent ++ indentUnit) ++ relLines right (indent ++ indentUnit)
+  | .write nms op ts input, indent =>
+      (indent ++ kwWrite ++ String.intercalate dotTok nms ++ ampTok ++
+        writeOpName op ++ refOutput input.width ++ "]") ::
+        relLines input (indent ++ indentUnit)
 
 /-- The canonical rel text (ONE writer: the lines' image; the parse
     half is the decode ladder, Phase 4). -/

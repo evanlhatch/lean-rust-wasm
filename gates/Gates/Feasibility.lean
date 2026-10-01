@@ -36,6 +36,7 @@ row (data + drift) over the feasibility discipline.
 -/
 import Contracts
 import Contracts.Feasibility
+import Gates.ObligationView
 import Gates.Packages
 import Gates.Common
 
@@ -43,6 +44,12 @@ namespace Gates.Feasibility
 
 open Contracts
 open Gates.Driver
+
+/-- THE gate's OWN claim (the obligation's type index — B7's
+    self-application lands HERE first): a certificate filed under a
+    different gate's claim is a different TYPE, so this feasibility
+    row cannot be discharged by another gate's run. -/
+instance : Gates.ObligationView.GateClaim "feasibility" := ⟨⟩
 
 /-- THE first feasibility census: the tree's registered specs with
 preconditions, one row per spec. The contracts rows carry (or declare)
@@ -108,11 +115,31 @@ def run (write acceptDrift : Bool) : IO UInt32 := do
   for r in census do
     if !r.verdict.checked then
       IO.eprintln s!"feasibility: {r.lane}/{r.name}: {r.verdict.render}"
+  -- THE OBLIGATION TAIL (B7's adoption — the run IS the discharge
+  -- attempt): the gateObligation row → the discharge attempt (the
+  -- baseline diff's three faces ARE the verdict's) → `certify`'s mint
+  -- AS DATA. The certificate gates the quiet face: a mint is the
+  -- discharged run (no finding exists); a refusal (a STALE or absent
+  -- certificate) falls to the LOUD `diffCheck` face — the same
+  -- drift/absent lines as before, byte-identical (the diff is re-run
+  -- against the SAME committed bytes, so its render agrees with the
+  -- verdict by construction). Behavior unchanged; the discipline is
+  -- now the gate's own.
+  let row := Gates.ObligationView.gateObligation "feasibility"
+    "the registered specs' feasibility census"
+  let evidence := Gates.ObligationView.certificate
+    baselinePath.toString "feasibility"
+  let verdict := Gates.ObligationView.attempt
+    (← Driver.diffBaseline baselinePath text) evidence
   Driver.reportGate "feasibility" baselinePath text write acceptDrift false
     "feasibility: clean — the registered specs' feasibility census in sync"
-    (Driver.diffCheck "feasibility" "census"
-      "the registered specs' feasibility rows changed (a new spec, a verdict \
-        change — re-adjudicate, then re-baseline)"
-      baselinePath text)
+    (do
+      match Gates.ObligationView.certify row verdict with
+      | some _ => return false
+      | none =>
+          Driver.diffCheck "feasibility" "census"
+            "the registered specs' feasibility rows changed (a new spec, a verdict \
+              change — re-adjudicate, then re-baseline)"
+            baselinePath text)
 
 end Gates.Feasibility

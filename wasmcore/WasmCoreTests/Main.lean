@@ -41,6 +41,7 @@ Evidence, not architecture — the five-question block lives in the modules unde
 -/
 
 import WasmCore
+import WasmCoreTests.Decode
 import Kit.Text
 import Kit.Varint
 import TestingKit.Lcg
@@ -69,20 +70,28 @@ def badDec : List UInt8 → Option (Nat × List UInt8)
         | none => none
         | some (v, tail) => some (b.toNat % 128 + 128 * v, tail)
 
-/-- Draw a 4-byte value + a 0..2-byte suffix; the append-form law must
-    hold exactly. -/
-def lebProp : Tape → CheckResult := fun t =>
+/-- Draw a 4-byte value: THE drawn value of the sweep (the same
+    sequence the prop performs — the shrink walks the VALUE, not the
+    tape, #14). -/
+def lebDraw (t : Tape) : Nat :=
   let (b0, t1) := t.byte
   let (b1, t2) := t1.byte
   let (b2, t3) := t2.byte
-  let (b3, t4) := t3.byte
-  let n := b0.toNat + b1.toNat * 256 + b2.toNat * 65536 + b3.toNat * 16777216
-  let (k, t5) := t4.below 3
-  let (r0, t6) := t5.byte
-  let (r1, _) := t6.byte
-  let rest := ([r0.toUInt8, r1.toUInt8]).take k
-  assert (decVarNat? (encVarNat n ++ rest) == some (n, rest))
-    s!"append-form law failed for n = {n} (rest length {k})"
+  let (b3, _) := t3.byte
+  b0.toNat + b1.toNat * 256 + b2.toNat * 65536 + b3.toNat * 16777216
+
+
+/-- The append-form law must hold exactly, over the drawn 4-byte value
+    + its re-derived suffix. -/
+def lebProp : Tape → CheckResult := fun t =>
+  let n := lebDraw t
+  assert (decVarNat? (encVarNat n ++ restOf n) == some (n, restOf n))
+    s!"append-form law failed for n = {n} (rest length {(restOf n).length})"
+
+/-- The prop's content at the drawn value alone (the attachment's
+    `fails`: tape-free — the rest is re-derived, never remembered). -/
+def lebFails (n : Nat) : Bool :=
+  decVarNat? (encVarNat n ++ restOf n) != some (n, restOf n)
 
 /-- Control 1: the truncated encoder must NOT round-trip (caught
     whenever the drawn value exceeds 7 bits). -/
@@ -99,12 +108,50 @@ def lebNegTruncate : Tape → CheckResult := fun t =>
 def lebNegRedundant : Tape → CheckResult := fun _ =>
   assert (decVarNat? [0x81, 0x00] != none) "control fired: the redundant zero group was refused"
 
+/-! ### the shrink discipline's consumer (08 §11) -/
+
+/-- THE SHRINK PIN's fixture: the SABOTAGED twin sweep — claims every
+    drawn value encodes within two bytes (it fails whenever the draw
+    reaches 2^16) — with the same attachment shape. The twin's draw is
+    the sweep's drawn value BOUNDED below 2^18: `shrinkNat`'s greedy
+    descent walks the strictly-smaller prefix, so the trail's width is
+    the drawn value — a 4-byte draw would walk a 2^32-candidate list
+    (the honest cost of the whole-prefix minimality; the twin keeps
+    the walk modest). Its failure evidence MUST carry the shrunk
+    counterexample + the path; the consumer spec's control below fires
+    iff it does. -/
+def lebSabFails (n : Nat) : Bool := n ≥ 65536
+
+def lebSabSpec : Spec :=
+  Spec.ofList "sabotaged: the drawn value fits two LEB128 bytes"
+    (fun t => assert (!lebSabFails ((lebDraw t) % 262144)) "sabotaged: the draw outgrew two bytes")
+    [ ("truncated encoder", lebNegTruncate)
+    , ("redundant zero group accepted", lebNegRedundant) ]
+    8 42
+    (shrunk := some ⟨Nat, fun _ => True, fun t => (lebDraw t) % 262144,
+                     fun n => toString n, lebSabFails, shrinkNat⟩)
+
+/-- THE SHRINK PIN (the discipline's tooth): the sabotaged twin's
+    failure evidence reports the SHRUNK counterexample (minimal =
+    65536 — greedy descent over `shrinkNat`'s prefix) + the path. The
+    control asserts the evidence is ABSENT — it must FAIL (be caught);
+    a dead attachment leaves it uncaught → VACUOUS, louder than
+    passing. -/
+def lebNegNoShrinkEvidence : Tape → CheckResult := fun _ =>
+  match lebSabSpec.run with
+  | .fail .prop _ _ m =>
+      assert (!((m.splitOn "minimal 65536").length > 1))
+        s!"control fired: the shrink evidence WAS present: {m}"
+  | _ => assert false "the sabotaged sweep did not fail"
+
 def lebSpec : Spec :=
   Spec.ofList "LEB128 append-form round trip (drawn 4-byte values)"
     lebProp
     [ ("truncated encoder", lebNegTruncate)
-    , ("redundant zero group accepted", lebNegRedundant) ]
+    , ("redundant zero group accepted", lebNegRedundant)
+    , ("shrink evidence absent", lebNegNoShrinkEvidence) ]
     64 42
+    (shrunk := some ⟨Nat, fun _ => True, lebDraw, fun n => toString n, lebFails, shrinkNat⟩)
 
 /-! ## Fixtures — the golden module -/
 
@@ -811,7 +858,7 @@ def execProp : Tape → CheckResult := fun _ => do
   assert (stackOf (run1 execBlock 100) == some [.i64 6]) "the block/br answer drifted"
   assert (stackOf (run1 execIfThen 100) == some [.i64 7]) "the if-then answer drifted"
   assert (stackOf (run1 execIfElse 100) == some [.i64 99]) "the if-else answer drifted"
-  assert (stackOf (run1 execSelect 100) == some [.i64 8]) "the select answer drifted"
+  assert (stackOf (run1 execSelect 100) == some [.i64 9]) "the select answer drifted"
   assert (stackOf (run1 execLtu 100) == some [.i32 1]) "the lt_u answer drifted"
   assert (stackOf (run1 execWrap 100) == some [.i32 5]) "the wrap answer drifted"
   assert (stackOf (run1 execSub 100) == some [.i64 5]) "the sub answer drifted"
@@ -1189,6 +1236,81 @@ def profileSpec : Spec :=
     , ("the profile's key set grew an unknown axis", profileKeysProp) ]
     1 42
 
+/-! ### The feature universe (the wasm-feature-detect axes + the shim) -/
+
+/-- The feature axes' pins: the closed universe's size + the detector
+    names' uniqueness + the named next fragment's off rows + the
+    dual-build face + the profile tie + the shim's rendered body. -/
+def featureProp : Tape → CheckResult := fun _ => do
+  -- the closed universe's size (a new ctor forces this pin to grow
+  -- WITH the axis row — the compile error already forces the row)
+  assert (WasmCore.Profile.featureList.length == 23)
+    "the feature universe's size drifted"
+  -- the detector names are UNIQUE (the shim's table collides otherwise)
+  let ds := (WasmCore.Profile.featureTable.map (·.2.detector))
+  assert (ds.eraseDups.length == 23) "the detector names collided"
+  -- the NAMED NEXT FRAGMENT: exceptionsFinal + gc OFF (the exnref/GC
+  -- direction is carried as axes + the OpTable's reserved rows, never
+  -- as instructions)
+  assert ((WasmCore.Profile.featureAxis .exceptionsFinal).status == .off)
+    "the exnref direction's axis drifted on"
+  assert ((WasmCore.Profile.featureAxis .gc).status == .off)
+    "the GC direction's axis drifted on"
+  -- THE DUAL-BUILD face: simd CONDITIONAL, the engine-config axis off
+  -- (the engines execute the scalar core; the bundles carry the flag)
+  assert ((WasmCore.Profile.featureAxis .simd).status == .conditional)
+    "the simd axis's conditional face drifted"
+  assert (!WasmCore.Profile.theProfile.simd)
+    "the profile's simd engine axis drifted on"
+  -- the profile tie: the three axis features the profile carries as
+  -- knobs read off in BOTH faces (one fact, two faces)
+  assert ((!WasmCore.Profile.theProfile.memory64)
+    && (WasmCore.Profile.featureAxis .memory64).status == .off)
+    "the memory64 faces disagree"
+  assert ((!WasmCore.Profile.theProfile.multiMemory)
+    && (WasmCore.Profile.featureAxis .multiMemory).status == .off)
+    "the multi-memory faces disagree"
+  assert ((!WasmCore.Profile.theProfile.wideArithmetic)
+    && (WasmCore.Profile.featureAxis .wideArithmetic).status == .off)
+    "the wide-arithmetic faces disagree"
+  -- the shim's rendered body carries EVERY detector + the entry points
+  let body := WasmCore.Profile.shimBody
+  assert ((WasmCore.Profile.featureTable.all fun p =>
+    body.contains p.2.detector)) "the shim's table dropped a detector row"
+  assert (body.contains "export function select")
+    "the shim dropped the selection entry point"
+  assert (body.contains "export function detectSimd128")
+    "the shim dropped the detection entry point"
+  -- the probe's shape (the observed discriminator; the wasmtime
+  -- both-ways evidence is the constant's note)
+  assert (WasmCore.Profile.simdProbe.length == 43)
+    "the simd probe's byte count drifted"
+  assert (WasmCore.Profile.simdProbe.take 4 == [0, 97, 115, 109])
+    "the simd probe lost the wasm magic"
+
+/-- NEGATIVE CONTROL (the deliberately-collided fixture): a table with
+    a DUPLICATED detector name — the eraseDups pin's check FIRES on it
+    (a uniqueness check that cannot fail is decoration). -/
+def featureCollisionProp : Tape → CheckResult := fun _ => do
+  let dup : List (String × String) := [("a", "x"), ("b", "x")]
+  assert ((dup.map (·.2)).eraseDups.length == dup.length)
+    "control fired: the collision check accepted a collided table"
+
+/-- NEGATIVE CONTROL (the shifted probe): the magic pin asserts the
+    probe's PREFIX — a probe missing its first byte fails the same
+    pin (the take-4 form, not an equality over the whole constant,
+    is what detects the shift). -/
+def featureProbeShiftProp : Tape → CheckResult := fun _ => do
+  assert ((WasmCore.Profile.simdProbe.drop 1).take 4 == [0, 97, 115, 109])
+    "control fired: the magic pin accepted a shifted probe"
+
+def featureSpec : Spec :=
+  Spec.ofList "WasmCore.Profile — the wasm-feature-detect axes + the shim"
+    featureProp
+    [ ("the collision check accepted a collided table", featureCollisionProp)
+    , ("the magic pin accepted a shifted probe", featureProbeShiftProp) ]
+    1 42
+
 /-! ### The type-safety theorem (the body-level induction + the module face) -/
 
 -- The deliverable: `WasmCore.exec_typed` (a VALIDATED body at ANY
@@ -1547,6 +1669,7 @@ def main : IO UInt32 :=
     , ("WasmCore.Exec/calls", [execCallSpec])
     , ("WasmCore.Exec/indirect", [indirectSpec, indirectTeethSpec])
     , ("WasmCore.Exec/type-safety", [typeSafetyTeethSpec])
-    , ("WasmCore.Profile", [profileSpec])
+    , ("WasmCore.Profile", [profileSpec, featureSpec])
     , ("WasmCore.Duel", [duelSpec])
+    , ("WasmCore.Decode", [decodeSpec, decodeModuleSpec])
     , ("WasmCore.ExecMachine", [machineSpec]) ]

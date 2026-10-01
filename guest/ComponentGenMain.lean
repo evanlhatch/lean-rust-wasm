@@ -45,7 +45,12 @@ The EDGE lane (the edgepython frontend's parity set —
 `ComponentTests.EdgeFixture.edgeSpec`, the pure frontend's product,
 no LCNF re-run) rides the same writer the same way: the second
 frontend's component face, wasmtime-executed through the host's edge
-lane.
+lane. The FAULT lane (`ComponentTests.FaultFixture` — the D6 port's
+typed-refusal channel) and the WITNESS lane
+(`ComponentTests.WitFixture` — the host-gating lane's checker
+component, `witness-gate`) ride it the same way: hand-built
+fixture specs, the writer checks each through its `regen` and writes
+through the lane's own emitter.
 
 THE OBSERVABILITY DISCIPLINE, honest minimal: the derived surface
 (compile set, world exports, compiled-but-unexported) is PRINTED at
@@ -74,6 +79,16 @@ open Guest
 /-- The name list's display face (the report's join). -/
 def nameList (ns : List Lean.Name) : String :=
   String.intercalate ", " (ns.map (·.toString))
+
+/-- One lane's regen-or-refuse: the skew check rides `regen` — a drift
+    refuses loudly, nothing written (the writer's per-lane face). -/
+unsafe def regenLane (tag : String) (s : Guest.Component.Spec) :
+    IO (Option String) :=
+  match Guest.Component.regen s with
+  | .error e => do
+      IO.eprintln s!"componentgen: {tag} REGEN FAILED — {e}"
+      return none
+  | .ok _ => return some "ok"
 
 unsafe def main : IO UInt32 := do
   let m := Guest.Gen.mandate
@@ -110,41 +125,38 @@ unsafe def main : IO UInt32 := do
           IO.eprintln s!"componentgen: LOWER FAILED — {e.render}"
           return 1
         | .ok core => do
-          -- the string lane's fixture: pure data, no LCNF re-run
-          -- (ComponentTests.Pipeline.stringSpec)
+          -- the scalar lane's spec: the LCNF re-run's product
           let spec : Guest.Component.Spec := { core := core, world := surf.world }
-          match Guest.Component.regen spec with
-          | .error e =>
-            IO.eprintln s!"componentgen: REGEN FAILED — {e}"
-            return 1
-          | .ok _ =>
-            match Guest.Component.regen ComponentTests.Pipeline.stringSpec with
-            | .error e =>
-              IO.eprintln s!"componentgen: STRING REGEN FAILED — {e}"
-              return 1
-            | .ok _ => do
-              -- the edge lane: the edgepython frontend's parity set
-              -- (ComponentTests.EdgeFixture — the pure frontend's
-              -- product, no LCNF re-run)
-              match Guest.Component.regen ComponentTests.Pipeline.edgeSpec with
-              | .error e =>
-                  IO.eprintln s!"componentgen: EDGE REGEN FAILED — {e}"
-                  return 1
-              | .ok _ => do
-                -- All three lanes through the emit spine (the regens'
-                -- checks already ran; the emitters re-run their pure
-                -- folds).
-                let _textRows ← Kit.Emit.runEmitters "componentgen"
-                  [(Guest.Component.componentEmitter, spec)
-                  ,(Guest.Component.stringComponentEmitter, ComponentTests.Pipeline.stringSpec)
-                  ,(Guest.Component.edgeComponentEmitter, ComponentTests.Pipeline.edgeSpec)]
-                  (fun _ f => pure { items := 1, contentHash := f.contents.hash })
-                let _binRows ← Kit.Emit.runBinaryEmitters "componentgen"
-                  [(Guest.Component.componentEmitter, spec)
-                  ,(Guest.Component.stringComponentEmitter, ComponentTests.Pipeline.stringSpec)
-                  ,(Guest.Component.edgeComponentEmitter, ComponentTests.Pipeline.edgeSpec)]
-                  (fun _ f =>
-                    pure { items := 1, contentHash := Kit.Emit.bytesHash f.contents })
-                IO.println s!"componentgen: the component slices' world texts + \
-                  component bytes (+ sidecars) written"
-                return 0
+          -- the five lanes' regens (the skew check rides each; the
+          -- first refusal aborts the writer, nothing written)
+          let lanes : List (String × Guest.Component.Spec) :=
+            [("SCALAR", spec)
+            , ("STRING", ComponentTests.Pipeline.stringSpec)
+            , ("EDGE", ComponentTests.Pipeline.edgeSpec)
+            , ("FAULT", ComponentTests.Pipeline.faultSpec)
+            , ("WITNESS", ComponentTests.Pipeline.witSpec)]
+          let mut ok := true
+          for (tag, s) in lanes do
+            let r ← regenLane tag s
+            ok := ok && r.isSome
+          if !ok then return 1
+          -- All five lanes through the emit spine (the regens' checks
+          -- already ran; the emitters re-run their pure folds).
+          let _textRows ← Kit.Emit.runEmitters "componentgen"
+            [(Guest.Component.componentEmitter, spec)
+            ,(Guest.Component.stringComponentEmitter, ComponentTests.Pipeline.stringSpec)
+            ,(Guest.Component.edgeComponentEmitter, ComponentTests.Pipeline.edgeSpec)
+            ,(Guest.Component.faultComponentEmitter, ComponentTests.Pipeline.faultSpec)
+            ,(Guest.Component.witComponentEmitter, ComponentTests.Pipeline.witSpec)]
+            (fun _ f => pure { items := 1, contentHash := f.contents.hash })
+          let _binRows ← Kit.Emit.runBinaryEmitters "componentgen"
+            [(Guest.Component.componentEmitter, spec)
+            ,(Guest.Component.stringComponentEmitter, ComponentTests.Pipeline.stringSpec)
+            ,(Guest.Component.edgeComponentEmitter, ComponentTests.Pipeline.edgeSpec)
+            ,(Guest.Component.faultComponentEmitter, ComponentTests.Pipeline.faultSpec)
+            ,(Guest.Component.witComponentEmitter, ComponentTests.Pipeline.witSpec)]
+            (fun _ f =>
+              pure { items := 1, contentHash := Kit.Emit.bytesHash f.contents })
+          IO.println s!"componentgen: the component slices' world texts + \
+            component bytes (+ sidecars) written"
+          return 0

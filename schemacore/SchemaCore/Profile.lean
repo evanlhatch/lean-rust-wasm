@@ -12,14 +12,16 @@ THE DISCIPLINE (§4.5, the honest minimal): a `Profile` names WHICH
 semantic a scalar carries. The lane lands in two pieces:
 
 1. `Profile` — the closed enum: `plain` (the default: the bare
-   scalar's own semantics) and `deterministic` (the fixed-point
+   scalar's own semantics), `deterministic` (the fixed-point
    discipline — the honest resolution of the no-floats exclusion,
-   NOT its avoidance). The enum stays CLOSED (15-patterns #15's
-   discipline, one level up): the honest `fast` slot (hardware-float
-   semantics with its forfeits named) extends the enum only with its
-   full fold — every consumer's match downstream — when a consumer
-   that needs hardware floats lands. The extension is driven by the
-   compiler, not remembered.
+   NOT its avoidance) and `fast` (the hardware-float trade: the f64
+   HOP — speed and range, the exactness laws FORFEITED, each forfeit
+   a theorem at the model below — the 16-surface §4.5
+   `Float Fast` face; D38's game-engine lane landed both slots). The
+   enum stays CLOSED (15-patterns #15's discipline, one level up):
+   the NEXT slot extends only with its full fold — every consumer's
+   match downstream. The extension is driven by the compiler, not
+   remembered.
 
 2. `Profiled p α` — the profiled wrapper. The phantom index `p` is a
    TYPE INDEX only: the runtime representation is the base scalar
@@ -55,7 +57,8 @@ What `deterministic` FORFEITS (named, per §4.5 — honesty cuts both
 ways): hardware-float SPEED (every operation is integer arithmetic
 plus a range check) and dynamic range (the scale is fixed at
 compile time; magnitudes past `2^64 / scale` units refuse). The
-`fast` slot names the opposite trade when it lands.
+`fast` slot names the opposite trade (the f64 hop — the forfeits
+ARE theorems below).
 
 THE TY-INTEGRATION JUDGMENT: `Ty` does NOT grow a ctor. The profile
 is METADATA over the existing ctors — the deterministic float's wire
@@ -97,8 +100,8 @@ open Kit.Varint
 /-! ## The Profile enum — closed, the honest minimal -/
 
 /-- WHICH semantic a scalar carries. CLOSED (see the module header):
-    `fast` (the hardware-float trade, forfeits named) extends with its
-    full fold — the compiler drives it — when its consumer lands. -/
+    the NEXT slot extends only with its full fold — every consumer's
+    match downstream; the compiler drives it. -/
 inductive Profile where
   /-- The bare scalar's own semantics (the default — an unprofiled
       `u64` reads `plain`). -/
@@ -107,6 +110,12 @@ inductive Profile where
       addition, named floor rounding for multiplication, total
       order, codec-legal on the `u64` wire row. -/
   | deterministic
+  /-- The hardware-float trade (`Fast` below): the f64 HOP — speed
+      and range, the EXACTNESS LAWS FORFEITED (identity above the
+      f53 horizon, associativity — each a theorem at the model;
+      the type carries the forfeit). Never discharges the exactness
+      obligation (the tooth below). -/
+  | fast
 deriving Repr, BEq, DecidableEq, Inhabited
 
 /-! ## The profiled wrapper — the phantom index erases -/
@@ -323,6 +332,92 @@ theorem val_codecLegal (f : Fixed scale) (rest : List UInt8) :
 
 end Fixed
 
+/-! ## The fast slot — the hardware-float trade, the forfeits ARE the data -/
+
+/-- The f53 horizon (the vortex hazard's instrument — Vortex.Compute's
+    `f53`, the SAME number `9007199254740992`): above it binary64
+    stops representing every integer exactly. -/
+def f53 : Nat := 2 ^ 53
+
+/-- THE FAST ARITHMETIC: the u64 sum through the f64 HOP — the
+    flatland study's hazard face (`apply_msg_op`'s pointwise-f64-hop).
+    The model: binary64 represents integers EXACTLY only below `f53`;
+    above, the nearest representable wins and the low bits die. The
+    model rounds toward zero (no tie-breaking) — the pinned forfeits
+    below involve no ties, so the model's verdicts are f64's. TOTAL
+    (no range checks, no refusals — the speed side of the trade);
+    the exactness forfeits are theorems, not hopes. -/
+def Fast.round (n : Nat) : Nat :=
+  if n < f53 then n
+  else 2 ^ (Nat.log2 n - 52) * (n / 2 ^ (Nat.log2 n - 52))
+
+/-- The fast addition: the hop's face. -/
+def Fast.add (a b : Nat) : Nat := Fast.round (a + b)
+
+/-- THE IDENTITY LOSS (forfeit #1): above the horizon, `x + 0 ≠ x` —
+    the hop loses the low bits (f64 keeps u64 integers exactly only
+    to 2^53; the vortex hazard's very shape, the study's measured
+    face). -/
+theorem fast_add_loses_identity : Fast.add (f53 + 1) 0 ≠ f53 + 1 := by
+  decide
+
+/-- THE ASSOCIATIVITY DEATH (forfeit #2): the hop's addition is NOT
+    associative — the exact sum's fate depends on the grouping (a law
+    the codec-legal order needs; the fast profile cannot promise
+    it). Pinned both faces. -/
+example : Fast.add (Fast.add f53 1) 1 = f53 := by decide
+
+example : Fast.add f53 (Fast.add 1 1) = f53 + 2 := by decide
+
+/-- THE EXACTNESS OBLIGATION (the codec-legal face) as DATA: an
+    addition plus the law `add a b = a + b`. The deterministic
+    profile discharges it (the witness below); the fast hop CANNOT —
+    the identity loss refutes every candidate. This is the tooth: a
+    `Float Fast` value cannot discharge the exactness obligation —
+    the discharge is UNCONSTRUCTIBLE over the hop. -/
+structure ExactAddition where
+  add : Nat → Nat → Nat
+  exact_law : ∀ a b, add a b = a + b
+
+/-- The DETERMINISTIC face's witness: the fixed-point addition IS the
+    sum (no hop — the arithmetic never leaves the integer lane). The
+    `Fixed.add?` carrier adds the capacity refusal on top
+    (`add?_some` is its exactness law). -/
+def deterministicAddition : ExactAddition where
+  add := fun a b => a + b
+  exact_law := fun _ _ => rfl
+
+/-- THE FORFEIT-HONESTY TOOTH: no obligation witness AGREES with the
+    fast hop — an exact addition and the hop diverge above the
+    horizon (pinned at `f53 + 1`). -/
+theorem exact_addition_never_hops :
+    ¬ ∃ e : ExactAddition, ∀ a b, e.add a b = Fast.add a b := by
+  intro ⟨e, hagree⟩
+  have h1 := e.exact_law (f53 + 1) 0
+  rw [hagree (f53 + 1) 0] at h1
+  exact absurd h1 (by decide)
+
+/-! ## The f64/2^53 hazard as a PROFILE LAW -/
+
+/-- THE PROFILE LAW (the hazard's honest resolution; Vortex.Compute's
+    `hazard_refused_not_rounded` / `hazard_no_f53_cliff` /
+    `hazard_above_f53_exact` are the same discipline's shapes at the
+    encoding lane — vortex is read-only here, the citation is the
+    shared shape): the DETERMINISTIC profile's arithmetic NEVER
+    routes through f64 — every operation is integer arithmetic over
+    the units (the type carries the discipline), so the f53 horizon
+    does not exist on its path: a sum ABOVE the horizon is carried
+    EXACTLY, where the fast hop rounds. -/
+theorem hazard_above_f53_exact {scale : Nat} {a b : Fixed scale}
+    {c : Fixed scale} (h : a.add? b = some c) (_hab : f53 ≤ a.units + b.units) :
+    c.units = a.units + b.units :=
+  Fixed.add?_some h
+
+/-- The law's negative face at the SAME operands: the fast hop is NOT
+    exact above the horizon — the forfeit the deterministic face
+    never pays. -/
+example : Fast.add f53 1 ≠ f53 + 1 := by decide
+
 /-- The `Money USD Cents` shape (§4.5's example): a deterministic
     fixed-point scalar at the named scale — the profile AND the units
     live in the type; at runtime the value is the units alone. -/
@@ -358,8 +453,12 @@ example : (⟨2 ^ 64 - 1, by decide, by decide⟩ : Fixed 100).add?
 -- The scale is type-level data, not runtime.
 example : (⟨425, by decide, by decide⟩ : Fixed 100).scaleOf = 100 := rfl
 
--- The wrapper's erasure at runtime: the phantom is nowhere.
+-- The wrapper's erasure at runtime: the phantom is nowhere (ALL
+-- indices — the `fast` profile included; the pins are the concrete
+-- faces).
 example : (⟨(7 : UInt64)⟩ : Profiled .plain UInt64).raw = 7 := rfl
 example : (Profiled.iso .plain UInt64).to ((Profiled.iso .plain UInt64).inv 7) = 7 := rfl
+example : (⟨(7 : UInt64)⟩ : Profiled .fast UInt64).raw = 7 := rfl
+example : (Profiled.iso .fast UInt64).to ((Profiled.iso .fast UInt64).inv 7) = 7 := rfl
 
 end SchemaCore

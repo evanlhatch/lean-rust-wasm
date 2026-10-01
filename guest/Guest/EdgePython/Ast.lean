@@ -98,7 +98,7 @@ inductive Ty where
   | int | bool
   | tup (ts : List Ty)
   | list (t : Ty)
-  deriving BEq, DecidableEq, Inhabited, Repr
+  deriving BEq, Inhabited, Repr
 
 inductive Expr where
   | int (n : Nat)
@@ -257,8 +257,8 @@ def evE (fns : List Fn) : Nat → List (String × Val) → Expr → Option Val
       let bv ← evE fns fuel env b
       let iv ← Val.asInt (← evE fns fuel env i)
       match bv, iv with
-      | .vtup es, .ofNat n => es.get? n
-      | .vlist es, .ofNat n => es.get? n
+      | .vtup es, .ofNat n => es[n]?
+      | .vlist es, .ofNat n => es[n]?
       | _, _ => none
   | fuel+1, env, .call f args => do
       let vs ← evArgs fns fuel env args
@@ -319,16 +319,16 @@ def evSs (fns : List Fn) : Nat → List Stmt → List (String × Val) →
       -- the compiled face keeps the element only through the body, the
       -- named boundary in `Fe`)
       match ← evE fns fuel env xsE with
-      | .vlist es =>
-          let rec walk (env : List (String × Val)) : List Val →
-              Option PyFlow
-            | [] => evSs fns fuel ss env
-            | e :: rest => do
-                match ← evSs fns fuel body (Env.set env x e) with
-                | .ret v => some (.ret v)
-                | .fall env' => walk env' rest
-          walk env es
+      | .vlist es => evWalk fns fuel ss x body env es
       | _ => none  -- the checker's list-typed contract
+def evWalk (fns : List Fn) : Nat → List Stmt → String → List Stmt →
+    List (String × Val) → List Val → Option PyFlow
+  | 0, _, _, _, _, _ => none
+  | fuel+1, ss, _x, _body, env, [] => evSs fns fuel ss env
+  | fuel+1, ss, x, body, env, e :: rest => do
+      match ← evSs fns fuel body (Env.set env x e) with
+      | .ret v => some (.ret v)
+      | .fall env' => evWalk fns fuel ss x body env' rest
 end
 
 /-- THE Python model's top level: run `name(args...)` over `fns`. -/

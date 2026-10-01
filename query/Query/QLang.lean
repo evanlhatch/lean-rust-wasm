@@ -9,11 +9,12 @@ to the query lane's typed `Q`. The tree's term-elab precedents are
 parser is Lean's own (the pipeline is syntax-cat data, the elaborator
 is a `TermElab`).
 
-THE PIPELINE (v0 fragment = the bridge's join-free fragment):
+THE PIPELINE (the bridge's full fragment — wall 2's dissolve brought
+the equijoin to the surface):
 
 ```
 qlang!{ from <schema> then select (<pred>) then project [.col, …]
-       then union qlang!{ … } }
+       then join .lkey .rkey qlang!{ … } then union qlang!{ … } }
 ```
 
 (The stage pipe is `then`, not the note's `|>` sketch: Lean 4.33's
@@ -108,6 +109,7 @@ syntax "from " term : qlangItem
 syntax "then" "select" "(" qpred ")" : qlangItem
 syntax "then" "project" "[" qcol,* "]" : qlangItem
 syntax "then" "union" "qlang!" "{" qlangItem* "}" : qlangItem
+syntax "then" "join" qcol qcol "qlang!" "{" qlangItem* "}" : qlangItem
 
 /-- THE SURFACE: `qlang!{ from s then select (…) then … }` — elaborates to
     the typed `Q fs gs`. -/
@@ -116,13 +118,14 @@ syntax (name := qlangBlock) "qlang!" "{" qlangItem* "}" : term
 /-! ## The resolution kit (elaboration-time, over the evaluated schema) -/
 
 /-- First-name-match resolution: the column's ordinal + its type —
-    the query lane's `RowVals.project?` discipline at elaboration. -/
+    the query lane's `RowVals.project?` discipline at elaboration. THE
+    ONE RESOLVER's face: the walk is `TypedBridge.colWalk?` (the
+    dependent `resolveCol`'s index projection, type-erased — the
+    ordinal-tie theorem keeps the elaboration face off a re-spelled
+    recursion); the join-key spelling (`fieldTy?`) consumes the same
+    walk. -/
 def findCol (fs : List Field) (n : String) : Option (Nat × Ty) :=
-  match fs with
-  | [] => none
-  | f :: rest =>
-      if f.name == n then some (0, f.ty)
-      else (findCol rest n).map (fun p => (p.1 + 1, p.2))
+  (colWalk? (fieldsSchema fs) n).map (fun p => (p.1, p.2.1))
 
 /-- The schema's names (the closed-world's valid space). -/
 def schemaNames (fs : List Field) : List String := fs.map (·.name)
@@ -301,11 +304,37 @@ private unsafe def elabItem (stk : QStk) (it : Syntax) : TermElabM QStk :=
       let gsT : Lean.Term := ⟨stk.gsStx⟩
       let gs ← `($fld $gsT $chT)
       pure ({ stk with q := q.raw, gsStx := gs.raw, gsVal := keptFields stk.gsVal ps })
+  | `(qlangItem| then join .$ln:ident .$rn:ident qlang!{$nested*}) => do
+      -- THE JOIN STAGE (wall 2's dissolve at the surface): the left
+      -- key resolves in the RUNNING schema, the nested branch (same
+      -- base) elaborates, the right key resolves in the BRANCH's
+      -- result schema; the two keys' types must agree (the equijoin's
+      -- reading); the result schema is the APPENDED one
+      let lr ← resolveColOrThrow stk.gsVal ln
+      let nst ← elabNested stk.fsStx stk.fsVal (nested.toList.map (·.raw))
+      let rr ← resolveColOrThrow nst.2.2 rn
+      match lr, rr with
+      | (_, tyL), (_, tyR) =>
+          if tyL != tyR then
+            Kit.Derive.Common.throwDiag eQL0003
+              s!"qlang: the join keys' types disagree — `{ln.getId.toString}` : \
+                {repr tyL} vs `{rn.getId.toString}` : {repr tyR} — the equijoin \
+                needs one common key type"
+      let lnT : Lean.Term := ⟨Lean.Syntax.mkStrLit ln.getId.toString⟩
+      let rnT : Lean.Term := ⟨Lean.Syntax.mkStrLit rn.getId.toString⟩
+      let qT : Lean.Term := ⟨stk.q⟩
+      let nT : Lean.Term := ⟨nst.1⟩
+      let qJoin : Lean.Term := Lean.mkIdent `Query.Q.join
+      let q ← `($qJoin $lnT $rnT $qT $nT)
+      let gsL : Lean.Term := ⟨stk.gsStx⟩
+      let gsR : Lean.Term := ⟨nst.2.1⟩
+      let gsApp ← `($gsL ++ $gsR)
+      pure { stk with q := q.raw, gsStx := gsApp.raw, gsVal := stk.gsVal ++ nst.2.2 }
   | `(qlangItem| then union qlang!{$nested*}) => do
       -- the nested branch: SAME base, SAME result schema (the VALUES
       -- compared; the terms need not be)
       let nst ← elabNested stk.fsStx stk.fsVal (nested.toList.map (·.raw))
-      if !(nst.2 == stk.gsVal) then
+      if !(nst.2.2 == stk.gsVal) then
         (Kit.Derive.Common.throwDiag eQL0005
           s!"qlang: the union's branch's result schema differs from the \
             running query's — valid: the current schema's shape \
@@ -317,13 +346,13 @@ private unsafe def elabItem (stk : QStk) (it : Syntax) : TermElabM QStk :=
       pure { stk with q := q.raw }
   | _ => (Kit.Derive.Common.throwDiag eQL0005 "qlang: malformed pipeline stage — valid: \
       `from <schema>`, `then select (<pred>)`, `then project [.col, …]`, \
-      `then union qlang!{ … }`")
+      `then join .key .key qlang!{ … }`, `then union qlang!{ … }`")
 
-/-- The nested body's elaboration (the union branch): its own `from`
-    must evaluate to the OUTER base's value; the result is the nested
-    Q term + its result schema's value. -/
+/-- The nested body's elaboration (the union/join branches): its own
+    `from` must evaluate to the OUTER base's value; the result is the
+    nested Q term + its result schema (term + value). -/
 private unsafe def elabNested (fsStx : Syntax) (fsVal : List Field)
-    (items : List Syntax) : TermElabM (Syntax × List Field) :=
+    (items : List Syntax) : TermElabM (Syntax × Syntax × List Field) :=
   match items with
   | it :: rest =>
       match it with
@@ -336,7 +365,7 @@ private unsafe def elabNested (fsStx : Syntax) (fsVal : List Field)
           let stk0 : QStk :=
             ({ q := Lean.mkIdent `Query.Q.table, fsStx := fsStx, fsVal := fsVal, gsStx := fsStx, gsVal := nfsVal })
           let stk ← rest.foldlM (fun acc r => elabItem acc r) stk0
-          pure (stk.q, stk.gsVal)
+          pure (stk.q, stk.gsStx, stk.gsVal)
       | _ => (Kit.Derive.Common.throwDiag eQL0005
           "qlang: the union's branch must start with `from <schema>`")
   | [] => (Kit.Derive.Common.throwDiag eQL0005 "qlang: empty union branch")

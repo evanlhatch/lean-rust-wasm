@@ -43,8 +43,12 @@ namespace ComponentTests.EdgeFixture
 
 /-! ## The parity source (ONE copy — EdgeSpecs adopts it) -/
 
-/-- THE fixture surface (the legacy's parity set, as TEXT) — the ONE
-    copy; `GuestTests.EdgeSpecs` renders its teeth from this. -/
+/-- THE fixture surface (the legacy's parity set + E6's productive
+    fragment, as TEXT) — the ONE copy; `GuestTests.EdgeSpecs` renders
+    its teeth from this. The E6 functions: `ops_mix` (the comparison/
+    logic/negation spellings), `tup_second` (the tuple literal + the
+    index read, nested), `list_sum` (the list literal + the `for` walk
+    with a carried accumulator), `list_head` (the head read). -/
 def edgeSrc : String :=
 "def double(x):\n" ++
 "  return x + x\n" ++
@@ -67,7 +71,38 @@ def edgeSrc : String :=
 "  if a < b:\n" ++
 "    return b\n" ++
 "  else:\n" ++
-"    return a\n"
+"    return a\n" ++
+"\n" ++
+"def ops_mix(a, b):\n" ++
+"  le = a <= b\n" ++
+"  gt = a > b\n" ++
+"  ne = a != b\n" ++
+"  both = le and gt\n" ++
+"  either = both or ne\n" ++
+"  neg = not either\n" ++
+"  if neg:\n" ++
+"    return 0 - a\n" ++
+"  else:\n" ++
+"    if ne:\n" ++
+"      return a - b\n" ++
+"    else:\n" ++
+"      return a + b\n" ++
+"\n" ++
+"def tup_second(a, b):\n" ++
+"  t = (a, b)\n" ++
+"  u = (t, a)\n" ++
+"  return u[0][0] + u[0][1] + u[1]\n" ++
+"\n" ++
+"def list_sum(n):\n" ++
+"  xs = [1, 2, 3, n]\n" ++
+"  s = 0\n" ++
+"  for x in xs:\n" ++
+"    s = s + x\n" ++
+"  return s\n" ++
+"\n" ++
+"def list_head(n):\n" ++
+"  xs = [n, 7, n + 1]\n" ++
+"  return xs[0]\n"
 
 /-! ## The frontend's products (pure — no LCNF re-run) -/
 
@@ -99,7 +134,7 @@ def idxOf (name : String) : Nat :=
     decl order). -/
 def kebab (s : String) : String := String.intercalate "-" (s.splitOn "_")
 
-/-- THE EDGE WORLD: the five parity functions, the honest ABI surface
+/-- THE EDGE WORLD: the nine parity functions, the honest ABI surface
     of the frontend's product — every fn is the u64-scalar shape
     (`int` = the IR u64 row, the frontend's exported surface), so the
     canonical-ABI lift needs no adapter face. The decl order below IS
@@ -125,6 +160,20 @@ def edgeWorld : Wit.World :=
       , .func { name := "if-max"
               , params := [{ name := "a", ty := .atom .u64 }
                          , { name := "b", ty := .atom .u64 }]
+              , result := some (.atom .u64) }
+      , .func { name := "ops-mix"
+              , params := [{ name := "a", ty := .atom .u64 }
+                         , { name := "b", ty := .atom .u64 }]
+              , result := some (.atom .u64) }
+      , .func { name := "tup-second"
+              , params := [{ name := "a", ty := .atom .u64 }
+                         , { name := "b", ty := .atom .u64 }]
+              , result := some (.atom .u64) }
+      , .func { name := "list-sum"
+              , params := [{ name := "n", ty := .atom .u64 }]
+              , result := some (.atom .u64) }
+      , .func { name := "list-head"
+              , params := [{ name := "n", ty := .atom .u64 }]
               , result := some (.atom .u64) } ] }
 
 /-- The component face's core module: the frontend's product with the
@@ -146,10 +195,15 @@ def edgeSpec : Guest.Component.Spec :=
 /-! ## The parity faces (the two Lean legs) -/
 
 /-- The Lean EXECUTOR's answer (the landed engine over the frontend's
-    module). -/
+    module). THE ARGS ARE THE STACK (the executor driver's pop
+    convention: head = TOP = the LAST param — the `call` rule's own;
+    the parity faces' args are NATURAL order), so the driver reverses.
+    The legacy pin set never discriminated (adder is commutative,
+    if_max symmetric, the rest single-param); the E6 pins
+    (`ops_mix`'s `a - b`, `tup_second`'s field reads) do. -/
 def execAt (name : String) (args : List Int) : WasmCore.Outcome :=
   WasmCore.runFunc edgeCore (idxOf name)
-    (args.map (fun z => WasmCore.Val.i64 z.toNat.toUInt64)) 2000
+    (args.reverse.map (fun z => WasmCore.Val.i64 z.toNat.toUInt64)) 2000
 
 /-- The i64 result of a completed run. -/
 def resultOf : WasmCore.Outcome → Option Int

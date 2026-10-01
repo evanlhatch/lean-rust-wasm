@@ -9,8 +9,10 @@
 #
 # THE ACTUAL TOOLCHAIN: the build env has NO rustup — the devenv profile's
 # NIX-PINNED nightly (legacy/.devenv/profiles/wasm/profile/bin, verified
-# `cargo 1.100.0-nightly`) is what compiles. THIS file is the floor for
-# rustup environments (it is inert without rustup; it names the requirement,
-# it never hides it).
+# `cargo 1.100.0-nightly (3c0b53475 2026-09-04)` = the 2026-09-06 pin) is
+# what compiles. (The GC lesson: the earlier rustup-side nix-nightly symlink
+# → 1.99.0-nightly-2026-07-31 dangled once the store GC'd it — pin what
+# EXISTS.) THIS file is the pin for rustup environments (it is inert without
+# rustup; it names the requirement, it never hides it).
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-09-06"

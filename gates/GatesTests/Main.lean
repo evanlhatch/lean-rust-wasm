@@ -62,6 +62,8 @@ import LintKitFixtures.Clean
 import Kit.Ledger
 import TestingKit.Harness
 import GatesTests.Axioms
+import GatesTests.Config
+import GatesTests.Baselines
 
 open TestingKit
 
@@ -858,8 +860,18 @@ unsafe def main : IO UInt32 := do
     , ("the legacy-hash row's sabotage teeth (B4: the read-only tooth)", legacyHashSpecs)
     , ("the feasibility row's sabotage teeth (B2: the spec-sanity census)", feasSpecs)
     , ("the audit gate's coverage-row teeth (wave-30 C1)", auditSpecs)
-    , ("the gates-as-obligation teeth (B7: the self-application)", obligationSpecs) ]
+    , ("the gates-as-obligation teeth (B7: the self-application)", obligationSpecs)
+    , ("the gates' config-face teeth (C4: the knobs' dogfood)", [GatesTests.Config.configFaceSpec])
+    , ("the baselines' grammar-layer teeth (B3: the flat shape, the
+      bytes, the drift)", [GatesTests.Baselines.baselinesSpec]) ]
   if code != 0 then return code
+  -- the baselines' LIVE byte-tie (B3: the committed files parse through
+  -- their grammars and print back to their own bytes)
+  match ← GatesTests.Baselines.liveTeeth with
+  | none => pure ()
+  | some e =>
+      IO.eprintln s!"GatesTests: the baselines' live byte-tie FAILED — {e}"
+      return 1
   -- the live pool teeth: the pure battery's one IO exception (above)
   match ← livePoolTeeth with
   | none => pure ()

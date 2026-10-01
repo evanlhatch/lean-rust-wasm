@@ -52,11 +52,12 @@ notes/v3/09-gates-ops.md §3). The root aggregate of the thin skeleton.
                        lintkit exe's OWN shard fold per gated package,
                        the row fails when any package has findings; the
                        sabotage teeth live in GatesTests.Main)
-- `Gates.Census`     — the two proof-hygiene censuses promoted to
+- `Gates.Census`     — the proof-hygiene censuses promoted to
                        baselined report-gates at 09 §8's trigger (the
                        first adjudicated nonempty run):
-                       decide-first-census + zero-citation-census, the
-                       findings as DATA, drift flagged
+                       decide-first-census + zero-citation-census + the
+                       evidence-redundancy census (B6; D37's teeth),
+                       the findings as DATA, drift flagged
 - `Gates.NolintCensus` — the nolint census gate (the opt-out rows'
                        per-(linter, file) counts, baselined in
                        notes/nolint-census.tsv; a new silenced site
@@ -145,7 +146,8 @@ def Gates.gateNames : List String :=
   ["packages-check", "lint", "axioms", "docs-check", "gen-check",
    "code-registry-check", "snapshot-check", "audit", "artifact-headers",
    "native-policy", "coverage", "kernel-check", "ownership", "breaking",
-   "decide-first-census", "zero-citation-census", "nolint-census",
+   "decide-first-census", "zero-citation-census",
+   "evidence-redundancy-census", "nolint-census",
    "legacy-hash", "feasibility", "elab-watch"]
 
 /-- The MEASURED per-gate worst-concurrent footprint (MB) — the runAll
@@ -227,11 +229,17 @@ abbrev AllChild :=
     the OOM era's shape). Exit code: the FIRST registry-ordered
     failure's code, else 0. -/
 unsafe def Gates.runAll : IO UInt32 := do
-  let jobs ← Gates.envNat "GATES_ALL_JOBS" 6
-  let budgetMb ← Gates.rssBudgetMb
-  let marginMb ← Gates.rssMarginMb
-  let kernelJobs ← Gates.envNat "GATES_KERNEL_JOBS" 6
-  let poolJobs ← Gates.envNat "GATES_POOL_JOBS" 3
+  -- the knobs ride the config face (C4's dogfood): the config file is
+  -- the validated base layer, the env vars the override source; a
+  -- refusal (mis-typed file value, violated check row) is the LOUD exit
+  match ← Gates.loadKnobs with
+  | .error d => IO.eprintln (Kit.Diag.toString d); return 1
+  | .ok kr =>
+  let jobs ← Gates.knobNat kr "all_jobs" 6
+  let budgetMb ← Gates.rssBudgetMb kr
+  let marginMb ← Gates.rssMarginMb kr
+  let kernelJobs ← Gates.knobNat kr "kernel_jobs" 6
+  let poolJobs ← Gates.knobNat kr "pool_jobs" 3
   let footprint := gateFootprintMb kernelJobs poolJobs
   let names : Array String := Gates.gateNames.toArray
   IO.println (s!"gates all: {names.size} gate(s), {jobs} at a time, " ++

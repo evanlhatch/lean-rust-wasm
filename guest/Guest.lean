@@ -36,8 +36,9 @@ re-exported — WasmCore.lean's discipline):
 - `Guest.Lower` — the lowering: consumes ONLY the IR (no LCNF import
   — the split's discipline); the scalar fragment, the boxed-Nat lane,
   the object seed, the CLOSURE discipline (`pap` + the known-arity
-  application + the `_closed` fixpoint family) and the RC seed (the
-  real rc cells, no reuse) → `WasmCore`'s ONE AST; every construct
+  application + the `_closed` fixpoint family) and the RC discipline
+  (the real rc cells; the del's reuse publish — the behavior-identical
+  memory discipline) → `WasmCore`'s ONE AST; every construct
   outside the fragment refuses loudly (the `LowerError` envelope, the
   GC-family E-codes).
 - `Guest.Correct` — the translation correctness for the straight-line

@@ -18,7 +18,15 @@ The world rides the LANDED typed AST (`Wit.Field`/`Wit.Interface`/
 
 - `Func` — a world func: named params + AT MOST ONE unnamed result
   (the canonical-ABI scalar fragment's shape; multi-result funcs are
-  unrepresentable here — the honest gap, grown with the consumer).
+  unrepresentable here — the honest gap, grown with the consumer) +
+  the `async` flag (the WASI async lane's func-level row: an `async`
+  func lifts via the async-lift protocol — `Machines.AsyncSession`'s
+  handshake, whose WIT-side bridge is `Wit.Session`'s
+  `exportTape`/`importTape` + the duality check — and its spelling is
+  `name: async func(...)` per the WIT spec's current shape, confirmed
+  against the mandate tree's own fixtures, e.g. legacy
+  `splicer-mw.wit`'s `export watch-counts: async func(n: u64) ->
+  stream<u64>;`).
 - `Item` — one world item: a func (the inline form the component lane
   emits) or an interface (the by-name form over the landed carrier).
 - `World` — the world's imports/exports as data, each side's item
@@ -28,11 +36,13 @@ The world rides the LANDED typed AST (`Wit.Field`/`Wit.Interface`/
 
 ## Named exclusions (the leftover rule, each with its consumer)
 
-- **no parse-back** — `Wit.Render.worldFile` is render-only; the
-  world text's parser direction is a NAMED follow-up (the landed
-  parser's accepted language is unchanged — the round-trip law's
-  scope does not grow silently). The world artifact's tie is the
-  render-side byte-tie (the committed bytes vs the fresh render).
+- **the world-block parse-back LANDED** (with the func-level async
+  row): `Wit.Parse.parseWorld` reads `Render.world`'s image back into
+  the WorldOk-gated carrier (the round-trip laws are the generic
+  instances). The worldFile DOCUMENT's package line stays render-only
+  — the id is the component driver's, not the contract's (`World`
+  carries no id); the document's tie is the render-side byte-tie
+  (the committed bytes vs the fresh render).
 - **no resources / no `use` / no worlds-in-worlds** — none is
   reachable by the component lane's emission today.
 
@@ -61,6 +71,12 @@ structure Func where
   name : String
   params : List Field
   result : Option Ty
+  /-- The async-lift discipline: the func's WIT row is spelled
+      `async func(...)` and its call rides the async-lift handshake
+      (`Machines.AsyncSession`'s session — the WIT-side bridge is
+      `Wit.Session`). The default is `false` — every pre-existing
+      func literal is a sync row, the artifacts' bytes unchanged. -/
+  async : Bool := false
 deriving Repr, Inhabited
 
 /-- One world item: the inline-func form (the component lane's

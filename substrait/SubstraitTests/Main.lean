@@ -102,8 +102,8 @@ def typedSpec : Spec :=
               | .error _ => false)
           -- the type text's spellings (the table's both faces)
           && (typeTexts.map (fun (t, s) => typeText t == s) |>.all id)
-          -- the width agreement over ALL EIGHT arms (the computed
-          -- aggregate schema included)
+          -- the width agreement over ALL arms (the computed
+          -- aggregate schema included; the fuller-plan rows)
           && widthCheck readUnits
           && widthCheck filterAdd
           && widthCheck demoJoin
@@ -111,6 +111,19 @@ def typedSpec : Spec :=
           && widthCheck sortRel
           && widthCheck fetchRel
           && widthCheck setRel
+          && widthCheck crossRel
+          && widthCheck writeRel
+          -- the cross's wire shape: NO condition, two children (the
+          -- CrossRel face); the write's: names + op + the table schema
+          -- echo (fields = the typed output schema's lowered cols)
+          && (match crossRel.toProto with
+              | .ok (.cross l r) => l.width == 1 && r.width == 1
+              | _ => false)
+          && (match writeRel.toProto with
+              | .ok (.write nms op ts _) =>
+                  nms == ["mydb", "units"] && op == WriteOp.insert
+                    && ts.names == ["health", "regen"]
+              | _ => false)
           -- the aggregate's wire shape: grouping exprs then measures,
           -- both as plain scalar-function expressions
           && (match aggRel.toProto with
@@ -316,6 +329,28 @@ def fetchOutLen : Nat :=
   | .ok rows => rows.length
   | .error _ => 42
 
+/-- The cross's product face: 2 x 2 rows, full width (the condition-
+    free join's kernel — evalJoin at the always-true cond). The full-
+    width stream feeds BOTH children through the split-half readers
+    (the join arm's reader discipline). -/
+def saFullRows : Table (sa ++ sb) :=
+  [Row.append (Row.ofCells sa [some ⟨.i64, .i64 0⟩])
+    (Row.ofCells sb [some ⟨.i64, .i64 1⟩]),
+   Row.append (Row.ofCells sa [some ⟨.i64, .i64 2⟩])
+    (Row.ofCells sb [some ⟨.i64, .i64 3⟩])]
+
+def crossOutLen : Nat :=
+  match evalRel (fun _ => .ok saFullRows) crossRel saFullRows with
+  | .ok rows => rows.length
+  | .error _ => 42
+
+/-- The write's refusal face: the evaluator is read-only (the named
+    boundary — the rows' destiny is the consumer's table store). -/
+def writeRefused : Bool :=
+  match evalRel unitReader writeRel unitRows with
+  | .error _ => true
+  | .ok _ => false
+
 /-- The unknown kernel's loud refusal face. -/
 def unknownFnRefused : Bool :=
   match evalFunc { name := "frob", args := [], ret := .i64, retNullable := false }
@@ -344,6 +379,10 @@ def evalSpec : Spec :=
           && setOutLen == 4
           -- the fetch window: limit 10 over 2 rows
           && fetchOutLen == 2
+          -- the cross's product: 2 x 2 (the always-true cond's join)
+          && crossOutLen == 4
+          -- the write's read-only refusal (the named boundary)
+          && writeRefused
           -- the bridge kernels (Query.TypedBridge's Pred lowering is
           -- the consumer): u64 equal/gt, string + bool equality, not
           && (match evalFunc Query.u64EqSig

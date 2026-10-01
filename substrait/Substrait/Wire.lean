@@ -181,6 +181,27 @@ theorem setOpOfNum?_self (op : SetOp) :
     setOpOfNum? (setOpNum op) = some op := by
   cases op <;> rfl
 
+/-- The write op's wire number (the upstream `WriteRel.WriteOp`
+    values: UNSPECIFIED = 0 is never written — the typed layer's
+    explicit-enum discipline). -/
+def writeOpNum : WriteOp → Nat
+  | .insert => 1
+  | .delete => 2
+  | .update => 3
+  | .ctas => 4
+
+/-- The write op's read-back. -/
+def writeOpOfNum? : Nat → Option WriteOp
+  | 1 => some .insert
+  | 2 => some .delete
+  | 3 => some .update
+  | 4 => some .ctas
+  | _ => none
+
+theorem writeOpOfNum?_self (op : WriteOp) :
+    writeOpOfNum? (writeOpNum op) = some op := by
+  cases op <;> rfl
+
 /-! ## the type wire (the Type kind oneof) -/
 
 /-- The Type message's body: exactly one kind field, at the upstream
@@ -422,6 +443,9 @@ def inDomainRel : Rel → Bool
       (limit.all (· < 9223372036854775808))
         && (offset.all (· < 9223372036854775808)) && inDomainRel i
   | .set _ l r => inDomainRel l && inDomainRel r
+  | .cross l r => inDomainRel l && inDomainRel r
+  | .write nms _ ts i =>
+      inDomainStrs nms && inDomainStrs ts.names && inDomainRel i
 
 /-- The plan relation's gate. -/
 def inDomainPlanRel : PlanRel → Bool
@@ -1240,6 +1264,24 @@ def encSetBody (op : SetOp) (l r : List UInt8) : List UInt8 :=
   encLenBytes 2 l ++ encLenBytes 2 r
     ++ encVarField 3 (setOpNum op)
 
+-- The CrossRel frame: the two inputs (fields 2, 3 — the upstream
+-- `CrossRel { left = 2, right = 3 }`); no condition, no type field.
+def encCrossBody (l r : List UInt8) : List UInt8 :=
+  encLenBytes 2 l ++ encLenBytes 3 r
+
+-- The WriteRel frame: the named table (field 1, whose payload is the
+-- repeated field-1 names — the `NamedObjectWrite { names = 1 }` face)
+-- + the table schema (field 3, the NamedStruct) + the op (field 4,
+-- the enum) + the input (field 5 — the upstream `WriteRel {
+-- named_table = 1, table_schema = 3, op = 4, input = 5 }`). The
+-- canonical order: the field numbers ascending.
+def encWriteBody (nms : List String) (op : WriteOp) (ts : NamedStruct)
+    (inner : List UInt8) : List UInt8 :=
+  encLenBytes 1 (encRep (fun n => encLenBytes 1 (encStr n)) nms)
+    ++ encLenBytes 3 (encNamedStructBody ts)
+    ++ encVarField 4 (writeOpNum op)
+    ++ encLenBytes 5 inner
+
 /-- The Rel body: the rel_type ONEOF at the upstream Rel fields
     (read = 1, filter = 2, fetch = 3, aggregate = 4, sort = 5, join = 6,
     project = 7, set = 8) — each arm's payload is that arm's frame over
@@ -1258,6 +1300,9 @@ def encRelBody : Rel → List UInt8
   | .join jt l r c => encLenBytes 6 (encJoinBody jt (encRelBody l) (encRelBody r) c)
   | .project es input => encLenBytes 7 (encProjectBody (encRelBody input) es)
   | .set op l r => encLenBytes 8 (encSetBody op (encRelBody l) (encRelBody r))
+  | .cross l r => encLenBytes 12 (encCrossBody (encRelBody l) (encRelBody r))
+  | .write nms op ts input =>
+      encLenBytes 19 (encWriteBody nms op ts (encRelBody input))
 def decNatLit? (fuel : Nat) (payload : List UInt8) : Option Nat :=
   match decOneof? payload with
   | some (7, pl, rest') =>
@@ -1443,6 +1488,43 @@ def decRelBody? : Nat → List UInt8 → Option (Step Rel)
                           match decEnumField? 3 setOpOfNum? rest2 with
                           | some (Step.more op []) =>
                               some (Step.more (.set op l r) rest)
+                          | _ => none
+                      | _ => none
+                  | _ => none
+              | _ => none
+          | _ => none
+      | some (12, payload, rest) =>
+          match decLenField? 2 payload with
+          | some (Step.more pll rest1) =>
+              match decRelBody? f pll with
+              | some (Step.more l []) =>
+                  match decLenField? 3 rest1 with
+                  | some (Step.more plr []) =>
+                      match decRelBody? f plr with
+                      | some (Step.more r []) =>
+                          some (Step.more (.cross l r) rest)
+                      | _ => none
+                  | _ => none
+              | _ => none
+          | _ => none
+      | some (19, payload, rest) =>
+          match decLenField? 1 payload with
+          | some (Step.more pl1 rest1) =>
+              match decRep? (decFieldStr? 1) (pl1.length + 1) pl1 with
+              | some (nms, []) =>
+                  match decLenField? 3 rest1 with
+                  | some (Step.more pl3 rest2) =>
+                      match decNamedStructBody? f pl3 with
+                      | some (Step.more ts []) =>
+                          match decEnumField? 4 writeOpOfNum? rest2 with
+                          | some (Step.more op rest3) =>
+                              match decLenField? 5 rest3 with
+                              | some (Step.more pl5 rest4) =>
+                                  match decRelBody? f pl5 with
+                                  | some (Step.more r []) =>
+                                      some (Step.more (.write nms op ts r) rest)
+                                  | _ => none
+                              | _ => none
                           | _ => none
                       | _ => none
                   | _ => none
@@ -1800,6 +1882,86 @@ theorem decRelBody?_law : ∀ (fuel : Nat),
               ih2 r hd4 hr,
               decEnumField?_encVarField 3 setOpOfNum? setOpNum
                 setOpOfNum?_self op]
+        | cross l r =>
+            have hd3 : inDomainRel l = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.1
+            have hd4 : inDomainRel r = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.2
+            have hF : (encCrossBody (encRelBody l) (encRelBody r)).length
+                = (encLenBytes 2 (encRelBody l)).length
+                  + (encLenBytes 3 (encRelBody r)).length := by
+              simp only [encCrossBody, List.length_append]
+            have hW := encLenBytes_ge 12 (encCrossBody (encRelBody l) (encRelBody r))
+            have h1 : (encLenBytes 12 (encCrossBody (encRelBody l) (encRelBody r))
+                ++ rest).length + 1 ≤ f + 1 := hfuel
+            have hA := encLenBytes_ge 2 (encRelBody l)
+            have hB := encLenBytes_ge 3 (encRelBody r)
+            simp only [List.length_append] at h1 hW hF hA hB
+            have hl : (encRelBody l).length + 1 ≤ f := by omega
+            have hr : (encRelBody r).length + 1 ≤ f := by omega
+            simp only [encRelBody, encCrossBody, decRelBody?, List.append_assoc,
+              decOneof?_encLenBytes_append,
+              decLenField?_encLenBytes_append,
+              decLenField?_encLenBytes 3 (encRelBody r),
+              ih2 l hd3 hl,
+              ih2 r hd4 hr]
+        | write nms op ts input =>
+            -- the write arm's gate: `inDomainRel`'s write row is the
+            -- LEFT-assoc `&&`-chain, so the accessors are h.1.1/h.1.2/h.2
+            have hd1 : inDomainStrs nms = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.1.1
+            have hd2 : inDomainNamedStruct ts = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.1.2
+            have hd3 : inDomainRel input = true := by
+              have h := hd; simp [inDomainRel] at h; exact h.2
+            have hF : (encWriteBody nms op ts (encRelBody input)).length
+                = (encLenBytes 1 (encRep (fun n => encLenBytes 1 (encStr n)) nms)).length
+                  + ((encLenBytes 3 (encNamedStructBody ts)).length
+                    + ((encVarField 4 (writeOpNum op)).length
+                      + (encLenBytes 5 (encRelBody input)).length)) := by
+              simp only [encWriteBody, List.length_append]
+              omega
+            have hW := encLenBytes_ge 19 (encWriteBody nms op ts (encRelBody input))
+            have h1 : (encLenBytes 19 (encWriteBody nms op ts (encRelBody input))
+                ++ rest).length + 1 ≤ f + 1 := hfuel
+            have hA := encLenBytes_ge 1 (encRep (fun n => encLenBytes 1 (encStr n)) nms)
+            have hB := encLenBytes_ge 3 (encNamedStructBody ts)
+            have hD := encLenBytes_ge 5 (encRelBody input)
+            simp only [List.length_append] at h1 hW hF hA hB hD
+            -- the named-struct law's NIL face (the payload's own end)
+            have hns : (encNamedStructBody ts ++ []).length + 1 ≤ f := by
+              simp only [List.append_nil]; omega
+            have hin : (encRelBody input).length + 1 ≤ f := by omega
+            -- the struct's read-back at the goal's exact shape (the
+            -- read arm's hns' pattern: re-insert the `++ []` face)
+            have hnsr : decNamedStructBody? f (encNamedStructBody ts)
+                = some (Step.more ts []) := by
+              rw [← List.append_nil (encNamedStructBody ts)]
+              exact decNamedStructBody?_encNamedStructBody_append f ts [] hd2 hns
+            -- the names' rep, at the goal's exact shape (the read
+            -- arm's hrep pattern)
+            have hrer : decRep? (decFieldStr? 1)
+                ((encRep (fun n => encLenBytes 1 (encStr n)) nms).length + 1)
+                (encRep (fun n => encLenBytes 1 (encStr n)) nms)
+                = some (nms, []) := by
+              rw [← List.append_nil (encRep (fun n => encLenBytes 1 (encStr n)) nms)]
+              exact decRep?_encRep_append (decFieldStr? 1)
+                (fun n => encLenBytes 1 (encStr n))
+                (fun n => inDomainStr n = true)
+                (fun n r' h => decFieldStr?_encLenBytes_append 1 n r' h)
+                (fun n => encLenBytes_pos 1 _)
+                [] (by rfl) _ nms
+                (fun n hn => inDomainStrs_self nms n hn hd1)
+                (by simp only [List.length_append, List.append_nil]; omega)
+            simp only [encRelBody, encWriteBody, decRelBody?, List.append_assoc,
+              decOneof?_encLenBytes_append,
+              decLenField?_encLenBytes_append,
+              hrer,
+              hnsr,
+              decEnumField?_encVarField_append 4 writeOpOfNum? writeOpNum
+                writeOpOfNum?_self op (encLenBytes 5 (encRelBody input)),
+              decLenField?_encLenBytes 5 (encRelBody input),
+              ih2 input hd3 hin]
       exact ⟨part1, fun r hd hb => by
         rw [← List.append_nil (encRelBody r)]
         exact part1 r [] hd (by

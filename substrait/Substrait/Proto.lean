@@ -23,8 +23,12 @@ whole format — the narrowings are DELIBERATE and named:
   name-carrying seed is honest: the wire anchor is a plan-local index
   into a table the seed does not yet build.
 - `Rel`: `read/filter/project/join/aggregate/sort/fetch/set` — the
-  relational core + the slice-2 rows (below). `cross/write/extension*`
-  port with their text grammar rows' first consumers.
+  relational core + the slice-2 rows (below) — now joined by `cross`
+  (field 12) and `write` (field 19), the fuller-plan rows (below).
+  The extension rels (`extension_leaf/single/multi`, fields 9-11)
+  stay EXCLUDED: their `detail` is `google.protobuf.Any` — opaque at
+  the wire, so the typed layer has no carrier for an opaque operator
+  (the named boundary; they land with the detail-typed grammar).
 - `Plan`: relations + the distinct function-name list (the seed's
   stand-in for the extension-declaration table); the version header
   ports with the anchors (above).
@@ -51,6 +55,21 @@ legacy `Proto/Rel.lean`'s message shapes, every narrowing named):
   offset options; `Rel.set`: BINARY (the legacy's N-input `SetRel` —
   the typed layer's same-schema discipline makes two the honest
   arity; the N-input shape ports with its first consumer).
+
+The fuller-plan rows (the vendored `algebra.proto`'s remaining rel
+universe, landed with the typed layer's fuller coverage):
+
+- `Rel.cross`: the condition-free join (`CrossRel { left = 2,
+  right = 3 }`) — the typed layer's `join` at the always-true
+  condition, no separate evaluation kernel.
+- `WriteOp`: all four proto values (insert/delete/update/ctas — the
+  enum's full closed set; no narrowing needed).
+- `Rel.write`: the named-object write (`WriteRel { named_table = 1,
+  table_schema = 3, op = 4, input = 5 }`). The TYPED layer's table
+  schema IS the input's output schema (the alignment by construction
+  — no separate schema datum to drift); the wire's `table_schema`
+  face is the lowering's WRITTEN echo of that same schema, and the
+  decode refuses the disagreement (SS0012).
 
 Plain total data, no proofs (the low-level currency: the typed layer
 lowers into it, the text emitter reads it).
@@ -222,6 +241,12 @@ inductive SetOp where
   | unionAll | unionDistinct
 deriving Repr, BEq, DecidableEq, Inhabited
 
+/-- Proto `WriteRel.WriteOp` — the full closed set (the write rows'
+    enum, no narrowing). -/
+inductive WriteOp where
+  | insert | delete | update | ctas
+deriving Repr, BEq, DecidableEq, Inhabited
+
 /-- Proto `Rel` — the narrow relation union (read/filter/project/join/
     aggregate/sort/fetch/set; see the module header). -/
 inductive Rel where
@@ -233,6 +258,17 @@ inductive Rel where
   | sort (keys : List SortField) (input : Rel)
   | fetch (limit : Option Nat) (offset : Option Nat) (input : Rel)
   | set (op : SetOp) (left : Rel) (right : Rel)
+  /-- The condition-free join (`CrossRel { left = 2, right = 3 }`) —
+      the typed layer reads it as the join at the always-true
+      condition (the shared width rule's face). -/
+  | cross (left : Rel) (right : Rel)
+  /-- The named-object write (`WriteRel { named_table = 1,
+      table_schema = 3, op = 4, input = 5 }`). The wire carries the
+      table's schema AND the input rel — the typed layer forces their
+      agreement (the decode's SS0012 refusal; the typed ctor's
+      alignment by construction). -/
+  | write (namedTable : List String) (op : WriteOp) (tableSchema : NamedStruct)
+      (input : Rel)
 deriving Repr, BEq, Inhabited
 
 /-- The declared name of a rel (the substrait-explain `NamedRelation`). -/
@@ -245,6 +281,8 @@ def Rel.name : Rel → String
   | .sort _ _ => "Sort"
   | .fetch _ _ _ => "Fetch"
   | .set _ _ _ => "Set"
+  | .cross _ _ => "Cross"
+  | .write _ _ _ _ => "Write"
 
 /-- The output width of a rel (the wire-side width rule the typed
     layer's lowering-agreement theorem consumes). A Read's width is its
@@ -265,6 +303,14 @@ def Rel.width : Rel → Nat
   -- the typed layer's same-schema discipline makes the set's width the
   -- shared width (the legacy's N-input average narrows to binary)
   | .set _ left _ => left.width
+  -- the cross join's width rule IS the join's (the always-true
+  -- condition changes no width)
+  | .cross left right => left.width + right.width
+  -- the write's output IS the written table (the spec's face); the
+  -- typed layer forces tableSchema ≡ the input's output schema, so
+  -- the input's width is the ONE rule (the decode's SS0012 refusal
+  -- pins the agreement)
+  | .write _ _ _ input => input.width
 
 /-! ## the plan container -/
 

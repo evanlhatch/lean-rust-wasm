@@ -28,6 +28,7 @@ import QueryTests.ExplainSpecs
 import QueryTests.Bridge
 import QueryTests.QLangSpecs
 import QueryTests.Axioms
+import QueryTests.Optimize
 
 open Query SchemaCore TestingKit ZSet
 
@@ -192,4 +193,5 @@ def main : IO UInt32 :=
   mainOfSuites [("QueryTests", [fragmentSpec, weightsSpec, keyjoinSpec])
                 , ("explanations", explainSpecs)
                 , ("bridge", [QueryTests.Bridge.bridgeSpec])
-                , ("qlang", [QueryTests.QLangSpecs.qlangSpec])]
+                , ("qlang", [QueryTests.QLangSpecs.qlangSpec])
+                , ("optimize", [QueryTests.Optimize.optimizeSpec])]

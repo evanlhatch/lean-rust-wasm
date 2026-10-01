@@ -68,6 +68,7 @@ import WasmCore.OpTable
 import WasmCore.Module
 import WasmCore.Validate
 import WasmCore.Encode
+import WasmCore.Decode
 import WasmCore.Wat
 import WasmCore.Slice
 import WasmCore.Exec

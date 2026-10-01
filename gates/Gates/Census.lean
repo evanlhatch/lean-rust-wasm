@@ -10,6 +10,10 @@ the first adjudicated NONEMPTY run.
   proof-level leftover rule: a theorem cited nowhere outside its own
   module is the proof layer's dead code — or the named public-API/
   load-bearing `@[nolint]` row).
+* `evidence-redundancy-census` — `linter.guestlang.evidenceRedundancy`
+  (B6; D37; 16-surface §3: re-proofs of carried laws + weaker-than-
+  kernel obligation rows — the entourage's first question, at the
+  hand-written face).
 
 Promotion, not hard-gating: the census linters stay default-OFF (their
 heuristics' limits are named in their own headers — promoting them to
@@ -57,6 +61,12 @@ def zeroCitation : Census :=
   { opt := `linter.guestlang.zeroCitation
     path := "notes/zero-citation-census.md", gate := "zero-citation-census" }
 
+/-- The evidence-redundancy census: D37's teeth (B6), census mode. -/
+def evidenceRedundancy : Census :=
+  { opt := `linter.guestlang.evidenceRedundancy
+    path := "notes/evidence-redundancy-census.md",
+    gate := "evidence-redundancy-census" }
+
 /-- The census lint config: EVERY env-linter whole-disabled except the
 census linter, enabled at the CLI-override level (the runner skips the
 disabled passes entirely; the axiomOnlyConfig shape). -/
@@ -72,7 +82,8 @@ def censusConfig (c : Census) : LintKit.DriverConfig :=
         |>.insert `linter.guestlang.guestBan false
         |>.insert `linter.guestlang.graduation false
         |>.insert `linter.guestlang.decideFirst false
-        |>.insert `linter.guestlang.zeroCitation false)
+        |>.insert `linter.guestlang.zeroCitation false
+        |>.insert `linter.guestlang.evidenceRedundancy false)
         |>.insert c.opt true }
 
 /-- One package's census analysis over its loaded env: the census

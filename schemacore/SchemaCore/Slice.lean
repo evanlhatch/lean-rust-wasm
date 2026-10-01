@@ -36,8 +36,17 @@ import SchemaCore
 
 open SchemaCore
 
-@[schema]
-structure Example where
+-- MIGRATION PROOF (wave-30 E1): the fixtures below are RE-AUTHORED
+-- through the `table!` surface — the one-declaration authoring act
+-- generates the same plain structure + the SAME `@[schema]` mount; the
+-- reflected items are byte-identical to the hand declarations' (the
+-- committed `gen/` artifacts are the tooth: the gen-check gate
+-- byte-ties them; the registration's replay is unchanged). The defaulted
+-- capabilities (`deriving WireCodec, row_bridge`) add the codecs'
+-- entourage WITHOUT touching the item level — the artifacts render from
+-- the registry's items, not the codecs.
+
+table! Example where
   ready : Bool
   count : UInt64
   delta : Int64
@@ -45,17 +54,22 @@ structure Example where
   note : Option String
   tags : List String
 
-/-- The grown-universe fixture: the sum shape (the item model is
+/-! The grown-universe fixture: the sum shape (the item model is
     records-only today — the sum rides the `result` Ty FIELD TYPE;
     variant ITEMS are the named future consumer, Item.lean's honest
-gap), the map shape (the association-list spelling; the WIT lowering
-is the declared retraction-with-note), and the bounded base type (the
-cap in the type; the WIT lowering drops it — the declared loss). The
-VARIANT-ITEM NOTE: `@[schema]` registers records only; when the item
-model grows variants, this fixture grows the variant row and the WIT
-emitter grows the `variant` decl (the mined legacy mapping). -/
-@[schema]
-structure ExampleEx where
+    gap), the map shape (the association-list spelling; the WIT lowering
+    is the declared retraction-with-note), and the bounded base type (the
+    cap in the type; the WIT lowering drops it — the declared loss).
+
+    The VARIANT-ITEM NOTE: the surface registers records only; when the
+    item model grows variants, this fixture grows the variant row and the
+    WIT emitter grows the `variant` decl (the mined legacy mapping).
+
+    (A `/-! -/` section comment, not a docstring: after a declaration, a
+    docstring must be followed by a DECLARATION command — Lean's own
+    docstring-attach rule — and `table!` is a command; the surface's
+    generated structure carries its own docstring.) -/
+table! ExampleEx where
   status : Sum UInt64 String
   counts : List (String × UInt64)
   small : Fin 42

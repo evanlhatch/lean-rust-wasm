@@ -24,25 +24,51 @@
 use std::path::Path;
 
 use crate::HostError;
-use crate::duel::{Expectation, RowVerdict};
+use crate::duel::Expectation;
 
-/// The wasmi leg's observation (mandate_rt::observe's face, widened to
-/// the refusal case): a value, a typed trap, or a load refusal.
-enum WasmiObserved {
+/// EITHER leg's observation: a completing call's value, the typed
+/// runtime trap, or a LOAD refusal (a compile/validation refusal —
+/// the `.refuse` rows' EXPECTED outcome on every leg). A refusal is an
+/// OBSERVATION, never a harness error; the harness error face is
+/// strictly the plumbing (io, engine init).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Observed {
     Value(i64),
-    Trap(String),
+    Trap,
     Refused(String),
 }
 
+impl Observed {
+    /// The witness's rendered face (the duel's vocabulary).
+    fn render(&self) -> String {
+        match self {
+            Observed::Value(v) => format!("i64:{v}"),
+            Observed::Trap => "trap".into(),
+            Observed::Refused(why) => format!("refused: {why}"),
+        }
+    }
+}
+
+/// Runs ONE module through the wasmtime leg (the duel lane's profiled
+/// engine walk): the engine's compile refusal is the [`Observed::Refused`]
+/// observation, the typed wasm trap is [`Observed::Trap`], a
+/// completing call is the value.
+fn observe_wasmtime(wasm: &[u8]) -> Result<Observed, HostError> {
+    match crate::duel::observe(wasm) {
+        Ok(Ok(v)) => Ok(Observed::Value(v)),
+        Ok(Err(_trap)) => Ok(Observed::Trap),
+        Err(HostError::EngineRefused(why)) => Ok(Observed::Refused(why)),
+        Err(e) => Err(e),
+    }
+}
+
 /// Runs ONE module through the wasmi leg (mandate-rt's
-/// profile-driven engine): a load refusal is the typed [`WasmiObserved::Refused`]
-/// (the `.refuse` rows' EXPECTED outcome on this leg), a trap code is
-/// [`WasmiObserved::Trap`], a completing call is the value.
-fn observe_wasmi(wasm: &[u8]) -> Result<WasmiObserved, HostError> {
+/// profile-driven engine): the same observation vocabulary.
+fn observe_wasmi(wasm: &[u8]) -> Result<Observed, HostError> {
     match mandate_rt::observe(wasm) {
-        Ok(Ok(v)) => Ok(WasmiObserved::Value(v)),
-        Ok(Err(trap)) => Ok(WasmiObserved::Trap(trap)),
-        Err(e) => Ok(WasmiObserved::Refused(e.0)),
+        Ok(Ok(v)) => Ok(Observed::Value(v)),
+        Ok(Err(_trap)) => Ok(Observed::Trap),
+        Err(e) => Ok(Observed::Refused(e.0)),
     }
 }
 
@@ -140,17 +166,6 @@ fn expect_note(e: &Expectation) -> String {
     }
 }
 
-/// The wasmtime leg's rendered observation (the witness's face): the
-/// same vocabulary the two-way duel's `run_row` speaks — `i64:<v>` /
-/// `trap` / the refusal text.
-fn run_wasmtime_leg(wasm: &[u8]) -> Result<Result<String, String>, HostError> {
-    let observed = crate::duel::observe(wasm)?;
-    Ok(match observed {
-        Ok(v) => Ok(format!("i64:{v}")),
-        Err(_trap) => Ok(Err("trap".into())),
-    })
-}
-
 /// Runs the whole triangle: reads the committed manifest, ties +
 /// executes each vector on BOTH engine legs, answers per row. The
 /// verdict is TESTED AGREEMENT — `TriangleReport::render` carries the
@@ -181,7 +196,7 @@ pub fn run_triangle(gen_dir: &Path) -> Result<TriangleReport, HostError> {
         let computed = crate::artifact::bytes_hash(&wasm);
         if computed != declared {
             out.push(TriRow {
-                path,
+                path: path.clone(),
                 expectation: expect,
                 verdict: TriVerdict::Diverge {
                     loc: path.clone(),
@@ -194,62 +209,29 @@ pub fn run_triangle(gen_dir: &Path) -> Result<TriangleReport, HostError> {
         }
         // BOTH legs run; a leg's HARNESS failure (not a module
         // refusal) is a harness error, never a verdict about the model.
-        let wt = run_wasmtime_leg(&wasm);
-        let mi = observe_wasmi(&wasm);
-        let verdict = match (wt, mi) {
-            (Ok(Ok(wt)), Ok(WasmiObserved::Value(v))) => {
-                let observed = format!("i64:{v}");
-                match &expect {
-                    Expectation::Run(expected) if &observed == expected && wt == observed => {
-                        TriVerdict::Agree
-                    }
-                    _ => TriVerdict::Diverge {
-                        loc: path.clone(),
-                        lhs: expect_note(&expect),
-                        wasmtime: wt,
-                        wasmi: observed,
-                    },
+        let verdict = match (observe_wasmtime(&wasm), observe_wasmi(&wasm)) {
+            (Ok(wt), Ok(mi)) => match (&expect, &wt, &mi) {
+                // THE `.run` row: both legs complete to the pinned
+                // values AND the legs agree with each other.
+                (Expectation::Run(expected), Observed::Value(a), Observed::Value(b))
+                    if format!("i64:{a}") == *expected && a == b =>
+                {
+                    TriVerdict::Agree
                 }
-            }
-            (Ok(Ok(wt)), Ok(WasmiObserved::Trap(t))) => match &expect {
-                Expectation::Trap if wt == "trap" => TriVerdict::Agree,
+                // THE `.trap` row: BOTH legs trap — the typed wasm
+                // trap in every engine.
+                (Expectation::Trap, Observed::Trap, Observed::Trap) => TriVerdict::Agree,
+                // THE `.refuse` row: BOTH legs refuse (the negative
+                // control passing on both engines — Lean's validator
+                // refused at generation).
+                (Expectation::Refuse, Observed::Refused(_), Observed::Refused(_)) => {
+                    TriVerdict::Agree
+                }
                 _ => TriVerdict::Diverge {
                     loc: path.clone(),
                     lhs: expect_note(&expect),
-                    wasmtime: wt,
-                    wasmi: t,
-                },
-            },
-            (Ok(Ok(_wt)), Ok(WasmiObserved::Refused(r))) => TriVerdict::Diverge {
-                loc: path.clone(),
-                lhs: expect_note(&expect),
-                wasmtime: "completed".into(),
-                wasmi: format!("refused: {r}"),
-            },
-            (Ok(Err(_)), Ok(WasmiObserved::Value(v))) => TriVerdict::Diverge {
-                loc: path.clone(),
-                lhs: expect_note(&expect),
-                wasmtime: "refused/trapped".into(),
-                wasmi: format!("i64:{v}"),
-            },
-            (Ok(Err(_)), Ok(WasmiObserved::Trap(_t))) => match &expect {
-                Expectation::Refuse => TriVerdict::Agree,
-                _ => TriVerdict::Diverge {
-                    loc: path.clone(),
-                    lhs: expect_note(&expect),
-                    wasmtime: "refused".into(),
-                    wasmi: "trapped".into(),
-                },
-            },
-            (Ok(Err(_)), Ok(WasmiObserved::Refused(_r))) => match &expect {
-                // THE `.refuse` row's agreement: BOTH legs refuse (the
-                // negative control passing on both engines).
-                Expectation::Refuse => TriVerdict::Agree,
-                _ => TriVerdict::Diverge {
-                    loc: path.clone(),
-                    lhs: expect_note(&expect),
-                    wasmtime: "refused".into(),
-                    wasmi: "refused".into(),
+                    wasmtime: wt.render(),
+                    wasmi: mi.render(),
                 },
             },
             (Err(e), _) | (_, Err(e)) => TriVerdict::HarnessError(e.to_string()),

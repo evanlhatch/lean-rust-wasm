@@ -39,8 +39,10 @@ The constructors' discipline (each is a lowering lane, read off
   REF-FIELD COUNT — the object's fields' refs decrement when the object
   dies, the count riding the landed layout: the ref slots are
   `0..count-1`), `del` (the honest deallocation: the ownership assertion
-  `rc = 1` + the dead marking — the freelist reuse stays the named
-  follow-up).
+  `rc = 1` + the dead marking — and the REUSE face: a shape-known
+  dead slot publishes to the allocator's single-slot cache, the
+  behavior-identity discipline keeping the reuse invisible to the
+  semantics; the size-class freelist stays the named follow-up).
 - **The in-place writes** (the mutation family): `sset` (a scalar field
   write — the SAME coordinates the `sproj` read rides), `oset` (a
   ref-field write), `setTag` (the tag byte's write) — each under the rc=1
@@ -48,11 +50,12 @@ The constructors' discipline (each is a lowering lane, read off
   trap; the copy discipline is the named follow-up). The `uset` face (a
   USize slot write) stays OUTSIDE the IR — no modeled row — the
   frontend's named refusal.
-- **The extern face**: `extern` — a DECLARED TRUST BOUNDARY: the decl
-  carries its signature, its body is NOT modeled (the lowering emits the
-  declared function with the `unreach` body — the host link step is the
-  named follow-up); a call to it rides the call lane's index like any
-  sibling.
+- **The extern face**: `extern` — a DECLARED TRUST BOUNDARY: the ctor
+  carries the CONTRACT as data (`ExternSig` — the declared rows, the
+  effect row, the trust note), its body is NOT modeled (the lowering
+  emits the declared function with the `unreach` body — the host link
+  step is the named follow-up); a call to it rides the call lane's
+  index like any sibling, type-checked against the contract.
 - **The type rows** (`Ty`): the closed set the lowering's type map
   covered — the machine scalars (`u64`/`u32`/`u8`), the source
   scalars with the i32 repr (`bool`/`char`), the prescan's
@@ -177,6 +180,16 @@ inductive LowerError where
       is unknowable from the lowering's data; a non-const type). The
       field-packing law needs the field's size class. -/
   | ctorFieldClass (ty : String)
+  /-- THE EXTERN CONTRACT's DECLARATION DRIFT: the decl's faces (the
+      params, the result row) do not match the contract the extern
+      declares — the boundary's data and the signature must agree,
+      never a silently skewed marshalling at the trust boundary. -/
+  | externSigDrift (fn : String) (got want : String)
+  /-- THE EXTERN CONTRACT's CALL-SITE DRIFT: a call to the extern
+      passes an argument whose bound row differs from the contract's
+      declared param row (the call site is type-checked against the
+      declared boundary). -/
+  | externCallDrift (fn : String) (got want : String)
   deriving Repr, BEq, DecidableEq, Inhabited
 
 /-! The E-code CONSTANTS (the GC family): one place, ready for the
@@ -204,6 +217,11 @@ def ecClosureApplyArityDrift : Kit.ECode := ⟨"GC2019"⟩
 def ecRcOnScalar : Kit.ECode := ⟨"GC2020"⟩
 def ecRcCascade : Kit.ECode := ⟨"GC2021"⟩
 def ecCtorFieldClass : Kit.ECode := ⟨"GC2022"⟩
+/-- The Effects lane's `EffectError.overClaim` holds GC2023 (its OWN
+    closed vocabulary, not this envelope's) — this envelope's next
+    rows allocate from GC2024, monotone, never reused. -/
+def ecExternSigDrift : Kit.ECode := ⟨"GC2024"⟩
+def ecExternCallDrift : Kit.ECode := ⟨"GC2025"⟩
 
 end LowerError
 
@@ -324,6 +342,18 @@ def LowerError.toDiag : LowerError → Kit.Diag
          the ctor count (unknowable from the lowering's data)"
         .error ty
         ["a field of UInt64/UInt32/UInt8 or an object-row type"]
+  | .externSigDrift fn got want =>
+      Kit.Diag.closedWorld ecExternSigDrift
+        s!"extern {fn}: the decl's signature drifts from the DECLARED \
+           contract (the trust boundary's data must match the faces — \
+           a skewed boundary is a silently wrong marshalling)"
+        .error got [want]
+  | .externCallDrift fn got want =>
+      Kit.Diag.closedWorld ecExternCallDrift
+        s!"extern call {fn}: the argument row drifts from the DECLARED \
+           contract (the call site is type-checked against the \
+           declared boundary)"
+        .error got [want]
 
 /-- The one-line rendering (the envelope's `.toString`). -/
 def LowerError.render (e : LowerError) : String := Kit.Diag.toString e.toDiag
@@ -445,6 +475,32 @@ inductive CaseVia where
   | value | tag
   deriving BEq, DecidableEq, Inhabited, Repr
 
+/-- THE EXTERN EFFECT ROW (the declared trust boundary's effect face,
+    closed): `pure` — a value computation with no memory effect;
+    `write` — may mutate the guest's linear memory; `host` — unmodeled
+    host effects (the trust note carries what the host side promised).
+    The row is DECLARED DATA (the boundary's honesty face); an
+    effect-tracking consumption is the named follow-up. Defined BEFORE
+    the `Code` block — the `extern` ctor's field type. -/
+inductive ExternEffect where
+  | pure | write | host
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- THE EXTERN CONTRACT (the declared trust boundary as DATA): the
+    declared param rows, the declared result row, the effect row, and
+    the trust note (what the host side promised, in words). The decl's
+    faces must MATCH the contract (`externSigDrift` — the lowering's
+    declaration check); the call sites are type-checked against it
+    (`externCallDrift` — the lowering's call-lane check). An
+    UNDECLARED extern is unrepresentable: the contract rides the IR's
+    `extern` ctor itself. -/
+structure ExternSig where
+  params : List Ty
+  result : Ty
+  effect : ExternEffect
+  note : String
+  deriving BEq, DecidableEq, Inhabited, Repr
+
 -- One case node's per-alt arm: the ctor-index branch or the default
 -- (the chain's else face). Mutual with `Code` (the alts' codes are
 -- the spine's subterms — the structural recursion's face; no
@@ -467,6 +523,16 @@ inductive Code where
   | inc (v : Var) (n : Nat) (k : Code)
   | dec (v : Var) (n : Nat) (cascade : Option Nat) (k : Code)
   | del (v : Var) (k : Code)
+  -- THE RC REUSE (the memory discipline's del face): the del — the
+  -- rc=1 ownership assertion + the dead marking — PUBLISHES a
+  -- shape-known slot to the allocator's single dead-slot cache, and
+  -- the allocator's next same-size allocation hands the slot back
+  -- (the shape match checked at runtime, the cache size cell). The
+  -- HONESTY: reuse is a MEMORY discipline, invisible to the
+  -- semantics — a live object's address never changes (only rc=0
+  -- slots publish, under the rc=1 assertion), so the program's
+  -- observable behavior is identical with and without the reuse.
+  -- The size-class freelist (many slots) stays the named follow-up.
   -- THE IN-PLACE WRITES (the mutation family): the value-form writes
   -- are STATEMENTS (no result binding — the ANF spine's continuity).
   -- Each rides the rc=1 legality guard at the lowering (a shared
@@ -476,8 +542,12 @@ inductive Code where
   | setTag (v : Var) (cidx : Nat) (k : Code)
   -- THE EXTERN FACE: a declared trust boundary (a leaf — no body; the
   -- lowering emits the declared function with the `unreach` body, the
-  -- host link step is the named follow-up).
-  | extern
+  -- host link step is the named follow-up). The CONTRACT rides the
+  -- ctor as DATA (`ExternSig` — the declared rows + the effect row +
+  -- the trust note): an undeclared extern is unrepresentable; the
+  -- decl's faces must match the contract (`externSigDrift`) and the
+  -- call sites are type-checked against it (`externCallDrift`).
+  | extern (sig : ExternSig)
   deriving Inhabited, Repr
 end
 

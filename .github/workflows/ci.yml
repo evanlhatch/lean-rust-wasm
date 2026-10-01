@@ -19,8 +19,12 @@
 #   - NO mathlib (the tree is core-only; Cli + batteries + lean4lean are
 #     the only requires) — no cachix olean fetch step exists; the first
 #     build compiles the small dep closure from source.
-#   - cargo: the ubuntu-latest runner ships a Rust toolchain; the crates
-#     (schema-generated, mandate-delta, mandate-host) need nothing else.
+#   - cargo: the ubuntu-latest runner ships a Rust toolchain; the SIX crates
+#     (schema-generated, mandate-delta, mandate-faults, mandate-rt,
+#     mandate-host, mandate-store — exactly the justfile's `rust` row) need
+#     nightly (fast-observe's error_generic_member_access + error_iter),
+#     served by the runner's rustup honoring crates/rust-toolchain.toml's
+#     dated pin on each crates/* cargo invocation.
 #   - The elab-watch row inside `just gates`: its committed baseline
 #     (notes/elab-baseline.tsv) carries the REFERENCE calibration — the
 #     module/reference ratio divides out CI-vs-local machine speed, so a
@@ -89,7 +93,7 @@ jobs:
                       ~/.cargo/registry
                       ~/.cargo/git
                       target
-                  key: rust-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+                  key: rust-v1-${{ runner.os }}-${{ hashFiles('crates/*/Cargo.lock') }}
                   restore-keys: |
                       rust-v1-${{ runner.os }}-
 

@@ -244,3 +244,62 @@ fn mangled_manifest_refuses() {
     let err = run_duel(&gdir).expect_err("the mangled manifest refuses");
     assert!(matches!(err, HostError::DuelManifest(_)), "{err:?}");
 }
+
+// ── THE THREE-WAY DUEL (D1's triangle: Lean exec ≡ wasmtime ≡ wasmi) ──
+
+use mandate_host::{TriVerdict, run_triangle};
+
+/// THE TRIANGLE PIN: all 38 rows agree on BOTH engine legs — the Lean
+/// executor's computed expectations match wasmtime's AND wasmi's
+/// observations over the whole family (the rt-conformance face: the
+/// portability proof, both engines riding the ONE committed profile).
+#[test]
+fn the_triangle_agrees() {
+    let report = run_triangle(&mandate_host::repo_gen_dir()).expect("the triangle runs");
+    assert_eq!(report.generator, "WasmCore.Duel");
+    assert_eq!(report.rows.len(), 38, "the same 38 vectors, both legs");
+    for row in &report.rows {
+        assert!(matches!(row.verdict, TriVerdict::Agree), "{:?}", row);
+    }
+    // The fold: all-agree IS agree; the tier sentence is part of the
+    // report (TESTED AGREEMENT, never a theorem).
+    assert_eq!(report.verdict(), TriVerdict::Agree);
+    let rendered = report.render();
+    assert!(rendered.contains("TESTED AGREEMENT"), "{rendered}");
+    assert!(rendered.contains("never a theorem"), "{rendered}");
+}
+
+/// THE TRIANGLE'S REFUSAL CONTROL: the invalid control refuses on
+/// BOTH legs (wasmtime's compiler AND wasmi's validator under the
+/// shared profile — the negative control passing engine-portably).
+#[test]
+fn the_triangle_refuse_row_agrees_on_both_legs() {
+    let report = run_triangle(&mandate_host::repo_gen_dir()).expect("the triangle runs");
+    let invalid = report
+        .rows
+        .iter()
+        .find(|r| r.path == "gen/wasm-duel/invalid.wasm")
+        .expect("the invalid control row");
+    assert_eq!(invalid.expectation, Expectation::Refuse);
+    assert_eq!(invalid.verdict, TriVerdict::Agree);
+}
+
+/// THE TRIANGLE TOOTH: a doctored expectation diverges WITH THE
+/// WITNESS naming the row (the wasmtime leg's true observation in the
+/// wasmtime face — the scratch copy, never the committed universe).
+#[test]
+fn the_triangle_tamper_tooth_diverges_with_witness() {
+    let gdir = scratch("triangle-tamper");
+    retarget(&gdir, "gen/wasm-duel/op-i32.add.wasm", "run i64:43");
+
+    let report = run_triangle(&gdir).expect("the triangle still runs");
+    match report.verdict() {
+        TriVerdict::Diverge { loc, lhs, wasmtime, wasmi } => {
+            assert_eq!(loc, "gen/wasm-duel/op-i32.add.wasm");
+            assert_eq!(lhs, "run i64:43", "lhs names the tampered expectation");
+            assert_eq!(wasmtime, "i64:4294967294", "the wasmtime leg's true observation");
+            assert_eq!(wasmi, "i64:4294967294", "the wasmi leg's true observation");
+        }
+        other => panic!("expected the divergence witness, got {other:?}"),
+    }
+}

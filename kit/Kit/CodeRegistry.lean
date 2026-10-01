@@ -716,7 +716,7 @@ data here, so the teeth tests construct occurrences directly.
     HERE and in `notes/code-registry.txt` in the same change. -/
 def codeFamilies : List String :=
   ["KB", "KD", "KL", "TK", "SC", "SD", "SCF", "SN", "SE", "WV", "SU", "GC",
-    "EM", "IN", "FT", "QL", "SS", "LK", "GT", "CX"]
+    "EM", "IN", "FT", "QL", "SS", "LK", "GT", "CX", "SR", "CF", "WD"]
 
 /-- The RAW code shape: uppercase letters (the family prefix's
     spelling) followed by exactly 4 digits — the family clause

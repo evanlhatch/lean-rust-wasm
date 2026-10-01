@@ -65,6 +65,8 @@ import MachinesTests.Closure
 import MachinesTests.Crash
 import MachinesTests.CrashLog
 import MachinesTests.Session
+import MachinesTests.AsyncSession
+import MachinesTests.Async
 
 open Machines TestingKit
 
@@ -856,4 +858,4 @@ def specGraduation : Spec := Spec.ofList "exec-graduation"
   1 48
 
 def main : IO UInt32 :=
-  mainOfSuites [("Machines", [specFaces, specTies, specBattery, specFusion, specMachine, specCoalg, specGraduation, specClosure, specSession, specCrash, MachinesTests.CrashLog.specCrashLog])]
+  mainOfSuites [("Machines", [specFaces, specTies, specBattery, specFusion, specMachine, specCoalg, specGraduation, specClosure, specSession, specCrash, MachinesTests.CrashLog.specCrashLog, MachinesTests.Async.specAsyncMutex, MachinesTests.Async.specAsyncCoord, MachinesTests.Async.specAsyncChan, MachinesTests.Async.specAsyncWatch, MachinesTests.AsyncSession.specAsyncSession])]

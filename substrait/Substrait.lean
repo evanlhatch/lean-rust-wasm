@@ -7,9 +7,9 @@ The wire story (the legacy's, kept): `Typed` → `Proto` → text, with
 `Typed` → `Eval` the SECOND reading (the execution). The port carries:
 
 - `Substrait.Proto` — the wire-faithful message shapes' honest core
-  (read/filter/project/join/aggregate/sort/fetch/set + the literal/
-  field/scalarFunction expression core; every narrowing named in the
-  module header).
+  (read/filter/project/join/aggregate/sort/fetch/set plus the
+  fuller-plan rows cross/write + the literal/field/scalarFunction
+  expression core; every narrowing named in the module header).
 - `Substrait.Typed` — the schema-indexed typed layer RETARGETED onto
   SchemaCore's closed `Ty` (the legacy's parallel `SType` universe dies
   per the doctrine: literal payloads ARE `SchemaCore.Value t`; the
@@ -47,6 +47,17 @@ The wire story (the legacy's, kept): `Typed` → `Proto` → text, with
   `Rel → Query.Q` conversion is the NAMED BOUNDARY (the row carriers
   differ; the conversion lands when a consumer forces it — the Eval
   module header).
+
+THE REL CENSUS (the typed layer vs the vendored `algebra.proto`'s
+`Rel` oneof — the full universe of 13): read/filter/project/join/
+aggregate/sort/fetch/set + cross + write LANDED end to end (typed
+ctor, width law, wire spelling, evaluation, typed decode); `keep` /
+`join'` are typed-only (no wire spelling — the named refusals); the
+extension rels (`extension_leaf/single/multi`) are the honest
+boundary: their `detail` is `google.protobuf.Any` — an opaque
+operator has no typed carrier. Exchange/window/expand rels are
+ABSENT from the vendored proto (later substrait additions) — out of
+scope by the byte-tie.
 
 Named exclusions (each lands with its first consumer — the leftover
 rule): the anchor/extension ladder (legacy `Typed/ToProto.lean`'s

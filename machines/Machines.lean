@@ -87,6 +87,18 @@ re-exports by importing):
   `reachableAux_run`/`_complete` + `deriv_iff_eval`) + `inv_of_eval`
   (check_proved's content re-expressed with the closure evaluation as
   the engine — the alternative path; no Explore refactor).
+- `Machines.Async` — the asyncband models (E5): the primitive families as
+  `MachineWithInv`s with the safety invariants PROVED (the mutex's
+  mutual exclusion; the semaphore's bound, the mpsc's bounded
+  backpressure, and the pool's no-double-checkout as
+  `reachable_preserves`'s instances; the once-cell's monotone
+  initialization; the oneshot's single-send) + the conformance
+  battery's free reach (16 §5.7) per machine + THE
+  SCHEDULE-INDEPENDENCE CLAIM (the watch channel's coalescing as a
+  `Kit.Noninterfering` instance — the 07 parked-table trigger's first
+  `Kit.Hyper` consumer, FIRED) + the conformance duel (model ≡
+  asyncband behavior) named as the next step (the crate is not a
+  dependency yet).
 - `Machines.Session` — session types (08 §9): the closed session
   grammar over the payload universe (`done`/`send`/`recv`/`choice`) +
   THE DUALITY as one total function with its laws (the involution
@@ -99,6 +111,12 @@ re-exports by importing):
   (`follow_runs`, the refusal lemmas, the `offender` named diagnostic)
   + the refinement (a delaying impl refines its protocol, riding
   `Coalg.Refines`).
+- `Machines.AsyncSession` — the WASI async-lift protocol AS a session
+  (D4's named remainder): the task-return/task-handle handshake
+  declared once, the host's concurrent call DERIVED as the dual (the
+  duality + peer agreement as a type), the conformance tapes, and the
+  mis-shaped-export refusal teeth — the Machines-side honest content
+  of `mandate-host::wasi_async` (the runtime's enforcement face).
 
 Named exclusions (per module header): fairness, POR, vector clocks
 (08 §10's guard), nondeterministic-relation-primary machines,
@@ -120,3 +138,5 @@ import Machines.Crash
 import Machines.CrashLog
 import Machines.Closure
 import Machines.Session
+import Machines.AsyncSession
+import Machines.Async

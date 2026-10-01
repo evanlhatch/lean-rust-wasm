@@ -73,17 +73,24 @@ fn invalid_component_bytes() -> Vec<u8> {
     wasm
 }
 
-/// A VALID component carrying `add64` with the WRONG component
-/// signature (one param, not two) — compiles, instantiates, and the
-/// start-time typed lift refuses (refuseStart's face).
+/// A VALID component carrying `add64` with the WRONG component RESULT
+/// type (`string`, not `u64`) — the surface check passes (the arity is
+/// the params' count: `add64/2`), the engine instantiates, and the
+/// start-time typed lift refuses (refuseStart's face — the signature
+/// teeth live at the lift, past the skew fail-fast's arity surface).
 fn wrong_signature_bytes() -> Vec<u8> {
     let wat = r#"(component
-  (core module $m (type (func (param i64) (result i64)))
-    (func (type 0) (param i64) (result i64) local.get 0 i64.const 1 i64.add)
-    (export "add64" (func 0)))
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "canonical_abi_realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024)
+    (type $core_add (func (param i64 i64) (result i32)))
+    (func (type $core_add) (param i64 i64) (result i32) i32.const 1024)
+    (export "add64" (func 1)))
   (core instance $i (instantiate $m))
-  (type $t (func (param "a" u64) (result u64)))
-  (func $f (type $t) (canon lift (core func $i "add64")))
+  (alias core export $i "memory" (core memory $mem))
+  (alias core export $i "canonical_abi_realloc" (core func $realloc))
+  (type $t (func (param "a" u64) (param "b" u64) (result string)))
+  (func $f (type $t) (canon lift (core func $i "add64") (memory $mem) (realloc $realloc)))
   (export "add64" (func $f)))"#;
     wat::parse_str(wat).expect("the wrong-sig component builds")
 }
@@ -492,4 +499,81 @@ fn the_commit_duel_agrees() {
         report.render()
     );
     assert!(report.render().contains("TESTED AGREEMENT"));
+}
+
+// ---------------------------------------------------------------------------
+// THE RELOAD (the D6 port): the component swap without a host restart —
+// the composition discipline (stop's release + the fresh load →
+// instantiate → start sequence, each a model row) + the identity pin.
+// ---------------------------------------------------------------------------
+
+/// THE PIN: a running host swaps the component and keeps serving — the
+/// identity names the bytes now running (same bytes → same identity;
+/// the golden discipline still holds after the swap).
+#[test]
+fn reload_swaps_and_names_the_identity() {
+    let dir = scratch("reload-same");
+    let mut h = host_at(Phase::Running);
+    let old_identity = h.identity().expect("a running host has an identity");
+
+    let got = h.reload(&dir).expect("the same-bytes swap succeeds");
+    assert_eq!(h.phase(), Phase::Running);
+    assert_eq!(got, old_identity, "same bytes = same identity");
+    // the host still serves the golden after the swap
+    let answered = h.call(2, 3).expect("the swapped component answers");
+    assert_eq!(answered, GUEST_GOLDEN);
+}
+
+/// THE SWAP HONESTY: a swap to DIFFERENT bytes (the tampered component
+/// — the hash tie refuses) is a typed refusal, the host lands in
+/// `Failed` (the model's escape row), and the old identity is GONE
+/// (the resources were released — no half-swap carries stale state).
+#[test]
+fn reload_refuses_a_tampered_swap_and_lands_failed() {
+    let dir = tampered_scratch("reload-tampered");
+    let mut h = host_at(Phase::Running);
+
+    let err = h.reload(&dir).expect_err("the tampered swap refuses");
+    assert!(
+        matches!(err, HostError::ContentHashMismatch { .. }),
+        "{err:?}"
+    );
+    assert_eq!(h.phase(), Phase::Failed);
+    assert!(h.identity().is_none(), "a failed host carries no bytes");
+}
+
+/// The reload's phase discipline: the pre-run states refuse the
+/// composition TYPED (the plain sequence is the path there — a
+/// reload label on a fresh host is the illegal-transition refusal),
+/// and the phase stays put.
+#[test]
+fn reload_from_unloaded_refuses_typed() {
+    let mut h = HostMachine::new();
+    let err = h.reload(&committed_dir()).expect_err("the pre-run reload refuses");
+    assert!(
+        matches!(err, HostError::Lifecycle { from: "unloaded", event: "reload" }),
+        "{err:?}"
+    );
+    assert_eq!(h.phase(), Phase::Unloaded);
+}
+
+/// The Failed-state honesty: a host that failed (the tampered swap's
+/// terminal face) can swap — the reload is the recovery path (a fresh
+/// instance, a fresh identity).
+#[test]
+fn reload_recovers_a_failed_host() {
+    let mut h = host_at(Phase::Running);
+    // force the failure: the tampered bytes refuse the hash tie at
+    // reload — the host lands Failed (the model's escape row)
+    let t = tampered_scratch("reload-recovery");
+    let _ = h.reload(&t).expect_err("the tampered swap refuses");
+    assert_eq!(h.phase(), Phase::Failed);
+
+    // the recovery: the COMMITTED set reloads the failed host
+    let got = h.reload(&committed_dir()).expect("the failed host recovers");
+    assert_eq!(h.phase(), Phase::Running);
+    assert_eq!(
+        got,
+        bytes_hash(&fs::read(committed_dir().join("component-slice.wasm")).expect("read"))
+    );
 }

@@ -107,7 +107,11 @@ def gatedPackages : Array PkgSpec := #[
     -- planted-violator exclusions in the header.
   { dir := "Gates", srcDir := "gates", roots := #[`Gates] },
   { dir := "GatesTestsLib", srcDir := "gates",
-    roots := #[`GatesTests.Main, `GatesTests.Axioms] },
+    -- Config: the C4 dogfood's teeth (the knobs' config-face pins + its
+    -- `#print axioms` pin) — a lakefile root, so a swept root (the
+    -- UNGATEDROOT face refuses the tree until the row mirrors it).
+    roots := #[`GatesTests.Main, `GatesTests.Axioms, `GatesTests.Config,
+               `GatesTests.Baselines] },
   -- ── C1 domain cores ──
   { dir := "SchemaCore", srcDir := "schemacore",
     roots := #[`SchemaCore, `SchemaCore.Slice] },
@@ -130,7 +134,8 @@ def gatedPackages : Array PkgSpec := #[
   { dir := "ZSet", srcDir := "zset", roots := #[`ZSet] },
   { dir := "ZSetTestsLib", srcDir := "zset",
     roots := #[`ZSetTests.Main, `ZSetTests.Axioms,
-               `ZSetTests.Circuit, `ZSetTests.CircuitAxioms] },
+               `ZSetTests.Circuit, `ZSetTests.CircuitAxioms,
+               `ZSetTests.Optimizer] },
   { dir := "Datalog", srcDir := "datalog", roots := #[`Datalog] },
   { dir := "DatalogTestsLib", srcDir := "datalog",
     roots := #[`DatalogTests.Main, `DatalogTests.Axioms] },
@@ -153,7 +158,7 @@ def gatedPackages : Array PkgSpec := #[
   { dir := "Query", srcDir := "query", roots := #[`Query] },
   { dir := "QueryTestsLib", srcDir := "query",
     roots := #[`QueryTests.Main, `QueryTests.Axioms, `QueryTests.ExplainSpecs,
-    `QueryTests.Bridge, `QueryTests.QLangSpecs] },
+    `QueryTests.Bridge, `QueryTests.QLangSpecs, `QueryTests.Optimize] },
   { dir := "Vortex", srcDir := "vortex", roots := #[`Vortex] },
   { dir := "VortexTestsLib", srcDir := "vortex",
     roots := #[`VortexTests.Main, `VortexTests.Axioms] },
@@ -186,9 +191,9 @@ def gatedPackages : Array PkgSpec := #[
   { dir := "ComponentTestsLib", srcDir := "guest",
     roots := #[`ComponentTests.Main, `ComponentTests.Fixture,
                `ComponentTests.Axioms, `ComponentTests.StringFixture,
-               `ComponentTests.EdgeFixture,
+               `ComponentTests.EdgeFixture, `ComponentTests.FaultFixture,
                `ComponentTests.Pipeline, `ComponentTests.Gen,
-               `ComponentTests.GenFixture] },
+               `ComponentTests.GenFixture, `ComponentTests.WitFixture] },
     -- the component lane's battery + its fixtures: one lib, one row
   -- Repr: the representation-independence lane (the reviews' §2
   -- discipline — the relation + the preservation construction gate +

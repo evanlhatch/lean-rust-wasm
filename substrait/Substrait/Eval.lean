@@ -50,9 +50,11 @@ THE QUERY-LANE CONNECTION (the honest state):
   connection today is the SEMANTIC one above: the same relational
   readings, pinned at both carriers, named here — plus the FORWARD
   crossing that now exists: `Query.TypedBridge` lowers the query
-  lane's `Q` (join-free fragment) into `Rel` and pins the evaluation
-  agreement BOTH directions (`qEval_sound`/`qEval_complete`); its
-  `Pred` lowering consumes this module's bridge kernels
+  lane's `Q` (the FULL fragment — the equijoin rides `Rel.join'`, the
+  shared-base join, since the wave-30 F2 dissolve) into `Rel` and pins
+  the evaluation agreement BOTH directions
+  (`qEval_sound`/`qEval_complete`); its `Pred` lowering consumes this
+  module's bridge kernels
   (`u64equal`/`u64gt`/`strequal`/`boolequal`/`not`).
 
 MECHANICS (the seed's discipline, kept): every evaluator def is a
@@ -147,6 +149,82 @@ theorem Row.get_resolves {s : Schema} {name : String} {t : Ty} {n : Bool}
             rw [hk]
             exact hc
 
+/-! ## The column lifts across an append (the shared-base join's
+     resolution face — the query bridge's join condition reads the
+     left key IN the left schema and the right key IN the right
+     schema, each lifted to the concatenation) -/
+
+-- the two lift defs return the CLASS type (constructor values for
+-- the bridge's joins, not instance-synthesis candidates) — the
+-- reducibility warning's named allowance
+set_option warn.classDefReducibility false
+
+/-- A left-schema column read survives the append to the right: below
+    the left schema's length, the concatenation's `get?` walk IS the
+    left schema's (the cons-append's definitional face, one level per
+    step). -/
+theorem Schema.get?_append_left : ∀ (s r : Schema) (i : Nat), i < s.length →
+    Schema.get? (s ++ r) i = Schema.get? s i := by
+  intro s
+  induction s with
+  | nil => intro r i hi; exact absurd hi (Nat.not_lt_zero i)
+  | cons c s' ih =>
+      intro r i hi
+      cases i with
+      | zero => rfl
+      | succ k =>
+          have hk : k < List.length s' := by
+            simp only [List.length_cons] at hi
+            omega
+          simp only [List.cons_append, Schema.get?]
+          rw [ih r k hk]
+
+/-- The LEFT lift: a column of the left schema keeps its ordinal in
+    the concatenation (the left part reads first — the index is
+    unchanged; the `resolves` proof rides the `get?_append_left` law). -/
+def HasCol.atLeft {name : String} {t : Ty} {nul : Bool} :
+    (s : Schema) → HasCol s name t nul → (r : Schema) →
+    HasCol (s ++ r) name t nul
+  | [], h, _ => absurd h.resolves (by simp [Schema.get?])
+  | _ :: _, ⟨0, res⟩, _ => ⟨0, res⟩
+  | c :: s', ⟨k + 1, res⟩, r =>
+      have hk : k < List.length s' :=
+        Nat.lt_of_succ_lt_succ
+          (Schema.get?_lt (c :: s') (k + 1) (name, t, nul) res)
+      ⟨k + 1, (Schema.get?_append_left s' r k hk).symm ▸ res⟩
+
+/-- The RIGHT lift: a column of the right schema shifts by the left
+    schema's length in the concatenation (the cons-append keeps the
+    tail's read definitional — no lemma needed here). -/
+def HasCol.atRight {name : String} {t : Ty} {nul : Bool} :
+    (l : Schema) → (s : Schema) → HasCol s name t nul →
+    HasCol (l ++ s) name t nul
+  | [], _, h => h
+  | _c :: l', s, h => ⟨(atRight l' s h).index + 1, (atRight l' s h).resolves⟩
+
+/-- The left lift's index is the column's own ordinal. -/
+theorem HasCol.atLeft_index {s : Schema} {name : String} {t : Ty} {nul : Bool}
+    (h : HasCol s name t nul) (r : Schema) :
+    (atLeft s h r).index = h.index := by
+  cases s with
+  | nil => exact absurd h.resolves (by simp [Schema.get?])
+  | cons _ _ =>
+      cases h with
+      | mk idx' _ => cases idx' <;> rfl
+
+/-- The right lift's index is the left schema's length plus the
+    column's own ordinal. -/
+theorem HasCol.atRight_index {s : Schema} {name : String} {t : Ty} {nul : Bool}
+    (l : Schema) (h : HasCol s name t nul) :
+    (atRight l s h).index = l.length + h.index := by
+  induction l with
+  | nil => show h.index = (0 : Nat) + h.index; rw [Nat.zero_add]
+  | cons c l' ih =>
+      have h1 : (atRight (c :: l') s h).index = (atRight l' s h).index + 1 := rfl
+      rw [h1, ih]
+      simp only [List.length_cons]
+      omega
+
 /-- Cast a runtime value to a pinned type: the transport along the
     (decidable) type equality — total over the closed `Ty`. The
     legacy's per-ctor `castCell` dies here: the closed universe's
@@ -195,6 +273,16 @@ def Row.keepW {s' outs : Schema} : Row s' → Keep s' outs → Row outs
   | .nil, .wnil => .nil
   | .cons _ rest, .wdrop _ h => Row.keepW rest h
   | .cons c rest, .wkeep _ h => .cons c (Row.keepW rest h)
+
+/-- THE APPENDED-CELLS WALK (the join's witness data face — the
+    `Row.keepW` precedent): re-index an appended-pair row to the
+    CALLER'S spelled output schema — the `AppendCols` witness drives,
+    no index search, no cast. The `wcons` arm's input type is the
+    cons-append's definitional face (`(e :: s') ++ b ≡ e :: (s' ++ b)`). -/
+def Row.appendW {b : Schema} : {a c : Schema} →
+    AppendCols a b c → Row (a ++ b) → Row c
+  | _, _, .wnil, r => r
+  | _, _, .wcons _ w, .cons cell rest => .cons cell (Row.appendW w rest)
 
 /-- The drop-everything walk: the `Keep.none` witness's canonical shape
     drops every cell (the bridge's keep-pick lemma's nil case). -/
@@ -262,6 +350,35 @@ def Row.splitRight {b : Schema} : (a : Schema) → Row (a ++ b) → Row b
   | (_, _, _) :: rest, r =>
       match r with
       | .cons _ rest' => Row.splitRight rest rest'
+
+/-- A left row's cells keep their ordinals in the appended pair (the
+    left part reads first — the shared-base join's left-key read). -/
+theorem Row.get_append_left : ∀ {a b : Schema} (ta : Row a) (tb : Row b) (i : Nat),
+    i < a.length → (Row.append ta tb).get i = ta.get i := by
+  intro a b ta
+  induction ta with
+  | nil => intro tb i hi; exact absurd hi (Nat.not_lt_zero i)
+  | cons c rest ih =>
+      intro tb i hi
+      cases i with
+      | zero => rfl
+      | succ k => exact ih tb k (Nat.lt_of_succ_lt_succ hi)
+
+/-- A right row's cell at ordinal `j` is the appended pair's cell at
+    the left schema's length plus `j` (the shared-base join's
+    right-key read). -/
+theorem Row.get_append_right : ∀ {a b : Schema} (ta : Row a) (tb : Row b) (j : Nat),
+    (Row.append ta tb).get (a.length + j) = tb.get j := by
+  intro a b ta
+  induction ta with
+  | nil =>
+      intro tb j
+      rw [show List.length ([] : Schema) + j = j from Nat.zero_add j]
+      rfl
+  | cons c rest ih =>
+      intro tb j
+      rw [List.length_cons, Nat.add_right_comm]
+      exact ih tb j
 
 /-! ## expression evaluation -/
 
@@ -588,7 +705,13 @@ theorem matchedRow_ok_sound {l' r' : Schema} {n : Bool}
                     exact ⟨rb, hxe, List.mem_cons.mpr (Or.inr hrb), hcond⟩
 
 /-- The join's inner core: the appended pairs satisfying the ON
-    condition (explicit double recursion). -/
+    condition (explicit double recursion). WEIGHT FACE (02 §4, the F5
+    note): the join node MULTIPLIES the children's weights at each
+    ON-satisfying pair — over Bool the multiply is AND (set semantics,
+    THIS module's face); the weight-polymorphic reading is the query
+    lane's `joinPairsW` (the semiring discipline), and the verified
+    optimizer's equational theory (wave-30 F5) consumes the semiring
+    laws, never this list walk. -/
 def evalJoinPairs {l' r' : Schema} {n : Bool} (cond : Expr (l' ++ r') .bool n) :
     Table l' → Table r' → Except String (Table (l' ++ r'))
   | [], _ => .ok []
@@ -640,6 +763,82 @@ theorem evalJoinPairs_ok_sound {l' r' : Schema} {n : Bool}
               · obtain ⟨la, rb, hxe, hla, hrb, hcond⟩ :=
                   ih rrows rest hr2 r hr
                 exact ⟨la, rb, hxe, List.mem_cons.mpr (Or.inr hla), hrb, hcond⟩
+
+/-- THE JOIN BRIDGE, per-left-row complete face (the mirror): every
+    ON-satisfying right row's appended pair IS produced — the walk
+    drops nothing the condition keeps. -/
+theorem matchedRow_ok_complete {l' r' : Schema} {n : Bool} (cond : Expr (l' ++ r') .bool n)
+    (l : Row l') :
+    ∀ (rrows : Table r') (m : Table (l' ++ r')),
+    matchedRow cond l rrows = .ok m →
+    ∀ rb ∈ rrows, condHolds cond l rb = .ok true → Row.append l rb ∈ m := by
+  intro rrows
+  induction rrows with
+  | nil => intro m _ rb hr _; cases hr
+  | cons r0 rest ih =>
+      intro m hm rb hrb hcond
+      simp only [matchedRow] at hm
+      cases hb : condHolds cond l r0 with
+      | error e => rw [hb] at hm; simp at hm
+      | ok b =>
+          rw [hb] at hm
+          cases b with
+          | false =>
+              have hne : ¬ (rb = r0) := by
+                intro he; subst he
+                rw [hcond] at hb; simp at hb
+              cases h3 : matchedRow cond l rest with
+              | error e => rw [h3] at hm; simp at hm
+              | ok m' =>
+                  rw [h3] at hm
+                  simp only [Except.ok.injEq] at hm
+                  subst hm
+                  rcases List.mem_cons.mp hrb with he | hrest
+                  · exact absurd he hne
+                  · exact ih m' h3 rb hrest hcond
+          | true =>
+              cases h3 : matchedRow cond l rest with
+              | error e => rw [h3] at hm; simp at hm
+              | ok m' =>
+                  rw [h3] at hm
+                  simp only [Except.ok.injEq] at hm
+                  subst hm
+                  rcases List.mem_cons.mp hrb with he | hrest
+                  · rw [he]
+                    exact List.mem_cons.mpr (Or.inl rfl)
+                  · exact List.mem_cons.mpr (Or.inr (ih m' h3 rb hrest hcond))
+
+/-- THE JOIN BRIDGE, complete face (the mirror of `evalJoinPairs_ok_sound`):
+    every ON-satisfying appended pair of PRESENT rows is produced — the
+    pairing walk is the conjunctive reading's both faces, sound AND
+    complete (the named follow-up's content, landed with the
+    shared-base join's consumer). -/
+theorem evalJoinPairs_ok_complete {l' r' : Schema} {n : Bool} (cond : Expr (l' ++ r') .bool n) :
+    ∀ (lrows : Table l') (rrows : Table r') (out : Table (l' ++ r')),
+    evalJoinPairs cond lrows rrows = .ok out →
+    ∀ la ∈ lrows, ∀ rb ∈ rrows, condHolds cond la rb = .ok true →
+    Row.append la rb ∈ out := by
+  intro lrows
+  induction lrows with
+  | nil => intro rrows out h la hl; cases hl
+  | cons l0 rest ih =>
+      intro rrows out h la hla rb hrb hcond
+      simp only [evalJoinPairs] at h
+      cases hm : matchedRow cond l0 rrows with
+      | error e => rw [hm] at h; simp at h
+      | ok m =>
+          rw [hm] at h
+          cases h2 : evalJoinPairs cond rest rrows with
+          | error e => rw [h2] at h; simp at h
+          | ok rest' =>
+              rw [h2] at h
+              simp only [Except.ok.injEq] at h
+              subst h
+              rcases List.mem_cons.mp hla with he | hrest
+              · rw [he] at hcond ⊢
+                exact List.mem_append.mpr
+                  (Or.inl (matchedRow_ok_complete cond l0 rrows m hm rb hrb hcond))
+              · exact List.mem_append.mpr (Or.inr (ih rrows rest' h2 la hrest rb hrb hcond))
 
 /-- The any-match WALK (the mirrored pair's ONE recursion): a fixed
     row of the SECOND schema against a walked table of the FIRST —
@@ -712,6 +911,109 @@ def evalJoin {l' r' : Schema} {n : Bool} (jt : Proto.JoinType)
   | .error e, _, _ => .error e
   | _, .error e, _ => .error e
   | _, _, .error e => .error e
+
+/-! ## the join walk's totality (the shared-base join's face: the
+     refusals live in the condition's construction, never in the walk
+     when every pair's condition slot evaluates) -/
+
+/-- The any-match walk succeeds when every probe does. -/
+theorem anyMatchOn_ok_exists {s1 s2 : Schema}
+    (holds : Row s2 → Row s1 → Except String Bool)
+    (htot : ∀ (y : Row s2) (x : Row s1), ∃ b, holds y x = .ok b)
+    (fixed : Row s2) :
+    ∀ (t : Table s1), ∃ b, anyMatchOn holds fixed t = .ok b := by
+  intro t
+  induction t with
+  | nil => exact ⟨false, rfl⟩
+  | cons x rest ih =>
+      obtain ⟨b, hb⟩ := htot fixed x
+      obtain ⟨b', hb'⟩ := ih
+      cases b with
+      | true => exact ⟨true, by simp only [anyMatchOn, hb]⟩
+      | false => exact ⟨b', by simp only [anyMatchOn, hb, hb']⟩
+
+/-- The per-left-row matcher succeeds when every probe does. -/
+theorem matchedRow_ok_exists {l' r' : Schema} {n : Bool} (cond : Expr (l' ++ r') .bool n)
+    (htot : ∀ (l : Row l') (r : Row r'), ∃ b, condHolds cond l r = .ok b)
+    (l : Row l') :
+    ∀ (rrows : Table r'), ∃ m, matchedRow cond l rrows = .ok m := by
+  intro rrows
+  induction rrows with
+  | nil => exact ⟨[], rfl⟩
+  | cons r0 rest ih =>
+      obtain ⟨b, hb⟩ := htot l r0
+      obtain ⟨m, hm⟩ := ih
+      cases b with
+      | true => exact ⟨Row.append l r0 :: m, by simp only [matchedRow, hb, hm]⟩
+      | false => exact ⟨m, by simp only [matchedRow, hb]; exact hm⟩
+
+/-- The pairing walk succeeds when every probe does. -/
+theorem evalJoinPairs_ok_exists {l' r' : Schema} {n : Bool} (cond : Expr (l' ++ r') .bool n)
+    (htot : ∀ (l : Row l') (r : Row r'), ∃ b, condHolds cond l r = .ok b) :
+    ∀ (lrows : Table l') (rrows : Table r'),
+    ∃ out, evalJoinPairs cond lrows rrows = .ok out := by
+  intro lrows
+  induction lrows with
+  | nil => intro rrows; exact ⟨[], rfl⟩
+  | cons l rest ih =>
+      intro rrows
+      obtain ⟨m, hm⟩ := matchedRow_ok_exists cond htot l rrows
+      obtain ⟨out, hout⟩ := ih rrows
+      exact ⟨m ++ out, by simp only [evalJoinPairs, hm, hout]⟩
+
+/-- The unmatched-keep walk succeeds when every probe does. -/
+theorem unmatchedWith_ok_exists {s1 s2 : Schema}
+    (any : Row s1 → Table s2 → Except String Bool)
+    (htot : ∀ (x : Row s1) (t : Table s2), ∃ b, any x t = .ok b) :
+    ∀ (t : Table s1) (fixed : Table s2),
+    ∃ out, unmatchedWith any t fixed = .ok out := by
+  intro t
+  induction t with
+  | nil => intro fixed; exact ⟨[], rfl⟩
+  | cons x rest ih =>
+      intro fixed
+      obtain ⟨b, hb⟩ := htot x fixed
+      obtain ⟨out, hout⟩ := ih fixed
+      cases b with
+      | true => exact ⟨out, by simp only [unmatchedWith, hb, hout]⟩
+      | false => exact ⟨x :: out, by simp only [unmatchedWith, hb, hout]⟩
+
+/-- THE JOIN WALK'S TOTALITY: all four narrow types evaluate when every
+    appended pair's condition slot evaluates (the shared-base join's
+    lowering leans on this — its condition is built, never searched). -/
+theorem evalJoin_ok_exists {l' r' : Schema} {n : Bool} (jt : Proto.JoinType)
+    (cond : Expr (l' ++ r') .bool n)
+    (htot : ∀ (l : Row l') (r : Row r'), ∃ b, condHolds cond l r = .ok b)
+    (lrows : Table l') (rrows : Table r') :
+    ∃ out, evalJoin jt cond lrows rrows = .ok out := by
+  obtain ⟨inner, hin⟩ := evalJoinPairs_ok_exists cond htot lrows rrows
+  obtain ⟨ul, hul⟩ :=
+    unmatchedWith_ok_exists (anyMatch cond)
+      (fun x t => anyMatchOn_ok_exists (condHolds cond) htot x t)
+      lrows rrows
+  obtain ⟨ur, hur⟩ :=
+    unmatchedWith_ok_exists (anyMatchR cond)
+      (fun x t => anyMatchOn_ok_exists (fun fixed walked => condHolds cond walked fixed)
+        (fun y x => htot x y) x t)
+      rrows lrows
+  cases jt with
+  | inner =>
+      exact ⟨inner, by
+        simp only [evalJoin, unmatchedLeft, unmatchedRight,
+          hin, hul, hur]⟩
+  | left =>
+      exact ⟨inner ++ ul.map (fun l => Row.append l (Row.padNone r')), by
+        simp only [evalJoin, unmatchedLeft, unmatchedRight,
+          hin, hul, hur]⟩
+  | right =>
+      exact ⟨inner ++ ur.map (fun r => Row.append (Row.padNone l') r), by
+        simp only [evalJoin, unmatchedLeft, unmatchedRight,
+          hin, hul, hur]⟩
+  | outer =>
+      exact ⟨inner ++ ul.map (fun l => Row.append l (Row.padNone r'))
+          ++ ur.map (fun r => Row.append (Row.padNone l') r), by
+        simp only [evalJoin, unmatchedLeft, unmatchedRight,
+          hin, hul, hur]⟩
 
 /-! ## the aggregate walk -/
 
@@ -917,6 +1219,21 @@ def evalRel {s s' : Schema} (reader : Reader s) :
       | .ok lrows, .ok rrows => evalJoin jt cond lrows rrows
       | .error e, _ => .error e
       | _, .error e => .error e
+  | @Rel.join' _ _sl' _sr' _ _ left right w cond jt, rows =>
+      -- the SHARED-BASE join (wall 2's dissolve): both children read
+      -- the SAME stream — no splitting, no replication; the pairs'
+      -- appended rows re-index to the caller's spelled output schema
+      -- through the witness (the data face). The weight face (02 §4):
+      -- the join multiplies at each ON-satisfying pair — over Bool the
+      -- multiply is AND; the weight-polymorphic reading is the query
+      -- lane's `joinPairsW` (the F5 note)
+      match evalRel reader left rows, evalRel reader right rows with
+      | .ok lrows, .ok rrows =>
+          match evalJoin jt cond lrows rrows with
+          | .ok t => .ok (t.map (fun r => Row.appendW w r))
+          | .error e => .error e
+      | .error e, _ => .error e
+      | _, .error e => .error e
   | .aggregate _ grouping measures, rows =>
       evalAggregate grouping measures rows
   | .sort _ _, _ =>
@@ -934,5 +1251,32 @@ def evalRel {s s' : Schema} (reader : Reader s) :
           | _, .error e => .error e
       | .unionDistinct =>
           .error "eval: unionDistinct — deduplication is non-linear (the named boundary; unionAll is the implemented op)"
+  | @Rel.cross sl _sl' sr _sr' left right, rows =>
+      -- the condition-free join: the children read their split halves
+      -- (the join arm's reader discipline) and the pairing runs at the
+      -- ALWAYS-TRUE condition (the literal-true cond — `evalJoin`'s
+      -- inner core IS the cross's kernel; no separate walk)
+      let lread : Reader sl := fun name =>
+        match reader name with
+        | .error e => .error e
+        | .ok t => .ok (t.map (fun r => Row.splitLeft sl r))
+      let rread : Reader sr := fun name =>
+        match reader name with
+        | .error e => .error e
+        | .ok t => .ok (t.map (fun r => Row.splitRight sl r))
+      match evalRel lread left (rows.map (fun r => Row.splitLeft sl r)),
+            evalRel rread right (rows.map (fun r => Row.splitRight sl r)) with
+      | .ok lrows, .ok rrows =>
+          evalJoin .inner (Expr.literal false (Value.bool true)) lrows rrows
+      | .error e, _ => .error e
+      | _, .error e => .error e
+  | .write _ _ input, rows =>
+      -- the evaluator is READ-ONLY: the write executes at the consumer
+      -- (the named boundary — the rows' destiny is the consumer's
+      -- table store, never a fabricated in-memory side effect)
+      match evalRel reader input rows with
+      | .ok _ =>
+          .error "eval: write — the evaluator is read-only (the write executes at the consumer; the named boundary)"
+      | .error e => .error e
 
 end Substrait.Typed

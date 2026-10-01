@@ -170,7 +170,7 @@ theorem mutex_excl (s : mutex.State) (h : mutex.toMachine.Reachable .free s) :
     the generated proof). The tests pin the REFUTED and UNKNOWN faces
     on the broken sibling. -/
 def mutexCheck : Machines.Verdict mutex.State mutex.Label :=
-  Machines.check mutex.toMachine (fun s => !decide (s = .both)) mutexLabels .free 4
+  Machines.check mutex.toMachine (fun s => !decide (s = .both)) mutex.labels .free 4
 
 /-! ## Family 2 — the Semaphore (hand-built: the Nat counter) -/
 
@@ -206,7 +206,7 @@ instance : DecidablePred sem.inv := fun n => inferInstanceAs (Decidable (n ≤ 2
     the guards discharge the per-step POs, `reachable_preserves` lifts
     them (the framework law CITED, never re-proved). -/
 theorem sem_bound (s : Nat) (h : sem.toMachine.Reachable 0 s) : s ≤ 2 :=
-  sem.reachable_preserves 0 (by omega) h
+  sem.reachable_preserves 0 (by show (0 : Nat) ≤ 2; omega) h
 
 /-! ## Family 3 — the WaitGroup (hand-built: the Nat counter) -/
 
@@ -237,6 +237,8 @@ def wg : MachineWithInv Nat WgLabel where
         , action := fun n _ => n
         , safety := by intros; trivial }
 
+instance : DecidablePred wg.inv := fun _ => isTrue trivial
+
 /-- THE waitgroup's release condition: a wait completes ⟺ the counter
     is zero (the barrier's release-⟺-all-arrived law's wg face). -/
 theorem wg_wait_iff_zero (n : Nat) :
@@ -251,8 +253,8 @@ theorem wg_done_refused_at_zero : wg.step? 0 .done = none := by
 
 /-! ## Family 4 — the oneshot channel (hand-built: payload labels) -/
 
-/-- The oneshot is GENERIC in the payload type `α` (the theorems hold
-    for every payload; the tests instantiate `Nat`). -/
+/- The oneshot is GENERIC in the payload type `α` (the theorems hold
+for every payload; the tests instantiate `Nat`). -/
 variable {α : Type}
 
 /-- The oneshot's labels: `send v` (payload — the Dsl exclusion's
@@ -287,7 +289,7 @@ theorem oneshot_send_full_refused (v u : α) :
 
 /-- The receive-side refusal: an empty oneshot delivers nothing — the
     recv is disabled, not a silent value. -/
-theorem oneshot_recv_empty_refused (u : α) :
+theorem oneshot_recv_empty_refused (_u : α) :
     oneshot.step? none (.recv (α := α)) = none := by
   simp [MachineWithInv.step?_eq, oneshot]
 
@@ -321,7 +323,8 @@ def mpsc : MachineWithInv (List Pay) MpscLabel where
         , action := fun s _ => s.tail
         , safety := by
             intro s h hs
-            have h2 : s.tail.length = s.length - 1 := List.length_tail s
+            have h2 : s.tail.length = s.length - 1 := List.length_tail
+            show s.tail.length ≤ 2
             omega }
 
 instance : DecidablePred mpsc.inv := fun s =>
@@ -332,13 +335,16 @@ instance : DecidablePred mpsc.inv := fun s =>
 def mpscInputs : List MpscLabel := [.recv, .send .a, .send .b]
 
 theorem mpscInputs_complete : ∀ i, i ∈ mpscInputs := by
-  intro i; cases i <;> simp [mpscInputs]
+  intro i
+  cases i with
+  | recv => simp [mpscInputs]
+  | send p => cases p <;> simp [mpscInputs]
 
 /-- THE bounded-backpressure law: every reachable buffer is within the
     cap — `reachable_preserves`'s instance (the framework law CITED). -/
 theorem mpsc_bounded (s : List Pay) (h : mpsc.toMachine.Reachable [] s) :
     s.length ≤ 2 :=
-  mpsc.reachable_preserves [] (by simp) h
+  mpsc.reachable_preserves [] (by decide) h
 
 /-- The backpressure's refusal face: a full buffer blocks the send. -/
 theorem mpsc_full_blocks_send (s : List Pay) (p : Pay) (h : s.length = 2) :
@@ -368,6 +374,8 @@ def onceCell : MachineWithInv (Option Pay) OnceLabel where
         , action := fun _ _ => some v
         , safety := by intros; trivial }
 
+instance : DecidablePred onceCell.inv := fun _ => isTrue trivial
+
 /-- THE once law, refusal face: initialization is refused in every
     initialized state — no re-init. -/
 theorem once_init_refused_after (v u : Pay) :
@@ -386,27 +394,38 @@ theorem once_persists (v : Pay) :
       onceCell.toMachine.run (some v) t = some s → s.isSome = true := by
   intro t
   induction t with
-  | nil => intro s h; rw [Machine.run_nil] at h; simp at h; simp [h]
+  | nil =>
+      intro s h
+      rw [Machine.run_nil] at h
+      have hs' : s = some v := (Option.some.inj h).symm
+      simp [hs']
   | cons i rest ih =>
       intro s h
       rw [Machine.run_cons, Option.bind_eq_some_iff] at h
       obtain ⟨s₀, hstep, hrun⟩ := h
-      have hinv : s₀.isSome = true := by
-        cases i with
-        | get =>
-            have : s₀ = some v := by
-              simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, onceCell] at hstep
-              exact Option.some.inj hstep
-            simp [this]
-        | init u =>
+      cases i with
+      | get =>
+          have hget : s₀ = some v := by
             simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, onceCell] at hstep
-      exact ih hinv hrun
+            exact hstep.symm
+          rw [hget] at hrun
+          exact ih hrun
+      | init u =>
+          simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, onceCell] at hstep
 
 /-! ## Family 7 — the Pool (the effects' resource discipline's instance) -/
 
-/-- The pool's labels: `acquire h` (checkout) or `release h` (return). -/
+/-- The pool's handles: the FINITE universe `Fin 2` — the battery's
+    completeness premise needs a complete label enumeration, and the
+    universe half of the pool discipline rides the TYPE (the earlier
+    draft carried it in the invariant; the type is the honest home). -/
+def h0 : Fin 2 := 0
+def h1 : Fin 2 := 1
+
+/-- The pool's labels: acquire/release PER HANDLE — payload-free (the
+    battery's completeness premise), the universe in the state type. -/
 inductive PoolLabel where
-  | acquire (h : Nat) | release (h : Nat)
+  | acquire0 | acquire1 | release0 | release1
 deriving DecidableEq, Repr, BEq
 
 /-- THE pool: the state is the CHECKED-OUT set (a list with the
@@ -416,60 +435,81 @@ deriving DecidableEq, Repr, BEq
     stays Machines'). `acquire` refuses an already-checked-out handle;
     the invariant makes the accounting the effect row cannot express
     (`Effects.row_blind_to_double_spend`'s machine face). -/
-def pool : MachineWithInv (List Nat) PoolLabel where
-  inv := fun s => s.Nodup ∧ s.all (fun h => decide (h < 2)) = true
+def pool : MachineWithInv (List (Fin 2)) PoolLabel where
+  inv := fun s => s.Nodup
   event := fun l => match l with
-    | .acquire h =>
-        { guard := fun s => decide (h ∉ s ∧ h < 2)
-        , action := fun s _ => h :: s
+    | .acquire0 =>
+        { guard := fun s => !decide (h0 ∈ s)
+        , action := fun s _ => h0 :: s
         , safety := by
             intro s hg hs
-            simp only [decide_eq_true_eq] at hg
-            exact ⟨List.nodup_cons.mpr ⟨hg.1, hs.1⟩,
-              by simp [List.all_cons, hg.2, hs.2]⟩ }
-    | .release h =>
-        { guard := fun s => decide (h ∈ s)
-        , action := fun s _ => s.erase h
+            have hg' : h0 ∉ s := by
+              simp only [Bool.not_eq_true'] at hg
+              simpa using hg
+            exact List.nodup_cons.mpr ⟨hg', hs⟩ }
+    | .acquire1 =>
+        { guard := fun s => !decide (h1 ∈ s)
+        , action := fun s _ => h1 :: s
         , safety := by
             intro s hg hs
-            exact ⟨hs.1.erase h,
-              List.all_eq_true.mpr fun x hx =>
-                hs.2 x (List.mem_of_mem_erase hx)⟩ }
+            have hg' : h1 ∉ s := by
+              simp only [Bool.not_eq_true'] at hg
+              simpa using hg
+            exact List.nodup_cons.mpr ⟨hg', hs⟩ }
+    | .release0 =>
+        { guard := fun s => decide (h0 ∈ s)
+        , action := fun s _ => s.erase h0
+        , safety := by intro s _ hg; exact hg.erase h0 }
+    | .release1 =>
+        { guard := fun s => decide (h1 ∈ s)
+        , action := fun s _ => s.erase h1
+        , safety := by intro s _ hg; exact hg.erase h1 }
 
 instance : DecidablePred pool.inv := fun s =>
-  inferInstanceAs (Decidable (s.Nodup ∧ s.all (fun h => decide (h < 2)) = true))
+  inferInstanceAs (Decidable (s.Nodup))
 
-/-- The pool's battery-complete label enumeration. -/
+/-- The pool's battery-complete label enumeration (the payload-free
+    per-handle labels make it complete). -/
 def poolInputs : List PoolLabel :=
-  [.acquire 0, .acquire 1, .release 0, .release 1]
+  [.acquire0, .acquire1, .release0, .release1]
 
 theorem poolInputs_complete : ∀ i, i ∈ poolInputs := by
   intro i; cases i <;> simp [poolInputs]
 
 /-- THE pool's state discipline: every reachable checked-out set is
-    duplicate-free AND within the handle universe —
-    `reachable_preserves`'s instance (the framework law CITED). The
-    nodup half is the resource discipline's content; the universe half
-    is what makes the release guard sound. -/
-theorem pool_state_ok (s : List Nat) (h : pool.toMachine.Reachable [] s) :
-    s.Nodup ∧ ∀ h, h ∈ s → h < 2 := by
-  have hin := pool.reachable_preserves [] ⟨List.Nodup.nil, by simp⟩ h
-  exact ⟨hin.1, fun h hm => decide_eq_true_eq.mp (List.all_eq_true.mp hin.2 h hm)⟩
+    duplicate-free — `reachable_preserves`'s instance (the framework
+    law CITED). The nodup discipline IS the resource accounting's
+    content: a released-then-reacquired handle cannot ghost. -/
+theorem pool_state_ok (s : List (Fin 2)) (h : pool.toMachine.Reachable [] s) :
+    s.Nodup :=
+  pool.reachable_preserves [] List.nodup_nil h
 
-/-- THE no-double-checkout law: with `h` checked out, a second acquire
-    of `h` is refused — the guard IS the accounting (the effect row's
-    blindness, repaired at the machine face). -/
-theorem pool_no_double_checkout (s : List Nat) (h : Nat) (hm : h ∈ s) :
-    pool.toMachine.step? s (.acquire h) = none := by
-  simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, pool, hm]
+/-- THE no-double-checkout law: with `h0` checked out, the acquire of
+    `h0` is refused — the guard IS the accounting (the effect row's
+    blindness, repaired at the machine face; `h1`'s face is the same
+    shape, `pool_acquire1_refused`). -/
+theorem pool_no_double_checkout (s : List (Fin 2)) (hm : h0 ∈ s) :
+    pool.toMachine.step? s .acquire0 = none := by
+  have hd : decide (h0 ∈ s) = true := decide_eq_true_eq.mpr hm
+  simp only [MachineWithInv.toMachine, MachineWithInv.step?_eq, pool]
+  rw [hd]
+  simp
+
+/-- The `h1` face of the refusal (the same shape). -/
+theorem pool_acquire1_refused (s : List (Fin 2)) (hm : h1 ∈ s) :
+    pool.toMachine.step? s .acquire1 = none := by
+  have hd : decide (h1 ∈ s) = true := decide_eq_true_eq.mpr hm
+  simp only [MachineWithInv.toMachine, MachineWithInv.step?_eq, pool]
+  rw [hd]
+  simp
 
 /-- The run face: no successful run checks out the same handle twice
     in a row — the second acquire cannot fire, so the run FAILS
     (the refusal is observable, never silent). -/
-theorem pool_no_double_checkout_run (t : List PoolLabel) (s : List Nat)
-    (hr : pool.toMachine.run [] t = some s) (hm : h ∈ s) :
-    pool.toMachine.run s [.acquire h, .acquire h] = none := by
-  rw [Machine.run_cons, pool_no_double_checkout s h hm]
+theorem pool_no_double_checkout_run (t : List PoolLabel) (s : List (Fin 2))
+    (_hr : pool.toMachine.run [] t = some s) (hm : h0 ∈ s) :
+    pool.toMachine.run s [.acquire0, .acquire0] = none := by
+  rw [Machine.run_cons, pool_no_double_checkout s hm]
   simp
 
 /-! ## Family 8 — the watch channel (the coalescing + the Hyper claim) -/
@@ -520,15 +560,17 @@ theorem watch_run_total : ∀ (t : List WatchLabel) (init : Option Nat),
   | nil => intro _; exact ⟨_, rfl⟩
   | cons i rest ih =>
       intro init
-      obtain ⟨s, hs⟩ := ih init
-      refine ⟨s, ?_⟩
       cases i with
       | recv =>
+          obtain ⟨s, hs⟩ := ih init
+          refine ⟨s, ?_⟩
           have hstep : watch.toMachine.step? init .recv = some init := by
             simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, watch]
           rw [Machine.run_cons, hstep, Option.bind_some]
           exact hs
       | send v =>
+          obtain ⟨s, hs⟩ := ih (some v)
+          refine ⟨s, ?_⟩
           have hstep : watch.toMachine.step? init (.send v) = some (some v) := by
             simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, watch]
           rw [Machine.run_cons, hstep, Option.bind_some]
@@ -547,7 +589,7 @@ theorem watch_run_last : ∀ (t : List WatchLabel) (init s : Option Nat),
       intro init s h
       rw [Machine.run_nil] at h
       simp at h
-      simp [h]
+      simp [h, lastSend?]
   | cons i rest ih =>
       intro init s h
       rw [Machine.run_cons, Option.bind_eq_some_iff] at h
@@ -556,28 +598,31 @@ theorem watch_run_last : ∀ (t : List WatchLabel) (init s : Option Nat),
       | recv =>
           have hs₀ : s₀ = init := by
             simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, watch] at hstep
-            exact Option.some.inj hstep
-          rw [ih s₀ s hrun, hs₀, lastSend?]
+            exact hstep.symm
+          rw [ih s₀ s hrun, hs₀]
+          simp only [lastSend?]
       | send v =>
           have hs₀ : s₀ = some v := by
             simp [MachineWithInv.toMachine, MachineWithInv.step?_eq, watch] at hstep
-            exact Option.some.inj hstep
-          rw [ih s₀ s hrun, hs₀, lastSend?]
-          cases hl : lastSend? rest <;> simp [hl]
+            exact hstep.symm
+          rw [ih s₀ s hrun, hs₀]
+          cases hl : lastSend? rest <;> simp [hl, lastSend?]
 
 /-- The delivered value: the totaled run from the empty cell (every
     run succeeds — `watch_run_total`). -/
 def watchRun (t : List WatchLabel) : Option Nat :=
-  (watch.toMachine.run none t).getD none
+  Option.getD (watch.toMachine.run none t) none
 
 /-- The coalescing law at the delivered-value face (the factor the
     hyperproperty cites): the delivered value IS the last send (or
-    `none`). -/
+    `none` — nothing delivered). -/
 theorem watch_factor (t : List WatchLabel) :
-    watchRun t = (lastSend? t).orElse (fun _ => none) := by
+    watchRun t = lastSend? t := by
   obtain ⟨s, hs⟩ := watch_run_total t none
-  rw [watchRun, hs]
-  exact watch_run_last t none s hs
+  have hres := watch_run_last t none s hs
+  show (watch.toMachine.run none t).getD none = lastSend? t
+  rw [hs, hres]
+  cases hl : lastSend? t <;> simp
 
 /-- THE SCHEDULE-INDEPENDENCE CLAIM (E5's hook; 07's Kit.Hyper trigger,
     FIRED): two watch executions agreeing on the coalesced summary —
@@ -589,7 +634,6 @@ theorem watch_factor (t : List WatchLabel) :
     (`watch_factor`) is data; NO new machinery. -/
 theorem watch_schedule_independent :
     Kit.Noninterfering watchRun (Kit.agreeOn lastSend?) (Kit.agreeOn id) :=
-  Kit.noninterfering_of_factor (fun o => o.getD none) (fun t => by
-    simpa [watch_factor, Option.orElse] using (watch_factor t).symm)
+  Kit.noninterfering_of_factor id watch_factor
 
 end Machines.Async

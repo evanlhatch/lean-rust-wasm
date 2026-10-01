@@ -255,7 +255,10 @@ def deriveCode (code : IR.Code) : Deriv :=
                                -- the named follow-up)
           derivRcField)
         |>.join (deriveCode k)
-  | .del _ k => derivRc.join (deriveCode k)
+  | .del _ k =>
+      -- the rc cell's read + write AND the reuse publish (the cache
+      -- cells — the allocator-state region the bump pointer shares)
+      (⟨derivRc.row, fpRc :: [fpBump]⟩ : Deriv).join (deriveCode k)
   -- the in-place writes: the rc=1 legality guard's READ + the slot's
   -- WRITE — the SAME region keys the corresponding read face rides
   -- (sproj's field slot, oproj's field slot, the tag cell)
@@ -263,7 +266,7 @@ def deriveCode (code : IR.Code) : Deriv :=
   | .oset _ _ _ k => derivRcField.join (deriveCode k)
   | .setTag _ _ k =>
       (⟨[Effect.read, Effect.write], [fpRc, fpTag]⟩ : Deriv).join (deriveCode k)
-  | .extern => derivTop      -- the declared trust boundary: unmodeled content
+  | .extern _sig => derivTop -- the declared trust boundary: unmodeled content
 def deriveAlts (alts : List IR.Alt) : Deriv :=
   match alts with
   | [] => derivPure

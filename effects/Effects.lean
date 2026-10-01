@@ -16,6 +16,11 @@ One import point for the library. Submodules:
   model: reads depend only on the declared footprint; writes preserve
   everything outside it; the frame rule composes (the full
   wp-composition is the contracts wave's — 08 §36, named exclusion).
+- `Effects.Capability` — the capability valves as effect rows (D3): the
+  WASI interface table over the closed atoms, the required set as the
+  FOLD JOIN over the world's imports (the derivation's law proved),
+  and the valve — the decided sub-effect order between the required
+  row and the allowance; default-deny is the empty allowance.
 - `Effects.Signature` — the algebraic presentations (the reviews' §11,
   the effects discipline's completion): the signature as DATA (the
   key-value/journal/clock operations + the laws as fields — an
@@ -36,3 +41,4 @@ import Effects.Basic
 import Effects.Resource
 import Effects.Footprint
 import Effects.Signature
+import Effects.Capability

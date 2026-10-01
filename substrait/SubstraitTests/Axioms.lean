@@ -116,6 +116,10 @@ corollary) -/
 #guard_msgs in
 #print axioms Substrait.Text.joinTypeOfName_self
 
+/-- info: 'Substrait.Text.writeOpOfName_self' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Substrait.Text.writeOpOfName_self
+
 /-- info: 'Substrait.Text.NameTable.ofName_self' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Substrait.Text.NameTable.ofName_self

@@ -234,6 +234,16 @@ def flatOf : Wit.Ty → List WasmCore.ValType
   | .tuple a b => flatOf a ++ flatOf b
   | .option t => .i32 :: flatOf t
   | .result ok err => .i32 :: (flatOf ok ++ flatOf err)
+  | .resultOk ok => .i32 :: flatOf ok
+  | .resultErr err => .i32 :: flatOf err
+  -- the D2 handle rows: a stream/future/resource handle flattens to
+  -- the ONE i32 (the waitable/handle face of the canonical ABI); the
+  -- read/write event channels are the deferred half (D2's honest
+  -- fragment — the guest lane's emitter never produces these rows
+  -- today, SchemaCore's witTy is both-summands and scalar-headed).
+  | .stream _ => [.i32]
+  | .future _ => [.i32]
+  | .own _ | .borrow _ => [.i32]
 
 /-- Does the type's lift/lower touch the linear memory? True iff a
     `string` or a `list` occurs anywhere in it (their values ARE
@@ -246,6 +256,13 @@ def memoryNeeded : Wit.Ty → Bool
   | .tuple a b => memoryNeeded a || memoryNeeded b
   | .option t => memoryNeeded t
   | .result ok err => memoryNeeded ok || memoryNeeded err
+  | .resultOk ok => memoryNeeded ok
+  | .resultErr err => memoryNeeded err
+  -- the D2 handle rows: a handle never touches the linear memory
+  -- (the value IS the i32 handle; see flatOf's note).
+  | .stream _ => false
+  | .future _ => false
+  | .own _ | .borrow _ => false
 
 /-- The component type encoding of a WIT type at base index `base`:
     the defined-type ENTRIES it contributes (inner types first —
@@ -272,6 +289,26 @@ def tyEncAt : Wit.Ty → Nat → List (List UInt8) × List UInt8
       let (ee, re) := tyEncAt err (base + eo.length)
       (eo ++ ee ++ [[0x6A, 0x01] ++ ro ++ [0x01] ++ re],
         encVarNat (base + eo.length + ee.length))
+  -- the D2 rows' one-summand result faces — NOW wasm-tools-pinned
+  -- (the D6 fault lane is their first EMITTED consumer; the devenv's
+  -- wasm-tools ground truth: `result = 0x6A, ok-opt (0x00 absent |
+  -- 0x01 present + valtype), err-opt (the same)` — resultOk u64 =
+  -- `6a 01 77 00`, resultErr u64 = `6a 00 01 77`):
+  | .resultOk ok, base =>
+      let (eo, ro) := tyEncAt ok base
+      (eo ++ [[0x6A, 0x01] ++ ro ++ [0x00]], encVarNat (base + eo.length))
+  | .resultErr err, base =>
+      let (ee, re) := tyEncAt err base
+      (ee ++ [[0x6A, 0x00, 0x01] ++ re], encVarNat (base + ee.length))
+  -- the D2 waitable/handle rows: the component TYPE descriptors (the
+  -- resource/stream/future alias machinery) are the deferred half; the
+  -- arm encodes the i32 handle the canonical ABI flattens (the same
+  -- face flatOf consumes). The descriptor bytes land with the
+  -- resource-emitting consumer.
+  | .stream _, _ => ([], [0x7F])
+  | .future _, _ => ([], [0x7F])
+  | .own _, _ => ([], [0x7F])
+  | .borrow _, _ => ([], [0x7F])
 
 /-- The canonical-ABI flattening limits (the ABI's constants). The
     nolint rows: semantically distinct ABI rows whose numeric values
@@ -620,6 +657,60 @@ def edgeComponentEmitter : Kit.Emit.Emitter Spec where
          , contents := ByteArray.mk bs.toArray }]
     | .error _ => []
   rev := "component-edge-slice-r1"
+  reads := [`Wit.World, `WasmCore.Encode]
+
+/-- The FAULT slice's emitter: the same emission over the fault lane's
+    committed artifact set (the hand-built heap-return fixture
+    `ComponentTests.FaultFixture.faultModule` — the D6 port's
+    typed-refusal channel: `probe : func() -> result<_, u64>`, the
+    flattening's heap collapse past `MAX_FLAT_RESULTS`). The
+    literal-path discipline is the scalar emitter's. The wasmtime
+    consumer: `crates/mandate-host`'s fault lane (the guest's `Err`
+    crossing as the host's TYPED error — never a trap). -/
+def faultComponentEmitter : Kit.Emit.Emitter Spec where
+  name := "guest.faultComponent"
+  style := .doubleSlash
+  specSource := "Guest.Component"
+  outputs := ["gen/component-fault-slice.wit"]
+  run := fun s =>
+    [{ path := "gen/component-fault-slice.wit"
+     , contents := Wit.Render.worldFile "mandate:guest" s.world }]
+  binaryOutputs := ["gen/component-fault-slice.wasm", "gen/component-fault-slice.wasm.hdr"]
+  runBinary := some fun s =>
+    match encodeComponent s.core s.world with
+    | .ok bs =>
+        [{ path := "gen/component-fault-slice.wasm"
+         , contents := ByteArray.mk bs.toArray }]
+    | .error _ => []
+  rev := "component-fault-slice-r1"
+  reads := [`Wit.World, `WasmCore.Encode]
+
+/-- The WITNESS slice's emitter: the same emission over the host-gating
+    lane's committed artifact set (the hand-built checker module
+    `ComponentTests.WitFixture.witGateModule` — the pinned invariant's
+    checker as an export: `witness-gate : func(src, dst, amount, t1,
+    b1, t2, t3, b3: u64) -> result<_, u64>`, the heap-return face). The
+    literal-path discipline is the scalar emitter's. The wasmtime
+    consumer: `crates/mandate-host`'s witness lane (the guest-compiled
+    checker GATES the host's commit — the legacy `@[invariant]`
+    discipline; a refusal crosses as the host's TYPED error, never a
+    trap). -/
+def witComponentEmitter : Kit.Emit.Emitter Spec where
+  name := "guest.witComponent"
+  style := .doubleSlash
+  specSource := "Guest.Component"
+  outputs := ["gen/component-witness-slice.wit"]
+  run := fun s =>
+    [{ path := "gen/component-witness-slice.wit"
+     , contents := Wit.Render.worldFile "mandate:guest" s.world }]
+  binaryOutputs := ["gen/component-witness-slice.wasm", "gen/component-witness-slice.wasm.hdr"]
+  runBinary := some fun s =>
+    match encodeComponent s.core s.world with
+    | .ok bs =>
+        [{ path := "gen/component-witness-slice.wasm"
+         , contents := ByteArray.mk bs.toArray }]
+    | .error _ => []
+  rev := "component-witness-slice-r1"
   reads := [`Wit.World, `WasmCore.Encode]
 
 /-- THE regen — the writer's and the tests' ONE copy (the

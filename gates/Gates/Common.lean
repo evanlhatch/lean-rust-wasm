@@ -45,8 +45,123 @@ baseline discipline is its first consumer).
 import Lean
 import Kit.Emit
 import Gates.Packages
+import SchemaCore.Config
+import TextKit.ConfigFormat
 
 namespace Gates
+
+open SchemaCore
+
+/-! ## THE DOGFOOD (C4/N8): the tree's own knobs as the FIRST config schema
+
+The gates' concurrency/budget knobs are a CONFIG: the schema record
+below (the SchemaCore.Config discipline), the config FILE as the base
+layer (typed + validated at load — the mis-typed value refuses with
+the curated CF Diag), the env vars as the OVERRIDE source with the
+envNat semantics preserved byte-for-byte (absent/unparsable/zero →
+the default — the legacy face never changed), the record's values as
+the layer between. `envNat` stays for the env-only knobs (ElabWatch's
+floor, the pool's own count) — the dogfood's six ride the face.
+
+-/
+
+/-- The gates' config schema record (the knobs' one schema; the
+    fields' names are the env spellings' lower-camel roots). -/
+def gatesItem : SchemaCore.Item :=
+  { name := "Gates.Knobs"
+    fields :=
+      [ { name := "all_jobs", ty := .u64 }
+      , { name := "kernel_jobs", ty := .u64 }
+      , { name := "pool_jobs", ty := .u64 }
+      , { name := "rss_budget_mb", ty := .u64 }
+      , { name := "rss_margin_mb", ty := .u64 }
+      , { name := "kernel_budget_secs", ty := .u64 } ] }
+
+/-- The knobs' check rows: every CONCURRENCY knob is positive (the RSS
+    faces are free — `0` means "derive from MemAvailable", the
+    legacy semantics). -/
+def gatesChecks : List (Pred gatesItem.fields) :=
+  [ Pred.u64GtLit "all_jobs" 0
+  , Pred.u64GtLit "kernel_jobs" 0
+  , Pred.u64GtLit "pool_jobs" 0
+  , Pred.u64GtLit "kernel_budget_secs" 0 ]
+
+/-- The knobs' config schema (the record + its validation). -/
+def gatesSchema : SchemaCore.ConfigSchema :=
+  { item := gatesItem, checks := gatesChecks }
+
+/-- The env var's spelling for a knob (the adapter's ONE mapping). -/
+def knobEnvName (name : String) : String := "GATES_" ++ name.toUpper
+
+/-- The typed record's knob read (the file layer's value; `0` = unset
+    → the default — the envNat fallback, at the record's face). -/
+def typedNat (kr : RowVals gatesItem.fields) (name : String) (dflt : Nat) : Nat :=
+  match readNat gatesItem.fields kr name with
+  | some n => if n == 0 then dflt else n
+  | none => dflt
+
+/-- THE KNOB READ (the pure core): the file layer's value `fileV`
+    beneath the env override — the envNat semantics preserved
+    byte-for-byte (absent/unparsable/zero env → the default; the file
+    layer speaks only when the env layer is ABSENT). -/
+def knobOf (fileV : Nat) (env : Option String) (dflt : Nat) : Nat :=
+  match env with
+  | some v =>
+      match v.trimAscii.toString.toNat? with
+      | some n => if n == 0 then dflt else n
+      | none => dflt
+  | none => if fileV == 0 then dflt else fileV
+
+/-- The knobs' load, PURE core: the config text parsed through the
+    file grammar (TextKit.ConfigFormat), lowered against the schema
+    (the curated CF refusals), the file layer validated by the check
+    rows RESTRICTED to the file's own keys (an absent knob carries no
+    constraint — the default row is not a violation). -/
+def knobsOfText (text : String) :
+    Except Kit.Diag (RowVals gatesItem.fields) :=
+  match TextKit.ConfigFormat.fileGrammar.run text with
+  | .error _ =>
+      .error (configDiag SchemaCore.eCF0002
+        "the config file does not parse (the format is `key=value` rows)")
+  | .ok pairs =>
+      match lowerPairs gatesItem.fields pairs with
+      | .error d => .error d
+      | .ok clauses =>
+          match initialRow gatesItem.fields with
+          | none => .error (configDiag SchemaCore.eCF0002 "no default row")
+          | some base =>
+              let rFile := applySources base
+                [{ src := ConfigSource.file, overrides := clauses }]
+              let keys := pairs.map (·.1)
+              let fileChecks : List (Pred gatesItem.fields) :=
+                gatesChecks.filter fun p => p.reads.any (· ∈ keys)
+              if fileChecks.all (fun p => p.check rFile) then .ok rFile
+              else .error (configDiag SchemaCore.eCF0003
+                "a knob's value violates the declared checks")
+
+/-- The knobs' config path (`GATES_CONFIG` overrides the default; the
+    exe runs from the repo root — the registry's path precedent). -/
+def gatesConfigPath : IO System.FilePath := do
+  match ← IO.getEnv "GATES_CONFIG" with
+  | some p => pure p
+  | none => pure "gates/gates.cfg"
+
+/-- The knobs' load (the IO face: the file's text — an ABSENT file is
+    NO base layer, the behavior-identical degenerate case). -/
+def loadKnobs : IO (Except Kit.Diag (RowVals gatesItem.fields)) := do
+  let path ← gatesConfigPath
+  let text ← match (← IO.FS.readFile path |>.toBaseIO) with
+    | .ok t => pure t
+    | .error _ => pure ""
+  pure (knobsOfText text)
+
+/-- The knob read, IO face (the dogfood's ONE entry): the loaded
+    record beneath the env var. -/
+def knobNat (kr : RowVals gatesItem.fields) (name : String) (dflt : Nat) :
+    IO Nat := do
+  match ← IO.getEnv (knobEnvName name) with
+  | some v => pure (knobOf 0 (some v) dflt)
+  | none => pure (typedNat kr name dflt)
 
 /-! ## The gates' finding envelope (B1 — the one-envelope discipline, 05 §4)
 
@@ -132,13 +247,14 @@ def memAvailableMb : IO Nat := do
     fat headroom + big lanes double-margin into false exclusivity.)
     (Measured base, wave-30: 29GB box, ~26GB available fresh →
     ~23.4GB budget.) -/
-def rssBudgetMb : IO Nat := do
-  let v ← envNat "GATES_RSS_BUDGET_MB" 0
+def rssBudgetMb (kr : RowVals gatesItem.fields) : IO Nat := do
+  let v ← knobNat kr "rss_budget_mb" 0
   if v == 0 then (· * 9 / 10) <$> memAvailableMb else pure v
 
 /-- The admission margin (MB): GATES_RSS_MARGIN_MB, default 1024 —
     the slack for a pool's own driver process + measurement error. -/
-def rssMarginMb : IO Nat := envNat "GATES_RSS_MARGIN_MB" 1024
+def rssMarginMb (kr : RowVals gatesItem.fields) : IO Nat :=
+  knobNat kr "rss_margin_mb" 1024
 
 /-- The admission predicate: the PROJECTED peak — the in-flight lanes'
     worst concurrent sum + the margin — must stay under the budget.
@@ -332,9 +448,14 @@ unsafe def shardDispatch (gate : String) (package : Option String)
           return 1
       | some pkg => shard pkg
   | none =>
-      let jobs ← envNat "GATES_POOL_JOBS" 3
-      let budgetMb ← rssBudgetMb
-      let marginMb ← rssMarginMb
+      -- the pool's knobs ride the config face too (the loud CF exit on
+      -- a mis-typed config file)
+      let kr ← match ← loadKnobs with
+        | .ok kr => pure kr
+        | .error d => IO.eprintln (Kit.Diag.toString d); return 1
+      let jobs ← knobNat kr "pool_jobs" 3
+      let budgetMb ← rssBudgetMb kr
+      let marginMb ← rssMarginMb kr
       let outs ← pkgPool (fun _ => "lake")
         (fun pkg => #["exe", "gates", gate, s!"--package={pkg.dir}"])
         gatedPackages jobs shardCostMb budgetMb marginMb

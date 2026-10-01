@@ -23,7 +23,9 @@ rust:
 	cd crates/schema-generated && cargo test
 	cd crates/mandate-delta && cargo test
 	cd crates/mandate-faults && cargo test
+	cd crates/mandate-rt && cargo test
 	cd crates/mandate-host && cargo test
+	cd crates/mandate-store && cargo test
 
 # The bench face (wave-30 C2 — the flatland discipline: a bench is a
 # PAIR — candidate vs baseline, the same seeded inputs — with a
@@ -116,9 +118,45 @@ gen:
 # The wasm slice regen (the BINARY lane's writer side: the WAT text
 # artifact + the wasm bytes + the .hdr sidecar through the emit spine;
 # the validator runs at generation — an invalid module refuses loudly,
-# nothing written). A drift fails `just gates`.
+# nothing written). A drift fails `just gates`. The writer's row set
+# includes the FEATURE SHIM (gen/wasm-feature-shim.mjs — the selection
+# shim, WasmCore.Profile's feature table rendered; the byte-tie's
+# writer side for the wasm-feature-detect discipline).
 wasmgen:
 	lake exe wasmgen
+
+# The SIMD DUAL-BUILD (the wasm-feature-detect discipline, the Rust
+# faces' side): the crate's wasm face builds TWICE — the simd128 bundle
+# (RUSTFLAGS "-C target-feature=+simd128") and the scalar twin — and
+# the committed selection shim (gen/wasm-feature-shim.mjs, byte-tied
+# through the spine) picks at load. WASM SIMD HAS NO RUNTIME FEATURE
+# DETECTION: a validated probe module is the whole discipline — the
+# shim carries the probe + the select () contract.
+#
+# THE HONEST BOUNDARY: the guest components are LEAN-EMITTED wasm and
+# the emitted fragment is scalar (no v128 ctor in the closed op set),
+# so TODAY the dual build applies to the RUST-CRATE wasm faces and any
+# future SIMD-emitting guest work — WASM_DUAL_CRATE pins the crate so
+# the first SIMD-bearing consumer adopts the recipe by name, never by
+# re-invention. THE ENGINE FACES ARE NOT HERE: mandate-rt's wasmi axis
+# is the crate-FEATURE axis (its Cargo.toml's note), off in the
+# deterministic profile — an ENGINE feature is a dependency edge, not a
+# bundle. The build needs nightly -Z build-std (the nix-pinned
+# toolchain's sysroot carries no wasm std; rust-src rides the
+# profile) and demands the wasm profile on PATH (the devenv env).
+WASM_DUAL_CRATE := "crates/mandate-rt"
+WASM_TARGET := "wasm32-unknown-unknown"
+
+wasm-dual:
+	cd {{WASM_DUAL_CRATE}} && RUSTFLAGS="-C target-feature=+simd128" \
+	  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR=target/wasm-dual/simd128 \
+	  cargo rustc -Z build-std=core,std,panic_abort --crate-type cdylib \
+	  --target {{WASM_TARGET}} --release
+	cd {{WASM_DUAL_CRATE}} && RUSTFLAGS="-C target-feature=-simd128" \
+	  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR=target/wasm-dual/scalar \
+	  cargo rustc -Z build-std=core,std,panic_abort --crate-type cdylib \
+	  --target {{WASM_TARGET}} --release
+	@echo "wasm-dual: two bundles written ({{WASM_DUAL_CRATE}}/target/wasm-dual/{simd128,scalar}); the selection shim (gen/wasm-feature-shim.mjs) picks at load"
 
 # Single gates (the loud re-baseline: `just gates-axioms-write` refuses a
 # non-empty diff without `--accept-drift` — append it by hand).

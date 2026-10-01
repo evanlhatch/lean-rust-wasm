@@ -124,6 +124,7 @@ def opBinop : BinOp → IR.Binop
   | .sub => .u64sub
   | .mul => .u64mul
   | .and => .u32mul
+  | .or => .u32add  -- unreachable (the join is the 3-op spelling)
 
 /-- The comparison op's row — the op surface's u64 compares; the
     swapped/negated spellings live in `compE`. -/
@@ -131,6 +132,11 @@ def opCmp : CmpOp → IR.Binop
   | .lt => .u64ltu
   | .eq => .u64eq
   | _ => .u64eq  -- unreachable (the swapped spellings never hit this)
+
+/-- Is this the list row? (the for-target's defensive gate.) -/
+def isListTy : Ty → Bool
+  | .list _ => true
+  | _ => false
 
 /-- The machine's u64 cap (the literal refusal's face). -/
 def u64Cap : Nat := 18446744073709551616
@@ -155,7 +161,7 @@ def elemRef (t : Ty) : Bool :=
 def elemCoords (ts : List Ty) (i : Nat) : Bool × Nat × Nat :=
   let before := ts.take i
   let nRefs := (ts.filter elemRef).length
-  if elemRef (ts.get? i |>.getD .int) then
+  if elemRef (ts[i]? |>.getD .int) then
     (true, (before.filter elemRef).length, 0)
   else
     (false, nRefs, (before.filter (fun t => !elemRef t)).length * 8)
@@ -240,15 +246,19 @@ def fresh (base : String) : FM IR.Var := do
 
 /-! ## The expression fold (the ANF face) -/
 
-/-- The cons chain (the right fold over the element vars — nil first,
-    one cons ctor per element). -/
-def buildCons : List IR.Var → IR.Var → FM (List IR.LetDecl × IR.Var)
-  | [], tailV => pure ([], tailV)
-  | h :: rest, tailV => do
-      let (letsT, tv) ← buildCons rest tailV
+/-- The cons chain: element order PRESERVED (cons(v1, cons(v2, …
+    cons(vn, nil)))) with the ANF order intact — the fold runs
+    right-to-left (the DEEPEST cons binds first), each new let
+    appended, and the RESULT is the LAST let = the OUTERMOST cons =
+    element 1's cell. -/
+def buildCons : List IR.Var → IR.Var → FM (List IR.LetDecl × IR.Var) :=
+  fun rem tailV =>
+    rem.foldrM (fun hv acc => do
+      let (lets, tv) := acc
       let c ← fresh "cons"
-      pure ({ var := c, ty := .obj
-            , value := .ctor 1 #[.var h, .var tv] } :: letsT, c)
+      pure (lets ++ [{ var := c, ty := .obj
+                     , value := .ctor 1 #[.var hv, .var tv] }], c))
+      ([], tailV)
 
 /-- One expression → the let spine + the result variable + its SOURCE
     type. Expressions carry NO control flow (the fragment's
@@ -337,7 +347,7 @@ def compE (env : Env) : Expr →
           let (ll, lv, _) ← compE env l
           let (rl, rv, _) ← compE env r
           let inner ← fresh "cmp"
-          let (innerOp, args) :=
+          let (innerOp, args) : IR.Binop × Array IR.Arg :=
             match op with
             | .le => (.u64ltu, #[.var rv, .var lv])   -- l <= r = !(r < l)
             | .ge => (.u64ltu, #[.var lv, .var rv])   -- l >= r = !(l < r)
@@ -406,7 +416,7 @@ def compE (env : Env) : Expr →
           let nilV ← fresh "nil"
           let nilLet : IR.LetDecl :=
             { var := nilV, ty := .obj, value := .ctor 0 #[] }
-          let (lastV, consLets) ← buildCons avs nilV
+          let (consLets, lastV) ← buildCons avs nilV
           pure (als ++ (nilLet :: consLets), lastV, .list t0)
       | _, _ =>
           throw (.unsupportedConstruct "[]"
@@ -416,7 +426,7 @@ def compE (env : Env) : Expr →
       let (bl, bv, bt) ← compE env b
       match bt with
       | .tup ts =>
-          match ts.get? i with
+          match ts[i]? with
           | some t =>
               if t == .bool then
                 throw (.unsupportedConstruct "tuple element"
@@ -481,15 +491,14 @@ where
         let (l1, v1, t1) ← compE env a
         let (l2, vs, ts) ← compEsT env rest
         pure (l1 ++ l2, v1 :: vs, t1 :: ts)
-
-/-- The args' fold (the call lane's; the types drop). -/
-def compEs (env : Env) : List Expr →
-    FM (List IR.LetDecl × List IR.Var)
-  | [] => pure ([], [])
-  | a :: rest => do
-      let (l1, v1, _) ← compE env a
-      let (l2, vs) ← compEs env rest
-      pure (l1 ++ l2, v1 :: vs)
+  -- the args' fold (the call lane's; the types drop)
+  compEs (env : Env) : List Expr →
+      FM (List IR.LetDecl × List IR.Var)
+    | [] => pure ([], [])
+    | a :: rest => do
+        let (l1, v1, _) ← compE env a
+        let (l2, vs) ← compEs env rest
+        pure (l1 ++ l2, v1 :: vs)
 
 /-! ## The assignment-target collector (the loop-carried vars' order) -/
 
@@ -561,7 +570,7 @@ def compSs (env : Env) : List Stmt → (Env → FM IR.Code) → FM IR.Code
       -- (the source type rides the info pairs — `rowOf` at the param)
       let msInfo ← ms.foldlM (fun acc x => do
         match lookupEnv env x with
-        | some (v, t) => do
+        | some (_v, t) => do
             let p ← fresh x
             pure (acc ++ [(x, (p, t))])
         | none => throw (.unboundFVar x)) []
@@ -599,10 +608,12 @@ def compSs (env : Env) : List Stmt → (Env → FM IR.Code) → FM IR.Code
       let t : Ty :=
         match xt with
         | .list t => t
-        | _ =>
-            throw (.unsupportedConstruct "for target"
-              "a list-typed iterable (the checker's contract — this is \
-               the lowering-side defense)")
+        | _ => .bool  -- unreachable (the checker's list contract; the
+                      -- defensive throw rides the bool face below)
+      if !isListTy xt then
+        throw (.unsupportedConstruct "for target"
+          "a list-typed iterable (the checker's contract — this is \
+           the lowering-side defense)")
       let ms := assignedVars body
       -- every loop-carried var must be bound at loop entry
       for x2 in ms do
@@ -619,7 +630,7 @@ def compSs (env : Env) : List Stmt → (Env → FM IR.Code) → FM IR.Code
       let curP ← fresh (x ++ "cur")
       let msInfo ← ms.foldlM (fun acc x2 => do
         match lookupEnv env x2 with
-        | some (v2, t2) => do
+        | some (_v2, t2) => do
             let p ← fresh x2
             pure (acc ++ [(x2, (p, t2))])
         | none => throw (.unboundFVar x2)) []
@@ -665,8 +676,8 @@ def compSs (env : Env) : List Stmt → (Env → FM IR.Code) → FM IR.Code
           (IR.Code.cases_ "for" .tag curP
             [IR.Alt.ctorAlt 1
                 (IR.Code.let_ xDecl (IR.Code.let_ tailDecl bodyC))
-            , IR.Alt.ctorAlt 0 exitC])
-          (.jmp jpName entryArgs)))
+            , IR.Alt.ctorAlt 0 exitC]))
+        (.jmp jpName entryArgs))
   termination_by ss => msL ss
   decreasing_by
     all_goals

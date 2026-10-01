@@ -55,10 +55,11 @@ citation is a finding. The table:
 | 31 | SPEC | | | the dependency injection |
 | 32 | SPEC | | | the transport semantics |
 | 33 | SPEC | | | the caching |
-| 34 | SPEC | | | the configuration |
+| 34 | LANDED | `ConfigSchema` `applySources` `lowerPair` | | the configuration (the face: the schema record + the override ORDER as data — the noncommutative fold, the CF refusals; the sources' text formats are TextKit.ConfigFormat's grammar values; the dogfood is the gates' knobs — Gates.Common's `gatesItem`/`knobOf`/`knobsOfText`) |
 | 35 | SPEC | | | the property taxonomy |
 | 36 | LANDED | `wp` | | the contracts (`requires`/`ensures` with wp-composition) |
 | 37 | SPEC | | | the systems observability lane |
+| 38 | LANDED | `Profiled` `Fixed` | | the semantic-profiles lane (16 §4.5 + D24/D38: the phantom-indexed scalar semantics — `Profile`'s closed `plain`/`deterministic`/`fast` slots; the deterministic fixed-point carrier with exact checked add, named floor rounding, total order, codec legality; the fast hop's forfeits as theorems + the exactness tooth; the erasure proved — `Profiled.erase`/`Profiled.iso`, the f64/2^53 hazard's profile law; the codegen face rides `Emit.Profiles` into the Rust const-generic phantom + the TS brand) |
 
 The WATCH entries carry no decl (one line + its trigger, unchanged
 below).
@@ -192,9 +193,18 @@ below).
     the journal + idempotency-key row, never asserted bare.
 33. **Caching** — the coherence obligation (`lookup c k = some v →
     compute k = v`) per cache, discharged at the appropriate tier.
-34. **Configuration** — a config = a schema record + the override ORDER
-    (last-wins is NOT a semilattice — noncommutative; sparse overrides
-    merge optional fields; document which) + the schema's own validation.
+34. **Configuration** (LANDED: `SchemaCore.Config`) — a config = a
+    schema record + the override ORDER (last-wins is NOT a semilattice
+    — noncommutative; sparse overrides merge per-field via the update
+    lane's ColPath write spine; the append law is the honest
+    associativity, the noncommutation + the disjoint commutation are
+    theorems) + the schema's own validation (the check rows). The
+    sources' text formats are `TextKit.ConfigFormat`'s grammar values
+    (file/env/CLI, the proved round trips); the refusals ride the CF
+    E-code family. FIRST CONSUMER: the gates' own knobs (the C4
+    dogfood — `Gates.Common`'s `gatesItem` schema, the config file the
+    validated base layer, the env vars the override source with the
+    envNat semantics preserved).
 
 ## The systems-semantics stratum
 

@@ -92,6 +92,7 @@ import Kit.Derive.Evidence
 import TestingKit.Lcg
 import SchemaCore.Derive
 import SchemaCore.Describe
+import LintKit.Basic  -- the nolint opt-out attribute (LintKit is core-only: any package may import it); the entourage's per-record rows emit it
 
 namespace SchemaCore
 
@@ -192,6 +193,26 @@ private def fieldRowsSyntax (fs : List Field) : CommandElabM Term :=
 private def rawIdent (n : Name) : Term :=
   ⟨Syntax.ident SourceInfo.none ((n.toString).toRawSubstring) n []⟩
 
+/-- The generated name's ident, `_root_`-ANCHORED. THE NAMESPACE BUG
+    the `table!` surface exposed (wave-30 E1): a dotted `mkIdent` in a
+    generated DECLARATION resolves RELATIVE to the consumer's current
+    namespace — `abbrev SchemaTests.SurfaceV1.Customer.descr` inside
+    `namespace SchemaTests.SurfaceV1` declares the DOUBLED name. Every
+    generated name (declaration heads via `tnDeclId`, references via
+    `tnIdent`) is `_root_.`-anchored, so the generated surface's names
+    are the record's full name in every consumer scope. (The in-tree
+    consumers were all top-level — the bug was latent until the first
+    namespaced consumer.) -/
+private def tnIdent (n : Name) : Term :=
+  ⟨Syntax.ident SourceInfo.none ((s!"_root_.{n}").toRawSubstring)
+    (`_root_ ++ n) []⟩
+
+/-- The DECLARATION-head variant (the `declId` category: the ident node
+    + the optional `.{weak}` slot). -/
+private def tnDeclId (n : Name) : TSyntax `Lean.Parser.Command.declId :=
+  ⟨Syntax.node SourceInfo.none ``Lean.Parser.Command.declId
+    #[(tnIdent (n)).raw, Lean.mkNullNode]⟩
+
 /-- The field projections' nested tuple (`(r.a, (r.b, ()))`),
     right-nested to the `prodTyOf` shape, `Unit`-terminated. -/
 private partial def projTuple (flds : List String) : CommandElabM Term :=
@@ -219,7 +240,7 @@ private partial def tupPath (j : Nat) : CommandElabM Term :=
     generated row type must see through it). -/
 private def elabDescrDef (tn : Lean.Name) (d : Descr) : CommandElabM Unit := do
   let dv ← descrSyntax d
-  elabCommand (← `(command| abbrev $(mkIdent (tn ++ `descr)) :
+  elabCommand (← `(command| abbrev $(tnDeclId (tn ++ `descr)) :
     $(mkIdent `SchemaCore.Descr) := $dv))
 
 /-- `T.tupleIso : Kit.Iso T (Descr.Ty T.descr)` — the ctor↔tuple
@@ -238,9 +259,9 @@ private def elabTupleIsoDef (env : Lean.Environment) (tn : Lean.Name)
   let rId := rawIdent `r
   let tId := rawIdent `t
   elabCommand (← `(command|
-    def $(mkIdent (tn ++ `tupleIso)) :
-        $(mkIdent `Kit.Iso) $(mkIdent tn)
-          ($(mkIdent `SchemaCore.Descr.Ty) $(mkIdent (tn ++ `descr))) :=
+    def $(tnDeclId (tn ++ `tupleIso)) :
+        $(mkIdent `Kit.Iso) $(tnIdent tn)
+          ($(mkIdent `SchemaCore.Descr.Ty) $(tnIdent (tn ++ `descr))) :=
       { to := fun $rId => $toFace
         inv := fun $tId => $app
         to_inv := fun _ => rfl
@@ -255,10 +276,10 @@ private def elabTupleIsoDef (env : Lean.Environment) (tn : Lean.Name)
     (the generic theorems) via `Kit.Codec`'s own transports — never a
     per-record proof. -/
 private def elabCodecDef (tn : Lean.Name) : CommandElabM Unit := do
-  let iso := mkIdent (tn ++ `tupleIso)
+  let iso := tnIdent (tn ++ `tupleIso)
   elabCommand (← `(command|
-    def $(mkIdent (tn ++ `codec)) : $(mkIdent `Kit.Codec) (List UInt8) $(mkIdent tn) :=
-      ($(mkIdent `SchemaCore.deriveCodec) $(mkIdent (tn ++ `descr))).transportRight
+    def $(tnDeclId (tn ++ `codec)) : $(mkIdent `Kit.Codec) (List UInt8) $(tnIdent tn) :=
+      ($(mkIdent `SchemaCore.deriveCodec) $(tnIdent (tn ++ `descr))).transportRight
         { to := ($iso).inv
           inv := ($iso).to
           to_inv := ($iso).inv_to
@@ -267,25 +288,25 @@ private def elabCodecDef (tn : Lean.Name) : CommandElabM Unit := do
 /-- `T.toRow` / `T.ofRow` — the thin row bridge: the generic
     field-list bridge transported along the ctor↔tuple iso. -/
 private def elabRowDefs (tn : Lean.Name) : CommandElabM Unit := do
-  let flds := mkIdent (tn ++ `fields)
+  let flds := tnIdent (tn ++ `fields)
   elabCommand (← `(command|
-    def $(mkIdent (tn ++ `toRow)) : $(mkIdent tn) →
+    def $(tnDeclId (tn ++ `toRow)) : $(tnIdent tn) →
         $(mkIdent `SchemaCore.RowVals) $flds :=
-      $(mkIdent `SchemaCore.toRowF) $flds ∘ ($(mkIdent (tn ++ `tupleIso))).to))
+      $(mkIdent `SchemaCore.toRowF) $flds ∘ ($(tnIdent (tn ++ `tupleIso))).to))
   elabCommand (← `(command|
-    def $(mkIdent (tn ++ `ofRow)) : $(mkIdent `SchemaCore.RowVals) $flds →
-        $(mkIdent tn) :=
-      ($(mkIdent (tn ++ `tupleIso))).inv ∘ $(mkIdent `SchemaCore.ofRowF) $flds))
+    def $(tnDeclId (tn ++ `ofRow)) : $(mkIdent `SchemaCore.RowVals) $flds →
+        $(tnIdent tn) :=
+      ($(tnIdent (tn ++ `tupleIso))).inv ∘ $(mkIdent `SchemaCore.ofRowF) $flds))
 
 /-- `T.rowIso : Kit.Iso T (RowVals T.fields)` — THE row bridge as a
     `Kit.Iso` value; both round-trip laws from the generic theorems
     (`toRowF_ofRowF` / `ofRowF_toRowF`) via `Kit.Iso.trans`. -/
 private def elabRowIsoDef (tn : Lean.Name) : CommandElabM Unit := do
-  let flds := mkIdent (tn ++ `fields)
+  let flds := tnIdent (tn ++ `fields)
   elabCommand (← `(command|
-    def $(mkIdent (tn ++ `rowIso)) : $(mkIdent `Kit.Iso) $(mkIdent tn)
+    def $(tnDeclId (tn ++ `rowIso)) : $(mkIdent `Kit.Iso) $(tnIdent tn)
         ($(mkIdent `SchemaCore.RowVals) $flds) :=
-      $(mkIdent (tn ++ `tupleIso)).trans ($(mkIdent `SchemaCore.rowBridgeIso) $flds)))
+      $(tnIdent (tn ++ `tupleIso)).trans ($(mkIdent `SchemaCore.rowBridgeIso) $flds)))
 
 /-! ## The evidence entourage (the handlers' emissions — 16-surface §3) -/
 
@@ -295,11 +316,20 @@ private def elabKindDef (tn : Lean.Name) : CommandElabM Unit := do
   let kindTy : Lean.Term := mkIdent `Kit.Derive.Evidence.EvidenceKind
   let kindOf : Lean.Term := mkIdent `Kit.Derive.Evidence.evidenceKindOf
   let cap : Lean.Term := mkIdent `Kit.Derive.Evidence.DerivCap.wireCodec
+  -- the nolint's linter ident splices through `mkIdent` (antiquotation —
+  -- exact syntax, no macro scopes): a literal ident inside the quotation
+  -- hygiene-mangles (`dupDefBodies._@…._hyg.…`), and `hasNolint`'s
+  -- `p.linters.contains` then never matches the option's clean name
+  -- (observed on the first emitted-`@[nolint]` in the tree).
+  let dymAttr : Lean.Ident := mkIdent `linter.guestlang.dupDefBodies
   elabCommand (← `(command|
     /-- GENERATED by `deriving WireCodec` — the evidence-kind row (the
         census's data face): kind COMPUTED from the capability + the
-        carrier shape (unbounded → the LCG sweep). -/
-    def $(mkIdent (tn ++ `codecEvidenceKind)) : $kindTy :=
+        carrier shape (unbounded → the LCG sweep). The per-record rows
+        are intentionally the same shape; the record's identity is the
+        type index. -/
+    @[nolint $dymAttr "the entourage's per-record rows are intentionally the same shape; the record's identity is the type index"]
+    def $(tnDeclId (tn ++ `codecEvidenceKind)) : $kindTy :=
       $kindOf $cap))
 
 /-- `T.codecObligation` + `T.codecDischarged` — the Prop-indexed
@@ -310,10 +340,10 @@ private def elabObligationDef (tn : Lean.Name) : CommandElabM Unit := do
   let tnT : Term := mkIdent tn
   let oblTy : Term := mkIdent `Kit.Obligation
   let disTy : Term := mkIdent `Kit.Discharged
-  let codec := mkIdent (tn ++ `codec)
+  let codec := tnIdent (tn ++ `codec)
   let claim : Term ←
     `(∀ (v : $tnT), ($codec).decode (($codec).encode v) = some v)
-  let kind : Term := mkIdent (tn ++ `codecEvidenceKind)
+  let kind : Term := tnIdent (tn ++ `codecEvidenceKind)
   elabCommand (← `(command|
     /-- GENERATED by `deriving WireCodec` — the evidence entourage's
         obligation row: THE CLAIM IS THE TYPE INDEX (the round-trip
@@ -322,7 +352,7 @@ private def elabObligationDef (tn : Lean.Name) : CommandElabM Unit := do
         side is type-carried (`Kit.Codec`'s law fields — the census
         generates no proof artifact for it); this row attests the
         SWEEP. -/
-    def $(mkIdent (tn ++ `codecObligation)) : $oblTy String $claim :=
+    def $(tnDeclId (tn ++ `codecObligation)) : $oblTy String $claim :=
       { label := $(quote s!"{tn}/wire-roundtrip")
         tier := ($kind).tier!
         payload := "the LCG sweep + the mechanical controls \
@@ -334,16 +364,16 @@ private def elabObligationDef (tn : Lean.Name) : CommandElabM Unit := do
         the evidence is the ORACLE ROW (the sweep's verdict),
         tier-matched by construction (a `citedProof` cannot construct
         here — the tier mismatch is unrepresentable). -/
-    def $(mkIdent (tn ++ `codecDischarged)) : $disTy String $claim :=
-      { obligation := $(mkIdent (tn ++ `codecObligation))
+    def $(tnDeclId (tn ++ `codecDischarged)) : $disTy String $claim :=
+      { obligation := $(tnIdent (tn ++ `codecObligation))
         evidence := Kit.Evidence.oracleRow $(quote s!"{tn}.codecSweep") }))
 
 /-- `T.codecSweep` — the LCG sweep (width 16, seed pinned; the verdict
     is DATA). -/
 private def elabSweepDef (tn : Lean.Name) : CommandElabM Unit := do
-  let codec := mkIdent (tn ++ `codec)
-  let descr := mkIdent (tn ++ `descr)
-  let tupleIso := mkIdent (tn ++ `tupleIso)
+  let codec := tnIdent (tn ++ `codec)
+  let descr := tnIdent (tn ++ `descr)
+  let tupleIso := tnIdent (tn ++ `tupleIso)
   let run : Lean.Term := mkIdent `SchemaCore.runCodecSweep
   let drawF : Lean.Term := mkIdent `SchemaCore.drawDescr
   elabCommand (← `(command|
@@ -352,7 +382,7 @@ private def elabSweepDef (tn : Lean.Name) : CommandElabM Unit := do
         trip + the mechanical truncation discrimination per instance.
         The verdict is DATA — the tier stays `oracleSwept` — and a
         failing instance replays byte-identically from its seed. -/
-    def $(mkIdent (tn ++ `codecSweep)) : SchemaCore.SweepVerdict :=
+    def $(tnDeclId (tn ++ `codecSweep)) : SchemaCore.SweepVerdict :=
       $run $codec
         (enc := fun a => ($codec).encode a)
         (draw := fun tape =>
@@ -363,9 +393,9 @@ private def elabSweepDef (tn : Lean.Name) : CommandElabM Unit := do
     negatives): the rows the capability's shape demands, the names the
     entourage's data renders (never hand-invented). -/
 private def elabSabotagesDef (tn : Lean.Name) (d : Descr) : CommandElabM Unit := do
-  let descr := mkIdent (tn ++ `descr)
-  let codec := mkIdent (tn ++ `codec)
-  let tupleIso := mkIdent (tn ++ `tupleIso)
+  let descr := tnIdent (tn ++ `descr)
+  let codec := tnIdent (tn ++ `codec)
+  let tupleIso := tnIdent (tn ++ `tupleIso)
   let kitAssert : Lean.Term := mkIdent `TestingKit.assert
   let truncF : Lean.Term := mkIdent `SchemaCore.truncDiscriminates
   let drawF : Lean.Term := mkIdent `SchemaCore.drawDescr
@@ -398,7 +428,7 @@ private def elabSabotagesDef (tn : Lean.Name) (d : Descr) : CommandElabM Unit :=
         row MUST fail — the consumer's suite takes them as its
         negatives (a suite without controls does not construct, and a
         control that stops failing is the suite's `vacuous` verdict). -/
-    def $(mkIdent (tn ++ `codecSabotages)) :
+    def $(tnDeclId (tn ++ `codecSabotages)) :
         List (String × (TestingKit.Tape → Except String Unit)) :=
       [$rows,*]))
 
@@ -408,13 +438,13 @@ private def elabSabotagesDef (tn : Lean.Name) (d : Descr) : CommandElabM Unit :=
     fact is the census finding). -/
 private def elabSimpLemmaDef (tn : Lean.Name) : CommandElabM Unit := do
   let tnT : Term := mkIdent tn
-  let codec := mkIdent (tn ++ `codec)
+  let codec := tnIdent (tn ++ `codec)
   elabCommand (← `(command|
     /-- GENERATED by `deriving WireCodec` — the round-trip law under
         the per-domain `@[schemaCodec]` simp set. The proof is the
         carrier's own law field (the citation face — the ladder's
         currency), not a re-proof. -/
-    @[schemaCodec] theorem $(mkIdent (tn ++ `codec_roundtrip)) :
+    @[schemaCodec] theorem $(tnDeclId (tn ++ `codec_roundtrip)) :
         ∀ (v : $tnT), ($codec).decode (($codec).encode v) = some v :=
       ($codec).decode_encode))
 
@@ -429,31 +459,38 @@ private def elabFieldsEntourageDef (tn : Lean.Name) : CommandElabM Unit := do
   let shape : Term := mkIdent `Kit.Derive.Evidence.CarrierShape.closedFinite
   let oblTy : Term := mkIdent `Kit.Obligation
   let disTy : Term := mkIdent `Kit.Discharged
-  let fieldNames := mkIdent (tn ++ `fieldNames)
+  let fieldNames := tnIdent (tn ++ `fieldNames)
+  -- the nolint's linter ident splices through `mkIdent` (see elabKindDef's
+  -- note: a quotation-literal ident hygiene-mangles, the param's name
+  -- never matches, the opt-out silently fails).
+  let dymAttr : Lean.Ident := mkIdent `linter.guestlang.dupDefBodies
   elabCommand (← `(command|
     /-- GENERATED by `deriving row_bridge` — the evidence-kind row: the
         determinacy fact lives over the CLOSED field-name list — the
         kernel decides. (The round trips' own kind is `typeCarried` —
-        the census generates nothing for them.) -/
-    def $(mkIdent (tn ++ `fieldsEvidenceKind)) : $kindTy :=
+        the census generates nothing for them.) The per-record rows
+        are intentionally the same shape; the record's identity is the
+        type index. -/
+    @[nolint $dymAttr "the entourage's per-record rows are intentionally the same shape; the record's identity is the type index"]
+    def $(tnDeclId (tn ++ `fieldsEvidenceKind)) : $kindTy :=
       $kindOfShape $shape))
   elabCommand (← `(command|
     /-- GENERATED by `deriving row_bridge` — the obligation row: the
         claim is the determinacy fact (the type index), the tier
         COMPUTED from the kind (`decidableNow`). -/
-    def $(mkIdent (tn ++ `fieldsObligation)) :
+    def $(tnDeclId (tn ++ `fieldsObligation)) :
         $oblTy (List String) (List.Nodup $fieldNames) :=
       { label := $(quote s!"{tn}/fields-nodup")
-        tier := $(mkIdent (tn ++ `fieldsEvidenceKind)).tier!
+        tier := $(tnIdent (tn ++ `fieldsEvidenceKind)).tier!
         payload := $fieldNames
         provenance := $(quote tn) }))
   elabCommand (← `(command|
     /-- GENERATED by `deriving row_bridge` — the discharge: the DECIDED
         evidence (the tier-matched backend; a `citedProof` or an
         `oracleRow` cannot construct here). -/
-    def $(mkIdent (tn ++ `fieldsDischarged)) :
+    def $(tnDeclId (tn ++ `fieldsDischarged)) :
         $disTy (List String) (List.Nodup $fieldNames) :=
-      { obligation := $(mkIdent (tn ++ `fieldsObligation))
+      { obligation := $(tnIdent (tn ++ `fieldsObligation))
         evidence := Kit.Evidence.decided true }))
 
 /-! ## The handlers -/
@@ -506,25 +543,25 @@ private def rowBridgeHandler : Lean.Elab.DerivingHandler := fun typeNames => do
               elabDescrDef tn d
               elabTupleIsoDef env tn d
             elabCommand (← `(command|
-              abbrev $(mkIdent (tn ++ `fields)) : List $(mkIdent `SchemaCore.Field) :=
+              abbrev $(tnDeclId (tn ++ `fields)) : List $(mkIdent `SchemaCore.Field) :=
                 $(← fieldRowsSyntax flds)))
             elabCommand (← `(command|
-              abbrev $(mkIdent (tn ++ `fieldNames)) : List String :=
-                ($(mkIdent (tn ++ `fields))).map fun f => f.name))
+              abbrev $(tnDeclId (tn ++ `fieldNames)) : List String :=
+                ($(tnIdent (tn ++ `fields))).map fun f => f.name))
             elabCommand (← `(command|
               -- GENERATED — the simp-set registration (the entourage's
               -- simpSet emission): the decided law under the per-domain
               -- `@[schemaCodec]` set.
-              @[schemaCodec] theorem $(mkIdent (tn ++ `fields_nodup)) :
-                  List.Nodup ($(mkIdent (tn ++ `fieldNames))) := by decide))
+              @[schemaCodec] theorem $(tnDeclId (tn ++ `fields_nodup)) :
+                  List.Nodup ($(tnIdent (tn ++ `fieldNames))) := by decide))
             -- THE EVIDENCE ENTOURAGE: the determinacy fact's obligation
             -- (kind computed: closed-finite → the kernel decides) + the
             -- simp-set registration. The ROUND TRIPS generate NOTHING
             -- (type-carried by the rowIso's law fields — the census).
             elabFieldsEntourageDef tn
             elabCommand (← `(command|
-              def $(mkIdent (tn ++ `nameIso)) :=
-                $(mkIdent `SchemaCore.fieldIndexIso) $(mkIdent (tn ++ `fields_nodup))))
+              def $(tnDeclId (tn ++ `nameIso)) :=
+                $(mkIdent `SchemaCore.fieldIndexIso) $(tnIdent (tn ++ `fields_nodup))))
             elabRowDefs tn
             elabRowIsoDef tn
   return true

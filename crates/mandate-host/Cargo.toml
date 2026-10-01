@@ -31,6 +31,19 @@ wasmtime = { version = "47", default-features = false, features = [
   "std",
   "component-model",
 ] }
+# THE WASI P3 LANE (D3): wasi 0.3 through wasmtime-wasi's p3 face —
+# `p3::add_to_linker` (the linker's p3 face: cli, clocks, filesystem,
+# random, sockets), the default-deny WasiCtx wiring (preopened dirs
+# clamped by DirPerms/FilePerms). default-features = false: p1/p2's
+# preview faces stay OUT (the p3 face only; the legacy host's
+# disposition, kept). SYNC-FIRST: the sync `Linker::instantiate` serves
+# the sync wasi interfaces (environment/stdio are not `async func`);
+# the async-lift's full protocol (streams/futures/task-return) is the
+# named next step — the engine carries component-model-async (the p3
+# feature's edge) but this lane never enters the concurrent context.
+wasmtime-wasi = { version = "47", default-features = false, features = [
+  "p3",
+] }
 # The typed-error derive (12 §8's no-bare-panics discipline). The
 # fast-observe fault registry integration (the causal trees) is a LATER
 # order — this enum is the honest first-seed surface, structured so each

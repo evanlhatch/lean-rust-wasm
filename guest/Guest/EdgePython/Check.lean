@@ -65,7 +65,8 @@ def exprTy (env : List (String × Ty)) : Expr → Option Ty
   | .int _ => some .int
   | .boolV _ => some .bool
   | .var x => findTy env x
-  | .bin (.and | .or) _ _ => some .bool
+  | .bin .and _ _ => some .bool
+  | .bin .or _ _ => some .bool
   | .bin _ _ _ => some .int
   | .cmp _ _ _ => some .bool
   | .un .neg _ => some .int
@@ -87,18 +88,18 @@ def exprTy (env : List (String × Ty)) : Expr → Option Ty
       match i with
       | .int n =>
           match ← exprTy env b with
-          | .tup ts => if n < ts.length then ts.get? n else none
+          | .tup ts => if n < ts.length then ts[n]? else none
           | .list t => if n == 0 then some t else none  -- the head only
           | _ => none
       | _ => none
   | .call _ _ => some .int
 
-/-- The deep checks `exprTy` can't see: the ARITH/CMP operands must be
-    int-typed and the LOGIC operands bool-typed (the repr split), the
-    call args must be int-typed (the u64 surface), the index must be a
-    literal. The operand sites are MUTUAL with `checkE` (each recurses
-    through the other — the operand sites re-run `checkE`, the arith
-    arms re-run the operand sites). -/
+-- The deep checks `exprTy` can't see: the ARITH/CMP operands must be
+-- int-typed and the LOGIC operands bool-typed (the repr split), the
+-- call args must be int-typed (the u64 surface), the index must be a
+-- literal. The operand sites are MUTUAL with `checkE` (each recurses
+-- through the other — the operand sites re-run `checkE`, the arith
+-- arms re-run the operand sites).
 mutual
 def intOperand (env : List (String × Ty)) (e : Expr) : Option Unit := do
   let _ ← checkE env e
@@ -115,11 +116,23 @@ def boolOperand (env : List (String × Ty)) (e : Expr) : Option Unit := do
     literal. -/
 def checkE (env : List (String × Ty)) : Expr → Option Unit
   | .int _ | .boolV _ | .var _ => some ()
-  | .bin (.add | .sub | .mul) l r => do
+  | .bin .add l r => do
       let _ ← intOperand env l
       let _ ← intOperand env r
       some ()
-  | .bin (.and | .or) l r => do
+  | .bin .sub l r => do
+      let _ ← intOperand env l
+      let _ ← intOperand env r
+      some ()
+  | .bin .mul l r => do
+      let _ ← intOperand env l
+      let _ ← intOperand env r
+      some ()
+  | .bin .and l r => do
+      let _ ← boolOperand env l
+      let _ ← boolOperand env r
+      some ()
+  | .bin .or l r => do
       let _ ← boolOperand env l
       let _ ← boolOperand env r
       some ()

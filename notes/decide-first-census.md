@@ -59,6 +59,13 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
 
 
 ## Machines
+  Machines.AsyncSession.step_handle
+  Machines.AsyncSession.host_refuses_handle_first
+  Machines.AsyncSession.export_refuses_recv
+  Machines.AsyncSession.offender_drift
+  Machines.AsyncSession.step_result
+  Machines.AsyncSession.hostDualGuest
+  Machines.AsyncSession.msgs_wire
 
 
 ## MachinesTestsLib
@@ -199,6 +206,7 @@ each line is fixed, a reasoned `@[nolint]`, or this baseline's record.
 
 
 ## Guest
+  Guest.Layout.u64_offsets
 
 
 ## GuestTestsLib

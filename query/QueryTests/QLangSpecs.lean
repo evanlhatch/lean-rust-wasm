@@ -66,6 +66,16 @@ def handUnion : Q bFields bFields :=
   .union (.select (.u64GtLit "id" 2) .table)
          (.select (.strEqLit "name" "bob") .table)
 
+/-- The JOIN stage (the wall-2 dissolve's surface face): the pipeline's
+    self-join on `id` ≡ the hand-written equijoin (the appended result
+    schema typed free). -/
+@[nolint linter.guestlang.dupDefBodies "the differential twin: elaborating to the hand-written Q's body IS the assertion under test"]
+def qJoin := qlang!{ from bFields then join .id .id qlang!{ from bFields } }
+
+@[nolint linter.guestlang.dupDefBodies "the differential twin: body-equality to the qlang! elaboration IS the assertion under test"]
+def handJoin : Q bFields (bFields ++ bFields) :=
+  .join "id" "id" .table .table
+
 /-! ## Suite — the surface's teeth -/
 
 def qlangSpec : Spec :=
@@ -102,6 +112,25 @@ def qlangSpec : Spec :=
                     ([] : Table (fieldsSchema bFields)) with
                 | .ok out => decide (out.map (typedRowToVals _)
                   = [some (.cons (.u64 1) .nil)])
+                | .error _ => false
+            | .error _ => false)
+        -- the JOIN stage: the elaborated equijoin's support IS the
+        -- hand-written twin's (the appended rows, ON-satisfying alone)
+        && (weightW (evalQ qJoin (tableW bRows true))
+              (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50)) = true)
+        && (weightW (evalQ qJoin (tableW bRows true))
+              (Query.Row.append (bRow 1 "ann" 200) (bRow 2 "bob" 50)) = false)
+        && (weightW (evalQ handJoin (tableW bRows true))
+              (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50)) = true)
+        -- the join stage's lowered rel agrees through the BRIDGE too
+        && (match qToRel qJoin with
+            | .ok rel =>
+                match evalRel (bridgeReader bRows) rel
+                    ([] : Table (fieldsSchema bFields)) with
+                | .ok out => decide (out.map (typedRowToVals _)
+                  = [some (Query.Row.append (bRow 1 "ann" 200) (bRow 1 "ann" 200)),
+                     some (Query.Row.append (bRow 2 "bob" 50) (bRow 2 "bob" 50)),
+                     some (Query.Row.append (bRow 3 "cee" 300) (bRow 3 "cee" 300))])
                 | .error _ => false
             | .error _ => false))
         "the qlang! surface's agreement drifted")

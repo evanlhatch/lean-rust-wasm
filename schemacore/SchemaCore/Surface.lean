@@ -21,7 +21,7 @@ THE SIX-WORD VOCABULARY (16-surface §2): `table`, `key`, `ref`,
 clause) are the NAMED NEXT ROWS — they wait for the variant-item
 model and the journal-lane clause, respectively (the honest gaps, not
 hidden ones). The unknown-clause refusal enumerates the LANDED
-vocabulary; the doc is where the next rows are named.
+vocabulary; this doc is where the next rows are named.
 
 ## What one declaration expands to (the entourage, per 16-surface §3)
 
@@ -33,7 +33,7 @@ vocabulary; the doc is where the next rows are named.
   The codecs' evidence entourage (obligation rows, the LCG sweep, the
   mechanical sabotage controls, the simp-set registrations) is the
   deriving handlers' unchanged emission — the tests' scaffolding hooks.
-- `key:` / `ref:` — the `KeyDecl` row(s) emitted into the keys lane at
+- `key:` / `ref:` — the `KeyDecl` row emitted into the keys lane at
   the declaration (the second-module + string-record-ref friction,
   killed): `record` is THIS declaration's full name (hygienic, never
   hand-strung), `fields` is the row_bridge-generated snapshot (ONE
@@ -41,9 +41,9 @@ vocabulary; the doc is where the next rows are named.
   (determinacy driving the API shape, 02 §3 — the target must be
   registered WITH a declared key: the foreignDecl rung at authoring
   time).
-- `rule:` — the `CheckItem` row(s) emitted into the check lane
-  (the shared authority over valid worlds, 02 §1 — the violating rows
-  ARE the payload; the obligation row rides `CheckItem.obligation`).
+- `rule:` — the `CheckItem` row(s) emitted into the check lane (the
+  shared authority over valid worlds, 02 §1 — the violating rows ARE
+  the payload; the obligation row rides `CheckItem.obligation`).
 - `v<N>` — THE EVOLUTION FACE: the prior version is looked up in the
   ONE log (the registry IS the accumulated event log, 15 #7; the
   versions ARE its rows), the diff→plan→upcaster pipeline is the
@@ -55,9 +55,9 @@ vocabulary; the doc is where the next rows are named.
   (order-aligned derivation; the stable-id lane is the named
   follow-up), key moves (a migrated key is a different entity set —
   08 §19), and additions without a type default.
-- (every declaration) — the build-time teeth: the replayed lanes'
-  WF (the keys cascade, the checks' scoping) + the derived plan's
-  key stability, pinned at the declaration site.
+- (every declaration) — the build-time teeth: the replayed lanes' WF
+  (the keys cascade, the checks' scoping) + the derived plan's key
+  stability, pinned at the declaration site.
 
 ## The token discipline + the curated failures
 
@@ -143,7 +143,9 @@ def eSR0006 : Kit.ECode := ⟨"SR0006"⟩
 def eSR0007 : Kit.ECode := ⟨"SR0007"⟩
 
 /-- The closed-world refusal (the ONE envelope: got + the valid space
-    + the ONE engine's did-you-mean). -/
+    + the ONE engine's did-you-mean — `Kit.suggestFor` fills the
+    envelope's suggest slot, so every `throwClosed` site's refusal
+    enumerates the valid space and suggests, unforgably). -/
 def throwClosed {α : Type} (code : Kit.ECode) (msg got : String)
     (valid : List String) : CommandElabM α :=
   throwError m!"{(Kit.Diag.closedWorld code msg .error got valid : Kit.Diag)}"
@@ -187,35 +189,55 @@ syntax (name := tableFieldClause) ident " : " term : tableClause
     colon-shaped typo (`ky: id`) shares the field line's shape and is
     the reflection's curated SD refusal at the mount (the term-led
     limit's analogue — named in the module header). -/
-syntax (name := tableUnknownEq) (priority := low) ident (ident)? " := " term : tableClause
+syntax (name := tableUnknownEq) (priority := low) ident " := " term : tableClause
+syntax (name := tableUnknownEq2) (priority := low) ident ident " := " term : tableClause
 syntax (name := tableUnknownIdents) (priority := low) ident ident : tableClause
+
+/-- THE CLAUSE LIST (the structFields discipline, Lean/Parser/Command.lean,
+    verbatim): `withPosition` + `checkColGe` per clause. THE TERM-GOBBLING
+    WALL, defeated here with Lean's OWN mechanism: a clause's trailing
+    `term` would otherwise juxtapose the next clause's first ident
+    (`a : Bool\n  b : UInt64` parses as `a : (Bool b)` — the application
+    parser's `checkColGt` argument guard passes without a saved column);
+    the `withPosition`-scoped `checkColGe` gives every term's argument
+    check a saved column at the clause list, stopping the application at
+    the line break. NOT expressible in the `syntax`-decl DSL — the DSL's
+    `(ppSpace colGt clause)*` carries no `withPosition` (defeat #1,
+    recorded; this def is the fix). -/
+def tableClausesP : Lean.Parser.Parser :=
+  Lean.Parser.withPosition <| Lean.Parser.many
+    (Lean.Parser.checkColGe "irrelevant" >>
+      (Lean.Parser.ppLine >> Lean.Parser.categoryParser `tableClause 0))
 
 /-- THE TABLE COMMAND: `table! <Name> (v<N>)? where <clauses>`. The
     version is mandatory from the second declaration of a name — the
     first declaration IS v1 (the version row IS the lane log's row). -/
 syntax (name := tableCmd) "table! " ident (ppSpace ident)? " where"
-  (ppSpace colGt tableClause)* : command
+  tableClausesP : command
 
 /-! ## The analysis (pre-emission — a refusal emits nothing) -/
 
-/-- One analyzed field line: the name, the author's type syntax (the
-    structure's emission is verbatim), the resolved `Ty`, and — for a
+/-- One analyzed field line: the name, the type syntax (the
+    structure's emission carries it verbatim — a `ref:`'s is the
+    target's key spelling, generated), the resolved `Ty`, and — for a
     `ref:` — the target's full registered name. -/
 structure TableRow where
   name : String
   tyStx : Syntax
   ty : Ty
-  refTarget? : Option String
   isRef : Bool
-  refStx : Option Syntax
+  refTarget? : Option String
+
+-- (the `ref:` clause's target, as its last-name string; resolved to
+-- the registered record below)
 
 /-- The analyzed table: everything the emission needs, computed BEFORE
     the first command is emitted. -/
 structure TableSpec where
-  tn : Lean.Name
   tnStr : String
   fullStr : String
   ver? : Option Nat
+  priorName? : Option String
   fields : List TableRow
   key? : Option String
   rules : Array (String × Syntax)
@@ -233,43 +255,66 @@ def scalarSpelling : Ty → Option String
 
 /-- The version ident's shape: `v` + digits. -/
 def versionOf? (id : Lean.Name) : Option Nat :=
-  match id.toString with
-  | s@(.str _ 'v' :: ds) => do
-      let mut n := 0
-      for d in ds do
-        unless d.isDigit do return none
-        n := 10 * n + d.toNat - '0'.toNat
-      if ds.isEmpty then none else some n
-      stop := s.isEmpty
-  | _ => none
+  let s := id.toString
+  let ds := (s.toList.drop 1)
+  if s.length >= 2 && s.startsWith "v" && ds.all Char.isDigit then
+    some (ds.foldl (fun n c => 10 * n + (c.toNat - '0'.toNat)) 0)
+  else none
 
 open Kit.Derive.Common (throwDiag)
 
 /-- The clause-walk refusal: the unknown clause, with the legal
-    enumeration + did-you-mean (the closed-world constructor). -/
+    enumeration + did-you-mean (the closed-world constructor —
+    `Kit.suggestFor` fills the suggest slot). -/
 def unknownClause (w : String) : CommandElabM α :=
   throwClosed eSR0001
     s!"table!: unknown clause `{w}` — the clause list is a closed world \
       (field lines are `name : type`)" w legalClauses
 
+/-- The evolution refusal mapped to the surface's envelope (the
+    migration lane's obligation named, the named follow-up stated). -/
+def evolutionRefusal (tnStr : String) (ver : Nat)
+    (r : SchemaCore.MigrateRefusal) : CommandElabM α :=
+  let detail : String :=
+    match r with
+    | .fieldRemoved _ f =>
+        s!"removes field `{f}` — gone data has no value-map target \
+          (the stable-id lane is the named follow-up)"
+    | .fieldUnremedied _ f =>
+        s!"retypes field `{f}` without a registered remedy — the inline \
+          `remedy:` clause is the named next row"
+    | .fieldReordered _ f =>
+        s!"reorders field `{f}` — the derivation is order-aligned; \
+          mid-list inserts refuse (the stable-id lane is the named \
+          follow-up)"
+    | .keyUnstable _ f =>
+        s!"moves the key to `{f}` — a migrated key is a different \
+          entity set (08 §19: stable identities)"
+    | .noDefault _ f =>
+        s!"adds field `{f}` whose type has no default value (a cap-0 \
+          `bounded` is uninhabited) — the fill needs the type's default"
+  throwClosed eSR0006
+    s!"table! {tnStr} v{ver}: the evolution refuses — {detail}" tnStr []
+
 /-- The analysis: the clauses' syntax → the `TableSpec` (types
     elaborated + reified, refs resolved, versions checked). Everything
     here REFUSES before any emission. -/
-unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
+unsafe def analyze (name : TSyntax `ident)
     (ver? : Option (TSyntax `ident)) (clauses : Array Syntax) :
     CommandElabM TableSpec := do
   let tn := name.getId.eraseMacroScopes
   let tnStr := tn.toString
-  let currNs ← Lean.Elab.Command.getCurrNamespace
+  let currNs ← getCurrNamespace
   let fullStr := (currNs ++ tn).toString
   -- ── the clause walk (source order) ──
   let mut fields : Array TableRow := #[]
   let mut fieldNames : Array String := #[]
   let mut key? : Option String := none
-  let mut refs : Array (String × String) := #[]
+  let mut refCount := 0
   let mut rules : Array (String × Syntax) := #[]
   let mut capsWire := true
   let mut capsRow := true
+  let mut derivingSeen := false
   for c in clauses do
     match c with
     | `(tableClause| key: $f:ident) =>
@@ -282,15 +327,18 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
         key? := some fStr
     | `(tableClause| ref: $f:ident : $t:ident) =>
         let fStr := f.getId.eraseMacroScopes.toString
-        refs := refs.push (fStr, t.getId.eraseMacroScopes.toString)
+        if fieldNames.contains fStr then
+          throwClosed eSR0002
+            s!"table! {tnStr}: duplicate field `{fStr}` — a table's field \
+              names are distinct (the fields-nodup obligation)"
+            fStr fieldNames.toList
+        refCount := refCount + 1
         fieldNames := fieldNames.push fStr
         fields := fields.push
-          { name := fStr, tyStx := f.raw, ty := .u64
-            refTarget? := some t.getId.eraseMacroScopes.toString
-            isRef := true, refStx := some t }
-    | `(tableClause| rule: $r:ident := $t:term) =>
-        rules := rules.push (r.getId.eraseMacroScopes.toString, t.raw)
+          { name := fStr, tyStx := f.raw, ty := .u64, isRef := true
+            refTarget? := some t.getId.eraseMacroScopes.toString }
     | `(tableClause| deriving: $[$cs:ident],*) =>
+        derivingSeen := true
         capsWire := false
         capsRow := false
         for ci in cs do
@@ -298,6 +346,8 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
           if cStr == "WireCodec" then capsWire := true
           else if cStr == "row_bridge" then capsRow := true
           else
+            -- the closed-world refusal: legalCaps is the valid space,
+            -- `Kit.suggestFor` the did-you-mean (throwClosed's envelope)
             throwClosed eSR0004
               s!"table! {tnStr}: unknown capability in `deriving:` — the \
                 capability set is a closed world" cStr legalCaps
@@ -305,7 +355,7 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
         let fStr := f.getId.eraseMacroScopes.toString
         -- the type: elaborated + reified NOW (a fragment refusal is
         -- the surface's SR envelope, before any emission)
-        let tyExpr ← liftTermElabM (Lean.Elab.Term.elabType t)
+        let tyExpr ← liftTermElabM (Lean.Elab.Term.elabType t.raw)
         match SchemaCore.tyOfExpr? tyExpr with
         | none =>
             throwClosed eSR0007
@@ -321,13 +371,24 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
                 fStr fieldNames.toList
             fieldNames := fieldNames.push fStr
             fields := fields.push
-              { name := fStr, tyStx := t.raw, ty := ty
-                refTarget? := none, isRef := false, refStx := none }
-    | `(tableClause| $w:ident $[$_:ident]? := $[$_]:term) =>
-        unknownClause w.getId.eraseMacroScopes.toString
-    | `(tableClause| $w:ident $_:ident) =>
-        unknownClause w.getId.eraseMacroScopes.toString
-    | _ => Lean.Elab.throwUnsupportedSyntax
+              { name := fStr, tyStx := t.raw, ty := ty, isRef := false
+                refTarget? := none }
+    | c =>
+        -- the `:=`-carrying clauses (rule + the catch-alls) dispatch by
+        -- KIND — `:=` is a token no quotation pattern can spell; the
+        -- rule's args are [ident, term], the catch-alls' first arg is
+        -- the (typo'd) clause word
+        let k := c.getKind
+        -- the literal tokens ("rule: ", " := ") OCCUPY arg slots: the
+        -- rule's shape is [atom, ident, atom, term]
+        if k == ``tableRuleClause then
+          rules := rules.push
+            (c.getArgs[1]!.getId.eraseMacroScopes.toString, c.getArgs[3]!)
+        else if k == ``tableUnknownEq || k == ``tableUnknownEq2 ||
+            k == ``tableUnknownIdents then
+          unknownClause c.getArgs[0]!.getId.eraseMacroScopes.toString
+        else
+          Lean.Elab.throwUnsupportedSyntax
   if fields.isEmpty then
     throwClosed eSR0002
       s!"table! {tnStr}: a table needs at least one field line \
@@ -340,9 +401,13 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
             a declared field — the key is one of the table's own field \
             lines" k fieldNames.toList
   | none => pure ()
+  if derivingSeen && !capsWire && !capsRow then
+    throwDiag eSR0004
+      s!"table! {tnStr}: an empty capability set — name at least one of \
+        WireCodec / row_bridge (deriving is lazy; the default is BOTH)"
   let env ← getEnv
   -- ── the ref resolution: the target's declared key types the field ──
-  let keyDecls? ←
+  let keyDecls : List KeyDecl ←
     match ← liftCoreM (SchemaCore.getKeys env) with
     | .error e => throwError s!"table! {tnStr}: the keys replay refused: {e}"
     | .ok kds => pure kds
@@ -379,15 +444,12 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
                       target ["Bool", "UInt64", "Int64", "String"]
                 | some sp =>
                     resolved := resolved.push
-                      { f with ty := kf.ty
-                        tyStx := (Lean.mkIdent `UInt64).raw }
-
-  -- THIS RESOLUTION IS DELIBERATELY CONCRETE: the ref field's source
-  -- spelling is rendered below from the resolved scalar, so the
-  -- placeholder ident above is never emitted.
+                      { name := f.name
+                        tyStx := Lean.mkIdent (Lean.Name.mkSimple sp)
+                        ty := kf.ty, isRef := true
+                        refTarget? := some kd.record }
   -- ── the capability/entourage coupling ──
-  let wantsKeys := key?.isSome || refs.any (fun r => r.2 != "")
-  if wantsKeys && !capsRow then
+  if (key?.isSome || refCount > 0) && !capsRow then
     throwDiag eSR0004
       s!"table! {tnStr}: the `key:`/`ref:` clauses need the row_bridge \
         capability (the fields snapshot `T.fields` is the ONE copy the \
@@ -404,30 +466,32 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
               s!"table! {tnStr}: the version must be spelled `v<N>` (the \
                 first declaration IS v1; the second declaration bumps to \
                 `v2`)" v.getId.eraseMacroScopes.toString []
-  let schemaItems? ←
+  let schemaItems : List Item ←
     match ← liftCoreM (SchemaCore.getSchemas env) with
     | .error e => throwError s!"table! {tnStr}: the schema replay refused: {e}"
     | .ok items => pure items
-  let priors :=
+  let priors :
+      List Kit.Lane.LaneRow :=
     (Kit.Lane.laneRows env SchemaCore.schemaLaneId).filter
       (fun r => SchemaCore.lastName r.name == tnStr && r.name != fullStr)
+  let priorName? : Option String := (priors.getLast?).map (·.name)
   if verNat?.isSome && priors.isEmpty then
     throwClosed eSR0005
       s!"table! {tnStr}: versioned declaration with no prior version in \
         the registry — the first declaration of a name is v1 (no `v<N>` \
         spelling); a version rides the registry's OWN event log (15 #7)"
-      tnStr (priors.map (·.name))
+      tnStr []
   if verNat?.isNone && !priors.isEmpty then
     throwClosed eSR0005
-      s!"table! {tnStr}: `{tnStr}` is already registered — a redeclaration \
-        bumps the version (`table! {tnStr} v2 where …`); the versions ARE \
-        the registry's rows" tnStr (priors.map (·.name))
-  if verNat?.isSome then
+      s!"table! {tnStr}: `{tnStr}` is already registered — a \
+        redeclaration bumps the version (`table! {tnStr} v2 where …`); \
+        the versions ARE the registry's rows" tnStr []
+  if let some ver := verNat? then
     match key? with
     | none =>
         throwClosed eSR0005
-          s!"table! {tnStr} v{verNat?.get!}: a versioned table declares its \
-            key — stable identities, 08 §19" tnStr ["a `key:` clause"]
+          s!"table! {tnStr} v{ver}: a versioned table declares its key — \
+            stable identities, 08 §19" tnStr ["a `key:` clause"]
     | some k =>
         -- the key must not MOVE: the prior's declared key is the
         -- entity set's identity (a migrated key is a different set)
@@ -438,40 +502,32 @@ unsafe def analyze (stx : Syntax) (name : TSyntax `ident)
         | some pk =>
             unless pk == k do
               throwClosed eSR0006
-                s!"table! {tnStr} v{verNat?.get!}: the key moves from \
-                  `{pk}` to `{k}` — a migrated key is a different entity \
-                  set (08 §19: stable identities required)"
+                s!"table! {tnStr} v{ver}: the key moves from `{pk}` to \
+                  `{k}` — a migrated key is a different entity set \
+                  (08 §19: stable identities required)"
                 k [pk]
         | none => pure ()
+        -- THE EVOLUTION CHECK: the migration lane's own derivation
+        -- (consumed, not re-rolled), at the declaration, pre-emission.
+        let oldIt? :=
+          schemaItems.find? fun it =>
+            it.name == (priorName?.getD "")
+        let newIt : Item :=
+          { name := fullStr
+            fields :=
+              (resolved.map (fun f => { name := f.name, ty := f.ty })).toList }
+        match oldIt? with
+        | some oldIt =>
+            match SchemaCore.deriveUpcaster k [] oldIt newIt with
+            | .error r => evolutionRefusal tnStr ver r
+            | .ok _ => pure ()
+        | none =>
+            throwError s!"table! {tnStr} v{ver}: the version chain \
+              drifted (the prior item did not replay)"
   pure
-    { tn := tn, tnStr := tnStr, fullStr := fullStr, ver? := verNat?
-      fields := resolved.toList, key? := key?, rules := rules
-      capsWire := capsWire, capsRow := capsRow }
-
-/-- The evolution refusal mapped to the surface's envelope (the
-    migration lane's obligation named, the named follow-up stated). -/
-def evolutionRefusal (tnStr : String) (ver : Nat)
-    (r : SchemaCore.MigrateRefusal) : CommandElabM α :=
-  let detail : String :=
-    match r with
-    | .fieldRemoved _ f =>
-        s!"removes field `{f}` — gone data has no value-map target \
-          (the stable-id lane is the named follow-up)"
-    | .fieldUnremedied _ f =>
-        s!"retypes field `{f}` without a registered remedy — the inline \
-          `remedy:` clause is the named next row"
-    | .fieldReordered _ f =>
-        s!"reorders field `{f}` — the derivation is order-aligned; \
-          mid-list inserts refuse (the stable-id lane is the named \
-          follow-up)"
-    | .keyUnstable _ f =>
-        s!"moves the key to `{f}` — a migrated key is a different \
-          entity set (08 §19: stable identities)"
-    | .noDefault _ f =>
-        s!"adds field `{f}` whose type has no default value (a cap-0 \
-          `bounded` is uninhabited) — the fill needs the type's default"
-  throwClosed eSR0006
-    s!"table! {tnStr} v{ver}: the evolution refuses — {detail}" tnStr []
+    { tnStr := tnStr, fullStr := fullStr, ver? := verNat?
+      priorName? := priorName?, fields := resolved.toList, key? := key?
+      rules := rules, capsWire := capsWire, capsRow := capsRow }
 
 /-! ## The emission (the parse route — pattern #19) -/
 
@@ -483,8 +539,7 @@ def renderStx (stx : Syntax) : String :=
 /-- The generated commands, as SOURCE TEXT (the parse route: rendered
     → re-parsed by the real parser → elaborated exactly like hand
     code; DepFold's wave-29 lesson). -/
-def renderCommands (spec : TableSpec) (priorName : Option String) :
-    CommandElabM (Array String) := do
+def renderCommands (spec : TableSpec) : CommandElabM (Array String) := do
   let mut cmds : Array String := #[]
   -- ── 1. THE STRUCTURE (the same @[schema] mount, capabilities defaulted) ──
   let mut structSrc := ""
@@ -494,51 +549,55 @@ def renderCommands (spec : TableSpec) (priorName : Option String) :
       (`@[schema]` + the lanes), never a parallel path. -/\n"
   structSrc := structSrc ++ "@[schema] structure " ++ spec.tnStr ++ " where\n"
   for f in spec.fields do
-    let tySrc : String :=
-      match f.isRef, f.refStx with
-      | true, some t => renderStx t
-      | _, _ => renderStx f.tyStx
-    structSrc := structSrc ++ "  " ++ f.name ++ " : " ++ tySrc ++ "\n"
+    structSrc := structSrc ++ "  " ++ f.name ++ " : " ++ renderStx f.tyStx ++ "\n"
   let mut caps : Array String := #[]
   if spec.capsWire then caps := caps.push "SchemaCore.WireCodec"
   if spec.capsRow then caps := caps.push "SchemaCore.row_bridge"
-  structSrc := structSrc ++ "  deriving " ++ String.intercalate ", " caps.toList
+  unless caps.isEmpty do
+    structSrc := structSrc ++ "  deriving " ++ String.intercalate ", " caps.toList
   cmds := cmds.push structSrc
-  -- ── 2. THE KEY/REF ROWS (the keys lane, at the declaration) ──
+  -- ── 2. THE KEY/REF ROW (the keys lane, at the declaration) ──
   if spec.key?.isSome || spec.fields.any (·.isRef) then
     let mut foreign : Array String := #[]
     for f in spec.fields do
       if f.isRef then
         foreign := foreign.push
-          s!"{{ field := \"{f.name}\", target := \"{f.refTarget?.get!}\" }}"
-    let fkSrc := if foreign.isEmpty then "[]" else "[" ++ String.intercalate ", " foreign.toList ++ "]"
-    let keySrc := spec.key?.getD ""
-    cmds := cmds.push (s!"/-- GENERATED by the `table!` surface — the table's \
-      declared key + its foreign refs, as the keys lane's rows (the \
-      second-module + string-ref friction killed; the fields snapshot is \
-      the row_bridge's ONE copy). -/\n" ++
-      "@[key] def " ++ spec.tnStr ++ ".keyRow : SchemaCore.KeyDecl :=\n" ++
-      "  { record := \"" ++ spec.fullStr ++ "\"\n" ++
-      "    fields := " ++ spec.tnStr ++ ".fields\n" ++
-      "    key := \"" ++ keySrc ++ "\"\n" ++
-      "    foreign := " ++ fkSrc ++ " }")
+          ("{ field := \"" ++ f.name ++ "\", target := \"" ++
+            f.refTarget?.get! ++ "\" }")
+    let fkSrc :=
+      if foreign.isEmpty then "[]"
+      else "[" ++ String.intercalate ", " foreign.toList ++ "]"
+    cmds := cmds.push
+      (s!"/-- GENERATED by the `table!` surface — the table's declared \
+          key + its foreign refs, as the keys lane's row (the \
+          second-module + string-ref friction killed; the fields \
+          snapshot is the row_bridge's ONE copy). -/\n" ++
+        "@[key] def " ++ spec.tnStr ++ ".keyRow : SchemaCore.KeyDecl :=\n" ++
+        "  { record := \"" ++ spec.fullStr ++ "\"\n" ++
+        "    fields := " ++ spec.tnStr ++ ".fields\n" ++
+        "    key := \"" ++ spec.key?.getD "" ++ "\"\n" ++
+        "    foreign := " ++ fkSrc ++ " }")
   -- ── 3. THE RULE ROWS (the check lane, at the declaration) ──
   for (rName, rStx) in spec.rules do
-    let defName := spec.tn ++ Lean.Name.mkSimple ("rule" ++ rName.capitalize)
-    cmds := cmds.push (s!"/-- GENERATED by the `table!` surface — the \
-      `{rName}` rule as the check lane's row (the shared authority over \
-      valid worlds; the violating rows are the payload). -/\n" ++
-      "@[check] def " ++ defName.toString ++ " : SchemaCore.CheckItem :=\n" ++
-      "  { name := \"" ++ spec.tnStr ++ "-" ++ rName ++ "\"\n" ++
-      "    schemaRef := \"" ++ spec.fullStr ++ "\"\n" ++
-      "    fields := " ++ spec.tnStr ++ ".fields\n" ++
-      "    pred := " ++ renderStx rStx ++ " }")
+    let defName := spec.tnStr ++ ".rule" ++ rName.capitalize
+    cmds := cmds.push
+      (s!"/-- GENERATED by the `table!` surface — the `{rName}` rule as \
+          the check lane's row (the shared authority over valid worlds; \
+          the violating rows are the payload). -/\n" ++
+        "@[check] def " ++ defName ++ " : SchemaCore.CheckItem :=\n" ++
+        "  { name := \"" ++ spec.tnStr ++ "-" ++ rName ++ "\"\n" ++
+        "    schemaRef := \"" ++ spec.fullStr ++ "\"\n" ++
+        "    fields := " ++ spec.tnStr ++ ".fields\n" ++
+        "    pred := " ++ renderStx rStx ++ " }")
   -- ── 4. THE TEETH (the lanes' WF + the plan's stability, at the site) ──
+  -- (a `--` comment, not a docstring: a doc comment does not attach to
+  -- `#eval` — it parses as a standalone moduleDoc command and the tooth
+  -- becomes a second, unparseable command)
   let mut tooth := ""
-  tooth := tooth ++ "/-- GENERATED by the `table!` surface — the declaration's \
-    build-time teeth: the registration's replay, the keys cascade's WF, the \
-    rules' scoping, and (versioned tables) the derived plan's key \
-    stability. -/\n"
+  tooth := tooth ++ "-- GENERATED by the `table!` surface — the declaration's \
+    build-time teeth: the registration's replay, the keys cascade's WF, \
+    the rules' scoping, and (versioned tables) the derived plan's key \
+    stability.\n"
   tooth := tooth ++ "#eval show Lean.CoreM Unit from do\n"
   tooth := tooth ++ "  let env ← Lean.getEnv\n"
   tooth := tooth ++ "  match ← SchemaCore.getSchemas env with\n"
@@ -578,7 +637,7 @@ def renderCommands (spec : TableSpec) (priorName : Option String) :
     tooth := tooth ++ "        unless diags.isEmpty do\n"
     tooth := tooth ++ "          throwError s!\"table! " ++ spec.tnStr ++
       ": the rule `{ci.name}` is not legal: {diags}\"\n"
-  match spec.ver?, priorName with
+  match spec.ver?, spec.priorName? with
   | some ver, some prior =>
       tooth := tooth ++ "    match items.find? fun it => it.name == \"" ++
         prior ++ "\", items.find? fun it => it.name == \"" ++
@@ -606,7 +665,8 @@ def renderCommands (spec : TableSpec) (priorName : Option String) :
     REAL parser, then elaborated (never quotation splices). -/
 def elabParsed (tnStr : String) (src : String) : CommandElabM Unit := do
   let env ← getEnv
-  match Lean.Parser.runParserCategory env `command src (fileName := "<table-gen>") with
+  match Lean.Parser.runParserCategory env `command src
+      (fileName := "<table-gen>") with
   | .ok s => elabCommand s
   | .error e =>
       throwDiag eSR0001
@@ -619,33 +679,8 @@ def elabParsed (tnStr : String) (src : String) : CommandElabM Unit := do
 unsafe def elabTableImpl (stx : Syntax) : CommandElabM Unit := do
   match stx with
   | `(command| table! $name:ident $[$ver?:ident]? where $[$clauses:tableClause]*) =>
-      let spec ← analyze stx name ver? clauses
-      -- the prior version's registered name (the version chain's read)
-      let env ← getEnv
-      let priorName : Option String :=
-        if spec.ver?.isSome then
-          ((Kit.Lane.laneRows env SchemaCore.schemaLaneId).filter
-            (fun r => SchemaCore.lastName r.name == spec.tnStr &&
-              r.name != spec.fullStr)).getLast? |>.map (·.name)
-        else none
-      -- THE EVOLUTION CHECK: the migration lane's own derivation
-      -- (consumed, not re-rolled), at the declaration, pre-emission.
-      if let some ver := spec.ver? do
-        let oldIt? := (← liftCoreM (SchemaCore.getSchemas env)).toOption
-          |>.bind (fun items => items.find? fun it => it.name == priorName.getD "")
-        let keyDecls? := (← liftCoreM (SchemaCore.getKeys env)).toOption
-        let newIt : SchemaCore.Item :=
-          { name := spec.fullStr
-            fields := spec.fields.map (fun f => { name := f.name, ty := f.ty }) |>.toList }
-        match oldIt?, keyDecls? with
-        | some oldIt, some _ =>
-            match SchemaCore.deriveUpcaster spec.key?.getD "" [] oldIt newIt with
-            | .error r => evolutionRefusal spec.tnStr ver r
-            | .ok _ => pure ()
-        | _, _ =>
-            throwError s!"table! {spec.tnStr} v{ver}: the version chain \
-              drifted (the prior item did not replay)"
-      for src in ← renderCommands spec priorName do
+      let spec ← analyze name ver? clauses
+      for src in ← renderCommands spec do
         elabParsed spec.tnStr src
   | _ => Lean.Elab.throwUnsupportedSyntax
 

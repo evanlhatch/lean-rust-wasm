@@ -466,8 +466,10 @@ def step : State → Instr → Outcome
   | s, .select =>
       match s.stack with
       | .i32 b :: v1 :: v2 :: rest =>
-          if b != 0 then .ok { s with stack := v1 :: rest }
-          else .ok { s with stack := v2 :: rest }
+          -- the spec's select: pops c, val2, val1 (top-first); c≠0 → val1
+          -- (the FIRST-pushed, deepest of the pair) — v2 here; else val2.
+          if b != 0 then .ok { s with stack := v2 :: rest }
+          else .ok { s with stack := v1 :: rest }
       | _ => .trap .typeErr
   | _, .unreach => .trap .unreach
 
@@ -1213,10 +1215,10 @@ theorem step_preserves (s s' : State) (i : Instr) (b mid : List ValType)
           split at hstep
           · rw [Outcome.ok.injEq] at hstep
             subst hstep
-            exact ⟨by simp [stackTys, hv1.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
+            exact ⟨by simp [stackTys, hv2.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
           · rw [Outcome.ok.injEq] at hstep
             subst hstep
-            exact ⟨by simp [stackTys, hv2.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
+            exact ⟨by simp [stackTys, hv1.1, hv2.2, hmid], fun n' t' h => hloc n' t' h⟩
       | i64 =>
           exfalso
           simp [tyOf] at hcty
@@ -2242,11 +2244,11 @@ theorem exec_typed (m : Module)
                 cases c0 with
                 | i32 b =>
                     have hx : step s Instr.select
-                        = .ok { s with stack := (if b != 0 then v2 else v3) :: rest3 } := by
+                        = .ok { s with stack := (if b != 0 then v3 else v2) :: rest3 } := by
                       simp only [step, hstack2, hrest2, hrest3]
                       split <;> rfl
                     obtain ⟨hstk2, hloc2⟩ := step_preserves s
-                      { s with stack := (if b != 0 then v2 else v3) :: rest3 }
+                      { s with stack := (if b != 0 then v3 else v2) :: rest3 }
                       Instr.select (ValType.i32 :: t :: t' :: ts) (t :: ts) c.lty c.tenv hx
                       (by rw [hstack2]; exact hstack) hloc hchk
                     rw [hm] at htail

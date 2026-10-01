@@ -306,7 +306,7 @@ theorem unescTo_close : ∀ (cs sfx : List Char),
         rw [he]
         simp [unescTo.eq_1, ih, h1]
       by_cases h2 : c = '"'
-      · have he : escChar c = ['\\', '"'] := by simp [escChar, h1, h2]
+      · have he : escChar c = ['\\', '"'] := by simp [escChar, h2]
         rw [he]
         simp [unescTo.eq_1, ih, h2]
       · have he : escChar c = [c] := by simp [escChar, h1, h2]
@@ -345,7 +345,7 @@ theorem quoteHead_cons (c : Char) (rest : List Char) :
             have hcc : '"' = c := beq_iff_eq.mp hb
             rw [hcc] at h
             simp at h
-      simp [h, h2]
+      simp [h2]
   | true =>
       have hcc : c = '"' := beq_iff_eq.mp h
       rw [hcc]
@@ -402,7 +402,7 @@ theorem quotedScan_ok {cur : Cursor} {v : String} {cur' : Cursor}
           have hne : 0 < cur.cs.length := by
             cases hcs : cur.cs with
             | nil => rw [hcs] at hhead; simp at hhead
-            | cons _ _ => simp [hcs]
+            | cons _ _ => simp
           simp only at h
           by_cases hguard : cur.cs.take (1 + ((cur.cs.drop 1).length - after.length)) = (strW (String.ofList s)).toList
           · rw [if_pos hguard] at h

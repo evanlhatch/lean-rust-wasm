@@ -23,16 +23,20 @@ Suites:
 
 import Guest
 import Guest.Component
+import Guest.Layout
 import WasmCore
+import TestingKit.Golden
 import TestingKit.Harness
 import ComponentTests.Fixture
 import ComponentTests.StringFixture
 import ComponentTests.EdgeFixture
+import ComponentTests.WitFixture
 import ComponentTests.Axioms
 import ComponentTests.Gen
 
 open Guest WasmCore TestingKit ComponentTests.StringFixture
 open ComponentTests.EdgeFixture (edgeCore edgeWorld edgeSpec execAt pyAt resultOf)
+open ComponentTests.WitFixture (gateRun gateVerdict)
 
 /-! ## The driver's IO face (the GuestTests.Main pattern) -/
 
@@ -101,11 +105,14 @@ def tieCommittedAt (wasmPath sidecarPath : String) (fresh : List UInt8) :
 def tieCommitted (fresh : List UInt8) : IO CheckResult :=
   tieCommittedAt "gen/component-slice.wasm" "gen/component-slice.wasm.hdr" fresh
 
-/-- The world text's tie face: the committed `.wit` body (the 2
-    GENERATED header lines stripped) must be the fresh render. -/
+/-- The world text's tie face: the committed `.wit` body (the ONE
+    strip — `TestingKit.Golden.bodyOf`: exactly the leading 2-line
+    GENERATED header block is exempt, keyed on the header's own
+    markers; a headerless committed text ties WHOLE, never silently
+    mis-stripped by a blind line count) must be the fresh render. -/
 def tieCommittedWitAt (witPath : String) (fresh : String) : IO CheckResult := do
   let committed ← IO.FS.readFile witPath
-  let body := String.intercalate "\n" ((committed.splitOn "\n").drop 2)
+  let body := TestingKit.Golden.bodyOf committed
   return if body == fresh then .ok ()
     else .error s!"the committed world text drifted: got «{body}»"
 
@@ -457,14 +464,18 @@ def computeEdgeEmitted : IO (Except String EdgeEmitted) := do
       return .ok { bytes := bs, witText := witText
                  , binTie := binTie, witTie := witTie }
 
-/-- The edge world's five export contract lines (the render's exact
+/-- The edge world's nine export contract lines (the render's exact
     shape — `Wit.Render.exportItem`). -/
 def edgeExportLines : List String :=
   [ "export double: func(x: u64) -> u64;"
   , "export adder: func(a: u64, b: u64) -> u64;"
   , "export dec1: func(n: u64) -> u64;"
   , "export loop-sum: func(n: u64) -> u64;"
-  , "export if-max: func(a: u64, b: u64) -> u64;" ]
+  , "export if-max: func(a: u64, b: u64) -> u64;"
+  , "export ops-mix: func(a: u64, b: u64) -> u64;"
+  , "export tup-second: func(a: u64, b: u64) -> u64;"
+  , "export list-sum: func(n: u64) -> u64;"
+  , "export list-head: func(n: u64) -> u64;" ]
 
 /-- THE THREE-WAY PARITY's point table: (name, args, the literal the
     three faces must agree on). The legs: `pyAt` (the legacy Python
@@ -475,7 +486,14 @@ def edgeExportLines : List String :=
 def parityPoints : List (String × List Int × Int) :=
   [ ("double", [21], 42), ("adder", [40, 2], 42), ("dec1", [5], 4)
   , ("loop_sum", [10], 45), ("loop_sum", [0], 0)
-  , ("if_max", [3, 9], 9), ("if_max", [9, 3], 9) ]
+  , ("if_max", [3, 9], 9), ("if_max", [9, 3], 9)
+  , ("ops_mix", [3, 9], 18446744073709551610)
+  , ("ops_mix", [9, 3], 6)
+  , ("ops_mix", [5, 5], 18446744073709551611)
+  , ("ops_mix", [2, 1], 1)
+  , ("tup_second", [3, 9], 15), ("tup_second", [10, 20], 40)
+  , ("list_sum", [10], 16), ("list_sum", [0], 6)
+  , ("list_head", [42], 42) ]
 
 def edgeSpecs (e : EdgeEmitted) : List TestingKit.Spec :=
   [ Spec.ofList "the edgepython emission: the frontend's module through \
@@ -554,6 +572,143 @@ def edgeSpecs (e : EdgeEmitted) : List TestingKit.Spec :=
       (h := by simp) 1 67
   ]
 
+/-! ## The WITNESS lane's computed face (the host-gating lane: the
+    pinned invariant's checker as an export, the heap-return face) -/
+
+/-- The witness emission's product: the same shape over the checker
+    component (the bytes, the world text, the committed ties; the
+    emission is PURE — the hand-built fixture needs no LCNF re-run). -/
+structure WitnessEmitted where
+  bytes : List UInt8
+  witText : String
+  binTie : CheckResult
+  witTie : CheckResult
+  deriving Inhabited
+
+/-- The witness emission's product (the committed artifact's source +
+    its ties). -/
+def computeWitnessEmitted : IO (Except String WitnessEmitted) := do
+  match Guest.Component.encodeComponent
+      ComponentTests.WitFixture.witGateModule
+      ComponentTests.WitFixture.witGateWorld with
+  | .error e => return .error s!"witness component: {e.render}"
+  | .ok bs => do
+      let witText := Wit.Render.worldFile "mandate:guest"
+        ComponentTests.WitFixture.witGateWorld
+      let binTie ← tieCommittedAt "gen/component-witness-slice.wasm"
+        "gen/component-witness-slice.wasm.hdr" bs
+      let witTie ← tieCommittedWitAt "gen/component-witness-slice.wit" witText
+      return .ok { bytes := bs, witText := witText
+                 , binTie := binTie, witTie := witTie }
+
+def witnessSpecs (w : WitnessEmitted) : List TestingKit.Spec :=
+  [ Spec.ofList "the witness emission: the pinned invariant's checker
+      module through the SAME world-checked component binary (the
+      heap-return face: `witness-gate : func(...) -> result<_, u64>`; the
+      committed artifact byte-tied)"
+      (fun _ => do
+        TestingKit.assertEq "the witness component's header pin"
+          (w.bytes.take 8) [0x00, 0x61, 0x73, 0x6D, 0x0D, 0x00, 0x01, 0x00]
+        TestingKit.assert (w.witText.contains
+          "export witness-gate: func(src: u64, dst: u64, amount: u64, t1: u64, \
+           b1: u64, t2: u64, t3: u64, b3: u64) -> result<_, u64>;"
+        ) "the world text must carry the witness-gate contract line"
+        TestingKit.assert (w.witText.startsWith "package mandate:guest;\n")
+          "the witness world text must carry the package line"
+        -- the LEAN teeth (the fixture's legs — the checker's own
+        -- calculus + the Lean-EXECUTOR parity, all pure): the parity's
+        -- wasmtime leg runs in crates/mandate-host's witness lane over
+        -- the COMMITTED component; the byte-tie above ties that
+        -- component to this module, closing the circle.
+        TestingKit.assert ComponentTests.WitFixture.legValid
+          "the producer's certificate must ACCEPT at the valid row"
+        TestingKit.assert ComponentTests.WitFixture.legValidWire
+          "the valid row's wire must be the pinned 5 slots"
+        TestingKit.assert ComponentTests.WitFixture.legTampered
+          "the tampered record must refuse (its wire exists)"
+        TestingKit.assert ComponentTests.WitFixture.legWrongSchema
+          "the wrong-shape certificate must refuse (no wire)"
+        TestingKit.assert ComponentTests.WitFixture.legInvalid
+          "the invalid row must refuse (no honest certificate)"
+        TestingKit.assert ComponentTests.WitFixture.legExecutorParity
+          "the fixture's own module must answer the pinned verdicts"
+        match w.binTie, w.witTie with
+        | .ok (), .ok () => .ok ()
+        | .error why, _ => .error s!"the binary tie failed: {why}"
+        | _, .error why => .error s!"the render tie failed: {why}")
+      [("control: the witness world's contract is a LIE (wrong err type
+          — caught)",
+         fun _ => TestingKit.assert
+           (w.witText.contains "export witness-gate: func() -> result<_, u64>;")
+           "the control demands the wrong signature to be present")
+      , ("control: the executor parity claim BROKEN (the tampered wire
+          accepted) is caught",
+         fun _ => TestingKit.assertEq "wrong" (gateVerdict (gateRun 1 2 5 1 0 3 0 0))
+           (some (0, 0)))
+      ]
+      (h := by simp) 1 70
+  ]
+
+/-! ## The layout suite (the D6 port: Guest.Layout — the canonical-ABI
+    flat-record layout's proof content + its concrete pins) -/
+
+def layoutSpecs : List TestingKit.Spec :=
+  [ Spec.ofList "the canonical-ABI flat-record layout: the offsets walk's
+      soundness (the non-overlap theorem, kernel-checked) + the
+      concrete pins (the D6 port)"
+      (fun _ => do
+        -- the pins' VALUES are the rfl theorems' subjects — the kernel
+        -- checked the equalities; the suite consumes the same numbers
+        -- (a drift here is a proof drift, impossible-by-construction —
+        -- the pin is the consumer's tooth)
+        TestingKit.assertEq "the user record's offsets"
+          (Guest.Layout.offsets Guest.Layout.userTys) [0, 8, 16, 24]
+        TestingKit.assertEq "the user record's size (the stream item
+          stride)" (Guest.Layout.size Guest.Layout.userTys) 32
+        TestingKit.assertEq "the u64 field's offset"
+          (Guest.Layout.offsets [.atom .u64]) [0])
+      [ ("control: the offsets pin BROKEN (tags at 25) is caught",
+         fun _ => TestingKit.assertEq "wrong"
+           (Guest.Layout.offsets Guest.Layout.userTys) [0, 8, 16, 25])
+      , ("control: the size pin BROKEN (stride 31) is caught",
+         fun _ => TestingKit.assertEq "wrong"
+           (Guest.Layout.size Guest.Layout.userTys) 31)
+      ]
+      (h := by simp) 1 68
+  ]
+
+/-! ## The Layout emitter consumer (the object-slot lane: Guest.Lower's
+    boxed-Nat constants are the proved walk's outputs — the hand
+    numbers died into `Guest.Layout.offsets`/`size`, and the generated
+    components' bytes are unchanged — the same layout, now
+    proved-derived) -/
+
+def layoutConsumerSpecs : List TestingKit.Spec :=
+  [ Spec.ofList "the object-slot lane's constants are Layout-derived
+      (the emitter consumer: the legacy hand-numbered rows ride the
+      proved walk)"
+      (fun _ => do
+        TestingKit.assertEq "the boxed object's size"
+          Guest.boxSize 16
+        TestingKit.assertEq "the rc cell's offset (slot 0)"
+          Guest.rcCellOff 0
+        TestingKit.assertEq "the box payload's offset (slot 1)"
+          Guest.boxPayloadOff 8
+        TestingKit.assertEq "the closure fnIdx's offset (slot 1)"
+          Guest.closureFnIdxOff 8
+        TestingKit.assertEq "the closure's first capture offset (slot 2)"
+          Guest.closureCapOff 16
+        TestingKit.assertEq "the closure's size (2 captures)"
+          (Guest.closureSize 2) 32)
+      [ ("control: the object-size pin BROKEN (15) is caught",
+         fun _ => TestingKit.assertEq "wrong" Guest.boxSize 15)
+      , ("control: the payload-offset pin BROKEN (slot 0 — the legacy's
+          wrong-twice face) is caught",
+         fun _ => TestingKit.assertEq "wrong" Guest.boxPayloadOff 0)
+      ]
+      (h := by simp) 1 69
+  ]
+
 /-! ## The driver -/
 
 unsafe def main : IO UInt32 := do
@@ -572,14 +727,22 @@ unsafe def main : IO UInt32 := do
           IO.eprintln s!"ComponentTests: EDGE PIPELINE FAILED — {ee}"
           return 1
       | .ok ed =>
-        match ← computeGen with
-        | .error eg =>
-            IO.eprintln s!"ComponentTests: GEN PIPELINE FAILED — {eg}"
+        match ← computeWitnessEmitted with
+        | .error ew =>
+            IO.eprintln s!"ComponentTests: WITNESS PIPELINE FAILED — {ew}"
             return 1
-        | .ok (g, pin) =>
-        TestingKit.mainOfSuites
-          [ ("the component emission", emissionSpecs e)
-          , ("the skew teeth", skewSpecs)
-          , ("the string emission", stringSpecs s)
-          , ("the edgepython component lane", edgeSpecs ed)
-          , ("the manifest discipline", genSpecs g pin) ]
+        | .ok wd =>
+          match ← computeGen with
+          | .error eg =>
+              IO.eprintln s!"ComponentTests: GEN PIPELINE FAILED — {eg}"
+              return 1
+          | .ok (g, pin) =>
+          TestingKit.mainOfSuites
+            [ ("the component emission", emissionSpecs e)
+            , ("the skew teeth", skewSpecs)
+            , ("the string emission", stringSpecs s)
+            , ("the edgepython component lane", edgeSpecs ed)
+            , ("the witness component lane", witnessSpecs wd)
+            , ("the flat-record layout", layoutSpecs)
+            , ("the Layout emitter consumer", layoutConsumerSpecs)
+            , ("the manifest discipline", genSpecs g pin) ]

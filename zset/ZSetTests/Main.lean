@@ -39,6 +39,7 @@ import TestingKit.Harness
 import ZSetTests.Axioms
 import ZSetTests.CircuitAxioms
 import ZSetTests.Circuit
+import ZSetTests.Optimizer
 
 open ZSet TestingKit
 
@@ -85,23 +86,150 @@ def negAddSwapsWeights : Tape → CheckResult := fun t => do
   assert (add z1 z2 == fromList [(k1, w2), (k2, w1)])
     s!"control fired: {k1}+{k2} swapped weights"
 
-/-- The group-law sweep: commutativity + the canonical merge, over
-    drawn pairs; plus the non-idempotence pin (03 §7). -/
-def groupSpec : Spec :=
-  Spec.ofList "group laws (drawn pairs)" (fun t => do
-    let (k1, t1) := drawKeyLo t
-    let (k2, t2) := drawKeyHi t1
-    let (w1, t3) := drawW t2
-    let (w2, _) := drawW t3
-    let z1 : ZSet Nat := fromList [(k1, w1)]
-    let z2 : ZSet Nat := fromList [(k2, w2)]
-    assert (add z1 z2 == add z2 z1) s!"{k1}+{k2} broke comm"
-    assert (toList (add z1 z2) == toList (fromList [(k1, w1), (k2, w2)]))
-      s!"{k1}+{k2} broke the canonical merge"
-    assert (!(add z2 z2 == z2)) "signed addition is idempotent (the forbidden collapse)")
+/-! ## the shrink attachment (08 §11; the Wire.lean / WasmCoreTests
+    precedents: the drawn pairs get the validity-preserving shrinker —
+    the shrink walks the VALUE, not the tape, #14) -/
+
+/-- The drawn pair-set: the group sweep's structured input (the four
+    draws, extracted — the attachment's `fails` is tape-free). -/
+structure DrawnPair where
+  k1 : Nat
+  k2 : Nat
+  w1 : Int
+  w2 : Int
+
+/-- The SAME draw sequence the group sweep's prop performs
+    (low half, high half, two nonzero weights). -/
+def drawPair (t : Tape) : DrawnPair :=
+  let (k1, t1) := drawKeyLo t
+  let (k2, t2) := drawKeyHi t1
+  let (w1, t3) := drawW t2
+  let (w2, _) := drawW t3
+  { k1 := k1, k2 := k2, w1 := w1, w2 := w2 }
+
+/-- The Int weight shrinker: candidates `±i` for `i < |w|` (every
+    integer with a strictly smaller absolute value; `omega` discharges
+    `smaller` over `natAbs`). -/
+def shrinkInt : ShrinkerV (α := Int) (fun _ => True) where
+  shrink w :=
+    (List.range w.natAbs).flatMap
+      (fun (i : Nat) => [Int.ofNat i, -Int.ofNat i])
+  measure w := w.natAbs
+  smaller w c hc := by
+    obtain ⟨i, hi, hci⟩ := List.mem_flatMap.mp hc
+    have hlt : i < w.natAbs := List.mem_range.mp hi
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hci
+    rcases hci with h | h
+    · show c.natAbs < w.natAbs
+      rw [h, Int.natAbs_ofNat']
+      exact hlt
+    · show c.natAbs < w.natAbs
+      rw [h, Int.natAbs_neg, Int.natAbs_ofNat']
+      exact hlt
+  valid := fun _ _ _ => trivial
+
+/-- The pair-set's size (the shrinker's measure: the keys plus the
+    weights' magnitudes — every single-field candidate strictly
+    shortens it). -/
+def pairSize (d : DrawnPair) : Nat :=
+  d.k1 + d.k2 + d.w1.natAbs + d.w2.natAbs
+
+/-- The pair-set shrinker: single-field candidate families (the fields
+    are INDEPENDENT — the shrinkPlan judgment: no coupled
+    re-derivation, the `shrinkerDpair` combinator is for Σ-types, not
+    flat records). Validity is trivial (any drawn pair-set is one). -/
+def shrinkPair : ShrinkerV (α := DrawnPair) (fun _ => True) where
+  shrink d :=
+    (((List.range d.k1).map (fun k => { d with k1 := k })
+        ++ (List.range d.k2).map (fun k => { d with k2 := k }))
+      ++ (shrinkInt.shrink d.w1).map (fun w => { d with w1 := w }))
+      ++ (shrinkInt.shrink d.w2).map (fun w => { d with w2 := w })
+  measure := pairSize
+  smaller d c hc := by
+    -- the candidate list is a parenthesized `++` chain — peel the
+    -- mems outermost-first, one field per layer
+    rcases List.mem_append.mp hc with hc | h
+    · rcases List.mem_append.mp hc with hc | h
+      · rcases List.mem_append.mp hc with h | h
+        · obtain ⟨k, hk, rfl⟩ := List.mem_map.mp h
+          have hk1 : k < d.k1 := List.mem_range.mp hk
+          simp only [pairSize] at *
+          omega
+        · obtain ⟨k, hk, rfl⟩ := List.mem_map.mp h
+          have hk2 : k < d.k2 := List.mem_range.mp hk
+          simp only [pairSize] at *
+          omega
+      · obtain ⟨w, hw, rfl⟩ := List.mem_map.mp h
+        have hw1 : w.natAbs < d.w1.natAbs := shrinkInt.smaller d.w1 w hw
+        simp only [pairSize] at *
+        omega
+    · obtain ⟨w, hw, rfl⟩ := List.mem_map.mp h
+      have hw2 : w.natAbs < d.w2.natAbs := shrinkInt.smaller d.w2 w hw
+      simp only [pairSize] at *
+      omega
+  valid := fun _ _ _ => trivial
+
+/-- The drawn pair-set's render (the failure evidence's face). -/
+def renderPair (d : DrawnPair) : String :=
+  s!"pair(k1 {d.k1}, k2 {d.k2}, w1 {d.w1}, w2 {d.w2})"
+
+/-- The group laws' content at the drawn pair-set ALONE (the
+    attachment's `fails`: tape-free — commutativity, the canonical
+    merge, the non-idempotence pin). -/
+def pairContent (d : DrawnPair) : Bool :=
+  let z1 : ZSet Nat := fromList [(d.k1, d.w1)]
+  let z2 : ZSet Nat := fromList [(d.k2, d.w2)]
+  add z1 z2 == add z2 z1
+    && toList (add z1 z2) == toList (fromList [(d.k1, d.w1), (d.k2, d.w2)])
+    && !(add z2 z2 == z2)
+
+/-- THE SHRINK PIN's fixture: the SABOTAGED twin sweep — claims the
+    drawn high key stays under 25 (the generator draws it from 25..49,
+    so it fails on EVERY instance) — with the same attachment shape.
+    Its failure evidence MUST carry the shrunk counterexample + the
+    path (the greedy descent over `shrinkPair` walks the keys down to
+    the minimal failing pair `k2 = 25`); the group spec's control
+    below fires iff it does. -/
+def pairSabFails (d : DrawnPair) : Bool := d.k2 ≥ 25
+
+def groupSabSpec : Spec :=
+  Spec.ofList "sabotaged: the drawn high key stays under 25"
+    (fun t => assert (!pairSabFails (drawPair t))
+      "sabotaged: the high key reached 25")
     [ ("add drops the second summand", negAddDropsSecond)
     , ("add swaps the weights", negAddSwapsWeights) ]
+    8 42
+    (shrunk := some ⟨DrawnPair, fun _ => True, fun t => drawPair t,
+                     renderPair, pairSabFails, shrinkPair⟩)
+
+/-- THE SHRINK PIN (the discipline's tooth): the sabotaged twin's
+    failure evidence reports the SHRUNK counterexample (minimal:
+    `k1 0, k2 25` — greedy descent over the independent-field
+    candidates) + the path. The control asserts the evidence is
+    ABSENT — it must FAIL (be caught); a dead attachment leaves it
+    uncaught → VACUOUS, louder than passing. -/
+def groupNegNoShrinkEvidence : Tape → CheckResult := fun _ =>
+  match groupSabSpec.run with
+  | .fail .prop _ _ m =>
+      assert (!((m.splitOn "minimal pair(k1 0, k2 25").length > 1))
+        s!"control fired: the shrink evidence WAS present: {m}"
+  | _ => assert false "the sabotaged sweep did not fail"
+
+/-- The group-law sweep: commutativity + the canonical merge, over
+    drawn pairs; plus the non-idempotence pin (03 §7). The prop draws
+    through `drawPair` (the attachment's same draw); the shrink pin's
+    control rides the sabotaged twin above. -/
+def groupSpec : Spec :=
+  Spec.ofList "group laws (drawn pairs)" (fun t => do
+    let d := drawPair t
+    assert (pairContent d)
+      s!"{d.k1}+{d.k2} broke the group laws")
+    [ ("add drops the second summand", negAddDropsSecond)
+    , ("add swaps the weights", negAddSwapsWeights)
+    , ("shrink evidence absent", groupNegNoShrinkEvidence) ]
     64 42
+    (shrunk := some ⟨DrawnPair, fun _ => True, fun t => drawPair t,
+                     renderPair, fun d => !pairContent d, shrinkPair⟩)
 
 /-! ## 2. The canonicalization's teeth -/
 
@@ -633,7 +761,7 @@ def gradSpec : Spec := Spec.ofList "the rep ≅ weight-function graduation"
 def main : IO UInt32 :=
   mainOfSuites [("ZSet", [groupSpec, canonSpec, trichotomySpec, homomorphismSpec,
     abstractSpec, oneTheoremIdSpec, oneTheoremCollapseSpec, oldValuesSpec, bridgeSpec,
-    graphSpec, gradSpec, freeSpec]),
+    graphSpec, gradSpec, freeSpec, ZSetTests.Optimizer.optimizerSpec]),
     -- The circuit lane's suites (the P1 merge: CircuitTests joined ZSetTests;
     -- the modules live at ZSet.Circuit / ZSet.CircuitCompile).
     ("Ckt-agree", [specAgree]),

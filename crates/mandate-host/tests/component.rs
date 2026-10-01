@@ -8,9 +8,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use mandate_host::{
-    load_component, load_edge_component, load_string_component, run_component,
-    run_edge_component, run_string_component, GUEST_EXPORT, GUEST_GOLDEN, STRING_GOLDEN,
-    STRING_GOLDEN_INPUT, HostError,
+    load_component, load_edge_component, load_fault_component, load_string_component,
+    run_component, run_edge_component, run_fault_component, run_string_component,
+    verify_component_surface, EDGE_EXPORTS_1, EDGE_EXPORTS_2, EDGE_PARITY,
+    EXPECTED_EDGE_SURFACE, EXPECTED_STRING_SURFACE, EXPECTED_WORLD_SURFACE,
+    GUEST_EXPORT, GUEST_GOLDEN, STRING_GOLDEN, STRING_GOLDEN_INPUT, HostError,
 };
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -160,6 +162,97 @@ fn committed_world_passes_the_surface_check() {
         && wit.lines().any(|l| l.starts_with("world ") && l.contains('{'))
         && wit.lines().any(|l| l.contains(&format!("export {GUEST_EXPORT}: func(")));
     assert!(ok, "the committed world must pass its own surface check");
+}
+
+/// THE SCHEMA SKEW FAIL-FAST (the D6 port — legacy guestlang-host's
+/// `schema.rs`): the component TYPE's export surface (read
+/// pre-instantiation from `Component::component_type`) verified
+/// against the host's committed expectation.
+
+/// THE PIN: the committed components pass their own introspection —
+/// the surface the component TYPE carries IS the surface the host's
+/// expectation names (the load paths run this check; the explicit
+/// call is the control that the teeth are not vacuous).
+#[test]
+fn committed_components_pass_their_own_introspection() {
+    let world = fs::read(gen_dir().join("component-slice.wasm")).expect("read");
+    verify_component_surface(&world, EXPECTED_WORLD_SURFACE)
+        .expect("the committed scalar component's surface matches");
+    let string = fs::read(gen_dir().join("component-string-slice.wasm")).expect("read");
+    verify_component_surface(&string, EXPECTED_STRING_SURFACE)
+        .expect("the committed string component's surface matches");
+    let edge = fs::read(gen_dir().join("component-edge-slice.wasm")).expect("read");
+    verify_component_surface(&edge, EXPECTED_EDGE_SURFACE)
+        .expect("the committed edge component's surface matches");
+}
+
+/// SKEW TOOTH: a valid component MISSING the expected export refuses
+/// at load with the mismatch NAMED (`add64` + both surfaces in the
+/// detail) — the fail-fast, not a wasm trap mid-request.
+#[test]
+fn surface_skew_missing_export_refuses() {
+    let wat = r#"(component
+  (core module $m (type (func (result i64))) (func (type 0) (result i64) i64.const 42)
+    (export "other" (func 0)))
+  (core instance $i (instantiate $m))
+  (type $t (func (result u64)))
+  (func $f (type $t) (canon lift (core func $i "other")))
+  (export "other" (func $f)))"#;
+    let wasm = wat::parse_str(wat).expect("the export-less component builds");
+
+    let err = verify_component_surface(&wasm, EXPECTED_WORLD_SURFACE)
+        .expect_err("the missing export refuses at the surface check");
+    assert!(
+        matches!(err, HostError::SurfaceSkew(ref d) if d.contains("add64") && d.contains("missing export")),
+        "{err:?}"
+    );
+}
+
+/// SKEW TOOTH: a valid component carrying `add64` with the WRONG
+/// ARITY (one flat arg, not two) refuses with the arity named.
+#[test]
+fn surface_skew_arity_refuses() {
+    let wat = r#"(component
+  (core module $m (type (func (param i64) (result i64)))
+    (func (type 0) (param i64) (result i64) local.get 0)
+    (export "add64" (func 0)))
+  (core instance $i (instantiate $m))
+  (type $t (func (param "a" u64) (result u64)))
+  (func $f (type $t) (canon lift (core func $i "add64")))
+  (export "add64" (func $f)))"#;
+    let wasm = wat::parse_str(wat).expect("the arity-skewed component builds");
+
+    let err = verify_component_surface(&wasm, EXPECTED_WORLD_SURFACE)
+        .expect_err("the arity skew refuses at the surface check");
+    assert!(
+        matches!(err, HostError::SurfaceSkew(ref d)
+            if d.contains("add64") && d.contains("expected arity 2, guest arity 1")),
+        "{err:?}"
+    );
+}
+
+/// NEGATIVE CONTROL for the fail-fast itself: the surface check does
+/// not refuse an honest component — the same walk over a component
+/// carrying EXACTLY the expected surface passes (the extra `other`
+/// export is out of contract).
+#[test]
+fn surface_check_passes_the_honest_component() {
+    let wat = r#"(component
+  (core module $m (type (func (param i64 i64) (result i64)))
+    (func (type 0) (param i64 i64) (result i64) local.get 0 local.get 1 i64.add)
+    (export "add64" (func 0))
+    (type (func (result i64))) (func (type 1) (result i64) i64.const 7)
+    (export "other" (func 1)))
+  (core instance $i (instantiate $m))
+  (type $t (func (param "a" u64) (param "b" u64) (result u64)))
+  (func $f (type $t) (canon lift (core func $i "add64")))
+  (export "add64" (func $f))
+  (type $u (func (result u64)))
+  (func $g (type $u) (canon lift (core func $i "other")))
+  (export "other" (func $g)))"#;
+    let wasm = wat::parse_str(wat).expect("the honest component builds");
+    verify_component_surface(&wasm, EXPECTED_WORLD_SURFACE)
+        .expect("the honest surface passes (extras are out of contract)");
 }
 
 /// SKEW TOOTH: a VALID component whose export is MISSING (the binary
@@ -588,4 +681,118 @@ fn edge_wrong_arity_refuses() {
 fn committed_edge_world_passes_the_surface_check() {
     let wasm = load_edge_component(&gen_dir()).expect("the committed set loads");
     assert!(!wasm.is_empty(), "the committed bytes must be present");
+}
+
+// ---------------------------------------------------------------------------
+// THE FAULT LANE (the D6 port): the fault-typed result channel — the
+// guest's typed refusal crosses as the host's TYPED error, never a
+// trap; the trap face stays distinct.
+// ---------------------------------------------------------------------------
+
+/// The fault lane's scratch dir (the tamper-tooth discipline).
+fn fault_scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "mandate-host-component-fault-{}-{name}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("scratch dir");
+    let committed = gen_dir();
+    for f in [
+        "component-fault-slice.wasm",
+        "component-fault-slice.wasm.hdr",
+        "component-fault-slice.wit",
+    ] {
+        fs::copy(committed.join(f), dir.join(f)).expect("copy the committed artifact");
+    }
+    dir
+}
+
+/// THE PIN: the committed fault component loads skew-checked and the
+/// guest's typed refusal crosses as the host's TYPED error — the
+/// `Err(FAULT_GOLDEN)` variant rides the result channel, NOT a trap,
+/// NOT an engine string.
+#[test]
+fn the_guest_typed_refusal_crosses_as_the_typed_fault() {
+    let wasm = load_fault_component(&gen_dir()).expect("the committed fault component loads");
+    let err = run_fault_component(&wasm).expect_err("the committed probe refuses (that IS its answer)");
+    assert!(
+        matches!(err, HostError::ComponentFault { code: c } if c == mandate_host::FAULT_GOLDEN),
+        "{err:?}"
+    );
+    // the distinctness teeth: NOT the trap face, NOT the engine face
+    assert!(!matches!(err, HostError::WasmTrap(_)), "a typed refusal is never a trap");
+    assert!(!matches!(err, HostError::Engine(_)), "a typed refusal is never an engine string");
+}
+
+/// TRAP CONTROL: a guest module that TRAPS (the `probe` export,
+/// `unreach` in the body — the same world shape as the committed lane,
+/// heap-return lift options included) surfaces the honest TRAP face —
+/// distinct from the typed-fault channel above (the same lane shape, a
+/// different failure KIND: the guest's bug vs the guest's answer).
+#[test]
+fn a_trap_surfaces_the_trap_face_not_the_typed_fault() {
+    let wat = r#"(component
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "canonical_abi_realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024)
+    (type $core_probe (func (result i32)))
+    (func (type $core_probe) (result i32) unreachable)
+    (export "probe" (func 1)))
+  (core instance $i (instantiate $m))
+  (alias core export $i "memory" (core memory $mem))
+  (alias core export $i "canonical_abi_realloc" (core func $realloc))
+  (type $t (func (result (result (error u64)))))
+  (func $f (type $t) (canon lift (core func $i "probe") (memory $mem) (realloc $realloc)))
+  (export "probe" (func $f)))"#;
+    let wasm = wat::parse_str(wat).expect("the trapping component builds");
+
+    let err = run_fault_component(&wasm).expect_err("the trap refuses");
+    // the honest assertion is the DISTINCTION: a trap is never the
+    // typed-fault channel
+    assert!(
+        !matches!(err, HostError::ComponentFault { .. }),
+        "a trap must not cross as a typed fault: {err:?}"
+    );
+    assert!(
+        matches!(err, HostError::WasmTrap(_)),
+        "the trap face is this control's honest refusal: {err:?}"
+    );
+}
+
+/// THE OK-FACE CONTROL: a probe answering `Ok(())` is not the artifact
+/// the host runs — the golden discipline refuses (the committed
+/// probe's meaning is the typed refusal; an ok answer is a different
+/// component wearing the world's name). The ok face still rides the
+/// heap return (the disc+payload flattening) — the disc is 0, the
+/// payload slot skipped.
+#[test]
+fn an_ok_answer_refuses_the_golden() {
+    let wat = r#"(component
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "canonical_abi_realloc") (param i32 i32 i32 i32) (result i32) i32.const 1024)
+    (type $core_ok (func (result i32)))
+    (func (type $core_ok) (result i32)
+      (local i32)
+      i32.const 0 i32.const 0 i32.const 0 i32.const 0
+      call 0
+      local.tee 0
+      i32.const 0
+      i32.store
+      local.get 0)
+    (export "probe" (func 1)))
+  (core instance $i (instantiate $m))
+  (alias core export $i "memory" (core memory $mem))
+  (alias core export $i "canonical_abi_realloc" (core func $realloc))
+  (type $t (func (result (result (error u64)))))
+  (func $f (type $t) (canon lift (core func $i "probe") (memory $mem) (realloc $realloc)))
+  (export "probe" (func $f)))"#;
+    let wasm = wat::parse_str(wat).expect("the ok-faced component builds");
+
+    let err = run_fault_component(&wasm).expect_err("an ok answer is not the committed probe");
+    assert!(
+        matches!(err, HostError::ComponentAnswerMismatch { got: 0, expected: 42 }),
+        "{err:?}"
+    );
 }

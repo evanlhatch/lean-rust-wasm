@@ -31,6 +31,7 @@ them in their summary):
     impacted      [--print-only --paths=a,b] — the impact-aware dev loop (09 §6)
     decide-first-census [--write --accept-drift --package=<dir>]
     zero-citation-census [--write --accept-drift --package=<dir>]
+    evidence-redundancy-census [--write --accept-drift --package=<dir>]
     nolint-census [--write --accept-drift]  — the silenced-site census
     legacy-hash   [--write --accept-drift]  — the legacy-immutability gate (B4)
     feasibility   [--write --accept-drift]  — the spec-sanity gate row (B2)
@@ -152,6 +153,36 @@ unsafe def runZeroCitationCensus (args : List String) : IO UInt32 :=
         re-baseline diff naming it (fixed, consumed, or the reasoned opt-out)."
       f.write f.acceptDrift f.pkg
 
+unsafe def runEvidenceRedundancyCensus (args : List String) : IO UInt32 :=
+  withFlags ["package"] args fun f =>
+    Gates.Census.run Gates.Census.evidenceRedundancy
+      "Evidence-redundancy census — carried-law re-proofs + weaker-than-kernel rows"
+      "The census linter (linter.guestlang.evidenceRedundancy, 16-surface \
+        §3 + D37): the entourage's first question — does the type already \
+        carry it? — over the hand-written face. TWO detectable shapes: a \
+        theorem whose statement is a carried law's own round-trip shape \
+        (Codec.decode_encode / Iso.to_inv / Iso.inv_to, same instance both \
+        sides) whose proof does not cite the law field; an obligation row \
+        (Obligation/Discharged) whose claim is closed and Decidable- \
+        synthesizable while the claimed backend is a LITERAL weaker tier \
+        (oracleSwept/generatedCheck/guestVerified). FIRST ADJUDICATED RUN \
+        (the B6 landing): the one false-positive class was the carried-law \
+        fields' OWN declaration sites (the field decl IS the construction \
+        — fixed by the name exemption in the test); Class B's fold was \
+        empty (no weaker-than-kernel row in the buildable tree — the \
+        honest zero; the fixture teeth prove the class fires). BOUNDARY: \
+        this first run's tree was red in WasmCore.Decode (another lane's \
+        in-flight work) — the packages whose env loads through it \
+        (WasmCore, WasmCoreTestsLib, Gates, GatesTestsLib, Guest, \
+        ComponentTestsLib, DemoApp, LedgerApp) are ABSENT below; their \
+        sections arrive at the green re-baseline, and that drift is the \
+        record of the blocked first run. The heuristic's limits are named \
+        in its own header (unbounded claims, computed tiers, and the \
+        sweep fn's carrier are invisible), so the census stays \
+        CENSUS-GRADE (09 §8's rule): the findings are DATA, never \
+        failures, and a drift is the deliberate re-baseline."
+      f.write f.acceptDrift f.pkg
+
 unsafe def runNolintCensus (args : List String) : IO UInt32 :=
   withFlags [] args fun f => Gates.NolintCensus.run f.write f.acceptDrift
 
@@ -255,6 +286,12 @@ notes/decide-first-census.md (--write/--accept-drift/--package=<dir>)."
 pattern): the linter's findings as DATA over every gated package, diffed against \
 notes/zero-citation-census.md (--write/--accept-drift/--package=<dir>)."
       run := runZeroCitationCensus }
+  , { name := "evidence-redundancy-census"
+      summary := "The evidence-redundancy census as a baselined report-gate (B6; D37's \
+teeth; the decide-first pattern): carried-law re-proofs + weaker-than-kernel \
+obligation rows, as DATA over every gated package, diffed against \
+notes/evidence-redundancy-census.md (--write/--accept-drift/--package=<dir>)."
+      run := runEvidenceRedundancyCensus }
   , { name := "nolint-census"
       summary := "The nolint census gate: every @[nolint] row's (linter, file) count \
 over the gated sources, baselined in notes/nolint-census.tsv \
